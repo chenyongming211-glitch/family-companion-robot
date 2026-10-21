@@ -92,7 +92,9 @@ it. An absent or empty patch directory is valid. Patch application strips
 inherited `GIT_*` overrides and prevents parent Git repository discovery. Each
 check/application has a 30-second timeout. Overlays preserve their relative
 layout and add regular files only: any collision with upstream or patched paths
-fails. Symbolic patch and overlay inputs are rejected.
+fails. Root `dependencies.lock` and `.family-robot-source.json` are reserved for
+generated output and cannot be overlays. Symbolic patch and overlay inputs are
+rejected.
 
 All work happens in an owned temporary directory under the destination's parent.
 Only after extraction, patches, overlays and dependency verification succeed is

@@ -131,6 +131,15 @@ class ExperimentTests(unittest.TestCase):
         (self.overlays / 'main/value.txt').write_text('collision\n')
         self.assert_clean_failure(FileExistsError)
 
+    def test_dependency_output_overlay_is_rejected_atomically(self):
+        (self.overlays / 'dependencies.lock').write_bytes(
+            b'dependencies:\n  other:\n    version: 9.9.9\n')
+        self.assert_clean_failure(FileExistsError)
+
+    def test_provenance_output_overlay_is_rejected_atomically(self):
+        (self.overlays / '.family-robot-source.json').write_text('{}\n')
+        self.assert_clean_failure(FileExistsError)
+
     def test_existing_destination_preserves_sentinel(self):
         self.destination.mkdir()
         sentinel = self.destination / 'sentinel'

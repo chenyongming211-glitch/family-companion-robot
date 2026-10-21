@@ -88,6 +88,8 @@ def prepare_experiment(archive: Path, destination: Path, lock: dict,
                                           'sha256': digest})
         for path in overlay_paths:
             relative = path.relative_to(overlays)
+            if relative.as_posix() in ('dependencies.lock', '.family-robot-source.json'):
+                raise FileExistsError('overlay collides with generated output')
             target = tree / relative
             # Patches must not route overlay copies through a newly created link.
             if not target.parent.resolve().is_relative_to(tree.resolve()):
