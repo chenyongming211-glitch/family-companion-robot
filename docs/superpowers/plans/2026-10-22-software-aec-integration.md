@@ -56,7 +56,7 @@ The adapter must give both channels to the same existing stateful resampler. Cap
 
 Implementer owns exact class signatures and bounded queue dimensions based on the locked driver. Report the selected time mapping, its uncertainty, locking order, memory sizes and fail-closed transition. Escalate controller questions if source facts invalidate the approach; do not silently substitute write-FIFO timing.
 
-- [ ] **Step 1: Add host behavioral RED tests for the chosen pairing/policy interfaces.**
+- [x] **Step 1: Add host behavioral RED tests for the chosen pairing/policy interfaces.**
 
 Use actual ramp PCM and independent microphone samples. Tests must assert a complete MR sequence, split/wrap order, timestamp phase offset, future-reference wait vs timeout, expired reference, missing/reordered blocks, known silent DMA frames, interruption tail preservation, hardware restart generation isolation, bounded RX overflow and fault-latched fallback. Also test a long synthetic 24k timeline (at least 10 seconds) with finite counters and no sample drift introduced by packet boundaries. Test offset extremes and invalid lengths without dereferencing invalid data. A reference fault must prevent realtime eligibility until an explicit valid lifecycle recovery; data loss cannot be reported as success.
 
@@ -70,7 +70,7 @@ const int16_t expected_mr[] = {101, 11, 102, 12, 103, 13};
 
 The comment describes fixture wiring to the selected API; it is not a completed test. Add Python unittest compile/execute wrappers following test_playback_reference.py. Capture expected missing-feature RED before implementation.
 
-- [ ] **Step 2: Implement bounded DMA/reference and hardware lifecycle ownership.**
+- [x] **Step 2: Implement bounded DMA/reference and hardware lifecycle ownership.**
 
 ISR callbacks perform only bounded copies, counters/stamps and task notifications under one portMUX; no allocation/logging/network/Application calls. Allocate ISR-shared data in internal SRAM and either ensure callback call graph is IRAM-safe or explicitly keep the experimental ISR IRAM-safe option disabled with documented guard. Register only while channels disabled. Begin mono epoch only after codec open/reconfiguration, discard prior-format descriptors explicitly, and detect clock loss/restart. Serialize codec lifecycle/output calls without introducing main-loop/ISR blocking.
 
@@ -80,7 +80,7 @@ Reset the joint resampler and AFE input/output partial frames when a hardware ge
 
 Distinguish a genuine expected-consumer overrun from startup/output-only or intentionally inactive capture. Boot sounds can open the duplex codec before a microphone consumer exists, and Wi-Fi configuration or AFE pause can temporarily stop reads. Do not permanently fault the experiment simply because RX callbacks continue in those intentional states; arm bounded capture on the actual input lifecycle and explicitly invalidate old partial frames on resumption. Add a host lifecycle regression for this case.
 
-- [ ] **Step 3: Integrate explicit observation and realtime eligibility.**
+- [x] **Step 3: Integrate explicit observation and realtime eligibility.**
 
 Add Kconfig scoped to StopWatch with software-reference flag and unique config.json build; extend USE_DEVICE_AEC dependency only for that real adapter. Build starts in observation mode: local capture and AEC continue during speaking for measurement, while ordinary cloud dialogue uses auto behavior until a local explicit realtime-enable command is accepted after ready/valid state. Prevent self-echo leaking through encoded audio already queued when switching states; keep the normal auto playback-drain behavior for non-experimental builds.
 
@@ -92,7 +92,7 @@ The stock sdkconfig uses UART as primary stdin and USB Serial/JTAG only as secon
 
 Diagnostics expose aggregate format/generation/counters/overruns/timing/offset/eligibility without normal audio logs. Window captures raw 16k MR after the joint resampler plus AEC output before cloud encoding. Use preallocated bounded packets/queue and separate nonblocking UDP worker; packet drops increment counters and are visible. Define a documented versioned binary header with stream id, sequence, generation, sample position, rate/channels/count, monotonic timestamp and payload length. Keep datagrams <=1200 bytes; split at complete frames. No destinations hard-coded to a specific user network, no capture before explicit command or after expiry/stop, no network writes in ISR/audio/main loop. Ensure a collector can distinguish gaps, streams, resets and DSP delay; do not pretend raw/AEC have zero processing delay.
 
-- [ ] **Step 4: Apply interrupted-stop semantics without stopping mic.**
+- [x] **Step 4: Apply interrupted-stop semantics without stopping mic.**
 
 Patch the transport-neutral tts handling. Copy the boolean from cJSON before scheduling; exact string only:
 
@@ -108,7 +108,7 @@ Schedule([this, interrupted]() {
 
 Ensure queued/in-flight decode generations cannot repopulate old playback. Existing ResetDecoder already covers decode queues/generation; preserve it and cover the one physical OutputData/DMA tail explicitly. Ordinary stop drains normally. Microphone processing/upstream mode must survive a marked interruption in valid realtime mode. Host test the real selected policy/queue helper where practical; use target build and code evidence for platform-owned queues rather than tests that only assert source text.
 
-- [ ] **Step 5: Verify, prepare exact patched source, document and commit.**
+- [x] **Step 5: Verify, prepare exact patched source, document and commit.**
 
 ```sh
 python3 -m unittest discover -s firmware/tests -v
@@ -116,6 +116,9 @@ git diff --check
 ```
 
 Focused tests while editing, entire firmware suite once before commit. Prepare a fresh real experimental tree with prepare_experiment.py; assert patch applies and added board files are present, selected variant is listed by canonical build.py, normal variant unchanged, source provenance covers all owned files. Do not run a local unsupported SDK build. Document exact debug commands, memory/queue/cadence assumptions, fallback, offset uncertainty, reference-tail behavior and no acoustic acceptance yet. Commit scoped code/patch/tests/docs on main, no push; controller handles CI.
+
+
+Task 1 source/host review: `7bee4db` + `3f433d0`, four lifecycle/clock/observer findings fixed and independently approved. Owned47/47 and prepared upstream110/110 pass. Exact-head target compilation and physical/acoustic acceptance remain Task2/field gates; no flashing performed. Observer auto uses a nonblocking120ms conservative post-drain boundary; common-clock drift and fresh capture lifecycle have production-policy regressions.
 
 ### Task 2: Collector, experimental target CI and rollback package
 
