@@ -411,7 +411,9 @@ Download `stopwatch-patched-<variant>-<exact github.sha>` within seven days. Its
 allowlisted contents include source/SDK lock, native resolved dependencies,
 effective sdkconfig, patch/overlay inputs and provenance, app/merged/bootloader/
 partition/assets/flasher args, canonical release ZIP, build identity and SHA256
-for every evidence file. It includes no environment dump. Neither workflow has
+for every evidence file. The outer evidence bundle also preserves the existing
+Xiaozhi license and root third-party notices with checksum coverage.
+It includes no environment dump. Neither workflow has
 an OTA, flash or deploy job.
 
 Follow [the field and rollback checklist](../docs/verification/2026-10-22-software-aec-field-test.md)

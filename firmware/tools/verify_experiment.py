@@ -119,6 +119,9 @@ def bundle(firmware, tree, output, source_sha, evidence):
         shutil.copyfile(tree/relative, target)
     for name in ['upstream.lock.json', 'dependencies.lock.sha256']:
         shutil.copyfile(firmware/name, output/name)
+    (output/'third_party').mkdir()
+    shutil.copyfile(firmware/'third_party/xiaozhi-LICENSE', output/'third_party/xiaozhi-LICENSE')
+    shutil.copyfile(firmware.parent/'THIRD_PARTY_NOTICES.txt', output/'THIRD_PARTY_NOTICES.txt')
     for name in ['patches', 'overlays']:
         shutil.copytree(firmware/name, output/'source'/name)
     (output/'build-evidence.json').write_text(

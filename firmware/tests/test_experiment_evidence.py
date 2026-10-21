@@ -22,6 +22,11 @@ class EvidenceTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.firmware = self.root/'firmware'
         self.firmware.mkdir()
+        self.license_bytes = b'Synthetic retained license notice\nfixture copyright\n'
+        self.notices_bytes = b'Synthetic retained third-party notices\nfixture attribution\n'
+        (self.firmware/'third_party').mkdir()
+        (self.firmware/'third_party/xiaozhi-LICENSE').write_bytes(self.license_bytes)
+        (self.root/'THIRD_PARTY_NOTICES.txt').write_bytes(self.notices_bytes)
         for name in ['dependencies.lock', 'dependencies.lock.sha256', 'upstream.lock.json']:
             shutil.copyfile(FIRMWARE/name, self.firmware/name)
         for directory in ['patches', 'overlays']:
@@ -107,7 +112,13 @@ class EvidenceTests(unittest.TestCase):
         release.write_bytes(b'synthetic release')
         output = self.root/'evidence'
         self.module.bundle(self.firmware, self.tree, output, 'a'*40, self.verify())
+        self.assertTrue((output/'third_party/xiaozhi-LICENSE').is_file())
+        self.assertEqual((output/'third_party/xiaozhi-LICENSE').read_bytes(), self.license_bytes)
+        self.assertTrue((output/'THIRD_PARTY_NOTICES.txt').is_file())
+        self.assertEqual((output/'THIRD_PARTY_NOTICES.txt').read_bytes(), self.notices_bytes)
         hashes = (output/'SHA256SUMS').read_text().splitlines()
+        names = {row.split('  ', 1)[1] for row in hashes}
+        self.assertTrue({'third_party/xiaozhi-LICENSE', 'THIRD_PARTY_NOTICES.txt'} <= names)
         self.assertEqual(len(hashes), len([p for p in output.rglob('*') if p.is_file()])-1)
         for row in hashes:
             digest, name = row.split('  ', 1)
