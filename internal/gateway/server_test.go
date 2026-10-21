@@ -215,6 +215,9 @@ func testInterrupt(t *testing.T, source string) {
 			var v map[string]any
 			json.Unmarshal(data, &v)
 			stopped = v["type"] == "tts" && v["state"] == "stop"
+			if stopped && v["reason"] != "interrupted" {
+				t.Fatalf("interruption stop reason = %v, want interrupted", v["reason"])
+			}
 		}
 	}
 	resumeOld()
@@ -242,6 +245,9 @@ func testInterrupt(t *testing.T, source string) {
 			newStarted = true
 		}
 		if v["type"] == "tts" && v["state"] == "stop" {
+			if _, exists := v["reason"]; exists {
+				t.Fatal("normal playback stop unexpectedly carried a reason")
+			}
 			break
 		}
 	}

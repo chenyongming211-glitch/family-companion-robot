@@ -315,7 +315,9 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 		return nil
 	}
 	// Stop playback before any network reconnect. No queued old audio survives.
-	if err := s.tts("stop", ""); err != nil {
+	if err := s.json(protocol.Control{
+		Type: "tts", State: "stop", Reason: "interrupted", SessionID: s.id,
+	}); err != nil {
 		return err
 	}
 	s.pending.Clear()

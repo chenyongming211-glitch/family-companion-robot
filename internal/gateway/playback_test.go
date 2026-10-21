@@ -123,6 +123,15 @@ func (h *playbackHarness) delayedTick(t *testing.T, tick, processed time.Time) [
 		if control.Type != "tts" {
 			t.Fatalf("unexpected control: %s", data)
 		}
+		if control.State == "stop" {
+			var raw map[string]any
+			if err := json.Unmarshal(data, &raw); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := raw["reason"]; exists {
+				t.Fatal("normal playback stop unexpectedly carried a reason")
+			}
+		}
 		observed = append(observed, control.State)
 	}
 }

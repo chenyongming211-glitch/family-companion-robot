@@ -24,6 +24,7 @@ type Hello struct {
 type Control struct {
 	Type      string `json:"type"`
 	State     string `json:"state,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 	Mode      string `json:"mode,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	Text      string `json:"text,omitempty"`

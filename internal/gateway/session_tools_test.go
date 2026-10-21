@@ -367,8 +367,9 @@ func TestDeviceToolsAbortDropsLateResult(t *testing.T) {
 			} else {
 				h.device.send(t, event)
 			}
-			if h.device.want(t, "tts")["state"] != "stop" {
-				t.Fatal("missing explicit interrupt stop")
+			stop := h.device.want(t, "tts")
+			if stop["state"] != "stop" || stop["reason"] != "interrupted" {
+				t.Fatalf("missing explicit interrupted stop: %v", stop)
 			}
 			p, _ := h.model(t)
 			rpcReply(t, h.device, req, toolContent("true"))
