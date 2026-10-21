@@ -34,7 +34,7 @@ def prepare_experiment(archive: Path, destination: Path, lock: dict,
 
 CLI: `python3 firmware/tools/prepare_experiment.py [--archive PATH] [--destination PATH]`; defaults: same upstream archive cache as prepare.py; destination firmware/.cache/experiment; patch directory firmware/patches; overlay directory firmware/overlays; dependency lock firmware/dependencies.lock. Inputs resolve adjacent to script, independent of cwd. Import existing prepare helpers rather than duplicating extraction/download validation.
 
-- [ ] **Step 1: Write real fixture behavior tests before implementation.**
+- [x] **Step 1: Write real fixture behavior tests before implementation.**
 
 The central success fixture creates a real gzip tar containing `source/main/value.txt` = `old\n`, a real unified patch changing it to `new\n`, a new overlay `main/extra.h`, and a real YAML-format SDK dependency lock with adjacent SHA256. Verify returned path, changed bytes, overlay bytes, copied dependency lock, and provenance hashes. Run from an unrelated cwd and inside an unrelated parent Git repository; the parent tracked sentinel/index must remain unchanged. Use actual git apply, not mocks or source-text tests.
 
@@ -50,7 +50,7 @@ Also cover failed patch context, checksum failure, overlay collision with upstre
 
 Run `python3 -m unittest discover -s firmware/tests -p test_prepare_experiment.py -v`; record expected missing-module/function RED.
 
-- [ ] **Step 2: Implement the smallest atomic adapter.**
+- [x] **Step 2: Implement the smallest atomic adapter.**
 
 Use a new temporary directory under destination.parent, safe-extract to its `source` child using prepare_source(), then apply lexically ordered regular `*.patch` files. For each patch run check and apply with explicit paths and bounded timeout:
 
@@ -65,7 +65,7 @@ subprocess.run(['git', 'apply', '--whitespace=error-all', str(patch)],
 
 Write `.family-robot-source.json` with upstream commit/archive SHA256, ordered relative patch paths and SHA256, overlay relative paths and SHA256, dependency-lock SHA256. No environment values or credentials. Before renaming tree to destination, refuse existing destination again. Catch OS/JSON/patch failures into a controlled CLI error without dumping subprocess output or private paths; success prints only resolved prepared path.
 
-- [ ] **Step 3: Pin dependencies and exercise the real locked source once.**
+- [x] **Step 3: Pin dependencies and exercise the real locked source once.**
 
 Copy `evidence/.cache/stock/dependencies.lock` byte for byte and write its adjacent SHA256; this is native SDK YAML, not JSON. Copy only this dependency record from artifacts/firmware-baseline-20261022-8953c44 into firmware/dependencies.lock. Verify esp_codec_dev 1.6.2 and ESP-SR 2.4.7 in this lock. Prepare real source into a fresh ignored destination with the existing verified archive; verify its new reference header bytes, upstream untouched-file bytes, dependency lock bytes and provenance. This does not execute the target SDK or use the watch.
 
@@ -75,6 +75,6 @@ python3 -m unittest discover -s firmware/tests -v
 git diff --check
 ```
 
-- [ ] **Step 4: Document and commit.**
+- [x] **Step 4: Document and commit.**
 
 Document the new command, atomic fresh destination semantics, patch order, overlay collision behavior and provenance. Explain that preparing experimental source alone does not integrate AEC. Commit only scoped source/tests/dependency lock/docs on main, no push. Report RED/GREEN, actual fixture scenarios, real-source verification, commit and concerns in assigned ignored report.
