@@ -9,7 +9,7 @@
   "idf_version": "v6.1",
   "idf_commit": "fff9895c82d744c7237be8847347bdd1b07c6643",
   "esp_sr_version": "2.4.7",
-  "board": "m5stack-stopwatch",
+  "board": "m5stack/stopwatch",
   "variant": "m5stack-stopwatch",
   "target": "esp32s3"
 }

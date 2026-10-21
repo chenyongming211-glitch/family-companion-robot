@@ -3,7 +3,7 @@
 This directory pins the unmodified Xiaozhi ESP32 v2.5.2 source at
 `49b4380b3faa0ceadd28a3e78aaf0f311c46c57e`, ESP-IDF v6.1 at
 `fff9895c82d744c7237be8847347bdd1b07c6643`, and ESP-SR 2.4.7 for the
-`m5stack-stopwatch` board/variant (`esp32s3`). The source URL, archive SHA256,
+`m5stack/stopwatch` board directory and `m5stack-stopwatch` variant (`esp32s3`). The source URL, archive SHA256,
 archive root and SDK identity are recorded in `upstream.lock.json`.
 
 From the repository root, with Python 3.12 or later:
@@ -37,7 +37,7 @@ test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
 idf.py --version
 cd firmware/.cache/stock
 python3 -m unittest discover -s scripts/tests -v
-python3 scripts/build.py m5stack-stopwatch --name m5stack-stopwatch --language zh-CN --zip
+python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch --language zh-CN --zip
 sha256sum build/xiaozhi.bin build/merged-binary.bin > build/SHA256SUMS
 ```
 

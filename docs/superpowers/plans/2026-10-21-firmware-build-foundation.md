@@ -65,7 +65,7 @@ Run `python3 -m unittest discover -s firmware/tests -v` before implementation; r
   "idf_version": "v6.1",
   "idf_commit": "fff9895c82d744c7237be8847347bdd1b07c6643",
   "esp_sr_version": "2.4.7",
-  "board": "m5stack-stopwatch",
+  "board": "m5stack/stopwatch",
   "variant": "m5stack-stopwatch",
   "target": "esp32s3"
 }
@@ -109,7 +109,7 @@ jobs:
           idf.py --version
           cd firmware/.cache/stock
           python3 -m unittest discover -s scripts/tests -v
-          python3 scripts/build.py m5stack-stopwatch --name m5stack-stopwatch --language zh-CN --zip
+          python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch --language zh-CN --zip
           sha256sum build/xiaozhi.bin build/merged-binary.bin > build/SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

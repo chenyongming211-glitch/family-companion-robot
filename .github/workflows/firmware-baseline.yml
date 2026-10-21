@@ -29,7 +29,7 @@ jobs:
           idf.py --version
           cd firmware/.cache/stock
           python3 -m unittest discover -s scripts/tests -v
-          python3 scripts/build.py m5stack-stopwatch --name m5stack-stopwatch --language zh-CN --zip
+          python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch --language zh-CN --zip
           sha256sum build/xiaozhi.bin build/merged-binary.bin > build/SHA256SUMS
       - name: Verify required build evidence
         shell: bash
