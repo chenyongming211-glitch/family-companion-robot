@@ -33,7 +33,7 @@ jobs:
           source "$IDF_PATH/export.sh"
           EXPECTED_IDF=$(python3 -c 'import json;print(json.load(open("firmware/upstream.lock.json"))["idf_commit"])')
           test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -c safe.directory="$GITHUB_WORKSPACE" -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$GITHUB_SHA"
           idf.py --version
           cd firmware/.cache/experiment
           python3 -m unittest discover -s scripts/tests -v

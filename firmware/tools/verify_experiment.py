@@ -136,7 +136,7 @@ def main():
     parser.add_argument('--source-sha', required=True)
     parser.add_argument('--idf-commit', required=True)
     args = parser.parse_args()
-    actual = subprocess.check_output(['git', '-C', str(FIRMWARE.parent), 'rev-parse', 'HEAD'], text=True).strip()
+    actual = subprocess.check_output(['git', '-c', f'safe.directory={FIRMWARE.parent}', '-C', str(FIRMWARE.parent), 'rev-parse', 'HEAD'], text=True).strip()
     if actual != args.source_sha:
         parser.error('checkout does not match requested source SHA')
     evidence = verify(FIRMWARE, args.tree, args.variant, args.idf_commit)
