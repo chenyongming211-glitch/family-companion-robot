@@ -770,14 +770,12 @@ diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_aud
          ApplyPendingReset();
          if ((xEventGroupGetBits(event_group_) & kAfeActive) == 0) {
              continue;
-@@ -413,11 +467,27 @@
+@@ -413,11 +467,25 @@
          if (afe_control_dirty_.exchange(false)) {
              // WakeNet/AEC toggles are not safe against a concurrent fetch,
              // so they are applied here, in the task that owns the fetch side.
 +            std::unique_lock<std::mutex> lock(input_buffer_mutex_, std::defer_lock);
-+            if (codec_->SoftwareReference())
-+                lock.try_lock();
-+            if (codec_->SoftwareReference() && !lock.owns_lock()) {
++            if (codec_->SoftwareReference() && !lock.try_lock()) {
 +                afe_control_dirty_ = true;
 +                afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(20));
 +                continue;
@@ -800,7 +798,7 @@ diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_aud
              (xEventGroupGetBits(event_group_) & kAfeActive) == 0) {
              // A disable/re-enable may make an old blocked fetch return after the
              // AFE is active again. Reset immediately and never process that frame.
-@@ -431,6 +501,20 @@
+@@ -431,6 +499,20 @@
              continue;
          }
 
@@ -821,7 +819,7 @@ diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_aud
          EventBits_t bits = xEventGroupGetBits(event_group_);
          if (bits & kWakeWordEnabled) {
              HandleWakeWordResult(result);
-@@ -448,7 +532,17 @@
+@@ -448,7 +530,17 @@
      }
 
  #if CONFIG_SEND_WAKE_WORD_DATA
@@ -840,7 +838,7 @@ diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_aud
  #endif
      if (result->wakeup_state != WAKENET_DETECTED) {
          return;
-@@ -525,6 +619,10 @@
+@@ -525,6 +617,10 @@
  }
 
  void AfeAudioEngine::EncodeWakeWordData() {
@@ -851,7 +849,7 @@ diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_aud
      if (wake_detector_ == WakeDetector::kMultiNet) {
          custom_wake_word_->EncodeWakeWordData();
          return;
-@@ -616,6 +714,8 @@
+@@ -616,6 +712,8 @@
  }
 
  bool AfeAudioEngine::GetWakeWordOpus(std::vector<uint8_t>& opus) {
@@ -860,7 +858,7 @@ diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_aud
      if (wake_detector_ == WakeDetector::kMultiNet) {
          return custom_wake_word_->GetWakeWordOpus(opus);
      }
-@@ -628,3 +728,140 @@
+@@ -628,3 +726,140 @@
      wake_word_opus_.pop_front();
      return !opus.empty();
  }

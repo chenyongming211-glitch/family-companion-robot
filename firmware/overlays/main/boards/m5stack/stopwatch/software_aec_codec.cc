@@ -11,8 +11,6 @@
 #error "Software AEC callback graph is not IRAM safe; disable I2S_ISR_IRAM_SAFE"
 #endif
 using D = family_robot::DuplexReference;
-static_assert(std::atomic<uint32_t>::is_always_lock_free,
-              "ISR state requires lock-free 32-bit atomics");
 
 SoftwareAecCodec::SoftwareAecCodec(void* bus, i2c_port_t port, int input_rate, int output_rate,
                                    gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout,
@@ -52,13 +50,29 @@ void SoftwareAecCodec::Start() {
     if (!infrastructure_ok_)
         Fail(D::Fault::Setup);
 }
+SoftwareAecCodec::State SoftwareAecCodec::ReadState() const {
+    portENTER_CRITICAL(&mux_);
+    const State state{valid_,
+                      faulted_,
+                      epochs_.capture(),
+                      epochs_.wake(),
+                      epochs_.integrity(),
+                      aec_ready_generation_};
+    portEXIT_CRITICAL(&mux_);
+    return state;
+}
+void SoftwareAecCodec::NotifyAecReady(bool ready, uint32_t generation) {
+    portENTER_CRITICAL(&mux_);
+    aec_ready_generation_ =
+        ready && valid_ && !faulted_ && generation == epochs_.capture() ? generation : UINT32_MAX;
+    portEXIT_CRITICAL(&mux_);
+}
 void SoftwareAecCodec::PublishLocked() {
     const bool fault = !pair_ || pair_->fault() != D::Fault::None;
     if (fault)
         valid_ = false;
-    if (fault && !faulted_.load()) {
+    if (fault && !faulted_) {
         epochs_.Fault();
-        PublishEpochLocked();
         faulted_ = true;
         ++faults_;
         if (pair_ && pair_->fault() == D::Fault::Overflow)
@@ -80,7 +94,6 @@ void SoftwareAecCodec::OnDeviceEpoch(bool opened) {
     accepting_ = false;
     valid_ = false;
     epochs_.HardwareChange();
-    PublishEpochLocked();
     if (opened && pair_ && callbacks_ok_ && infrastructure_ok_ && !setup_failed_) {
         pair_->Begin(++hardware_generation_, CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES);
         pair_->Capture(capture_active_);
@@ -137,7 +150,6 @@ void SoftwareAecCodec::SetCaptureActive(bool active) {
             epochs_.Resume();
         else
             epochs_.Pause();
-        PublishEpochLocked();
         if (pair_)
             pair_->Capture(active);
     }
@@ -149,7 +161,6 @@ void SoftwareAecCodec::CaptureBoundary() {
     // raw backlog and in-flight capture results at observer-auto tail boundary.
     valid_ = false;
     epochs_.Boundary();
-    PublishEpochLocked();
     if (pair_) {
         pair_->Capture(false);
         pair_->Capture(capture_active_);
@@ -240,9 +251,11 @@ void SoftwareAecCodec::ResetDiagnosticStream(uint8_t stream) {
 }
 void SoftwareAecCodec::RecordDiagnostic(uint8_t stream, const int16_t* pcm, size_t frames,
                                         uint8_t channels, uint32_t generation) {
-    if (diagnostics_)
+    if (diagnostics_) {
+        const auto state = ReadState();
         diagnostics_->Record(stream, pcm, frames, channels, generation,
-                             generation == CaptureGeneration() && ReferenceValid());
+                             generation == state.capture && state.valid && !state.faulted);
+    }
 }
 void SoftwareAecCodec::PollFault() {
     bool report = false;

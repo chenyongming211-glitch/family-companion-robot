@@ -203,7 +203,11 @@ of PCM. Reference object plus240-sample scratch and bounded reference metadata
 stay below32KiB. The separate RX queue holds16×240 samples (160ms;7680 PCM bytes).
 The portable pairing object measures40592 bytes on the host (ABI-dependent) and
 is explicitly allocated in internal SRAM; ISR state also uses internal storage
-and lock-free32-bit atomics. One portMUX protects every pairing operation; ISR
+and plain state protected by the same portMUX as the pairing buffer. Task-facing
+getters take short value snapshots under that mux; readiness updates also use it.
+ISR callbacks call only already-locked plain-state helpers, without std::atomic
+or recursive mux acquisition. The pinned Xtensa toolchain does not guarantee
+std::atomic<uint32_t> is lock-free; the adapter does not rely on it. ISR
 work is bounded copies, counters and stamps only. The callback graph is not
 IRAM-safe, so both Kconfig and a compile guard require `I2S_ISR_IRAM_SAFE=n`.
 Flash/cache stalls can therefore trip a cadence fault and must be field-tested.

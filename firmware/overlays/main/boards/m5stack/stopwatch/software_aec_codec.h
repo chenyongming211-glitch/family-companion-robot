@@ -1,7 +1,6 @@
 #pragma once
 #include "sdkconfig.h"
 #if CONFIG_STOPWATCH_SOFTWARE_AEC
-#include <atomic>
 #include "codecs/es8311_audio_codec.h"
 #include "duplex_reference.h"
 #include "experiment_gate.h"
@@ -19,19 +18,18 @@ public:
     void EnableOutput(bool enable) override;
     void SetCaptureActive(bool active) override;
     void CaptureBoundary() override;
-    uint32_t ReferenceIntegrity() const override { return integrity_generation_.load(); }
+    uint32_t ReferenceIntegrity() const override { return ReadState().integrity; }
     bool SoftwareReference() const override { return true; }
-    bool ReferenceValid() const override { return valid_.load(); }
+    bool ReferenceValid() const override { return ReadState().valid; }
     void ReportReferenceFailure() override { Fail(family_robot::DuplexReference::Fault::Setup); }
     bool RealtimeEligible() const override {
-        return ReferenceValid() && aec_ready_generation_.load() == CaptureGeneration();
+        const auto state = ReadState();
+        return state.valid && !state.faulted && state.aec_ready == state.capture;
     }
-    void NotifyAecReady(bool ready, uint32_t generation = 0) override {
-        aec_ready_generation_ = ready ? generation : UINT32_MAX;
-    }
-    bool ReferenceFaulted() const override { return faulted_.load(); }
-    uint32_t WakeAudioGeneration() const override { return wake_generation_.load(); }
-    uint32_t CaptureGeneration() const override { return capture_generation_.load(); }
+    void NotifyAecReady(bool ready, uint32_t generation = 0) override;
+    bool ReferenceFaulted() const override { return ReadState().faulted; }
+    uint32_t WakeAudioGeneration() const override { return ReadState().wake; }
+    uint32_t CaptureGeneration() const override { return ReadState().capture; }
     void ResetDiagnosticStream(uint8_t stream) override;
     void RecordDiagnostic(uint8_t stream, const int16_t* pcm, size_t frames, uint8_t channels,
                           uint32_t generation = 0) override;
@@ -46,20 +44,24 @@ private:
     static bool Received(i2s_chan_handle_t, i2s_event_data_t*, void*);
     bool Complete(i2s_event_data_t* event, bool tx);
     void Fail(family_robot::DuplexReference::Fault fault);
+    // Requires mux_ already held, whether called from task or ISR. Never calls
+    // task-facing snapshot/getter methods, takes another lock or uses std::atomic.
     void PublishLocked();
+    struct State {
+        bool valid, faulted;
+        uint32_t capture, wake, integrity, aec_ready;
+    };
+    // Task-only, acquire mux_ exactly once and return a value snapshot.
+    State ReadState() const;
     mutable portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
     std::mutex lifecycle_;
     family_robot::CaptureEpoch epochs_;
-    void PublishEpochLocked() {
-        capture_generation_ = epochs_.capture();
-        wake_generation_ = epochs_.wake();
-        integrity_generation_ = epochs_.integrity();
-    }
     family_robot::DuplexReference* pair_ = nullptr;
     AecDiagnostics* diagnostics_ = nullptr;
-    std::atomic<uint32_t> valid_{0}, faulted_{0};
-    std::atomic<uint32_t> capture_generation_{0}, wake_generation_{0}, integrity_generation_{0},
-        aec_ready_generation_{UINT32_MAX};
+    // ISR-shared status and epochs_ are plain internal-SRAM state under mux_.
+    // Xtensa's std::atomic<uint32_t> is not guaranteed lock-free by this toolchain.
+    bool valid_ = false, faulted_ = false;
+    uint32_t aec_ready_generation_ = UINT32_MAX;
     bool infrastructure_ok_ = false, setup_failed_ = false;
     bool callbacks_ok_ = false, accepting_ = false, capture_active_ = false;
     bool fault_reported_ = false;
