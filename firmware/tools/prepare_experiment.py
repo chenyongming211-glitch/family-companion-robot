@@ -91,7 +91,9 @@ def prepare_experiment(archive: Path, destination: Path, lock: dict,
             if relative.as_posix() in ('dependencies.lock', '.family-robot-source.json'):
                 raise FileExistsError('overlay collides with generated output')
             target = tree / relative
-            # Patches must not route overlay copies through a newly created link.
+            # Even in-tree aliases can bypass reserved output paths and provenance.
+            if any((tree / parent).is_symlink() for parent in relative.parents):
+                raise ValueError('overlay target has a symbolic parent')
             if not target.parent.resolve().is_relative_to(tree.resolve()):
                 raise ValueError('overlay target escapes prepared tree')
             refuse_existing(target)

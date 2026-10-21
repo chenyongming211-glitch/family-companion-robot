@@ -140,6 +140,32 @@ class ExperimentTests(unittest.TestCase):
         (self.overlays / '.family-robot-source.json').write_text('{}\n')
         self.assert_clean_failure(FileExistsError)
 
+    def add_alias_overlay(self, name):
+        (self.patches / '02-alias.patch').write_text(
+            'diff --git a/alias b/alias\n'
+            'new file mode 120000\n'
+            'index 0000000..945c9b4\n'
+            '--- /dev/null\n'
+            '+++ b/alias\n'
+            '@@ -0,0 +1 @@\n'
+            '+.\n'
+            '\\ No newline at end of file\n')
+        alias = self.overlays / 'alias'
+        alias.mkdir()
+        (alias / name).write_bytes(b'overlay aliases generated root output\n')
+
+    def test_patch_symlink_cannot_alias_dependency_output(self):
+        self.add_alias_overlay('dependencies.lock')
+        self.assert_clean_failure((ValueError, FileExistsError))
+
+    def test_patch_symlink_cannot_alias_provenance_output(self):
+        self.add_alias_overlay('.family-robot-source.json')
+        self.assert_clean_failure((ValueError, FileExistsError))
+
+    def test_overlay_cannot_traverse_patch_symlink_for_ordinary_file(self):
+        self.add_alias_overlay('ordinary.h')
+        self.assert_clean_failure(ValueError)
+
     def test_existing_destination_preserves_sentinel(self):
         self.destination.mkdir()
         sentinel = self.destination / 'sentinel'

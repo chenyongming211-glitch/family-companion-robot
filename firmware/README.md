@@ -94,7 +94,7 @@ check/application has a 30-second timeout. Overlays preserve their relative
 layout and add regular files only: any collision with upstream or patched paths
 fails. Root `dependencies.lock` and `.family-robot-source.json` are reserved for
 generated output and cannot be overlays. Symbolic patch and overlay inputs are
-rejected.
+rejected. Overlay paths also cannot traverse symlinks introduced by patches.
 
 All work happens in an owned temporary directory under the destination's parent.
 Only after extraction, patches, overlays and dependency verification succeed is
