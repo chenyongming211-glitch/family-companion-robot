@@ -31,14 +31,17 @@ In the ESP-IDF v6.1 environment, run the same stock build as CI from the reposit
 root (the SDK checkout must match the exact pinned commit):
 
 ```bash
-source "$IDF_PATH/export.sh"
-EXPECTED_IDF=$(python3 -c 'import json;print(json.load(open("firmware/upstream.lock.json"))["idf_commit"])')
-test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
-idf.py --version
-cd firmware/.cache/stock
-python3 -m unittest discover -s scripts/tests -v
-python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch --language zh-CN --zip
-sha256sum build/xiaozhi.bin build/merged-binary.bin > build/SHA256SUMS
+(
+  set -e
+  source "$IDF_PATH/export.sh"
+  EXPECTED_IDF=$(python3 -c 'import json;print(json.load(open("firmware/upstream.lock.json"))["idf_commit"])')
+  test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
+  idf.py --version
+  cd firmware/.cache/stock
+  python3 -m unittest discover -s scripts/tests -v
+  python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch --language zh-CN --zip
+  sha256sum build/xiaozhi.bin build/merged-binary.bin > build/SHA256SUMS
+)
 ```
 
 Downloaded archives and extracted stock sources, dependencies, SDK configuration,
