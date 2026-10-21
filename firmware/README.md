@@ -68,6 +68,47 @@ The complete upstream MIT license is in `third_party/xiaozhi-LICENSE`; see the
 repository's `THIRD_PARTY_NOTICES.txt` for attribution. Dependencies retain their
 own licenses.
 
+## Experimental source preparation
+
+Prepare a fresh experimental tree from the same locked upstream archive:
+
+```sh
+python3 firmware/tools/prepare_experiment.py
+# Or use an already verified local archive and a fresh destination:
+python3 firmware/tools/prepare_experiment.py --archive /path/to/xiaozhi-v2.5.2.tar.gz --destination /path/to/fresh-experiment
+```
+
+The default output is `firmware/.cache/experiment`. Default inputs resolve beside
+the script, independently of the working directory: `upstream.lock.json`,
+`patches/`, `overlays/`, and `dependencies.lock` with its adjacent
+`dependencies.lock.sha256`. The dependency lock is the exact native YAML record
+from the verified stock build, including esp_codec_dev 1.6.2 and ESP-SR 2.4.7.
+Preparation checks its SHA256, regular file type and 1 MiB size bound; IDF validates
+the native dependency schema during a subsequent build.
+
+Preparation applies regular `patches/*.patch` files in lexical filename order,
+checking each with real `git apply --check --whitespace=error-all` before applying
+it. An absent or empty patch directory is valid. Patch application strips
+inherited `GIT_*` overrides and prevents parent Git repository discovery. Each
+check/application has a 30-second timeout. Overlays preserve their relative
+layout and add regular files only: any collision with upstream or patched paths
+fails. Symbolic patch and overlay inputs are rejected.
+
+All work happens in an owned temporary directory under the destination's parent.
+Only after extraction, patches, overlays and dependency verification succeed is
+the completed source tree renamed to the destination. An existing destination,
+including a dangling symlink, is refused; failures remove only this invocation's
+temporary tree. Successful commands print only the resolved prepared path.
+
+The generated `.family-robot-source.json` records the upstream commit and archive
+SHA256, ordered relative patch paths and hashes, overlay paths and hashes, and
+dependency-lock SHA256. It records no environment values. Keep the prepared tree
+and subsequent build products under ignored `.cache/`.
+
+This command prepares experimental source only. Copying the playback reference
+header into that tree does not connect it to playback, DMA, capture or AEC, and
+does not validate natural barge-in.
+
 ## Playback reference history prerequisite
 
 `overlays/main/boards/m5stack/stopwatch/playback_reference_buffer.h` provides a
