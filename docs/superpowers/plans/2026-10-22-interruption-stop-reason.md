@@ -31,7 +31,7 @@
 - Existing `session.tts(state, text string)` stays unchanged for normal controls.
 - Existing `session.interrupt(ctx context.Context, replay, force bool)` keeps its signature and guard; its immediate stop is emitted directly with the optional reason before cancellation/reconnection.
 
-- [ ] **Step 1: Extend existing wire-level behavioral regressions before implementation.** In `testInterrupt`, when the first stop is observed, assert its decoded JSON map has `reason == "interrupted"`. When the replacement reply finishes, assert the normal stop has no `reason` key. Cover existing device/model/pending/capturing cases through the existing table. In `TestDeviceToolsAbortDropsLateResult`, retain the returned stop map and assert both state and reason for all existing triggers. In the playback harness, decode raw control data into a JSON map when a stop is received and fail if a reason key exists; this makes every existing normal-drain scenario validate omission on the actual wire.
+- [x] **Step 1: Extend existing wire-level behavioral regressions before implementation.** In `testInterrupt`, when the first stop is observed, assert its decoded JSON map has `reason == "interrupted"`. When the replacement reply finishes, assert the normal stop has no `reason` key. Cover existing device/model/pending/capturing cases through the existing table. In `TestDeviceToolsAbortDropsLateResult`, retain the returned stop map and assert both state and reason for all existing triggers. In the playback harness, decode raw control data into a JSON map when a stop is received and fail if a reason key exists; this makes every existing normal-drain scenario validate omission on the actual wire.
 
 ```go
 if stopped && v["reason"] != "interrupted" {
@@ -50,7 +50,7 @@ if stop["state"] != "stop" || stop["reason"] != "interrupted" {
 
 Run `go test ./internal/gateway -run 'TestInterruptDropsOldConnectionAudioAndStartsNewResponse|TestDeviceToolsAbortDropsLateResult' -count=1` and record the missing reason failure before changing production code. Do not add tests that only compare source text or mirror JSON struct declarations.
 
-- [ ] **Step 2: Add the minimal production field and interrupt emission.**
+- [x] **Step 2: Add the minimal production field and interrupt emission.**
 
 ```go
 // Within protocol.Control:
@@ -66,7 +66,7 @@ if err := s.json(protocol.Control{
 
 Do not move the existing no-op guard, change cancellation order, or set the reason in normal playback's `tts` helper. Do not change production pacing, idle behavior or model APIs.
 
-- [ ] **Step 3: Run focused green regressions, then the full meaningful verification once.**
+- [x] **Step 3: Run focused green regressions, then the full meaningful verification once.**
 
 ```sh
 gofmt -w internal/protocol/protocol.go internal/gateway/session.go internal/gateway/server_test.go internal/gateway/playback_test.go internal/gateway/session_tools_test.go
@@ -79,7 +79,7 @@ git diff --check
 
 Expected: focused regressions pass, all packages pass race/vet/build, no tracked generated binary or private material.
 
-- [ ] **Step 4: Document the wire contract and commit.** Add a short README paragraph near the existing interrupt explanation, with the exact interruption example below and a statement that normal stop omits reason. State that the optional field alone does not make the current stock firmware clear its queues or support natural barge-in; those need the custom firmware and field acceptance.
+- [x] **Step 4: Document the wire contract and commit.** Add a short README paragraph near the existing interrupt explanation, with the exact interruption example below and a statement that normal stop omits reason. State that the optional field alone does not make the current stock firmware clear its queues or support natural barge-in; those need the custom firmware and field acceptance.
 
 ```json
 {"type":"tts","state":"stop","reason":"interrupted","session_id":"..."}
