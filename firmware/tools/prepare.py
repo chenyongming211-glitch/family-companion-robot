@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+import zlib
 
 
 MAX_BYTES = 64 * 1024 * 1024
@@ -76,7 +77,7 @@ def prepare_source(archive: Path, destination: Path, checksum: str, expected_roo
                 source.extractall(tree, members=members, filter='data')
                 refuse_existing(destination)
                 tree.rename(destination)
-    except (tarfile.TarError, EOFError) as error:
+    except (tarfile.TarError, EOFError, zlib.error) as error:
         raise ValueError('invalid source archive') from error
     return destination
 

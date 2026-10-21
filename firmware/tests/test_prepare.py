@@ -10,6 +10,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import zlib
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'tools' / 'prepare.py'
@@ -178,6 +179,19 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(result.stdout, '')
         self.assertEqual(result.stderr, 'prepare: destination already exists\n')
         self.assertEqual((prepared / 'main/file.txt').read_bytes(), b'source contents')
+
+    def test_late_deflate_corruption_is_a_controlled_validation_error(self):
+        info = tarfile.TarInfo('source/file')
+        info.size = 64 * 1024
+        compressor = zlib.compressobj(wbits=31)
+        valid_prefix = info.tobuf() + b'x' * info.size
+        self.archive.write_bytes(compressor.compress(valid_prefix)
+                                 + compressor.flush(zlib.Z_SYNC_FLUSH)
+                                 + b'\xff')
+        checksum = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        with self.assertRaises(ValueError):
+            self.run_prepare(checksum)
+        self.assertEqual(set(self.root.iterdir()), {self.archive})
 
     def test_corrupt_deflate_is_a_controlled_validation_error(self):
         # Valid gzip header followed by an invalid deflate block type.
