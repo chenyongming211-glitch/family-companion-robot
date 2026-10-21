@@ -2,16 +2,20 @@
 
 状态：软件交付与现场验收分开记录。本文是未执行的现场步骤；没有连接串口、刷机、重启、现场收音或部署网关。目标构建、下载产物复核、AEC 声学通过和自然插话通过均须各自提供证据，不能用主机测试或绿色 CI 代替。
 
+已完成的离线构建/下载检查见 [交付记录](2026-10-22-software-aec-build.md)。以下现场门槛仍逐项执行。
+
 依据：[已批准自然插话设计](../superpowers/specs/2026-10-21-natural-barge-in-design.md)、[软件 AEC 整合计划](../superpowers/plans/2026-10-22-software-aec-integration.md)。保留物理单麦、原引脚、24kHz I2S、待机唤醒、音量/亮度工具和两分钟退出；本地不新增 VAD abort。
 
 ## 1. 下载产物和恢复资料，先离线核对
 
-- [ ] 记录待测 main 完整提交 SHA、两个 matrix job 链接和 artifact digest。下载同一 SHA 的 `stopwatch-patched-m5stack-stopwatch-software-aec-<sha>` 与 `stopwatch-patched-m5stack-stopwatch-<sha>`，七天内离线保留。后者检查补丁树关闭实验时的核心路径；[独立未修改原版基线](2026-10-22-firmware-baseline.md)仍是另外一份证据。
-- [ ] 校验下载 ZIP 的 GitHub digest、ZIP CRC，解包后在证据目录执行 `sha256sum --check SHA256SUMS`（macOS 可用 `shasum -a 256 --check SHA256SUMS`）。检查所有清单文件恰好存在，来源 SHA 对应该次运行，而不是另一次同名构建。
-- [ ] 核对 `build-evidence.json`、`.family-robot-source.json` 和 `source/patches/`、`source/overlays/`：上游 `49b4380b3faa0ceadd28a3e78aaf0f311c46c57e`，SDK `fff9895c82d744c7237be8847347bdd1b07c6643`，原生 `dependencies.lock` 与仓库验证过的锁字节相同，ESP-SR 2.4.7、esp_codec_dev 1.6.2、IDF 6.1.0。依赖漂移必须先解释、复核并更新受控锁，不能把自动解析的新锁当成原来的锁。
-- [ ] 检查实际 `sdkconfig`：实验 `STOPWATCH_SOFTWARE_AEC=y`、`USE_DEVICE_AEC=y`、`USE_AUDIO_PROCESSOR=y`、USB Serial/JTAG PRIMARY、UART DEFAULT 关闭、secondary USB 关闭；两变体 `I2S_ISR_IRAM_SAFE=n`、`USE_AUDIO_DEBUGGER=n`。原变体 software AEC/device AEC 关闭、UART DEFAULT 开启、USB PRIMARY 关闭。Kconfig 对依赖不成立的原版 `USE_DEVICE_AEC` 可省略该符号，含义为关闭；实验 primary USB 开启时 secondary USB 也可省略，见[锁定 SDK 的控制台 Kconfig](https://github.com/espressif/esp-idf/blob/fff9895c82d744c7237be8847347bdd1b07c6643/components/esp_stdio/Kconfig#L32-L52)。记录实际 `STOPWATCH_AEC_OFFSET_SAMPLES`，单位为 24kHz 物理样本，默认 0。
-- [ ] 用相同 SDK 的镜像/分区工具离线检查 app 和 bootloader 的 ESP32-S3 类型、image checksum/hash、入口/段边界、Flash 模式/频率/容量、secure boot/flash encryption 策略；校验分区表 MD5。检查 `flasher_args.json` 的地址和文件与实际产物一致；不要执行其中的整套写入参数。
-- [ ] app 必须不超过 `0x3f0000`，assets 不超过 `0x800000`；分区不重叠，Flash 终点不超过 `0x1000000`。实际 app、bootloader、表和资源须一起核查，而非仅核对 merged 文件大小。
+刷实验固件前，先按第 5 节在现有固件记录电池与 Mac/原 C-to-C 线的噪声基线，记下固件身份和发生阶段。刷后再以相同条件重复；声学测试与 USB 噪声调查分别记录。
+
+- [x] 记录待测 main 完整提交 SHA、两个 matrix job 链接和 artifact digest。下载同一 SHA 的 `stopwatch-patched-m5stack-stopwatch-software-aec-<sha>` 与 `stopwatch-patched-m5stack-stopwatch-<sha>`，七天内离线保留。后者检查补丁树关闭实验时的核心路径；[独立未修改原版基线](2026-10-22-firmware-baseline.md)仍是另外一份证据。
+- [x] 校验下载 ZIP 的 GitHub digest、ZIP CRC，解包后在证据目录执行 `sha256sum --check SHA256SUMS`（macOS 可用 `shasum -a 256 --check SHA256SUMS`）。检查所有清单文件恰好存在，来源 SHA 对应该次运行，而不是另一次同名构建。
+- [x] 核对 `build-evidence.json`、`.family-robot-source.json` 和 `source/patches/`、`source/overlays/`：上游 `49b4380b3faa0ceadd28a3e78aaf0f311c46c57e`，SDK `fff9895c82d744c7237be8847347bdd1b07c6643`，原生 `dependencies.lock` 与仓库验证过的锁字节相同，ESP-SR 2.4.7、esp_codec_dev 1.6.2、IDF 6.1.0。依赖漂移必须先解释、复核并更新受控锁，不能把自动解析的新锁当成原来的锁。
+- [x] 检查实际 `sdkconfig`：实验 `STOPWATCH_SOFTWARE_AEC=y`、`USE_DEVICE_AEC=y`、`USE_AUDIO_PROCESSOR=y`、USB Serial/JTAG PRIMARY、UART DEFAULT 关闭、secondary USB 关闭；两变体 `I2S_ISR_IRAM_SAFE=n`、`USE_AUDIO_DEBUGGER=n`。原变体 software AEC/device AEC 关闭、UART DEFAULT 开启、USB PRIMARY 关闭。Kconfig 对依赖不成立的原版 `USE_DEVICE_AEC` 可省略该符号，含义为关闭；实验 primary USB 开启时 secondary USB 也可省略，见[锁定 SDK 的控制台 Kconfig](https://github.com/espressif/esp-idf/blob/fff9895c82d744c7237be8847347bdd1b07c6643/components/esp_stdio/Kconfig#L32-L52)。记录实际 `STOPWATCH_AEC_OFFSET_SAMPLES`，单位为 24kHz 物理样本，默认 0。
+- [x] 用相同 SDK 的镜像/分区工具离线检查 app 和 bootloader 的 ESP32-S3 类型、image checksum/hash、入口/段边界、Flash 模式/频率/容量、secure boot/flash encryption 策略；校验分区表 MD5。检查 `flasher_args.json` 的地址和文件与实际产物一致；不要执行其中的整套写入参数。
+- [x] app 必须不超过 `0x3f0000`，assets 不超过 `0x800000`；分区不重叠，Flash 终点不超过 `0x1000000`。实际 app、bootloader、表和资源须一起核查，而非仅核对 merged 文件大小。
 
 现有私有完整恢复源：`artifacts/device-backup-20261021-191653/full-flash-before.bin`，16,777,216 字节，SHA256 `e87c4a8541d5a324ad670e648d3700f88845cd22d895ad5033969d6c05d60d8d`。备份目录保持 0700、文件 0600；不得上传完整 Flash、NVS、凭据或原始音频。`artifacts/firmware-preflight-20261022/` 的完整性、app 身份、OTA 元数据 JSON 仅是已有离线备份分析，不能证明当前设备状态。
 
@@ -26,7 +30,8 @@
 | ota_1 | `0x410000` | `0x3f0000` | 同上，优先考虑保留可启动的已知良好槽 |
 | assets（两 app 共用） | `0x800000` | `0x800000` | 先验证与两 app 兼容，默认保留 |
 
-- [ ] 离线再次验证完整备份长度/SHA、表 MD5 和 ota_0 app 身份；从备份按上述范围提取 ota_0、assets，分别记录长度与 SHA，生成仅列允许恢复分区的私有恢复清单。保留原文件不修改；提取物也设 0600。提前验证恢复工具可用、供电和线材稳定、存在手动进入下载模式的恢复手段。
+- [x] 已离线复核完整备份长度/SHA、表 MD5、app/bootloader 的 ESP32-S3 镜像 checksum 与附加 SHA；按上述范围提取 ota_0（4,128,768 字节）和完整 assets（8,388,608 字节），并逐字节核对切片。私有 `artifacts/firmware-rollback-20261022/` 保存两份完整分区、`rollback-manifest.json` 与 `SHA256SUMS`；目录 0700、文件 0600。未提取或纳入 NVS、otadata、phy、bootloader、表的默认恢复写入清单，未连接设备。清单中的地址仅代表旧备份布局，不能代替现场槽选择。
+- [ ] 现场确认恢复工具/下载通道可用、供电和线材稳定、存在手动进入下载模式的恢复手段；完成当前设备身份、分区及兼容性核查后才决定准确恢复范围。
 - [ ] OTA 选择必须解析两个 4KiB 扇区中的原生 `esp_ota_select_entry_t`，按此 SDK 的 sequence CRC、state 有效性和序号回绕选择规则处理，不能只取最大数字。对有效条目，用 `(ota_seq - 1) % OTA分区数量` 得到候选槽，再检查相应镜像。已有备份第一条 `ota_seq=1`、`ESP_OTA_IMG_VALID`、sequence CRC 有效；第二条擦除，故**备份**选择 ota_0。SDK 的 `bootloader_common_loader.c`、`esp_flash_partitions.h`、`bootloader_utility.c` 是 CRC/枚举/选择的核对依据；不能自行简化为对整条记录做普通 CRC。
 - [ ] 当前设备的选择仍未核实。用户在场且提前知悉后，先只读保存当前表、两个 otadata 扇区与当前 app 身份，私有留档并按同一 SDK 解码；不静默打开可能触发复位的串口。若当前表、槽、加密策略或固件身份不符，停止并重做写入/恢复清单。
 
@@ -81,7 +86,7 @@ MR 两声道来自同一次联合重采样，可以在完整有效段上比较 m
 
 ## 4. 真实千问链路与至少十轮现场验收
 
-先确认所需 `tts.stop reason:"interrupted"` 已在所测网关版本中可用；记录部署身份。源代码已有这个标记不等于线上已部署；若缺失，应暂停这部分，安排独立授权的网关操作，不在本轮静默部署。之后才在真实云链路测试：
+先确认所需 `tts.stop reason:"interrupted"` 已在所测网关版本中可用；记录部署身份。源代码已有这个标记不等于线上已部署；若缺失，应暂停这部分，在用户知悉且在场的测试窗口完成计划内网关更新；不在用户休息期间静默部署。之后才在真实云链路测试：
 
 - [ ] 机器人单独播放累计两分钟，无自身回声造成的用户转写或误打断。单次原始诊断窗口不超过 120 秒，采集不是正常运行的常开功能。
 - [ ] 回复开头、中段、末尾直接说完整的新句，至少十轮，至少九轮识别新意图并转入新回答。至少九轮从开口到旧回复**实际扬声器停止**不超过一秒；记录中位数、最差值和每个失败原因。这是验收目标，当前没有通过证据。
