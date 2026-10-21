@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/78/xiaozhi-esp32",
+  "tag": "v2.5.2",
+  "commit": "49b4380b3faa0ceadd28a3e78aaf0f311c46c57e",
+  "archive_url": "https://codeload.github.com/78/xiaozhi-esp32/tar.gz/49b4380b3faa0ceadd28a3e78aaf0f311c46c57e",
+  "archive_sha256": "b3460397122eff7edeb8c07bd9c26e2c216b24cc2e5c2d836ec2209ba5be0c63",
+  "archive_root": "xiaozhi-esp32-49b4380b3faa0ceadd28a3e78aaf0f311c46c57e",
+  "idf_version": "v6.1",
+  "idf_commit": "fff9895c82d744c7237be8847347bdd1b07c6643",
+  "esp_sr_version": "2.4.7",
+  "board": "m5stack-stopwatch",
+  "variant": "m5stack-stopwatch",
+  "target": "esp32s3"
+}

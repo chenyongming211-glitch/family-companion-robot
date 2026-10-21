@@ -75,3 +75,15 @@ https://datatracker.ietf.org/ipr/1914/
 
 Broadcom Corporation:
 https://datatracker.ietf.org/ipr/1526/
+
+Xiaozhi ESP32 stock StopWatch firmware source
+https://github.com/78/xiaozhi-esp32
+Tag: v2.5.2
+Commit: 49b4380b3faa0ceadd28a3e78aaf0f311c46c57e
+
+The externally prepared upstream firmware source is distributed under the MIT
+License. The complete upstream license is preserved in
+firmware/third_party/xiaozhi-LICENSE. Source provenance and archive checksum are
+recorded in firmware/upstream.lock.json. This attribution does not assign a new
+license to this workspace's own code. Upstream dependencies retain their own
+licenses; consult their notices when distributing firmware binaries.
