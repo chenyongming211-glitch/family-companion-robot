@@ -33,7 +33,7 @@
 - `Read(uint32_t generation, int64_t first_sample, int16_t* output, size_t count) const` returns Ready, NotYetAvailable, Expired, DifferentGeneration or InvalidRange. Output is entirely unchanged on every non-Ready result.
 - `begin_sample()`, `end_sample()`, `generation()` and `size()` are diagnostic accessors subject to the same caller locking contract.
 
-- [ ] **Step 1: Write the behavioral C++ harness and Python runner before the header.**
+- [x] **Step 1: Write the behavioral C++ harness and Python runner before the header.**
 
 The C++ harness uses real sample arrays and sentinels and must cover these independent cases: exact append/read; read across block boundaries; wrap after more than capacity with distinct ramp samples; expired read leaves output unchanged; future/incomplete read leaves output unchanged; wrong generation on both append/read leaves history/output unchanged; append gap and overlap rejected without changing the prior window; explicit zero samples readable without fabricating missing samples; negative index/null buffer/count above capacity rejected; signed sample-index overflow rejected; Reset invalidates prior history while preserving the chosen new generation; a submitted tail followed by zeros remains readable (no reset on playback stop). Use `static_assert(sizeof(PlaybackReferenceBuffer) <= 32768)`.
 
@@ -111,7 +111,7 @@ class PlaybackReferenceTest(unittest.TestCase):
 
 Run `python3 -m unittest discover -s firmware/tests -p test_playback_reference.py -v`; record expected missing-header compilation failure. No source-text assertions or mock ring implementations.
 
-- [ ] **Step 2: Implement the bounded buffer header.** Use this complete implementation contract, preserving exact API names:
+- [x] **Step 2: Implement the bounded buffer header.** Use this complete implementation contract, preserving exact API names:
 
 ```cpp
 #pragma once
@@ -205,7 +205,7 @@ static_assert(sizeof(PlaybackReferenceBuffer) <= 32768);
 
 If a real behavioral test exposes a defect in this starting implementation, fix the defect rather than weakening the test; report the correction. This class does not own calibration, clocks, DSP, reset-on-interruption policy, thread scheduling or application actions.
 
-- [ ] **Step 3: Verify the new contract and existing preparation regressions once.**
+- [x] **Step 3: Verify the new contract and existing preparation regressions once.**
 
 ```sh
 python3 -m unittest discover -s firmware/tests -p test_playback_reference.py -v
@@ -215,7 +215,7 @@ git diff --check
 
 Expected: real C++ behavior passes; 19 existing preparation tests remain passing. Do not rerun unrelated Go tests for these files. The existing CI's firmware-test discovery will execute this new harness on Linux when the controller pushes.
 
-- [ ] **Step 4: Document, self-review and commit on main.** Add a concise README section: reference-history scope, exact 32000-byte PCM/32768-byte object bounds, caller locking, no invented silence, reset only for a hardware timeline restart, and no AEC/firmware integration yet. Record RED/GREEN commands, actual scenarios, memory size and findings in the assigned ignored report. Stage only four task files and commit, without push.
+- [x] **Step 4: Document, self-review and commit on main.** Add a concise README section: reference-history scope, exact 32000-byte PCM/32768-byte object bounds, caller locking, no invented silence, reset only for a hardware timeline restart, and no AEC/firmware integration yet. Record RED/GREEN commands, actual scenarios, memory size and findings in the assigned ignored report. Stage only four task files and commit, without push.
 
 ## Remaining approved work
 
