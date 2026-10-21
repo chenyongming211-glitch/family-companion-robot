@@ -46,6 +46,45 @@ int main() {
     }
     assert(d.tx_samples() == 288000);
     assert(d.rx_samples() == 288000);
+
+    // Five minutes each of shared +/-50 and +/-1000 ppm drift must not change integer MR mapping.
+    for (int ppm : {-1000, -50, 50, 1000}) {
+        d.Begin(20, 0);
+        d.Capture(true);
+        for (int64_t b = 0; b < 30000; ++b) {
+            const auto stamp = (b + 1) * 10000 + ((b + 1) * ppm / 100);
+            tx = ramp(int(b % 1000));
+            assert(d.Tx(b * 240, stamp, tx.data(), 240));
+            assert(d.Rx(b * 240, stamp, mic.data(), 240));
+            assert(d.Take(mr.data(), 240, stamp) == D::Result::Ready);
+            for (size_t n = 0; n < 240; ++n) {
+                assert(mr[2 * n] == mic[n] && mr[2 * n + 1] == tx[n]);
+            }
+        }
+        assert(d.tx_samples() == 7200000 && d.rx_samples() == 7200000);
+    }
+    // Relative drift is not common clock error: fail before pairing diverges
+    // beyond the explicit relative timestamp uncertainty budget.
+    d.Begin(21, 0);
+    for (int64_t b = 0; b < 6000 && d.fault() == D::Fault::None; ++b) {
+        d.Tx(b * 240, (b + 1) * 10000 + (b + 1) / 2, tx.data(), 240);
+        d.Rx(b * 240, (b + 1) * 10000 - (b + 1) / 2, mic.data(), 240);
+    }
+    assert(d.fault() == D::Fault::Cadence);
+    // A genuinely missing descriptor remains a gap even if both clocks jump.
+    d.Begin(22, 0);
+    assert(d.Tx(0, 10000, tx.data(), 240));
+    assert(d.Rx(0, 10000, mic.data(), 240));
+    assert(!d.Tx(240, 30000, tx.data(), 240));
+    assert(d.fault() == D::Fault::Cadence);
+    // A continuous but out-of-budget common rate must fail the bounded rate check.
+    d.Begin(23, 0);
+    for (int64_t b = 0; b < 2000 && d.fault() == D::Fault::None; ++b) {
+        const auto stamp = (b + 1) * 10050;  // +5000 ppm
+        d.Tx(b * 240, stamp, tx.data(), 240);
+        d.Rx(b * 240, stamp, mic.data(), 240);
+    }
+    assert(d.fault() == D::Fault::Cadence);
     // Different callback phase: RX starts 125us (3 samples) after TX.
     d.Begin(3, 0);
     d.Capture(true);

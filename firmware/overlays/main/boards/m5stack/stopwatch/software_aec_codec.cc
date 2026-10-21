@@ -54,9 +54,12 @@ void SoftwareAecCodec::Start() {
 }
 void SoftwareAecCodec::PublishLocked() {
     const bool fault = !pair_ || pair_->fault() != D::Fault::None;
-    if (fault && !faulted_.exchange(true)) {
+    if (fault)
+        valid_ = false;
+    if (fault && !faulted_.load()) {
         epochs_.Fault();
         PublishEpochLocked();
+        faulted_ = true;
         ++faults_;
         if (pair_ && pair_->fault() == D::Fault::Overflow)
             ++overruns_;
@@ -111,8 +114,6 @@ void SoftwareAecCodec::OnDeviceEpoch(bool opened) {
 }
 void SoftwareAecCodec::EnableInput(bool enable) {
     std::lock_guard<std::mutex> lock(lifecycle_);
-    if (!enable)
-        SetCaptureActive(false);
     Es8311AudioCodec::EnableInput(enable);
 }
 void SoftwareAecCodec::EnableOutput(bool enable) {
@@ -139,6 +140,19 @@ void SoftwareAecCodec::SetCaptureActive(bool active) {
         PublishEpochLocked();
         if (pair_)
             pair_->Capture(active);
+    }
+    portEXIT_CRITICAL(&mux_);
+}
+void SoftwareAecCodec::CaptureBoundary() {
+    portENTER_CRITICAL(&mux_);
+    // Keep physical capture/TX history and frozen wake preroll; quarantine only
+    // raw backlog and in-flight capture results at observer-auto tail boundary.
+    valid_ = false;
+    epochs_.Boundary();
+    PublishEpochLocked();
+    if (pair_) {
+        pair_->Capture(false);
+        pair_->Capture(capture_active_);
     }
     portEXIT_CRITICAL(&mux_);
 }

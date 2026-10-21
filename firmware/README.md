@@ -180,18 +180,28 @@ Rounding occurs once on epoch phase. All later positions are integer counters;
 packet splits and ring wraps introduce no new rate conversion. Positive offset
 looks back; `CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES` is bounded to[-2400,2400]
 (default0). A negative initial index is warmup and is discarded, never fed to AFE.
-Future reference waits up to150ms; expiry, sequence/format gaps, cadence deviation
-beyond1500us from the epoch anchor, RX overflow and missing clocks latch a fault.
+Future reference waits up to150ms; expiry, sequence/format gaps, RX overflow and
+missing clocks latch a fault. Cadence checks distinguish common clock error from
+lost/relatively drifting streams: adjacent callbacks must be within1500us plus
+10us rate allowance of10ms; independent10-second measurement windows allow
+1000ppm common rate error plus1500us timestamp uncertainty. TX/RX relative
+completion phase, compared at equal integer sample index, must remain within
+1500us of its initial value plus1000ppm allowance for unequal latest indices.
+Thus harmless common clock error does not accumulate against the first nominal
+timestamp, while gaps and growing relative drift still fault. Pairing origins and
+sample history are never periodically reset; the relative budget is a bounded
+integrity uncertainty, not proof of sample-accurate acoustic alignment.
 The timestamp is ISR completion observation, not acoustic speaker time. Phase
 quantization is at most half a physical sample; callback latency, jitter,
 clock error and acoustic delay are not established by this calculation and
-must be measured. The1500us cadence threshold is an integrity guard, not an
+must be measured. The allowed1000ppm rate error over the maximum150ms initial
+phase adds up to150us fixed mapping uncertainty. The1500us relative/cadence threshold is an integrity guard, not an
 acoustic accuracy promise or a substitute for calibration.
 
 The unchanged ring stores16000 physical samples:666.7ms at24k, with32000 bytes
 of PCM. Reference object plus240-sample scratch and bounded reference metadata
 stay below32KiB. The separate RX queue holds16×240 samples (160ms;7680 PCM bytes).
-The portable pairing object measures40544 bytes on the host (ABI-dependent) and
+The portable pairing object measures40592 bytes on the host (ABI-dependent) and
 is explicitly allocated in internal SRAM; ISR state also uses internal storage
 and lock-free32-bit atomics. One portMUX protects every pairing operation; ISR
 work is bounded copies, counters and stamps only. The callback graph is not
@@ -211,7 +221,12 @@ Capture resumption, hardware restart and the first fault change the capture
 generation. AFE/input/output partial buffers and joint resampler state reset;
 20ms fetch polling and discard-only draining allow reset acknowledgement even
 when no new frame can safely be fed. Old in-flight AFE/encode results and queued
-cloud packets carry epochs and are rejected after the gate changes.
+cloud packets carry epochs and are rejected after the gate changes. A separate
+fault/hardware integrity identity lets an explicit next-wake mono authorization
+survive intentional warmup/pause/resume while a new fault revokes that grant.
+Capture activation serializes the event-bit read and codec apply together across
+all callers; warmup holds activation off until its owner releases it. Service stop
+and idle input-close updates use the same owner.
 
 A fault immediately revokes reference validity/eligibility and invalidates send
 epochs; a worker schedules one main-task mode-off/channel-close operation. The
@@ -222,6 +237,18 @@ feeding fallback data. Successful suspend/resume cannot clear a latched fault;
 a valid physical close/open may recover non-setup faults, while setup failures
 require reboot/reinitialization. A missing DSP resource can prevent audio from
 working at all; resource exhaustion is never reported as healthy fallback.
+
+Observer auto additionally holds uplink closed for120ms after software playback
+queues and write/decode in-flight flags first become idle. Polling does not extend
+the deadline; new output invalidates that idle boundary. A write-activity token
+also detects writes that begin and finish between polling calls. Local observation keeps
+running. At expiry, a single atomic RX/partial flush changes capture generation,
+then joint-resampler/AFE resets reject pre-boundary raw/fetch/encode work before
+fresh cloud output. It preserves TX history, the hardware microphone and frozen
+wake batches. Valid realtime bypasses this quarantine. This is the stock-equivalent
+120ms control guard, conservatively beyond six nominal10ms DMA descriptors after
+the last write finishes; it is not a measured physical/acoustic drain guarantee.
+No extra sleep is introduced in the main/audio path for this guard.
 
 The stock standby wake-audio/greeting path is retained. Its software-experiment
 encoder uses tagged batches and a persistent worker. Suspension after detection

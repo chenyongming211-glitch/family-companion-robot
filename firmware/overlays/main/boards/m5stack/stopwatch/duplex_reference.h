@@ -12,6 +12,7 @@ public:
     static constexpr size_t kBlock = 240, kRxBlocks = 16;
     static constexpr int kRate = 24000, kMaxOffset = 2400;
     static constexpr int64_t kHoldbackUs = 150000, kCadenceToleranceUs = 1500;
+    static constexpr int64_t kMaxClockErrorPpm = 1000, kRateWindowUs = 10000000;
     enum class Fault { None, Format, Sequence, Cadence, Overflow, Expired, Timeout, Setup };
     enum class Result { Ready, Wait, Warmup, Fault };
     void Begin(uint32_t generation, int offset) {
@@ -121,7 +122,7 @@ public:
 
 private:
     struct Clock {
-        int64_t end = 0, origin = 0;
+        int64_t end = 0, origin = 0, last_stamp = 0, rate_stamp = 0, rate_end = 0;
         bool started = false;
     };
     struct Block {
@@ -149,11 +150,44 @@ private:
         if (!clock.started) {
             clock.origin = stamp - duration;
             clock.started = true;
-        } else if (std::llabs(stamp - clock.origin - duration) > kCadenceToleranceUs) {
-            Fail(Fault::Cadence);
-            return false;
+            clock.rate_stamp = stamp;
+            clock.rate_end = first + n;
+        } else {
+            // Adjacent missing/repeated callbacks are gaps; shared slow clock
+            // error must not accumulate against the first nominal timestamp.
+            if (std::llabs(stamp - clock.last_stamp - 10000) >
+                kCadenceToleranceUs + 10000 * kMaxClockErrorPpm / 1000000) {
+                Fail(Fault::Cadence);
+                return false;
+            }
+            const int64_t window = (first + n - clock.rate_end) * 1000000 / kRate;
+            if (window >= kRateWindowUs) {
+                const auto error = stamp - clock.rate_stamp - window;
+                if (std::llabs(error) >
+                    window / 1000000 * kMaxClockErrorPpm + kCadenceToleranceUs) {
+                    Fail(Fault::Cadence);
+                    return false;
+                }
+                clock.rate_stamp = stamp;
+                clock.rate_end = first + n;
+            }
         }
         clock.end += n;
+        clock.last_stamp = stamp;
+        if (tx_.started && rx_.started) {
+            // Compare latest observations at equal integer sample position.
+            // The initial phase stays fixed; only common clock error cancels.
+            const auto samples = rx_.end - tx_.end;
+            const auto elapsed = samples * 1000000 / kRate;
+            const auto relative =
+                (rx_.last_stamp - tx_.last_stamp) - elapsed - (rx_.origin - tx_.origin);
+            const auto common_skew = std::llabs(elapsed) / 1000000 * kMaxClockErrorPpm +
+                                     (std::llabs(elapsed) % 1000000) * kMaxClockErrorPpm / 1000000;
+            if (std::llabs(relative) > kCadenceToleranceUs + common_skew) {
+                Fail(Fault::Cadence);
+                return false;
+            }
+        }
         return true;
     }
     Result WaitOrFault(int64_t now, int64_t stamp) {
@@ -169,7 +203,7 @@ private:
         partial_ = 0;
     }
     // PCM history + reference scratch + TX clock/state metadata stay under32KiB.
-    static_assert(sizeof(PlaybackReferenceBuffer) + kBlock * sizeof(int16_t) + 96 <= 32768);
+    static_assert(sizeof(PlaybackReferenceBuffer) + kBlock * sizeof(int16_t) + 160 <= 32768);
     PlaybackReferenceBuffer reference_;
     std::array<Block, kRxBlocks> rx_blocks_{};
     std::array<int16_t, kBlock> scratch_{};

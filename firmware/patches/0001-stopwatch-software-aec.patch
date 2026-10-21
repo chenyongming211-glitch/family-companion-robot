@@ -214,7 +214,7 @@ diff --git a/main/application.cc b/main/application.cc
 
      // Send the start listening command
      protocol_->SendStartListening(listening_mode_);
-+    audio_service_.SetExperimentUplink(true);
++    audio_service_.SetExperimentUplink(true, listening_mode_ != kListeningModeRealtime);
      audio_service_.EnableVoiceProcessing(true);
 
      ConfigureWakeWordForListening();
@@ -251,7 +251,7 @@ diff --git a/main/application.cc b/main/application.cc
 diff --git a/main/audio/audio_codec.h b/main/audio/audio_codec.h
 --- a/main/audio/audio_codec.h
 +++ b/main/audio/audio_codec.h
-@@ -38,6 +38,29 @@
+@@ -38,6 +38,31 @@
      virtual bool InputData(std::vector<int16_t>& data);
      virtual void Start();
 
@@ -266,6 +266,8 @@ diff --git a/main/audio/audio_codec.h b/main/audio/audio_codec.h
 +    }
 +    virtual bool ReferenceFaulted() const { return false; }
 +    virtual uint32_t WakeAudioGeneration() const { return CaptureGeneration(); }
++    virtual uint32_t ReferenceIntegrity() const { return 0; }
++    virtual void CaptureBoundary() {}
 +    virtual uint32_t CaptureGeneration() const { return 0; }
 +    virtual void SetCaptureActive(bool active) { (void)active; }
 +    virtual void ResetDiagnosticStream(uint8_t stream) { (void)stream; }
@@ -325,29 +327,44 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
          if (callbacks_.on_wake_word_detected) {
              callbacks_.on_wake_word_detected(wake_word);
          }
-@@ -192,6 +194,38 @@
+@@ -173,6 +175,7 @@
+ void AudioService::Stop() {
+     esp_timer_stop(audio_power_timer_);
+     service_stopped_.store(true);
++    UpdateCaptureActive();
+     xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING |
+                                          AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+
+@@ -192,7 +195,57 @@
      }
  }
 
-+void AudioService::SetExperimentUplink(bool enabled) {
++void AudioService::SetExperimentUplink(bool enabled, bool observer_tail) {
 +    if (!codec_ || !codec_->SoftwareReference())
 +        return;
-+    if (enabled && codec_->ReferenceFaulted())
-+        permitted_fault_generation_ = codec_->CaptureGeneration();
-+    experiment_uplink_requested_ = enabled;
-+    UpdateExperimentGate();
++    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
++    experiment_authorization_.Request(enabled, codec_->ReferenceIntegrity());
++    observer_tail_.Begin(enabled && observer_tail);
++    UpdateExperimentGateLocked();
 +}
 +
 +void AudioService::UpdateExperimentGate() {
 +    if (!codec_->SoftwareReference())
 +        return;
 +    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-+    // Faulted auto fallback may send mono, but the fault transition invalidates
-+    // every queued/in-flight result from the prior AEC epoch first.
++    UpdateExperimentGateLocked();
++}
++
++void AudioService::UpdateExperimentGateLocked() {
++    // Queue/in-flight drain excludes an outstanding write, but submitted DMA
++    // may still sound. Keep local observation running through the nonblocking
++    // stock-equivalent 120ms guard, then flush raw backlog before a fresh epoch.
++    if (observer_tail_.Advance(esp_timer_get_time(), IsPlaybackDrainedLocked(), output_activity_))
++        codec_->CaptureBoundary();
 +    const auto generation = codec_->CaptureGeneration();
 +    const bool permitted =
-+        experiment_uplink_requested_.load() &&
-+        (!codec_->ReferenceFaulted() || permitted_fault_generation_.load() == generation);
++        !observer_tail_.pending() &&
++        experiment_authorization_.Allows(codec_->ReferenceFaulted(), codec_->ReferenceIntegrity());
 +    if (experiment_gate_.Set(permitted, generation)) {
 +        audio_encode_queue_.clear();
 +        audio_send_queue_.clear();
@@ -355,16 +372,28 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
 +    }
 +}
 +
-+void AudioService::UpdateCaptureActive() {
++bool AudioService::CaptureRequested() const {
 +    const auto bits = xEventGroupGetBits(event_group_);
-+    codec_->SetCaptureActive(bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING |
-+                                     AS_EVENT_AUDIO_TESTING_RUNNING));
++    return !service_stopped_.load() &&
++           (bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING |
++                    AS_EVENT_AUDIO_TESTING_RUNNING));
++}
++void AudioService::UpdateCaptureActive() {
++    capture_activation_.Refresh([this] { return CaptureRequested(); },
++                                [this](bool active) { codec_->SetCaptureActive(active); });
++}
++void AudioService::SetCaptureWarmup(bool hold) {
++    capture_activation_.Warmup(
++        hold, [this] { return CaptureRequested(); },
++        [this](bool active) { codec_->SetCaptureActive(active); });
 +}
 +
  bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
++    UpdateExperimentGate();
      if (!codec_->input_enabled()) {
          esp_timer_stop(audio_power_timer_);
-@@ -202,8 +236,25 @@
+         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+@@ -202,8 +255,25 @@
      if (codec_->input_sample_rate() != sample_rate) {
          data.resize(samples * codec_->input_sample_rate() / sample_rate * codec_->input_channels());
          if (!codec_->InputData(data)) {
@@ -390,7 +419,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
          if (input_resampler_ != nullptr) {
              std::lock_guard<std::mutex> lock(input_resampler_mutex_);
              uint32_t in_sample_num = data.size() / codec_->input_channels();
-@@ -212,8 +263,16 @@
+@@ -212,8 +282,16 @@
                                                     &output_samples);
              auto resampled = std::vector<int16_t>(output_samples * codec_->input_channels());
              uint32_t actual_output = output_samples;
@@ -409,7 +438,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
              resampled.resize(actual_output * codec_->input_channels());
              data = std::move(resampled);
          }
-@@ -224,6 +283,10 @@
+@@ -224,6 +302,10 @@
          }
      }
 
@@ -420,12 +449,21 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
      /* Update the last input time */
      last_input_time_ = std::chrono::steady_clock::now();
      debug_statistics_.input_count++;
-@@ -274,9 +337,12 @@
+@@ -265,6 +347,7 @@
+             // enabled after the timer posted the stop request.
+             bits = xEventGroupGetBits(event_group_);
+             if ((bits & kAudioInputActiveBits) == 0) {
++                UpdateCaptureActive();
+                 if (codec_->input_enabled()) {
+                     codec_->EnableInput(false);
+                 }
+@@ -274,9 +357,13 @@
          }
 
          if (audio_input_need_warmup_.exchange(false)) {
-+            codec_->SetCaptureActive(false);
++            SetCaptureWarmup(true);
              vTaskDelay(pdMS_TO_TICKS(120));
++            SetCaptureWarmup(false);
              continue;
          }
 +
@@ -433,7 +471,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
 
          /* Used for audio testing in NetworkConfiguring mode by clicking the BOOT button */
          if (bits & AS_EVENT_AUDIO_TESTING_RUNNING) {
-@@ -311,7 +377,7 @@
+@@ -311,7 +398,7 @@
              int samples = 160;  // 10ms
              std::vector<int16_t> data;
              if (ReadAudioData(data, 16000, samples)) {
@@ -442,7 +480,15 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
                  continue;
              }
          }
-@@ -492,6 +558,10 @@
+@@ -335,6 +422,7 @@
+         auto task = std::move(audio_playback_queue_.front());
+         audio_playback_queue_.pop_front();
+         output_in_flight_ = true;
++        ++output_activity_;
+         audio_queue_cv_.notify_all();
+         lock.unlock();
+
+@@ -492,6 +580,10 @@
                      if (task.type == kAudioTaskTypeEncodeToSendQueue) {
                          {
                              std::lock_guard<std::mutex> lock2(audio_queue_mutex_);
@@ -453,7 +499,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
                              /* Never let a full send queue stall encoding: stale realtime
                               * audio is useless to the server, so drop the oldest packet. */
                              if (audio_send_queue_.size() >= MAX_SEND_PACKETS_IN_QUEUE) {
-@@ -576,6 +646,11 @@
+@@ -576,6 +668,11 @@
          /* Push the task to the encode queue */
          std::unique_lock<std::mutex> lock(audio_queue_mutex_);
 
@@ -465,7 +511,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
          /* If the task is to send queue, we need to set the timestamp */
          if (type == kAudioTaskTypeEncodeToSendQueue && !timestamp_queue_.empty()) {
              task.timestamp = timestamp_queue_.front();
-@@ -630,6 +705,11 @@
+@@ -630,6 +727,11 @@
 
  std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
      std::lock_guard<std::mutex> lock(audio_queue_mutex_);
@@ -477,7 +523,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
      if (audio_send_queue_.empty()) {
          return nullptr;
      }
-@@ -689,6 +769,7 @@
+@@ -689,6 +791,7 @@
              audio_engine_->EnableWakeWordDetection(false);
          }
          xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
@@ -485,7 +531,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
      }
  }
 
-@@ -707,6 +788,8 @@
+@@ -707,6 +810,8 @@
  }
 
  void AudioService::EnableVoiceProcessing(bool enable) {
@@ -494,7 +540,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
      ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
 
      if (enable) {
-@@ -728,6 +811,7 @@
+@@ -728,6 +833,7 @@
              audio_engine_->EnableVoiceProcessing(false);
          }
          xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
@@ -502,7 +548,7 @@ diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
      }
  }
 
-@@ -737,6 +821,7 @@
+@@ -737,6 +843,7 @@
          xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING);
      } else {
          xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING);
@@ -543,24 +589,36 @@ diff --git a/main/audio/audio_service.h b/main/audio/audio_service.h
      void EnableVoiceProcessing(bool enable);
      void EnableAudioTesting(bool enable);
      void EnableDeviceAec(bool enable);
-+    void SetExperimentUplink(bool enabled);
++    void SetExperimentUplink(bool enabled, bool observer_tail = false);
 
      void SetCallbacks(AudioServiceCallbacks& callbacks);
 
-@@ -150,6 +156,13 @@
+@@ -150,6 +156,17 @@
 
  private:
      AudioCodec* codec_ = nullptr;
 +    family_robot::ExperimentGate experiment_gate_;
-+    std::atomic<bool> experiment_uplink_requested_{false};
++    family_robot::UplinkAuthorization experiment_authorization_;
++    family_robot::CaptureActivation capture_activation_;
++    family_robot::ObserverTail observer_tail_;
 +    std::atomic<uint32_t> capture_generation_{0};
-+    std::atomic<uint32_t> permitted_fault_generation_{0};
 +    bool capture_faulted_ = false;
 +    void UpdateExperimentGate();
++    void UpdateExperimentGateLocked();
 +    void UpdateCaptureActive();
++    bool CaptureRequested() const;
++    void SetCaptureWarmup(bool hold);
      AudioServiceCallbacks callbacks_;
      std::unique_ptr<AudioEngine> audio_engine_;
      std::unique_ptr<AudioDebugger> audio_debugger_;
+@@ -192,6 +209,7 @@
+     FixedQueue<AudioTask, MAX_PLAYBACK_TASKS_IN_QUEUE> audio_playback_queue_;
+     bool decode_in_flight_ = false;
+     bool output_in_flight_ = false;
++    uint32_t output_activity_ = 0;  // under audio_queue_mutex_, includes writes between guard polls
+     bool playback_drained_notified_ = true;
+     uint32_t playback_generation_ = 0;
+     // For server AEC
 diff --git a/main/audio/codecs/es8311_audio_codec.cc b/main/audio/codecs/es8311_audio_codec.cc
 --- a/main/audio/codecs/es8311_audio_codec.cc
 +++ b/main/audio/codecs/es8311_audio_codec.cc

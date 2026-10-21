@@ -18,6 +18,8 @@ public:
     void EnableInput(bool enable) override;
     void EnableOutput(bool enable) override;
     void SetCaptureActive(bool active) override;
+    void CaptureBoundary() override;
+    uint32_t ReferenceIntegrity() const override { return integrity_generation_.load(); }
     bool SoftwareReference() const override { return true; }
     bool ReferenceValid() const override { return valid_.load(); }
     void ReportReferenceFailure() override { Fail(family_robot::DuplexReference::Fault::Setup); }
@@ -51,11 +53,12 @@ private:
     void PublishEpochLocked() {
         capture_generation_ = epochs_.capture();
         wake_generation_ = epochs_.wake();
+        integrity_generation_ = epochs_.integrity();
     }
     family_robot::DuplexReference* pair_ = nullptr;
     AecDiagnostics* diagnostics_ = nullptr;
     std::atomic<uint32_t> valid_{0}, faulted_{0};
-    std::atomic<uint32_t> capture_generation_{0}, wake_generation_{0},
+    std::atomic<uint32_t> capture_generation_{0}, wake_generation_{0}, integrity_generation_{0},
         aec_ready_generation_{UINT32_MAX};
     bool infrastructure_ok_ = false, setup_failed_ = false;
     bool callbacks_ok_ = false, accepting_ = false, capture_active_ = false;
