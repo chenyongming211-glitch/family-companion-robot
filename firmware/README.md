@@ -48,7 +48,7 @@ changes will be maintained as tracked patches/overlays against the lock, rather
 than edits to untracked vendor output.
 
 The private repository's **Actions → StopWatch stock firmware** workflow runs on
-`main` and `codex/**` firmware changes and supports **Run workflow**. Open a
+`main` firmware changes and supports **Run workflow**. Open a
 successful run matching the exact Git commit and download the
 `stopwatch-stock-<github.sha>` artifact within its seven-day retention period.
 It contains the source lock, resolved dependency lock, SDK configuration, app and

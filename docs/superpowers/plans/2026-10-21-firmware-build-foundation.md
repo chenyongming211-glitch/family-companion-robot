@@ -12,7 +12,7 @@
 
 - 用户已批准自然插话实验，但这项构建任务不打开串口、不刷机、不重启设备、不部署服务端。
 - 保留所有原有 Go 功能；不得提交密钥、设备备份、原始音频、原始抓包、`.superpowers/` 或生成的固件镜像。
-- 当前使用已注册的隔离 worktree，分支 `codex/natural-barge-in`，不得切换主目录分支或覆盖主目录私有材料。
+- 按用户 2026-10-22 的明确要求，直接在主目录的 `main` 分支开发、提交和推送；不再创建功能分支或新的 worktree。不得覆盖主目录私有材料。
 - 版本和 SHA 使用下列实查值；SDK 选择 v6.1 遵循上游 AGENTS.md 和官方 CI，满足设计的 >=6.0.1 要求。
 - 构建成功只证明原版源码可编译，不证明设备端 AEC 或自然插话可用。
 
@@ -32,7 +32,7 @@
 - CLI `python3 firmware/tools/prepare.py` reads the adjacent lock file, downloads missing archive to `firmware/.cache/`, creates `firmware/.cache/stock`, and prints only the prepared path. Optional `--archive PATH --destination PATH` allow a local verified archive or separate build directory; never overwrite an existing destination.
 - Workflow performs stock build through upstream canonical `scripts/build.py`, without AEC patches or local hardware secrets.
 
-- [ ] **Step 1: Write behavioral failing tests.** Use `unittest`, `tempfile`, and real `tarfile` archives; dynamic-load `firmware/tools/prepare.py` via `importlib.util`. Test valid nested file extraction with the top-level root stripped; checksum mismatch leaves destination absent; a `../escape` member is rejected without writing outside destination; symlinks and hardlinks are rejected; unexpected top-level root is rejected; an existing destination with a sentinel remains unchanged. A real fixture helper is:
+- [x] **Step 1: Write behavioral failing tests.** Use `unittest`, `tempfile`, and real `tarfile` archives; dynamic-load `firmware/tools/prepare.py` via `importlib.util`. Test valid nested file extraction with the top-level root stripped; checksum mismatch leaves destination absent; a `../escape` member is rejected without writing outside destination; symlinks and hardlinks are rejected; unexpected top-level root is rejected; an existing destination with a sentinel remains unchanged. A real fixture helper is:
 
 ```python
 def archive_at(path, name="source/main/file.txt", kind=tarfile.REGTYPE):
@@ -51,7 +51,7 @@ def archive_at(path, name="source/main/file.txt", kind=tarfile.REGTYPE):
 
 Run `python3 -m unittest discover -s firmware/tests -v` before implementation; record the expected missing-module/API failure. Tests must verify file contents and unchanged sentinels, not source text or implementation details.
 
-- [ ] **Step 2: Create the lock file with these exact values.**
+- [x] **Step 2: Create the lock file with these exact values.**
 
 ```json
 {
@@ -71,17 +71,17 @@ Run `python3 -m unittest discover -s firmware/tests -v` before implementation; r
 }
 ```
 
-- [ ] **Step 3: Implement minimal safe source preparation.** Compute SHA256 using streaming reads; reject an archive over 64MiB. Open `r:gz`, validate every entry before extraction: exactly the configured top-level root, no absolute path or `..` component, only regular files/directories, no links or device nodes, cumulative declared file sizes <=64MiB. Strip the root, extract with Python's `data` filter into a temporary sibling directory and move the prepared tree to a destination that does not exist. Clean temporary data on failure and refuse an existing destination before touching it. Download with `urllib.request` using a 30-second timeout and 64MiB limit into a temporary file; only keep the download after checksum validation. Do not execute downloaded scripts during preparation.
+- [x] **Step 3: Implement minimal safe source preparation.** Compute SHA256 using streaming reads; reject an archive over 64MiB. Open `r:gz`, validate every entry before extraction: exactly the configured top-level root, no absolute path or `..` component, only regular files/directories, no links or device nodes, cumulative declared file sizes <=64MiB. Strip the root, extract with Python's `data` filter into a temporary sibling directory and move the prepared tree to a destination that does not exist. Clean temporary data on failure and refuse an existing destination before touching it. Download with `urllib.request` using a 30-second timeout and 64MiB limit into a temporary file; only keep the download after checksum validation. Do not execute downloaded scripts during preparation.
 
 Implementation uses stdlib only. Keep extraction logic in `prepare_source`, CLI/download in small helpers and `main()`. Bind the CLI lock path from the script location so invocation from another cwd cannot select another lock file. Clearly report controlled errors without dumping environmental credentials.
 
-- [ ] **Step 4: Add the CI workflow.** Use this complete workflow as the starting point; resolve any real toolchain/build incompatibility rather than hiding it. Changes to workflow mechanics must preserve source/SDK checks and artifacts.
+- [x] **Step 4: Add the CI workflow.** Use this complete workflow as the starting point; resolve any real toolchain/build incompatibility rather than hiding it. Changes to workflow mechanics must preserve source/SDK checks and artifacts.
 
 ```yaml
 name: StopWatch stock firmware
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: [main]
     paths: ['firmware/**', '.github/workflows/firmware-baseline.yml']
   workflow_dispatch:
 permissions:
@@ -131,11 +131,11 @@ jobs:
 
 Record dependency lock, SDK config and flasher/partition artifacts because the existing device must retain NVS when experiment flashing is eventually performed. This task never invokes esptool or uploads firmware to an OTA endpoint.
 
-- [ ] **Step 5: License and docs.** Copy the complete upstream MIT license from the verified archive to `firmware/third_party/xiaozhi-LICENSE`. Add attribution to THIRD_PARTY_NOTICES without assigning a new license to our own code. `firmware/README.md` must show pinned source/SDK, the exact local prepare and stock build commands above, where ignored outputs live, how to find the private Actions artifact, and an explicit statement that stock build is neither AEC validation nor a flashing instruction. Explain that future source changes will be maintained as tracked patches/overlays against the lock, not edits to untracked vendor output.
+- [x] **Step 5: License and docs.** Copy the complete upstream MIT license from the verified archive to `firmware/third_party/xiaozhi-LICENSE`. Add attribution to THIRD_PARTY_NOTICES without assigning a new license to our own code. `firmware/README.md` must show pinned source/SDK, the exact local prepare and stock build commands above, where ignored outputs live, how to find the private Actions artifact, and an explicit statement that stock build is neither AEC validation nor a flashing instruction. Explain that future source changes will be maintained as tracked patches/overlays against the lock, not edits to untracked vendor output.
 
-- [ ] **Step 6: Verify and commit.** Re-run Python tests; run preparation against the real already-downloaded archive `/Users/chen/code/家庭陪伴机器人/.superpowers/firmware-baseline/xiaozhi-v2.5.2.tar.gz` into a fresh worktree-local `.superpowers/` destination. Compare prepared `main/application.cc` and the license to the verified archive. `git diff --check`; stage only task files; commit. Do not push (controller handles remote/CI).
+- [x] **Step 6: Verify and commit.** Re-run Python tests; run preparation against the real already-downloaded archive `/Users/chen/code/家庭陪伴机器人/.superpowers/firmware-baseline/xiaozhi-v2.5.2.tar.gz` into a fresh ignored `.superpowers/` destination. Compare prepared `main/application.cc` and the license to the verified archive. `git diff --check`; stage only task files; commit. Do not push (controller handles remote/CI).
 
-- [ ] **Step 7: Controller review and Linux build.** Generate task review package; require both spec compliance and code quality approval. Push the feature branch without proxy environment overrides being written into Git config or scripts. Observe the first exact-head Actions run, inspect failures, resolve actual build issues under the same task and re-review changes. Save dependency lock and build/partition evidence from a successful artifact locally under ignored `artifacts/`; report stock build separately from unimplemented AEC and unperformed hardware tests.
+- [ ] **Step 7: Controller review and Linux build.** Generate task review package; require both spec compliance and code quality approval. Push `main` directly without proxy environment overrides being written into Git config or scripts. Observe the first exact-head Actions run, inspect failures, resolve actual build issues under the same task and re-review changes. Save dependency lock and build/partition evidence from a successful artifact locally under ignored `artifacts/`; report stock build separately from unimplemented AEC and unperformed hardware tests.
 
 ## Self-review
 

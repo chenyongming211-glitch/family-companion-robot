@@ -1,7 +1,7 @@
 name: StopWatch stock firmware
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: [main]
     paths: ['firmware/**', '.github/workflows/firmware-baseline.yml']
   workflow_dispatch:
 permissions:
