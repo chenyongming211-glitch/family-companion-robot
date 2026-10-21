@@ -1,0 +1,20 @@
+name: Artifact storage check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create tiny storage probe
+        shell: bash
+        run: |
+          printf 'sha=%s\nrun_id=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/artifact-storage-probe.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: storage-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/artifact-storage-probe.txt
+          retention-days: 1
+          if-no-files-found: error
