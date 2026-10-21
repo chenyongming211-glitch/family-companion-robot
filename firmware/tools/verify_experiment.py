@@ -61,8 +61,9 @@ def verify(firmware, tree, variant, idf_commit):
             key, value = line[2:-len(' is not set')], 'n'
         else:
             continue
-        if key in effective:
-            raise ValueError('duplicate SDK config key')
+        # Native SDK output repeats deprecated aliases with identical values.
+        if key in effective and effective[key] != value:
+            raise ValueError('conflicting SDK config key: '+key)
         effective[key] = value
     experiment = variant == VARIANTS[1]
     required = {'CONFIG_IDF_TARGET': '"esp32s3"', 'CONFIG_BOARD_TYPE_M5STACK_STOPWATCH': 'y',

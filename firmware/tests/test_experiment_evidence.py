@@ -80,6 +80,23 @@ class EvidenceTests(unittest.TestCase):
         config.write_text(config.read_text().replace('# CONFIG_USE_DEVICE_AEC is not set\n', ''))
         self.assertEqual(self.verify('m5stack-stopwatch')['effective_config']['CONFIG_STOPWATCH_SOFTWARE_AEC'], 'n')
 
+    def test_native_style_identical_sdk_config_repeats_are_accepted(self):
+        config = self.tree/'sdkconfig'
+        config.write_text(config.read_text()
+                          + 'CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=3\n'
+                          + 'CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM=3\n'
+                          + 'CONFIG_USE_DEVICE_AEC=y\n'
+                          + '# CONFIG_I2S_ISR_IRAM_SAFE is not set\n')
+        evidence = self.verify()
+        self.assertEqual(evidence['effective_config']['CONFIG_USE_DEVICE_AEC'], 'y')
+        self.assertEqual(evidence['effective_config']['CONFIG_I2S_ISR_IRAM_SAFE'], 'n')
+
+    def test_conflicting_critical_sdk_config_repeats_are_rejected(self):
+        config = self.tree/'sdkconfig'
+        config.write_text(config.read_text() + '# CONFIG_USE_DEVICE_AEC is not set\n')
+        with self.assertRaisesRegex(ValueError, 'conflicting SDK config key: CONFIG_USE_DEVICE_AEC'):
+            self.verify()
+
     def test_lock_drift_wrong_sdk_and_changed_provenance_fail(self):
         with self.assertRaises(ValueError):
             self.module.verify(self.firmware, self.tree, 'm5stack-stopwatch-software-aec', '0'*40)
