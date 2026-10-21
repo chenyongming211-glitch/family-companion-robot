@@ -340,4 +340,80 @@ across resets. A lost reset marker is accompanied by a sequence gap and/or
 position discontinuity. Reboot starts a new collection session. Raw/AEC producer
 timestamps and sample positions do not imply zero DSP delay: segment at gaps,
 resets and invalid flags, then estimate delay/alignment within valid acoustic
-segments. The collector is a separate task; this change defines its wire only.
+segments. The explicit collector below consumes this wire without aligning the
+two stream origins.
+
+
+## Bounded private collector
+
+Only run the receiver inside an explicitly agreed test window. It creates a new
+0700 directory and exclusively creates 0600 files; existing output paths are
+refused. There is no background listener or capture on import. From the repo root:
+
+```sh
+python3 firmware/tools/capture_aec.py --bind <local-IPv4> --port 9000 --duration 30 --source <watch-IPv4> --output artifacts/aec-<new-window>
+```
+
+Bind is a numeric local IPv4, duration must be >0 and <=120 seconds, and the
+optional source filter is an exact IPv4. The first valid sender endpoint is also
+pinned for the session. `--max-bytes` defaults to 33554432 (32 MiB), with a minimum
+8192-byte metadata reserve and a hard 32 MiB ceiling. The budget includes packet
+framing, index, WAV headers/PCM and summary, not just PCM. Timeout, budget or
+Ctrl-C closes WAV files and writes the private summary. Stop the device window
+with `aec_diag_stop` too; receiver shutdown does not send commands to the watch.
+
+`packets.bin` retains each accepted original datagram in receive order, prefixed
+by its uint32 little-endian byte length. `index.jsonl` maps packet offsets to
+unchanged per-stream PCM WAV segments and retains every header field, sender,
+reference-validity flag and split reason. `summary.json` reports per-stream
+frame/channel-sample counts, sequence gaps, disorder, first/last generation and
+generation-change counts; the index preserves the full generation sequence.
+Reset, window/generation change, sequence/position discontinuity, duplicate or
+out-of-order packets, timestamp regression and reference-validity change split
+segments. Replayed older runs remain separate. Invalid-reference segments are
+explicitly marked in the index. No gap is padded and no PCM is invented.
+
+Raw MR and AFE positions have independent origins; do not align them by equal
+positions, file starts or producer timestamps. Calibration and acoustic delay
+measurement require real complete valid segments and field evidence; this
+collector gives no DSP/acoustic pass score. All automated collector tests use
+synthetic UDP traffic on 127.0.0.1 and verify actual saved packet/PCM bytes,
+permissions, rejection, segmentation, disk bounds, timeout and stopping.
+
+## Experimental target CI and field gate
+
+**Actions → StopWatch software AEC experiment** builds two isolated matrix jobs
+in the official `espressif/idf:v6.1` container, asserts the exact locked SDK
+commit, and runs host tests plus the canonical source preparation/build. Both
+jobs prepare the same tracked patch/overlay inputs in a fresh tree:
+
+```sh
+python3 firmware/tools/prepare_experiment.py
+cd firmware/.cache/experiment
+python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch-software-aec --language zh-CN --zip
+# In the other isolated job: --name m5stack-stopwatch
+```
+
+`tools/verify_experiment.py` rejects resolved native dependency-byte drift,
+checks critical component versions and source provenance, and asserts effective
+SDK config. The original variant from the patched tree keeps software/device
+AEC off and UART primary; the experiment enables software/device AEC and USB
+primary. Both require ISR IRAM safety and unconditional audio debugger off.
+Kconfig may omit the original device-AEC symbol or the experimental secondary
+USB symbol when their dependencies are false; these are disabled, never enabled. The separate unmodified stock workflow remains
+independent of this patched-tree check.
+
+Download `stopwatch-patched-<variant>-<exact github.sha>` within seven days. Its
+allowlisted contents include source/SDK lock, native resolved dependencies,
+effective sdkconfig, patch/overlay inputs and provenance, app/merged/bootloader/
+partition/assets/flasher args, canonical release ZIP, build identity and SHA256
+for every evidence file. It includes no environment dump. Neither workflow has
+an OTA, flash or deploy job.
+
+Follow [the field and rollback checklist](../docs/verification/2026-10-22-software-aec-field-test.md)
+before any device operation. Verify downloaded artifacts, partition geometry,
+shared-assets compatibility, current OTA selection and private rollback sources.
+Never blindly flash a merged image or overwrite NVS/otadata. The user must be on
+site and notified before serial access, resets, flashing or live capture. AEC
+observation/calibration comes before explicit realtime enable; ten-round real
+acoustic acceptance and USB-noise comparison remain separate pending work.
