@@ -78,6 +78,8 @@ Task InputData consumes bounded RX blocks and matching completed TX windows. Act
 
 Reset the joint resampler and AFE input/output partial frames when a hardware generation changes; mixed pre/post-restart samples are invalid even if a reference ring reset itself passed. The existing resampler exposes esp_ae_rate_cvt_reset. Ensure a generation fault cannot leak through an in-flight encode/send after closing its gate. At physical 24kHz the fixed 16000-sample history is about 667ms, not one second; document this actual retention and keep total reference storage within the approved cap.
 
+Distinguish a genuine expected-consumer overrun from startup/output-only or intentionally inactive capture. Boot sounds can open the duplex codec before a microphone consumer exists, and Wi-Fi configuration or AFE pause can temporarily stop reads. Do not permanently fault the experiment simply because RX callbacks continue in those intentional states; arm bounded capture on the actual input lifecycle and explicitly invalidate old partial frames on resumption. Add a host lifecycle regression for this case.
+
 - [ ] **Step 3: Integrate explicit observation and realtime eligibility.**
 
 Add Kconfig scoped to StopWatch with software-reference flag and unique config.json build; extend USE_DEVICE_AEC dependency only for that real adapter. Build starts in observation mode: local capture and AEC continue during speaking for measurement, while ordinary cloud dialogue uses auto behavior until a local explicit realtime-enable command is accepted after ready/valid state. Prevent self-echo leaking through encoded audio already queued when switching states; keep the normal auto playback-drain behavior for non-experimental builds.
