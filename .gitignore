@@ -1,0 +1,22 @@
+.env
+.env.*
+*.env
+*.local.env
+!.env.example
+!*.env.example
+/bin/
+/gateway
+/smoke
+/artifacts/
+/.superpowers/
+*.log
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Firmware sources, patches and lock files belong in Git; local builds do not.
+/firmware/.cache/
+/firmware/build/
+/firmware/managed_components/
+/firmware/sdkconfig
+/firmware/sdkconfig.old
