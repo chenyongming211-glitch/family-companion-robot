@@ -67,3 +67,26 @@ physical acoustic acceptance remain separate, unimplemented or unvalidated work.
 The complete upstream MIT license is in `third_party/xiaozhi-LICENSE`; see the
 repository's `THIRD_PARTY_NOTICES.txt` for attribution. Dependencies retain their
 own licenses.
+
+## Playback reference history prerequisite
+
+`overlays/main/boards/m5stack/stopwatch/playback_reference_buffer.h` provides a
+portable, sample-indexed history for one playback generation. Its fixed ring
+retains the newest 16000 signed 16-bit PCM samples: exactly 32000 bytes of PCM
+storage, with the whole object bounded to 32768 bytes by a compile-time assertion.
+It performs no dynamic allocation and has no internal lock. Callers must protect
+every operation, including reset, reads and diagnostic accessors, with the same
+ISR/task-safe critical section.
+
+Appends must be contiguous and match the current generation; rejected appends
+leave the history unchanged. Reads report expired or unavailable ranges and leave
+the entire output unchanged unless ready. Missing samples never become invented
+silence; zero samples must be explicitly submitted. Reset only for a hardware
+sample-timeline restart, not playback stop or interruption: an already submitted
+tail and subsequent explicit zeros must remain readable. Reset changes logical
+bounds and generation without clearing the PCM storage.
+
+This is a bounded-history prerequisite only. It has no DMA positions, clocks,
+calibration, DSP, AEC or firmware integration yet. The host C++ behavior harness
+runs through the Python test discovery command above; it does not establish
+device timing, acoustic performance or natural barge-in acceptance.
