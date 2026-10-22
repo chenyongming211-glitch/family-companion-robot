@@ -27,3 +27,30 @@ func (s *session) traceVoice(event string) {
 		"upstream_generation", s.generation, "response_open", s.responseID != "",
 		"speaking", s.started, "pending_ms", pendingMS, "input_bytes", s.inputBytes)
 }
+
+// Record only ledger boundaries, never each periodic receipt or request text.
+// A DMA position is digital completion evidence, not a word or acoustic clock.
+func (s *session) tracePlayback(event string, r *playbackRecord) {
+	if r == nil {
+		return
+	}
+	switch event {
+	case "progress_started", "invalid", "finished", "paused_created", "paused_retained", "confirmed":
+	default:
+		return
+	}
+	known := s.playbackEnabled && r.known && !r.invalid
+	var played any
+	if known {
+		played = r.played
+	}
+	args := []any{"event", event, "session", s.id, "playback_id", r.id,
+		"sent_samples", r.sent, "played_samples", played, "position_known", known,
+		"settled", r.settled, "interrupted", r.interrupted, "text_position", "unknown"}
+	if s.paused != nil {
+		args = append(args, "paused_task_id", s.paused.id,
+			"paused_playback_id", s.paused.playback.id,
+			"original_request_known", s.paused.playback.origin.known)
+	}
+	slog.Info("playback_event", args...)
+}

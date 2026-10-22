@@ -93,3 +93,63 @@ func TestVoiceTraceHasTimingMetadataWithoutConversationOrCredentials(t *testing.
 		}
 	}
 }
+
+func TestPlaybackTraceReportsBoundariesWithoutPrivateContentOrProgressFlood(t *testing.T) {
+	h := newPlaybackHarness(t)
+	const private = "NEVER_LOG_PLAYBACK_PRIVATE_CONTENT"
+	h.s.playbackEnabled = true
+	h.s.responseOrigin = requestOrigin{itemID: private, text: private, known: true}
+	var output lockedTraceBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	if err := h.s.beginPlayback(); err != nil {
+		t.Fatal(err)
+	}
+	h.s.started = true
+	h.s.activePlayback.sent = 14400
+	report := func(state string, n int, valid bool) {
+		data, err := json.Marshal(map[string]any{"type": "playback", "state": state,
+			"session_id": h.s.id, "playback_id": 1, "sample_rate": 24000,
+			"played_samples": n, "valid": valid, "basis": "i2s_dma", "interrupted": true,
+			"untrusted_extra": private})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.onDevice(context.Background(), deviceEvent{kind: websocket.TextMessage, data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for n := 2400; n <= 12000; n += 2400 {
+		report("progress", n, true)
+	}
+	h.s.pausePlayback()
+	report("finished", 12240, true)
+	text := output.snapshot()
+	if strings.Contains(text, private) {
+		t.Fatal("playback trace leaked private content")
+	}
+	if strings.TrimSpace(text) == "" {
+		t.Fatal("missing playback boundary diagnostics")
+	}
+	var events []string
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["msg"] != "playback_event" {
+			continue
+		}
+		events = append(events, record["event"].(string))
+		if record["playback_id"] != float64(1) || record["sent_samples"] != float64(14400) || record["text_position"] != "unknown" {
+			t.Fatal(record)
+		}
+		if record["event"] == "finished" && (record["played_samples"] != float64(12240) || record["settled"] != true || record["position_known"] != true || record["paused_task_id"] != "task-1") {
+			t.Fatal(record)
+		}
+	}
+	if strings.Join(events, ",") != "progress_started,paused_created,finished" {
+		t.Fatalf("missing or unbounded playback diagnostics: %v", events)
+	}
+}

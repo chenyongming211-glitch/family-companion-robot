@@ -143,7 +143,7 @@ func (s *session) run() error {
 		features = map[string]bool{"playback_progress_v1": true}
 	}
 	// This bridge does not implement server-side AEC; do not imply otherwise.
-	slog.Info("device_connected", "session", s.id, "protocol", s.version, "input_frame_ms", hello.AudioParams.FrameDuration, "server_aec_requested", hello.Features["aec"])
+	slog.Info("device_connected", "session", s.id, "protocol", s.version, "input_frame_ms", hello.AudioParams.FrameDuration, "server_aec_requested", hello.Features["aec"], "playback_progress_enabled", s.playbackEnabled)
 	if err := s.json(protocol.Hello{Type: "hello", Version: s.version, Transport: "websocket", SessionID: s.id, Features: features, AudioParams: protocol.AudioParams{Format: "opus", SampleRate: 24000, Channels: 1, FrameDuration: 60}}); err != nil {
 		return err
 	}

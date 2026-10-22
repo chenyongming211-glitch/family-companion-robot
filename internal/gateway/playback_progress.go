@@ -76,6 +76,9 @@ func (s *session) pausePlayback() {
 	if s.paused == nil {
 		s.taskSequence++
 		s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), playback: *r}
+		s.tracePlayback("paused_created", r)
+	} else {
+		s.tracePlayback("paused_retained", r)
 	}
 }
 func (s *session) receivePlayback(data []byte) {
@@ -102,6 +105,7 @@ func (s *session) receivePlayback(data []byte) {
 		if p.State == "finished" && !r.sealed && *p.Valid {
 			return
 		}
+		wasKnown, wasInvalid := r.known, r.invalid
 		if !*p.Valid {
 			r.invalid = true
 			r.known = false
@@ -122,6 +126,14 @@ func (s *session) receivePlayback(data []byte) {
 		if s.paused != nil && s.paused.playback.id == r.id {
 			s.paused.playback = *r
 		}
+		switch {
+		case p.State == "finished":
+			s.tracePlayback("finished", r)
+		case !wasInvalid && r.invalid:
+			s.tracePlayback("invalid", r)
+		case !wasKnown && r.known:
+			s.tracePlayback("progress_started", r)
+		}
 		s.promotePlayback(r)
 		return
 	}
@@ -132,6 +144,7 @@ func (s *session) promotePlayback(r *playbackRecord) {
 			t := &s.hist.Turns[i]
 			if t.playbackID == r.id && t.Delivery == "transport_sent" {
 				t.Delivery = "playback_confirmed"
+				s.tracePlayback("confirmed", r)
 			}
 		}
 	}
