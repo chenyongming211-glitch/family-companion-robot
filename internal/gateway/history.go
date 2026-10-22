@@ -27,6 +27,14 @@ func (h *history) add(role, text string) {
 	h.appendTurn(turn{Role: role, Text: limitText(text, 512)})
 }
 
+// Like LiveKit's optional synchronized_transcript, unknown playback must remain
+// unknown. Sending the final packet is not evidence of words heard on hardware.
+func (h *history) addSent(generated string) {
+	if generated != "" {
+		h.appendTurn(turn{Role: "assistant", Delivery: "transport_sent", GeneratedText: limitText(generated, 512)})
+	}
+}
+
 // Keep an unfinished reply as draft data, never as words known to be heard.
 // A completed side answer may clear the latest-interruption flag, but this
 // chronological record remains available for an explicit request to continue.

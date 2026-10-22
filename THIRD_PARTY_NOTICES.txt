@@ -87,3 +87,28 @@ firmware/third_party/xiaozhi-LICENSE. Source provenance and archive checksum are
 recorded in firmware/upstream.lock.json. This attribution does not assign a new
 license to this workspace's own code. Upstream dependencies retain their own
 licenses; consult their notices when distributing firmware binaries.
+
+Qwen-Live-Harness output lifecycle reference (Apache License 2.0)
+https://github.com/QwenLM/Qwen-Live-Harness
+Commit: b2d17b8706b226ff7792683ecd8f050f18f9752e
+Reference: packages/qwen-live-harness-host/src/preload/audio-output-queue.ts
+
+The gateway adapts the sealed-output and bounded completed-identity patterns
+in Go (internal/gateway/response_lifecycle.go and session.go). It uses the
+gateway's existing single-output PCM queue and connection-generation boundary;
+the original TypeScript source is not included. These adaptations are changes
+from the upstream implementation. The upstream license is included in
+licenses/Apache-2.0.txt.
+
+LiveKit Agents playback/context reference (Apache License 2.0)
+https://github.com/livekit/agents
+Commit: 7a7547e442aaf9cf6f6cab54dd5db6f7cfb5a964
+References: livekit-agents/livekit/agents/voice/io.py,
+            livekit-agents/livekit/agents/voice/agent_activity.py,
+            livekit-agents/livekit/agents/voice/transcription/synchronizer.py
+
+The gateway's transport_sent history label follows the distinction between
+audio forwarding and a sink's playback confirmation. This is an independently
+written Go representation; no LiveKit runtime, model weights or source files
+are bundled. The reference project's license is included in
+licenses/Apache-2.0.txt.

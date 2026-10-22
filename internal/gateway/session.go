@@ -44,6 +44,7 @@ type session struct {
 	mode                   string
 	responseID, transcript string
 	draftTranscript        string
+	retired                retiredResponses
 	responseDone, started  bool
 	nextAudio              time.Time
 	lastAudio              time.Time
@@ -218,6 +219,7 @@ func (s *session) connect(ctx context.Context) error {
 	}
 	s.cancelTools()
 	s.generation++
+	s.retired = retiredResponses{}
 	cfg := s.toolConfig()
 	c, err := qwen.Open(ctx, cfg, s.mode, s.hist.context())
 	if err != nil {
@@ -413,6 +415,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		if ev.Response.ID == "" || len(ev.Response.ID) > 256 {
 			return errors.New("upstream response ID missing")
 		}
+		if s.retired.contains(ev.Response.ID) {
+			return nil
+		}
 		if s.responseID != "" || len(s.toolCalls) > 0 {
 			return errors.New("overlapping upstream responses")
 		}
@@ -440,7 +445,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 	case "response.function_call_arguments.done":
 		return s.callTool(ev)
 	case "response.audio.delta":
-		if ev.ResponseID == "" || ev.ResponseID != s.responseID {
+		if ev.ResponseID == "" || ev.ResponseID != s.responseID || s.responseDone {
 			return nil
 		}
 		pcm, err := base64.StdEncoding.DecodeString(ev.Delta)
@@ -452,11 +457,11 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		}
 		return s.pending.Append(pcm)
 	case "response.audio_transcript.delta":
-		if ev.ResponseID == s.responseID && s.responseID != "" {
+		if ev.ResponseID == s.responseID && s.responseID != "" && !s.responseDone {
 			s.draftTranscript = limitText(s.draftTranscript+ev.Delta, 2048)
 		}
 	case "response.audio_transcript.done":
-		if ev.ResponseID != s.responseID || s.responseID == "" {
+		if ev.ResponseID != s.responseID || s.responseID == "" || s.responseDone {
 			return nil
 		}
 		s.transcript = limitText(ev.Transcript, 2048)
@@ -465,7 +470,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			return s.tts("sentence_start", s.transcript)
 		}
 	case "response.done":
-		if ev.Response.ID != s.responseID || s.responseID == "" {
+		if ev.Response.ID != s.responseID || s.responseID == "" || s.responseDone {
 			return nil
 		}
 		if ev.Response.Status != "completed" {

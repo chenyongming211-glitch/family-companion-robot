@@ -67,8 +67,9 @@ func (s *session) play() error {
 			}
 		}
 		// Transport delivery is known; actual hardware playback has no ACK.
-		s.hist.add("assistant", s.transcript)
+		s.hist.addSent(s.transcript)
 		s.hist.Interrupted = false
+		s.retired.add(s.responseID)
 		s.responseID = ""
 		if !s.toolPlayback {
 			s.started = false

@@ -60,7 +60,7 @@ func TestInterruptedDraftSurvivesInterveningAnswerAsUnplayedData(t *testing.T) {
 			h.device.want(t, "tts")
 			_, setup = h.model(t)
 			instructions = setup["instructions"].(string)
-			if !strings.Contains(instructions, `"generated_text":"`+draft+`"`) || !strings.Contains(instructions, `"text":"等于二"`) {
+			if !strings.Contains(instructions, `"generated_text":"`+draft+`"`) || !strings.Contains(instructions, `"delivery":"transport_sent","generated_text":"等于二"`) {
 				t.Fatal("answering the side question discarded the unfinished original task")
 			}
 		})
@@ -72,7 +72,7 @@ func TestInterruptedDraftsShareTheExistingHistoryBudget(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		h.add("user", strings.Repeat("问", 1000))
 		h.addInterrupted(strings.Repeat("稿", 1000))
-		h.add("assistant", "短答")
+		h.addSent(strings.Repeat("答", 1000))
 	}
 	var decoded struct {
 		Turns []map[string]any `json:"turns"`
@@ -85,7 +85,7 @@ func TestInterruptedDraftsShareTheExistingHistoryBudget(t *testing.T) {
 	}
 	for _, v := range decoded.Turns {
 		if draft, ok := v["generated_text"].(string); ok {
-			if len([]rune(draft)) != 512 || v["delivery"] != "interrupted" || v["text"] != nil {
+			if len([]rune(draft)) != 512 || (v["delivery"] != "interrupted" && v["delivery"] != "transport_sent") || v["text"] != nil {
 				t.Fatal("unbounded draft or generated words presented as completed speech")
 			}
 		}
