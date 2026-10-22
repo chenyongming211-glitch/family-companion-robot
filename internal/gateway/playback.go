@@ -18,6 +18,9 @@ func (s *session) play() error {
 	frame := s.pending.Pop(audio.FrameBytes, s.responseDone)
 	if frame != nil {
 		if !s.started {
+			if err := s.beginPlayback(); err != nil {
+				return err
+			}
 			if err := s.tts("start", ""); err != nil {
 				return err
 			}
@@ -38,6 +41,9 @@ func (s *session) play() error {
 		}
 		if err := s.writeAudio(wrapped); err != nil {
 			return err
+		}
+		if s.activePlayback != nil {
+			s.activePlayback.sent += 1440
 		}
 		s.lastAudio = s.playbackNow()
 		s.lastActivity = time.Now()
@@ -66,8 +72,16 @@ func (s *session) play() error {
 				return err
 			}
 		}
-		// Transport delivery is known; actual hardware playback has no ACK.
+		// Transport completion alone never proves playback. A matching final
+		// receipt can later promote only this block's normal completed history.
 		s.hist.addSent(s.transcript)
+		if s.playbackEnabled && s.activePlayback != nil && s.transcript != "" {
+			s.hist.Turns[len(s.hist.Turns)-1].playbackID = s.activePlayback.id
+		}
+		if !s.toolPlayback {
+			s.sealPlayback(false)
+			s.activePlayback = nil
+		}
 		s.hist.Interrupted = false
 		s.retired.add(s.responseID)
 		s.responseID = ""

@@ -81,9 +81,15 @@ func (p *toolPeer) quiet(t *testing.T, d time.Duration) {
 type toolHarness struct {
 	device *toolPeer
 	models chan *toolPeer
+	hello  map[string]any
 }
 
 func newToolHarness(t *testing.T, mcp bool, configure ...func(*Config)) *toolHarness {
+	t.Helper()
+	return newToolHarnessFeatures(t, map[string]bool{"mcp": mcp}, configure...)
+}
+
+func newToolHarnessFeatures(t *testing.T, features map[string]bool, configure ...func(*Config)) *toolHarness {
 	t.Helper()
 	models := make(chan *toolPeer, 8)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -113,9 +119,16 @@ func newToolHarness(t *testing.T, mcp bool, configure ...func(*Config)) *toolHar
 	}
 	t.Cleanup(func() { c.Close() })
 	p := newToolPeer(c)
-	p.send(t, map[string]any{"type": "hello", "version": 1, "transport": "websocket", "features": map[string]bool{"mcp": mcp}, "audio_params": map[string]any{"format": "opus", "sample_rate": 16000, "channels": 1, "frame_duration": 60}})
-	p.want(t, "hello")
-	return &toolHarness{p, models}
+	p.send(t, map[string]any{"type": "hello", "version": 1, "transport": "websocket", "features": features, "audio_params": map[string]any{"format": "opus", "sample_rate": 16000, "channels": 1, "frame_duration": 60}})
+	hello := p.want(t, "hello")
+	if features["playback_progress_v1"] {
+		if hello["features"].(map[string]any)["playback_progress_v1"] != true {
+			t.Fatal("missing server negotiation")
+		}
+	} else if hello["features"] != nil {
+		t.Fatal("legacy server hello unexpectedly negotiated playback")
+	}
+	return &toolHarness{device: p, models: models, hello: hello}
 }
 func (h *toolHarness) model(t *testing.T) (*toolPeer, map[string]any) {
 	t.Helper()
@@ -200,7 +213,7 @@ func TestDeviceToolsDiscoveryExecutionAndContinuation(t *testing.T) {
 	discoverTools(t, h)
 	p, cfg := h.model(t)
 	defs, ok := cfg["tools"].([]any)
-	if !ok || len(defs) != 3 {
+	if !ok || len(defs) != 5 {
 		t.Fatalf("fixed native tools missing: %v", cfg)
 	}
 	for _, def := range defs {
@@ -320,7 +333,7 @@ func TestDeviceToolsDiscoveryFailureRetainsVoiceAndBufferedEvents(t *testing.T) 
 				}
 			}
 			p, cfg := h.model(t)
-			if defs, ok := cfg["tools"].([]any); ok && len(defs) > 0 {
+			if defs, ok := cfg["tools"].([]any); ok && len(defs) != 2 {
 				t.Fatal("failed discovery exposed tools")
 			}
 			if !strings.Contains(cfg["instructions"].(string), "不可用") {

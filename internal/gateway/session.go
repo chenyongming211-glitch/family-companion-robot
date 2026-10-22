@@ -28,6 +28,15 @@ type modelEvent struct {
 	err        error
 }
 type session struct {
+	playbackEnabled        bool
+	playbackSequence       uint32
+	taskSequence           uint64
+	playbacks              []*playbackRecord
+	activePlayback         *playbackRecord
+	paused                 *pausedTask
+	currentInput           requestOrigin
+	responseOrigin         requestOrigin
+	inputCommitted         bool
 	ctx                    context.Context
 	device                 *websocket.Conn
 	cfg                    Config
@@ -62,6 +71,7 @@ type session struct {
 	toolSeen               map[string]bool
 	toolCount              int
 	toolParentDone         bool
+	toolContinuation       bool
 	toolPlayback           bool
 }
 
@@ -92,7 +102,11 @@ func (s *session) json(v any) error {
 	return s.write(websocket.TextMessage, b)
 }
 func (s *session) tts(state, text string) error {
-	if err := s.json(protocol.Control{Type: "tts", State: state, Text: text, SessionID: s.id}); err != nil {
+	v := protocol.Control{Type: "tts", State: state, Text: text, SessionID: s.id}
+	if s.playbackEnabled && s.activePlayback != nil {
+		v.PlaybackID = s.activePlayback.id
+	}
+	if err := s.json(v); err != nil {
 		return err
 	}
 	if state == "start" {
@@ -113,9 +127,21 @@ func (s *session) run() error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		s.playbacks = nil
+		s.activePlayback = nil
+		s.paused = nil
+		s.currentInput = requestOrigin{}
+		s.responseOrigin = requestOrigin{}
+	}()
+	s.playbackEnabled = hello.Features["playback_progress_v1"]
+	features := map[string]bool(nil)
+	if s.playbackEnabled {
+		features = map[string]bool{"playback_progress_v1": true}
+	}
 	// This bridge does not implement server-side AEC; do not imply otherwise.
 	slog.Info("device_connected", "session", s.id, "protocol", s.version, "input_frame_ms", hello.AudioParams.FrameDuration, "server_aec_requested", hello.Features["aec"])
-	if err := s.json(protocol.Hello{Type: "hello", Version: s.version, Transport: "websocket", SessionID: s.id, AudioParams: protocol.AudioParams{Format: "opus", SampleRate: 24000, Channels: 1, FrameDuration: 60}}); err != nil {
+	if err := s.json(protocol.Hello{Type: "hello", Version: s.version, Transport: "websocket", SessionID: s.id, Features: features, AudioParams: protocol.AudioParams{Format: "opus", SampleRate: 24000, Channels: 1, FrameDuration: 60}}); err != nil {
 		return err
 	}
 	s.device.SetReadDeadline(time.Time{})
@@ -219,6 +245,10 @@ func (s *session) connect(ctx context.Context) error {
 	}
 	s.cancelTools()
 	s.generation++
+	s.currentInput = requestOrigin{}
+	s.inputCommitted = false
+	s.toolContinuation = false
+	s.responseOrigin = requestOrigin{}
 	s.retired = retiredResponses{}
 	cfg := s.toolConfig()
 	c, err := qwen.Open(ctx, cfg, s.mode, s.hist.context())
@@ -270,6 +300,16 @@ func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
 	if ev.kind != websocket.TextMessage {
 		return nil
 	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(ev.data, &envelope) != nil {
+		return errors.New("invalid device control JSON")
+	}
+	if envelope.Type == "playback" {
+		s.receivePlayback(ev.data)
+		return nil
+	}
 	var v protocol.Control
 	if json.Unmarshal(ev.data, &v) != nil {
 		return errors.New("invalid device control JSON")
@@ -288,7 +328,7 @@ func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
 			if v.Mode != "auto" && v.Mode != "manual" && v.Mode != "realtime" {
 				return errors.New("unsupported listen mode")
 			}
-			if s.responseID != "" || s.awaitingResponse || len(s.toolCalls) > 0 {
+			if s.responseID != "" || s.started || s.awaitingResponse || len(s.toolCalls) > 0 {
 				if err := s.interrupt(ctx, false, false); err != nil {
 					return err
 				}
@@ -335,9 +375,12 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 		return nil
 	}
 	// Stop playback before any network reconnect. No queued old audio survives.
-	if err := s.json(protocol.Control{
-		Type: "tts", State: "stop", Reason: "interrupted", SessionID: s.id,
-	}); err != nil {
+	s.pausePlayback()
+	stop := protocol.Control{Type: "tts", State: "stop", Reason: "interrupted", SessionID: s.id}
+	if s.playbackEnabled && s.activePlayback != nil && s.started {
+		stop.PlaybackID = s.activePlayback.id
+	}
+	if err := s.json(stop); err != nil {
 		return err
 	}
 	s.traceVoice("interrupt")
@@ -352,6 +395,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	s.responseID = ""
 	s.responseDone = false
 	s.started = false
+	s.activePlayback = nil
 	s.transcript = ""
 	s.draftTranscript = ""
 	s.lastAudio = time.Time{}
@@ -377,6 +421,9 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	return nil
 }
 func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
+	if (ev.Type == "input_audio_buffer.committed" || ev.Type == "conversation.item.input_audio_transcription.completed") && len(ev.ItemID) > 256 {
+		return errors.New("upstream input identity exceeded limits")
+	}
 	switch ev.Type {
 	case "error":
 		return errors.New("upstream rejected a realtime event")
@@ -393,6 +440,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.lastActivity = time.Now()
 	case "input_audio_buffer.committed":
 		s.traceVoice("input_committed")
+		s.commitOrigin(ev.ItemID)
 		s.inputActive = false
 		s.lastActivity = time.Now()
 		s.inputTail = nil
@@ -406,6 +454,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.traceVoice("transcription_ready")
 		s.toolCount = 0
 		text := limitText(ev.Transcript, 2048)
+		s.transcribeOrigin(ev.ItemID, ev.Transcript)
 		if text != "" {
 			s.lastActivity = time.Now()
 		}
@@ -425,6 +474,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		// A tool continuation shares the open TTS block and encoder. Firmware
 		// resets its decoder only at TTS start, and resumes listening on stop.
 		if !s.toolPlayback {
+			if !s.toolContinuation {
+				s.responseOrigin = s.currentInput
+			}
 			s.encoder.Close()
 			var err error
 			s.encoder, err = audio.NewEncoder()
@@ -434,6 +486,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			s.started = false
 		}
 		s.toolPlayback = false
+		s.toolContinuation = false
 		s.responseID = ev.Response.ID
 		s.awaitingResponse = false
 		s.responseDone = false

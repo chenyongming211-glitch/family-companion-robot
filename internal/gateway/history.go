@@ -3,6 +3,7 @@ package gateway
 import "encoding/json"
 
 type turn struct {
+	playbackID    uint32
 	Role          string `json:"role"`
 	Text          string `json:"text,omitempty"`
 	Delivery      string `json:"delivery,omitempty"`

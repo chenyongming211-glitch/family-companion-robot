@@ -22,12 +22,13 @@ type Hello struct {
 	Features    map[string]bool `json:"features,omitempty"`
 }
 type Control struct {
-	Type      string `json:"type"`
-	State     string `json:"state,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-	Mode      string `json:"mode,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	Text      string `json:"text,omitempty"`
+	PlaybackID uint32 `json:"playback_id,omitempty"`
+	Type       string `json:"type"`
+	State      string `json:"state,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	Text       string `json:"text,omitempty"`
 }
 
 func ParseHello(data []byte, version int) (Hello, error) {
