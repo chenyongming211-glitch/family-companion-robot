@@ -90,7 +90,15 @@ func (s *session) json(v any) error {
 	return s.write(websocket.TextMessage, b)
 }
 func (s *session) tts(state, text string) error {
-	return s.json(protocol.Control{Type: "tts", State: state, Text: text, SessionID: s.id})
+	if err := s.json(protocol.Control{Type: "tts", State: state, Text: text, SessionID: s.id}); err != nil {
+		return err
+	}
+	if state == "start" {
+		s.traceVoice("tts_start")
+	} else if state == "stop" {
+		s.traceVoice("tts_stop")
+	}
+	return nil
 }
 func (s *session) run() error {
 	s.device.SetReadLimit(16384)
@@ -268,6 +276,7 @@ func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
 	}
 	switch v.Type {
 	case "abort":
+		s.traceVoice("device_abort")
 		s.lastActivity = time.Now()
 		return s.interrupt(ctx, false, true)
 	case "listen":
@@ -287,9 +296,12 @@ func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
 			}
 			if s.mode != v.Mode {
 				s.mode = v.Mode
+				s.traceVoice("listen_start")
 				return s.model.SetMode(v.Mode)
 			}
+			s.traceVoice("listen_start")
 		case "stop":
+			s.traceVoice("listen_stop")
 			if s.inputActive {
 				s.lastActivity = time.Now()
 			}
@@ -325,6 +337,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	}); err != nil {
 		return err
 	}
+	s.traceVoice("interrupt")
 	s.pending.Clear()
 	s.hist.Interrupted = true
 	if !s.responseDone {
@@ -361,15 +374,18 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 	case "error":
 		return errors.New("upstream rejected a realtime event")
 	case "input_audio_buffer.speech_started":
+		s.traceVoice("vad_started")
 		if err := s.interrupt(ctx, true, false); err != nil {
 			return err
 		}
 		s.inputActive = true
 		s.lastActivity = time.Now()
 	case "input_audio_buffer.speech_stopped":
+		s.traceVoice("vad_stopped")
 		s.inputActive = false
 		s.lastActivity = time.Now()
 	case "input_audio_buffer.committed":
+		s.traceVoice("input_committed")
 		s.inputActive = false
 		s.lastActivity = time.Now()
 		s.inputTail = nil
@@ -380,6 +396,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			return s.model.Send(map[string]any{"type": "response.create"})
 		}
 	case "conversation.item.input_audio_transcription.completed":
+		s.traceVoice("transcription_ready")
 		s.toolCount = 0
 		text := limitText(ev.Transcript, 2048)
 		if text != "" {
@@ -413,6 +430,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.transcript = ""
 		s.nextAudio = time.Time{}
 		s.lastAudio = time.Time{}
+		s.traceVoice("response_created")
 	case "response.function_call_arguments.done":
 		return s.callTool(ev)
 	case "response.audio.delta":
@@ -440,8 +458,10 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			return nil
 		}
 		if ev.Response.Status != "completed" {
+			s.traceVoice("response_cancelled")
 			return s.interrupt(ctx, false, false)
 		}
+		s.traceVoice("response_completed")
 		if s.pending.Len()%2 != 0 {
 			return errors.New("upstream PCM ended with a partial sample")
 		}
