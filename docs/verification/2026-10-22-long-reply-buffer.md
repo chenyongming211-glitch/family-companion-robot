@@ -17,4 +17,10 @@
 - 扩展真实 WebSocket 打断回归：设备 abort 和上游 speech_started 都在 30 秒积压下停止旧回复、隔离旧代次/回复 ID、恢复新回复，保留上下文中断标记。
 - macOS 本机 `go test -race ./...` 与 `go vet ./...` 通过。Darwin/CGO 链接器有 LC_DYSYMTAB 警告；Linux 发布验证另记，未把本机检查当成线上或实机通过。
 
-Linux 构建、发布身份与真实长回复复测将在执行后补记。自然插话仍待完成长回复、双讲和实际停播验收。
+## Linux 发布
+
+提交 `17449213d109019bee5bfe5415869bfa994c96eb` 的受控源码归档 SHA256 为 `8c777641fafddbf10fa5a7ba1bb109c85166bbc26c2fc096cd221168c8cb2a89`，本地与服务器一致。在服务器独立目录使用 Go 1.27.3 / Linux amd64 / libopus 1.4 完成 `go test -race -count=1 ./...`、`go vet ./...`、`go build -trimpath`，全部成功，二进制 SHA256 为 `6f7db6584c569c3e81eeed10558355538d296b2d1816ee2ce7a5142410403dc0`。
+
+提前告知会结束语音连接后，于 2026-10-22 13:42（北京时间）更新为 `/opt/family-robot/releases/voice-gateway-20261022T054223Z-1744921`，保留之前的 `voice-gateway-20261021T152702Z-56ea18e2` 供回滚。已核对 systemd active、实际运行进程的二进制 SHA，以及服务器内/公网健康接口。没有改密钥、环境配置或手表固件。私有构建与发布记录在 `artifacts/gateway-build-20261022-1744921/`。
+
+用户复测反馈：第一次模型未理解数数意图；第二次已完整数到五十，数完后继续回答一加一。设备记录了约 34.76 秒连续 speaking，并正常返回 listening。本轮长回复不再因旧 20 秒待播上限断开。realtime 仍关闭，播放中不能打断符合本轮观察模式；双讲音频与实际自然插话验收仍在继续。
