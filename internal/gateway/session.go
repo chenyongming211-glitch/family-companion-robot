@@ -459,7 +459,11 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		}
 		if ev.Response.Status != "completed" {
 			s.traceVoice("response_cancelled")
-			return s.interrupt(ctx, false, false)
+			// Native VAD may cancel before speech_started. Preserve its already
+			// uploaded, uncommitted prefix just as the speech_started path does.
+			// Explicit aborts, failed responses and manual mode discard input.
+			replay := ev.Response.Status == "cancelled" && s.mode != "manual"
+			return s.interrupt(ctx, replay, false)
 		}
 		s.traceVoice("response_completed")
 		if s.pending.Len()%2 != 0 {
