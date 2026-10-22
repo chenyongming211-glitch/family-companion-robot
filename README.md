@@ -1,6 +1,6 @@
 # 家庭陪伴机器人：最小 Go 实时语音网关
 
-2026-10-22：已实现设备播放回报与独立暂停任务的构建候选，尚未部署或刷机；准确字词接续仍未验收，未加入辅助 ASR。结果与各阶段边界见[验证记录](docs/verification/2026-10-22-device-playback-and-paused-task.md)。
+2026-10-22：已部署设备播放回报与独立暂停任务网关，并通过 USB 刷入候选固件；实机普通对话、完整长回复、直接插话和播放回报已验证，任务内容归属继续现场核验。“继续数”的位置或终点仍不正确，未加入辅助 ASR。最新状态见[现场验证](docs/verification/2026-10-22-playback-field-results.md)，构建来源见[阶段记录](docs/verification/2026-10-22-device-playback-and-paused-task.md)。
 
 自研 Go 会话主干，通过小智 WebSocket 协议连接 M5StopWatch 与千问原生实时语音。本阶段实现对话、打断，以及现有固件的音量和屏幕控制。
 
