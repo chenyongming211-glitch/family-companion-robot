@@ -199,7 +199,11 @@ void AecDiagnostics::Console() {
     char line[96]{};
     size_t used = 0;
     bool overflow = false;
-    fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+    // IDF fff9895's polling USB backend returns immediately without RX data.
+    // O_NONBLOCK skips its FIFO prefetch, then queries the optional interrupt
+    // driver's byte count (zero when not installed), making every read empty.
+    // Keep the VFS flag clear; the underlying polling RX remains nonblocking.
+    fcntl(STDIN_FILENO, F_SETFL, 0);
     while (running_) {
         char c;
         const auto n = read(STDIN_FILENO, &c, 1);

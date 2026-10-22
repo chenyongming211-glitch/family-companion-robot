@@ -49,6 +49,8 @@ void SoftwareAecCodec::Start() {
     infrastructure_ok_ = diagnostics_ && diagnostics_->Start();
     if (!infrastructure_ok_)
         Fail(D::Fault::Setup);
+    printf("aec_init callbacks=%d infrastructure=%d\n", callbacks_ok_, infrastructure_ok_);
+    PrintStats();
 }
 SoftwareAecCodec::State SoftwareAecCodec::ReadState() const {
     portENTER_CRITICAL(&mux_);
@@ -123,6 +125,10 @@ void SoftwareAecCodec::OnDeviceEpoch(bool opened) {
                     Fail(D::Fault::Format);
             }
         }
+        printf("aec_format tx_dma_bytes=%lu rx_dma_bytes=%lu tx_bclk_hz=%lu rx_bclk_hz=%lu\n",
+               (unsigned long)tx.total_dma_buf_size, (unsigned long)rx.total_dma_buf_size,
+               (unsigned long)tx.bclk_hz, (unsigned long)rx.bclk_hz);
+        PrintStats();
     }
 }
 void SoftwareAecCodec::EnableInput(bool enable) {
@@ -270,8 +276,11 @@ void SoftwareAecCodec::PollFault() {
         report = true;
     }
     portEXIT_CRITICAL(&mux_);
-    if (report)
+    if (report) {
+        // One aggregate snapshot per fault epoch; no audio, transcript or credentials.
+        PrintStats();
         Application::GetInstance().Schedule([] { Application::GetInstance().SetAecMode(kAecOff); });
+    }
 }
 void SoftwareAecCodec::PrintStats() {
     uint32_t faults = 0, overruns = 0;
