@@ -1,10 +1,13 @@
 // Production protocol methods, shared with the host integration harness.
 
-bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected) {
+bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected, uint32_t* closed_epoch) {
     std::lock_guard<std::mutex> lock(playback_mutex_);
     if (expected && expected != playback_connection_) return false;
+    // Never reuse a saturated epoch for another socket or close notification.
+    if (playback_connection_ == UINT32_MAX || (!expected && playback_connection_ == UINT32_MAX - 1)) return false;
     // Saturation permanently disables receipts on this protocol object.
     if (playback_connection_ != UINT32_MAX) ++playback_connection_;
+    if (closed_epoch) *closed_epoch = playback_connection_;
     playback_negotiated_ = playback_receiving_ = playback_tracking_ = false;
     playback_id_ = {}; playback_first_ = 0;
     session_id_.clear();
@@ -17,22 +20,26 @@ bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected) {
 bool WebsocketProtocol::PlaybackNegotiated() const {
     std::lock_guard<std::mutex> lock(playback_mutex_); return playback_negotiated_;
 }
-family_robot::PlaybackIdentity WebsocketProtocol::PlaybackEventIdentity(const cJSON* root) const {
+family_robot::PlaybackEvent WebsocketProtocol::PlaybackEventIdentity(const cJSON* root) const {
     // Metadata added only by the validated receive callback, not a later read of
     // current protocol state. Disconnect/new start cannot relabel scheduled UI.
     auto* connection = cJSON_GetObjectItem(root, "_device_playback_connection");
     auto* id = cJSON_GetObjectItem(root, "playback_id");
-    if (!cJSON_IsNumber(connection) || !cJSON_IsNumber(id)) return {};
-    return {static_cast<uint32_t>(connection->valuedouble), static_cast<uint32_t>(id->valuedouble)};
+    auto* lease = cJSON_GetObjectItem(root, "_device_playback_lease");
+    if (!cJSON_IsNumber(connection) || !cJSON_IsNumber(id) || !cJSON_IsNumber(lease)) return {};
+    return {{static_cast<uint32_t>(connection->valuedouble), static_cast<uint32_t>(id->valuedouble)},
+            static_cast<uint32_t>(lease->valuedouble)};
 }
-bool WebsocketProtocol::PlaybackEventCurrent(family_robot::PlaybackIdentity id) const {
+bool WebsocketProtocol::PlaybackEventCurrent(family_robot::PlaybackEvent event) const {
     std::lock_guard<std::mutex> lock(playback_mutex_);
-    return playback_negotiated_ && id == playback_id_;
+    return playback_negotiated_ && event.identity == playback_id_ &&
+        event.lease == playback_event_lease_ && event.lease != UINT32_MAX;
 }
 bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
     std::lock_guard<std::mutex> lock(playback_mutex_);
     if (connection != playback_connection_) return false;
     cJSON_DeleteItemFromObject(root, "_device_playback_connection");
+    cJSON_DeleteItemFromObject(root, "_device_playback_lease");
     if (!playback_negotiated_) return true;
     auto* session = cJSON_GetObjectItem(root, "session_id");
     auto* number = cJSON_GetObjectItem(root, "playback_id");
@@ -48,6 +55,7 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
         // scheduled UI start may not reset the decoder or relabel these frames.
         if (!playback_id_ || playback_receiving_)
             Application::GetInstance().GetAudioService().ResetDecoder();
+        if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
         playback_id_ = id; playback_first_ = 0; playback_receiving_ = true;
         playback_tracking_ = codec->PlaybackControl(AudioCodec::PlaybackOp::Start, id);
     } else if (id != playback_id_) return false;
@@ -56,10 +64,13 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
         auto* reason = cJSON_GetObjectItem(root, "reason");
         const bool interrupted = cJSON_IsTrue(cJSON_GetObjectItem(root, "interrupted")) ||
             (cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0);
-        if (interrupted) Application::GetInstance().GetAudioService().ResetDecoder();
-        else codec->PlaybackControl(AudioCodec::PlaybackOp::Seal, id);
+        if (interrupted) {
+            if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
+            Application::GetInstance().GetAudioService().ResetDecoder();
+        } else codec->PlaybackControl(AudioCodec::PlaybackOp::Seal, id);
     }
     cJSON_AddNumberToObject(root, "_device_playback_connection", connection);
+    cJSON_AddNumberToObject(root, "_device_playback_lease", playback_event_lease_);
     return true;
 }
 void WebsocketProtocol::DeliverAudio(std::unique_ptr<AudioStreamPacket> packet, uint32_t connection) {
@@ -126,7 +137,10 @@ void WebsocketProtocol::SendPlayback(const family_robot::PlaybackSnapshot& r) {
 void WebsocketProtocol::SendAbortSpeaking(AbortReason reason) {
     {
         std::lock_guard<std::mutex> lock(playback_mutex_);
-        if (playback_negotiated_) playback_receiving_ = false;
+        if (playback_negotiated_) {
+            playback_receiving_ = false;
+            if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
+        }
     }
     Protocol::SendAbortSpeaking(reason);
 }
@@ -172,3 +186,20 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root, uint32_t connection)
     xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
 }
 
+uint32_t WebsocketProtocol::AudioChannelEpoch() const {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    return playback_connection_;
+}
+void WebsocketProtocol::NotifyPlaybackClosed(uint32_t connection) {
+    uint32_t closed_epoch;
+    if (!ResetPlaybackConnection(connection, &closed_epoch)) return;
+    if (on_audio_channel_closed_) on_audio_channel_closed_(closed_epoch);
+}
+void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
+    (void)send_goodbye;
+    if (!websocket_) return;
+    // Claim this physical socket's close before destruction. Synchronous, delayed
+    // and repeated transport callbacks then fail the old-epoch check harmlessly.
+    NotifyPlaybackClosed(socket_connection_);
+    websocket_.reset();
+}

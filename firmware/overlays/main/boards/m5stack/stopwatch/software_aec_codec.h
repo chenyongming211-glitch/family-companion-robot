@@ -14,7 +14,7 @@ public:
     void Start() override;
     bool InputData(std::vector<int16_t>& data) override;
     void OutputData(std::vector<int16_t>& data) override;
-    bool PlaybackSupported() const override { return playback_ != nullptr && callbacks_ok_; }
+    bool PlaybackSupported() const override { return refill_mode_ && playback_ != nullptr && callbacks_ok_ && infrastructure_ok_; }
     bool PlaybackControl(PlaybackOp op, family_robot::PlaybackIdentity id = {}, uint64_t first = 0, size_t n = 0) override;
     uint32_t PlaybackGeneration() const override;
     bool PlaybackPoll(family_robot::PlaybackSnapshot& out) override;
@@ -26,7 +26,7 @@ public:
     void SetCaptureActive(bool active) override;
     void CaptureBoundary() override;
     uint32_t ReferenceIntegrity() const override { return ReadState().integrity; }
-    bool SoftwareReference() const override { return true; }
+    bool SoftwareReference() const override { return refill_mode_; }
     bool ReferenceValid() const override { return ReadState().valid; }
     void ReportReferenceFailure() override { Fail(family_robot::DuplexReference::Fault::Setup); }
     bool RealtimeEligible() const override {
@@ -47,6 +47,10 @@ protected:
     void OnDeviceEpoch(bool opened) override;
 
 private:
+    void InitializePlayback(int input_rate, int output_rate);
+    void StartPlaybackInfrastructure();
+    void UseOrdinaryOutput();
+    bool refill_mode_ = true;
     static bool Sent(i2s_chan_handle_t, i2s_event_data_t*, void*);
     static bool Received(i2s_chan_handle_t, i2s_event_data_t*, void*);
     bool Complete(i2s_event_data_t* event, bool tx);

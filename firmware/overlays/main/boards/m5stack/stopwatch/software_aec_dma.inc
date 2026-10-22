@@ -17,7 +17,7 @@ bool SoftwareAecCodec::Complete(i2s_event_data_t* e, bool tx) {
         }
         PublishLocked();
     }
-    if (tx && e->dma_buf) {
+    if (refill_mode_ && tx && e->dma_buf) {
         // pair_->Tx above observes the actual old physical bytes. Refill only
         // afterwards; DMA address and tag remain owned until its next callback.
         if (playback_ && accepting_ && e->size == D::kBlock * sizeof(int16_t)) {

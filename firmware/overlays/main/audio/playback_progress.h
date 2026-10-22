@@ -19,6 +19,11 @@ struct PlaybackIdentity {
     bool operator!=(PlaybackIdentity b) const { return !(*this == b); }
     explicit operator bool() const { return connection != 0 && playback != 0; }
 };
+struct PlaybackEvent {
+    PlaybackIdentity identity{};
+    uint32_t lease = 0;
+    explicit operator bool() const { return bool(identity); }
+};
 struct PlaybackSnapshot {
     PlaybackIdentity identity{};
     uint64_t played_samples = 0;

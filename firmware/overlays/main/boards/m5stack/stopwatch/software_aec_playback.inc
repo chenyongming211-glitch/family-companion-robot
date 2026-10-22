@@ -1,8 +1,9 @@
 // Included by the production codec and host adapter harness. No alternate implementation.
 bool SoftwareAecCodec::PlaybackControl(PlaybackOp op, family_robot::PlaybackIdentity id, uint64_t first, size_t n) {
     portENTER_CRITICAL(&mux_);
-    bool result = playback_ != nullptr;
-    if (playback_) {
+    if (op == PlaybackOp::Reset && output_generation_ != UINT32_MAX) ++output_generation_;
+    bool result = refill_mode_ && playback_ != nullptr;
+    if (result) {
         switch (op) {
         case PlaybackOp::Connect: playback_->Connect(id.connection); break;
         case PlaybackOp::Start: result = playback_->Start(id); break;
@@ -12,8 +13,7 @@ bool SoftwareAecCodec::PlaybackControl(PlaybackOp op, family_robot::PlaybackIden
         case PlaybackOp::Interrupt: playback_->Seal(id, true); break;
         case PlaybackOp::Invalidate: playback_->Invalidate(id); break;
         case PlaybackOp::Reset: playback_->InterruptAll();
-            if (output_generation_ != UINT32_MAX) ++output_generation_;
-            else playback_->HardwareFault();
+            if (output_generation_ == UINT32_MAX) playback_->HardwareFault();
             break;
         }
     }
@@ -28,13 +28,13 @@ uint32_t SoftwareAecCodec::PlaybackGeneration() const {
 }
 bool SoftwareAecCodec::PlaybackPoll(family_robot::PlaybackSnapshot& out) {
     portENTER_CRITICAL(&mux_);
-    const bool result = playback_ && playback_->NextReport(esp_timer_get_time(), out);
+    const bool result = refill_mode_ && playback_ && playback_->NextReport(esp_timer_get_time(), out);
     portEXIT_CRITICAL(&mux_);
     return result;
 }
 bool SoftwareAecCodec::PlaybackBusy() const {
     portENTER_CRITICAL(&mux_);
-    const bool result = playback_ && playback_->Busy();
+    const bool result = refill_mode_ && playback_ && playback_->Busy();
     portEXIT_CRITICAL(&mux_);
     return result;
 }
@@ -47,6 +47,13 @@ void SoftwareAecCodec::OutputTagged(std::vector<int16_t>& data, family_robot::Pl
     // submission; mux_ serializes each small copy against cancellation and ISR.
     // Never invoke esp_codec_dev_write/i2s_channel_write in callback-refill mode.
     std::lock_guard<std::mutex> lock(lifecycle_);
+    if (!refill_mode_) {
+        portENTER_CRITICAL(&mux_);
+        const bool current = generation == output_generation_ && generation != UINT32_MAX;
+        portEXIT_CRITICAL(&mux_);
+        if (current) Es8311AudioCodec::Write(data.data(), data.size());
+        return;
+    }
     size_t offset = 0;
     int64_t last_progress = esp_timer_get_time();
     while (offset < data.size()) {
