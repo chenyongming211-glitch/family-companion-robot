@@ -153,3 +153,74 @@ func TestPlaybackTraceReportsBoundariesWithoutPrivateContentOrProgressFlood(t *t
 		t.Fatalf("missing or unbounded playback diagnostics: %v", events)
 	}
 }
+
+func TestPlaybackTraceRepeatedInvalidFinalDoesNotFloodOrClaimSettlement(t *testing.T) {
+	h := newPlaybackHarness(t)
+	h.s.playbackEnabled = true
+	var output lockedTraceBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	if err := h.s.beginPlayback(); err != nil {
+		t.Fatal(err)
+	}
+	h.s.activePlayback.sent = 1440
+	data, _ := json.Marshal(map[string]any{"type": "playback", "state": "finished", "session_id": h.s.id,
+		"playback_id": 1, "sample_rate": 24000, "played_samples": 0, "valid": false, "basis": "i2s_dma"})
+	for range 20 {
+		h.s.receivePlayback(data)
+	}
+	if h.s.activePlayback.settled {
+		t.Fatal("premature invalid final settled playback")
+	}
+	h.s.sealPlayback(false)
+	for range 20 {
+		h.s.receivePlayback(data)
+	}
+	var events []string
+	for _, line := range strings.Split(strings.TrimSpace(output.snapshot()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, record["event"].(string))
+		if record["position_known"] != false || record["played_samples"] != nil {
+			t.Fatal(record)
+		}
+		if record["event"] == "invalid" && record["settled"] != false {
+			t.Fatal(record)
+		}
+	}
+	if strings.Join(events, ",") != "invalid,finished" {
+		t.Fatalf("repeated invalid report logged as a final boundary: %v", events)
+	}
+}
+
+func TestPlaybackTraceSharedBlockConfirmsHistoryOnce(t *testing.T) {
+	h := newPlaybackHarness(t)
+	h.s.playbackEnabled = true
+	var output lockedTraceBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	if err := h.s.beginPlayback(); err != nil {
+		t.Fatal(err)
+	}
+	h.s.activePlayback.sent = 1440
+	for range 2 {
+		h.s.hist.addSent("private tool continuation")
+		h.s.hist.Turns[len(h.s.hist.Turns)-1].playbackID = 1
+	}
+	h.s.sealPlayback(false)
+	data, _ := json.Marshal(map[string]any{"type": "playback", "state": "finished", "session_id": h.s.id,
+		"playback_id": 1, "sample_rate": 24000, "played_samples": 1440, "valid": true, "basis": "i2s_dma"})
+	h.s.receivePlayback(data)
+	if n := strings.Count(output.snapshot(), `"event":"confirmed"`); n != 1 {
+		t.Fatalf("one block confirmed %d times", n)
+	}
+	for _, turn := range h.s.hist.Turns {
+		if turn.Delivery != "playback_confirmed" {
+			t.Fatal("history upgrade changed")
+		}
+	}
+}

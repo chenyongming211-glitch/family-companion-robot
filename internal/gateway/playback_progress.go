@@ -127,7 +127,7 @@ func (s *session) receivePlayback(data []byte) {
 			s.paused.playback = *r
 		}
 		switch {
-		case p.State == "finished":
+		case p.State == "finished" && r.settled:
 			s.tracePlayback("finished", r)
 		case !wasInvalid && r.invalid:
 			s.tracePlayback("invalid", r)
@@ -140,12 +140,16 @@ func (s *session) receivePlayback(data []byte) {
 }
 func (s *session) promotePlayback(r *playbackRecord) {
 	if r.sealed && !r.interrupted && r.settled && r.known && !r.invalid && r.played == r.sent {
+		promoted := false
 		for i := range s.hist.Turns {
 			t := &s.hist.Turns[i]
 			if t.playbackID == r.id && t.Delivery == "transport_sent" {
 				t.Delivery = "playback_confirmed"
-				s.tracePlayback("confirmed", r)
+				promoted = true
 			}
+		}
+		if promoted {
+			s.tracePlayback("confirmed", r)
 		}
 	}
 }
