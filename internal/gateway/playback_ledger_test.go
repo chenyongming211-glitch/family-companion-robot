@@ -351,3 +351,33 @@ func TestPlaybackInvalidFinalBeforeServerStopCannotHeal(t *testing.T) {
 		t.Fatal("invalid final before server stop healed into a valid prefix")
 	}
 }
+
+func TestPlaybackZeroAudioContinuationDoesNotBorrowParentConfirmation(t *testing.T) {
+	h := newToolHarnessFeatures(t, map[string]bool{"playback_progress_v1": true})
+	p, _ := h.model(t)
+	toolParent(t, p, "parent", 1)
+	start := readStart(t, h.device)
+	toolCall(t, p, "parent", "inspect", "conversation_get_paused_task", "{}")
+	p.send(t, map[string]any{"type": "response.audio_transcript.done", "response_id": "parent", "transcript": "parent-audio"})
+	toolDone(t, p, "parent")
+	wantToolOutput(t, p, "inspect")
+	p.want(t, "response.create")
+	toolParent(t, p, "continuation", 0)
+	p.send(t, map[string]any{"type": "response.audio_transcript.done", "response_id": "continuation", "transcript": "no-audio-continuation"})
+	toolDone(t, p, "continuation")
+	readStop(t, h.device)
+	receipt(h.device, t, start, "finished", 1440, true)
+	h.device.send(t, map[string]any{"type": "abort"})
+	readStop(t, h.device)
+	_, cfg := h.model(t)
+	instructions := cfg["instructions"].(string)
+	if !strings.Contains(instructions, `"delivery":"playback_confirmed","generated_text":"parent-audio"`) {
+		t.Fatal("parent audio lost its own full playback confirmation")
+	}
+	if !strings.Contains(instructions, `"delivery":"transport_sent","generated_text":"no-audio-continuation"`) {
+		t.Fatal("zero-audio generated draft was lost or relabeled")
+	}
+	if strings.Contains(instructions, `"delivery":"playback_confirmed","generated_text":"no-audio-continuation"`) {
+		t.Fatal("zero-audio continuation promoted using parent's 1440 samples")
+	}
+}

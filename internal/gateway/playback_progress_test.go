@@ -75,6 +75,10 @@ func TestPlaybackProgressNegotiatedPausedTaskSurvivesReconnect(t *testing.T) {
 	fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "original", "transcript": "新问题"})
 	wantSTT(t, h.device)
 	receipt(h.device, t, start, "finished", 1440, true)
+	// The model and device are independent sockets. A device-originated mode
+	// update acknowledges that the preceding receipt was handled before query.
+	h.device.send(t, map[string]any{"type": "listen", "state": "start", "mode": "manual"})
+	fresh.want(t, "session.update")
 	out := localResult(t, fresh, "query", "conversation_get_paused_task", "{}")
 	if out["available"] != true || out["original_request"] != "请读完整篇文章" || out["played_samples"] != float64(1440) || out["settled"] != true || out["text_position"] != "unknown" {
 		t.Fatalf("paused task = %v", out)

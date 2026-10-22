@@ -42,6 +42,7 @@ func (s *session) play() error {
 		if err := s.writeAudio(wrapped); err != nil {
 			return err
 		}
+		s.responseAudioSent = true
 		if s.activePlayback != nil {
 			s.activePlayback.sent += 1440
 		}
@@ -75,7 +76,7 @@ func (s *session) play() error {
 		// Transport completion alone never proves playback. A matching final
 		// receipt can later promote only this block's normal completed history.
 		s.hist.addSent(s.transcript)
-		if s.playbackEnabled && s.activePlayback != nil && s.transcript != "" {
+		if s.playbackEnabled && s.responseAudioSent && s.activePlayback != nil && s.transcript != "" {
 			s.hist.Turns[len(s.hist.Turns)-1].playbackID = s.activePlayback.id
 		}
 		if !s.toolPlayback {
@@ -85,6 +86,7 @@ func (s *session) play() error {
 		s.hist.Interrupted = false
 		s.retired.add(s.responseID)
 		s.responseID = ""
+		s.responseAudioSent = false
 		if !s.toolPlayback {
 			s.started = false
 		}

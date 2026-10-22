@@ -53,6 +53,7 @@ type session struct {
 	mode                   string
 	responseID, transcript string
 	draftTranscript        string
+	responseAudioSent      bool
 	retired                retiredResponses
 	responseDone, started  bool
 	nextAudio              time.Time
@@ -238,6 +239,7 @@ func (s *session) readDevice(ctx context.Context, cancel context.CancelFunc) {
 	}
 }
 func (s *session) connect(ctx context.Context) error {
+	s.responseAudioSent = false
 	s.inputActive = false
 	if s.model != nil {
 		s.model.Close()
@@ -393,6 +395,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 		s.model.Send(map[string]any{"type": "response.cancel"})
 	}
 	s.responseID = ""
+	s.responseAudioSent = false
 	s.responseDone = false
 	s.started = false
 	s.activePlayback = nil
@@ -488,6 +491,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.toolPlayback = false
 		s.toolContinuation = false
 		s.responseID = ev.Response.ID
+		s.responseAudioSent = false
 		s.awaitingResponse = false
 		s.responseDone = false
 		s.transcript = ""
