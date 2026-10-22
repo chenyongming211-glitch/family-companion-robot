@@ -63,10 +63,15 @@ type session struct {
 	toolPlayback           bool
 }
 
+// Native realtime audio can arrive much faster than its 60ms device cadence.
+// Keep up to 120s of 24kHz mono16 pending (5.76MB), still finite per session.
+// This is server storage, not audio sent ahead to the device; abort clears it.
+const maxPendingAudioBytes = 24000 * 2 * 120
+
 func newSession(ctx context.Context, c *websocket.Conn, cfg Config, version int) *session {
 	var b [12]byte
 	rand.Read(b[:])
-	s := &session{ctx: ctx, device: c, cfg: cfg, version: version, id: hex.EncodeToString(b[:]), input: make(chan deviceEvent, 64), events: make(chan modelEvent, 64), pending: audio.NewBuffer(48000 * 20), mode: "auto", lastActivity: time.Now(), playbackNow: time.Now}
+	s := &session{ctx: ctx, device: c, cfg: cfg, version: version, id: hex.EncodeToString(b[:]), input: make(chan deviceEvent, 64), events: make(chan modelEvent, 64), pending: audio.NewBuffer(maxPendingAudioBytes), mode: "auto", lastActivity: time.Now(), playbackNow: time.Now}
 	s.writeAudio = func(data []byte) error { return s.write(websocket.BinaryMessage, data) }
 	return s
 }

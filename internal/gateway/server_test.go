@@ -76,10 +76,10 @@ func TestRejectUnsafeConfig(t *testing.T) {
 
 func TestInterruptDropsOldConnectionAudioAndStartsNewResponse(t *testing.T) {
 	for _, source := range []string{"device", "model", "pending", "capturing"} {
-		t.Run(source, func(t *testing.T) { testInterrupt(t, source) })
+		t.Run(source, func(t *testing.T) { testInterrupt(t, source, 30) })
 	}
 }
-func testInterrupt(t *testing.T, source string) {
+func testInterrupt(t *testing.T, source string, oldFrames int) {
 	var opened atomic.Int32
 	oldContinue := make(chan struct{})
 	var once sync.Once
@@ -133,7 +133,7 @@ func testInterrupt(t *testing.T, source string) {
 				id = "new"
 			}
 			c.WriteJSON(map[string]any{"type": "response.created", "response": map[string]any{"id": id}})
-			frames := 30
+			frames := oldFrames
 			if n == 2 {
 				frames = 2
 			}
