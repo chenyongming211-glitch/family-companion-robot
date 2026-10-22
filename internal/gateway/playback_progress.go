@@ -39,6 +39,9 @@ func (s *session) beginPlayback() error {
 		s.playbacks = s.playbacks[len(s.playbacks)-maxPlaybackRecords:]
 	}
 	s.activePlayback = r
+	if s.playbackEnabled {
+		s.devicePlayback = r
+	}
 	return nil
 }
 func (s *session) sealPlayback(interrupted bool) {
@@ -48,12 +51,28 @@ func (s *session) sealPlayback(interrupted bool) {
 		s.promotePlayback(r)
 	}
 }
+
+// Device ownership outlives normal transport sealing. It refers only to the
+// newest admitted block in the bounded ledger, never a response or draft.
+func (s *session) interruptiblePlayback() *playbackRecord {
+	if s.started && s.activePlayback != nil {
+		return s.activePlayback
+	}
+	if s.playbackEnabled && s.devicePlayback != nil {
+		r := s.devicePlayback
+		if !r.settled || r.interrupted {
+			return r
+		}
+	}
+	return nil
+}
 func (s *session) pausePlayback() {
-	r := s.activePlayback
-	if r == nil || !s.started {
+	r := s.interruptiblePlayback()
+	if r == nil {
 		return
 	}
-	s.sealPlayback(true)
+	r.sealed = true
+	r.interrupted = true
 	if s.paused == nil {
 		s.taskSequence++
 		s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), playback: *r}
@@ -93,6 +112,12 @@ func (s *session) receivePlayback(data []byte) {
 		if p.State == "finished" && r.sealed {
 			r.settled = true
 			r.interrupted = r.interrupted || p.Interrupted
+		}
+		// A normal final resolves device ownership. An interrupted final may
+		// precede its abort control; retain that identity until the actual entry
+		// point consumes it. invalid progress alone never proves device drain.
+		if s.devicePlayback == r && r.settled && !r.interrupted {
+			s.devicePlayback = nil
 		}
 		if s.paused != nil && s.paused.playback.id == r.id {
 			s.paused.playback = *r
@@ -195,6 +220,11 @@ func (s *session) conversationTool(name, args string) (string, bool) {
 			s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), playback: playbackRecord{origin: s.currentInput}}
 		default:
 			return fail("invalid_action")
+		}
+		// An explicit task mutation supersedes any already-finished interruption
+		// awaiting its control event; that event must not resurrect discarded work.
+		if s.devicePlayback != nil && s.devicePlayback.settled {
+			s.devicePlayback = nil
 		}
 	}
 	out := s.pausedData()

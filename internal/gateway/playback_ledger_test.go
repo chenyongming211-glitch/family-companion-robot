@@ -89,7 +89,7 @@ func TestPlaybackLedgerBoundAndIdentityExhaustion(t *testing.T) {
 		h.play(t, at)
 		h.play(t, at.Add(60*time.Millisecond))
 	}
-	if len(s.playbacks) != 16 || s.playbacks[0].id != 5 || s.playbackSequence != 20 {
+	if len(s.playbacks) != 16 || s.playbacks[0].id != 5 || s.playbackSequence != 20 || s.devicePlayback != s.playbacks[15] {
 		t.Fatal("unbounded or reused playback identities")
 	}
 	s.playbackSequence = math.MaxUint32

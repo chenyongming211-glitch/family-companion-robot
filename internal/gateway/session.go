@@ -33,6 +33,7 @@ type session struct {
 	taskSequence           uint64
 	playbacks              []*playbackRecord
 	activePlayback         *playbackRecord
+	devicePlayback         *playbackRecord
 	paused                 *pausedTask
 	currentInput           requestOrigin
 	responseOrigin         requestOrigin
@@ -131,6 +132,7 @@ func (s *session) run() error {
 	defer func() {
 		s.playbacks = nil
 		s.activePlayback = nil
+		s.devicePlayback = nil
 		s.paused = nil
 		s.currentInput = requestOrigin{}
 		s.responseOrigin = requestOrigin{}
@@ -373,14 +375,15 @@ func (s *session) appendAudio(pcm []byte) error {
 func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	// Explicit device abort also cancels uncommitted input, before a model
 	// response exists. A first speech_started event alone is not an abort.
-	if !force && s.responseID == "" && !s.started && !s.awaitingResponse && len(s.toolCalls) == 0 {
+	target := s.interruptiblePlayback()
+	if !force && target == nil && s.responseID == "" && !s.started && !s.awaitingResponse && len(s.toolCalls) == 0 {
 		return nil
 	}
 	// Stop playback before any network reconnect. No queued old audio survives.
 	s.pausePlayback()
 	stop := protocol.Control{Type: "tts", State: "stop", Reason: "interrupted", SessionID: s.id}
-	if s.playbackEnabled && s.activePlayback != nil && s.started {
-		stop.PlaybackID = s.activePlayback.id
+	if s.playbackEnabled && target != nil {
+		stop.PlaybackID = target.id
 	}
 	if err := s.json(stop); err != nil {
 		return err
@@ -399,6 +402,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	s.responseDone = false
 	s.started = false
 	s.activePlayback = nil
+	s.devicePlayback = nil
 	s.transcript = ""
 	s.draftTranscript = ""
 	s.lastAudio = time.Time{}
