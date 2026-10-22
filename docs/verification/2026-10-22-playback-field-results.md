@@ -1,11 +1,11 @@
 # 设备播放回报与暂停任务：现场验证
 
-本轮已在用户现场窗口部署网关、以 USB 更新手表应用分区，取得唤醒、普通语音、完整长回复、直接插话和播放回报的成功样例。暂停任务内容归属现场发现错误，纯唤醒来源修复已上线，待内容复验；最新两次数数仅承诺开始、没有执行，因而不能完成该复验。准确字词接续未验收，辅助 ASR 保持关闭。用户当前没有耳机麦克风，继续使用手表；先用合成输入隔离网关/模型差异，避免让用户反复重复同一测试。前一阶段的[构建候选记录](2026-10-22-device-playback-and-paused-task.md)保留其当时未部署、未刷机的边界。
+本轮已在用户现场窗口部署网关、以 USB 更新手表应用分区，取得唤醒、普通语音、完整长回复、直接插话和播放回报的成功样例。暂停任务内容归属现场发现错误，纯唤醒来源修复已上线，待内容复验；数数仅承诺开始、没有执行的问题已在持续上传静音的合成客户端两次复现；口头任务执行约定修复已上线，待实机复验，尚不能完成暂停内容复验。准确字词接续未验收，辅助 ASR 保持关闭。用户当前没有耳机麦克风，继续使用手表；先用合成输入隔离网关/模型差异，避免让用户反复重复同一测试。前一阶段的[构建候选记录](2026-10-22-device-playback-and-paused-task.md)保留其当时未部署、未刷机的边界。
 
 ## 当前部署身份
 
-- 当前 Go 源码 `9cd1edbe5abad2a495b5a9864dd9aec2a49011c6`，二进制 SHA256 `6427ea89a6f304c7685f6fc107d2900eadb83317e447b2e88f6b5192ec2378fe`。
-- 当前路径 `/opt/family-robot/releases/voice-gateway-20261022T151326Z-9cd1edb`；2026-10-22 23:13（北京时间）检查服务 active、healthz ok，进程文件哈希匹配。修复仅更新网关，没有再刷机。
+- 当前 Go 源码 `c6f2787c804468be8c5c7db6fee21fbb8db0a7e0`，二进制 SHA256 `23febec890015b5f31b9a266f8a5b03d568b25a54c638c88594eda649b12a809`。
+- 当前路径 `/opt/family-robot/releases/voice-gateway-20261022T154320Z-c6f2787`；2026-10-22 23:43（北京时间）检查服务 active、healthz ok，进程文件哈希匹配。旧版 `/opt/family-robot/releases/voice-gateway-20261022T151326Z-9cd1edb` 保留回退。此次仅更新网关，没有再刷机。
 - 本轮首次部署为22:49的 `cade444`，二进制 SHA256 `40bb051194d2eb56780e25d110062445eb26807dbcf316556f97881c9c3b4734`；该版及更早 `/opt/family-robot/releases/voice-gateway-20261022T114318Z-c5a8f36` 均保留回退。
 - 固件源码 `17bb1e001f9f25926071a6a8871426ae52235e4a`，软件 AEC/播放回报变体；app SHA256 `ed30c3e02eaa21f64d0d9a7669b7e42f826212bcc3bec71fbeb053c0a9803e66`，2,906,256 字节。此次走 USB，不是 OTA。
 - 当前分区表与候选一致，原生 OTA 条目第一份 seq=1/state=VALID/CRC有效，第二份擦除，确认启动 ota_0。只写 `0x20000` 的 app；共享 assets 全分区与候选加擦除填充逐字节一致，无须改写。
@@ -56,9 +56,9 @@
 | 同上，先打断问候再发送任务 | 识别完整，生成转写含完整1–50，收到579帧 | 该控制样例经过上游重建，未复现故障 |
 | 同样工具和合成输入，但回复期间持续上传60ms静音包 | 两次识别都完整；均只答应从1读到50，分别56、42帧（3.36、2.52秒） | 两次复现与现场相同的“只承诺”；尚不能把差异归为底层模型的确定缺陷 |
 
-故障已能在没有手表参与时复现，不再单凭手表硬件或现场措辞推测。原先“发送后停止”的 smoke 协议成功不等于口头任务完成，其 `status=passed` 只验证收发与有音频。合成客户端没有冒充设备 DMA 回报，`first_audio_ms_after_input` 因读队列时机不能作为响应延迟。隔离端口仅增加口头任务执行约定后，第一次生成转写含完整1–50，收到570帧（34.20秒）。候选仅将该约定加入通用千问会话指令，不更改收音、VAD或工具调用；尚待精确提交的Linux构建、重复验证和现场复验，未直接上线。
+故障已能在没有手表参与时复现，不再单凭手表硬件或现场措辞推测。原先“发送后停止”的 smoke 协议成功不等于口头任务完成，其 `status=passed` 只验证收发与有音频。合成客户端没有冒充设备 DMA 回报，`first_audio_ms_after_input` 因读队列时机不能作为响应延迟。隔离端口仅增加口头任务执行约定后，第一次生成转写含完整1–50，收到570帧（34.20秒）。候选仅将该约定加入通用千问会话指令，不更改收音、VAD或工具调用；精确提交 `c6f2787` 的macOS/Linux完整race与vet、Linux构建及独立审查通过。该Linux二进制在独立127.0.0.1:18001端口、不覆盖线上服务的两次持续收音复验均生成完整1–50，分别收到387、598帧（23.22、35.88秒）；后一轮先显式打断问候并经过上游重建。这里不是自然插话或声学停声时延的新增验收。23:43在正式会话为0时原子切换上线，服务和进程哈希复核通过；现场正常播放复验仍待用户反馈。
 
-对应私有证据：`model-fulfillment-baseline.jsonl`、`gateway-synthetic-voice.json`、`gateway-synthetic-mcp.json`、`gateway-synthetic-mcp-interrupted.json`、`gateway-synthetic-continuous.json`、`gateway-synthetic-continuous-repeat.json`、`gateway-synthetic-continuous-contract.json` 和 `fulfillment-semantic-check.json`。合成输入和临时探针均位于忽略目录。
+对应私有证据：`model-fulfillment-baseline.jsonl`、`gateway-synthetic-voice.json`、`gateway-synthetic-mcp.json`、`gateway-synthetic-mcp-interrupted.json`、`gateway-synthetic-continuous.json`、`gateway-synthetic-continuous-repeat.json`、`gateway-synthetic-continuous-contract.json` 、`fulfillment-semantic-check.json`、`candidate-continuous-normal.json`、`candidate-continuous-after-interrupt.json` 和 `candidate-fulfillment-check.json`。合成输入和临时探针均位于忽略目录。
 
 22:53 已在 eligibility 检查通过后重新启用 realtime；未在用户长回复期间关闭模式或重启网关。
 
@@ -68,4 +68,4 @@
 
 新隐私/去重回归先失败后通过。独立审查发现未封口的重复无效 final 和共享播放块的多条历史会重复记日志，均修正并复审通过；未改变原有状态机/线协议。最终完整 macOS race/vet、Linux race/vet/build 通过；macOS保留既有 cgo LC_DYSYMTAB 链接告警。此处没有声称新的固件 CI，固件树与已验证17bb1e0产物相同。
 
-私有证据位于忽略目录 `artifacts/playback-field-20261022/`：备份、预检、刷写与读回校验、部署清单、过滤后的设备/网关元数据。Go构建证据位于 `artifacts/device-playback-20261022/go-cade444a277e/` 和 `go-9cd1edbe5aba/`；后者在服务器隔离目录保留候选，没有再向本机重复下载二进制。15分钟设备元数据观察有60次采样健康快照，未见fault或崩溃，结束时保持realtime模式，不录额外音频。备份、产物及凭据均不进入 Git。
+私有证据位于忽略目录 `artifacts/playback-field-20261022/`：备份、预检、刷写与读回校验、部署清单、过滤后的设备/网关元数据。Go构建证据位于 `artifacts/device-playback-20261022/go-cade444a277e/` 和 `go-9cd1edbe5aba/`、`go-c6f2787c8044/`；后两者在服务器隔离目录保留候选，没有再向本机重复下载二进制。15分钟设备元数据观察有60次采样健康快照，未见fault或崩溃，结束时保持realtime模式，不录额外音频。备份、产物及凭据均不进入 Git。
