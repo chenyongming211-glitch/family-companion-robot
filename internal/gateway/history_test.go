@@ -28,7 +28,7 @@ func TestNewResponseResetsEncoderForDeviceDecoderReset(t *testing.T) {
 	}
 }
 
-func TestHistoryIsBoundedAndDoesNotStoreInterruptedReply(t *testing.T) {
+func TestHistoryIsBoundedAndMarksLatestInterruption(t *testing.T) {
 	var h history
 	for i := 0; i < 20; i++ {
 		h.add("user", strings.Repeat("字", 1000))

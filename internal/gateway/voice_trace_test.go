@@ -52,6 +52,7 @@ func TestVoiceTraceHasTimingMetadataWithoutConversationOrCredentials(t *testing.
 		{Type: "input_audio_buffer.speech_stopped"},
 		{Type: "conversation.item.input_audio_transcription.completed", Transcript: private},
 		{Type: "response.created", Response: qwen.Response{ID: private + "-response"}},
+		{Type: "response.audio_transcript.delta", ResponseID: private + "-response", Delta: private},
 		{Type: "response.audio.delta", ResponseID: private + "-response",
 			Delta: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{37, 66}, 32))},
 		{Type: "response.done", Response: qwen.Response{ID: private + "-response", Status: "completed"}},

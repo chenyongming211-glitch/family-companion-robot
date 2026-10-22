@@ -43,6 +43,7 @@ type session struct {
 	hist                   history
 	mode                   string
 	responseID, transcript string
+	draftTranscript        string
 	responseDone, started  bool
 	nextAudio              time.Time
 	lastAudio              time.Time
@@ -339,6 +340,9 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	}
 	s.traceVoice("interrupt")
 	s.pending.Clear()
+	if s.started && s.responseID != "" {
+		s.hist.addInterrupted(s.draftTranscript)
+	}
 	s.hist.Interrupted = true
 	if !s.responseDone {
 		s.model.Send(map[string]any{"type": "response.cancel"})
@@ -347,6 +351,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	s.responseDone = false
 	s.started = false
 	s.transcript = ""
+	s.draftTranscript = ""
 	s.lastAudio = time.Time{}
 	s.manualCommit = false
 	s.awaitingResponse = false
@@ -428,6 +433,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.awaitingResponse = false
 		s.responseDone = false
 		s.transcript = ""
+		s.draftTranscript = ""
 		s.nextAudio = time.Time{}
 		s.lastAudio = time.Time{}
 		s.traceVoice("response_created")
@@ -445,11 +451,16 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			s.lastActivity = time.Now()
 		}
 		return s.pending.Append(pcm)
+	case "response.audio_transcript.delta":
+		if ev.ResponseID == s.responseID && s.responseID != "" {
+			s.draftTranscript = limitText(s.draftTranscript+ev.Delta, 2048)
+		}
 	case "response.audio_transcript.done":
 		if ev.ResponseID != s.responseID || s.responseID == "" {
 			return nil
 		}
 		s.transcript = limitText(ev.Transcript, 2048)
+		s.draftTranscript = s.transcript
 		if s.started {
 			return s.tts("sentence_start", s.transcript)
 		}

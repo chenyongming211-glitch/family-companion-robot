@@ -75,6 +75,7 @@ func (s *session) play() error {
 		}
 		s.responseDone = false
 		s.transcript = ""
+		s.draftTranscript = ""
 		s.lastAudio = time.Time{}
 		s.lastActivity = time.Now()
 	}
