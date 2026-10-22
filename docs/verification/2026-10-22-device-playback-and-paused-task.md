@@ -10,6 +10,7 @@
 - 可选跟踪资源或初始化失败时，销毁旧回调通道并重建普通自动清零 writer，关闭回报、恢复单声道输入。底层 I2S 本身无法建立时仍按原驱动错误处理，不声称硬件故障下可播放。
 - Go 最多16个轻量播放记录和1份暂停任务。valid=false 锁定未知；错误身份、倒退和越界不更新有效记录；最终位置结算后不可重写。上游重连不丢设备位置，设备会话结束则清理。
 - 只有正常封口、有效完整最终回报才能升级对应历史为 playback_confirmed；generated_text 仍表示生成稿。只生成文字而没有成功发送音频的工具续答不能借父块的确认升级。
+- 服务器正常 stop 后仍保留设备封口排空阶段的归属；真实 abort/speech 会带匹配播放ID中断并保存原任务。invalid progress 不代表排空，自动 listen.start 不触发这一中断；正常 finished 后不复活旧任务。
 - 原请求按上游 generation + committed item_id 归属，匹配晚到 STT；旁支及其再次中断不覆盖原任务。请求最多512 rune，截断明确标记。本地查询、放弃和替换工具独立于设备 MCP；替换建立新任务身份并保留未知位置。
 - 未新增用于识别的音频尾部、录音留存或日志正文；回报不是用户活动，不延长闲置会话。详见[线协议](../protocol/playback-progress-v1.md)。
 
@@ -33,15 +34,17 @@
 | 项目 | 来源及结果 |
 | --- | --- |
 | 固件源码 | `17bb1e001f9f25926071a6a8871426ae52235e4a`；初审3项生命周期/降级问题均修复并独立复审通过 |
-| Go源码 | `9f02a4de15d2e67c7fdb282bd4d51d86a7cafbc5`；零音频续答误标问题修复并独立复审通过 |
+| Go源码 | `0d114768012d5e53008dccd6907abf95c6f41c50`；零音频续答误标问题修复并独立复审通过 |
 | 固件主机与准备树 | 两个 CI job 各68项 firmware 测试、110项上游测试通过；实际核心、调度、初始化故障路径使用 ASan/UBSan |
 | macOS Go1.25.6 | 最终完整 `go test -race ./...` 与 `go vet ./...` 通过；保留既有 Darwin cgo LC_DYSYMTAB 链接告警 |
 | Linux/amd64 Go1.27.3、libopus1.4 | 最终源码 Git 归档完整 race/vet 通过；`go build -trimpath -o voice-gateway ./cmd/gateway` 成功，未部署 |
 | 固件目标编译 | [实验矩阵39791587535](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/39791587535) 两变体成功；[原版流程39791587538](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/39791587538) 成功 |
 
-Go 归档 SHA256 `d1e426a665a5c75ee06cb48d9a795d2c727f930b0e1af4b82b0bdf1b67333629`；候选二进制 SHA256 `b12bd01f3e1095fd8f76ce279500d32de060b0962d2eb8335765682d66d10945`。本机目录 `artifacts/device-playback-20261022/go-9f02a4de15d2/`。
+Go 归档 SHA256 `9641fc3b19fac0bf31158751b49aac2697302e7fe69758cd0d7ebf74bcab407e`；候选二进制 SHA256 `0a12865dd4b4298467d0ba9a695d1fc6566086774e4c3254be8969bcd680dca2`。本机目录 `artifacts/device-playback-20261022/go-0d114768012d/`。
 
 固件 CI 实际构建提交为17bb1e0，随后 Go 提交没有改固件；两者 firmware tree 均为 `ed32846d9c8d47f258c184adb7f7a7bf8ab243b7`，实验 workflow blob 也一致。分别记录源码身份，不称固件 CI 构建了之后的 Go 提交。
+
+全阶段初审另发现正常 transport seal 后过早丢失设备排空归属；修正后，两个打断入口、最终回报先/后到达、invalid位置、正常完成不复活、旁支与旧/新ID、已结算及未结算的 discard/replace 都有真实双向 WebSocket 回归。原独立反例已先失败再通过，最终 macOS/Linux race/vet/build 均在修正源码后重跑。该修正仅影响 Go；固件 tree 与已验证产物一致。
 
 第一轮101cb4e CI 在 host fixture 的 GCC misleading-indentation 错误处失败，未进入目标编译；17bb1e0只修正测试分行/花括号，保持 -Werror 和 sanitizers，窄范围独立审查通过后重跑成功。Linux 额外原生验证遇到系统 libonion 预加载使 ASan 加载顺序错误；只在测试二进制进程显式先加载 libasan，未改全局配置或关闭 sanitizer，3项均通过。目标构建保留5项固定 SDK 内部 esp_wifi/wpa_supplicant 私有 include 依赖的 CMake Warning；没有将成功构建称为无告警。
 
@@ -54,7 +57,7 @@ Go 归档 SHA256 `d1e426a665a5c75ee06cb48d9a795d2c727f930b0e1af4b82b0bdf1b673336
 | 原版对照 | 2899088 | `c8236fdf41616c961654f5ea97b7fdf6f4261d63f0553f8ce745a1ae21d024a0` |
 | 软件AEC与播放回报 | 2906256 | `ed30c3e02eaa21f64d0d9a7669b7e42f826212bcc3bec71fbeb053c0a9803e66` |
 
-产物 ID 原版 `12432096173`、软件AEC `12431961684`。ZIP SHA256 分别 `ab114c4001b04143703a25c8ec2ab5c333143ca4910d3804b75ff685a095175f`、`d465f55094b582fdbea160906df2c76d159bc659f35f0f1fc7f95fc3b80f5146`。本机私有目录 `artifacts/device-playback-20261022/firmware-17bb1e0/` 保存 ZIP、提取候选和离线 verification.json；`ci-summary.json` 保存身份索引。软件AEC assets 加擦除填充与旧离线备份分区完全相等，原版对照不相等；不能因此声称当前硬件 assets/活动槽/fuse 已核验。原有备份和回退信息保留，刷机前仍需新的现场预检。
+产物 ID 原版 `12432096173`、软件AEC `12431961684`。ZIP SHA256 分别 `ab114c4001b04143703a25c8ec2ab5c333143ca4910d3804b75ff685a095175f`、`d465f55094b582fdbea160906df2c76d159bc659f35f0f1fc7f95fc3b80f5146`。本机私有目录 `artifacts/device-playback-20261022/firmware-17bb1e0/` 保存 ZIP、提取候选和离线 verification.json；`artifacts/device-playback-20261022/ci-summary.json` 保存身份索引。软件AEC assets 加擦除填充与旧离线备份分区完全相等，原版对照不相等；不能因此声称当前硬件 assets/活动槽/fuse 已核验。原有备份和回退信息保留，刷机前仍需新的现场预检。
 
 ## 发布与现场边界
 
@@ -62,4 +65,4 @@ Go 归档 SHA256 `d1e426a665a5c75ee06cb48d9a795d2c727f930b0e1af4b82b0bdf1b673336
 
 仍待提前告知后的现场窗口：刷入候选、确认真实设备回报、正常排空/中断尾部、原任务与旁支归属、音量/屏幕及软件 AEC 回归，测量 SRAM/栈和回调耗时。数字 DMA 完成不证明声学效果或人听清。准确按字词继续仍待可靠映射与现场验收；本阶段不把“有回报/测试通过”写成该问题已修复。
 
-全阶段交叉审查：待最终审查结论；任务级审查已通过。
+全阶段交叉审查：初审发现的一项封口排空 P2 已修正，待最终独立复审；任务级审查已通过。
