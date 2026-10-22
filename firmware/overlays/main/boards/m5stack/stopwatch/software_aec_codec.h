@@ -14,6 +14,13 @@ public:
     void Start() override;
     bool InputData(std::vector<int16_t>& data) override;
     void OutputData(std::vector<int16_t>& data) override;
+    bool PlaybackSupported() const override { return playback_ != nullptr && callbacks_ok_; }
+    bool PlaybackControl(PlaybackOp op, family_robot::PlaybackIdentity id = {}, uint64_t first = 0, size_t n = 0) override;
+    uint32_t PlaybackGeneration() const override;
+    bool PlaybackPoll(family_robot::PlaybackSnapshot& out) override;
+    bool PlaybackBusy() const override;
+    void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity id,
+                      uint64_t first, uint32_t generation) override;
     void EnableInput(bool enable) override;
     void EnableOutput(bool enable) override;
     void SetCaptureActive(bool active) override;
@@ -58,6 +65,8 @@ private:
     family_robot::CaptureEpoch epochs_;
     family_robot::DuplexReference* pair_ = nullptr;
     AecDiagnostics* diagnostics_ = nullptr;
+    family_robot::PlaybackProgress* playback_ = nullptr;
+    uint32_t output_generation_ = 0;
     // ISR-shared status and epochs_ are plain internal-SRAM state under mux_.
     // Xtensa's std::atomic<uint32_t> is not guaranteed lock-free by this toolchain.
     bool valid_ = false, faulted_ = false;

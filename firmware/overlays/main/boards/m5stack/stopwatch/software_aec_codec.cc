@@ -4,6 +4,7 @@
 #include <esp_timer.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <new>
 #include "aec_diagnostics.h"
 #include "application.h"
@@ -23,9 +24,11 @@ SoftwareAecCodec::SoftwareAecCodec(void* bus, i2c_port_t port, int input_rate, i
     auto* storage = heap_caps_malloc(sizeof(D), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (storage)
         pair_ = new (storage) D;
+    auto* playback_storage = heap_caps_malloc(sizeof(family_robot::PlaybackProgress), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (playback_storage) playback_ = new (playback_storage) family_robot::PlaybackProgress;
     const auto tx_disabled = i2s_channel_disable(tx_handle_);
     const auto rx_disabled = i2s_channel_disable(rx_handle_);
-    if (pair_ && tx_disabled == ESP_OK && rx_disabled == ESP_OK && input_rate == D::kRate &&
+    if (pair_ && playback_ && tx_disabled == ESP_OK && rx_disabled == ESP_OK && input_rate == D::kRate &&
         output_rate == D::kRate) {
         i2s_event_callbacks_t tx_callbacks = {}, rx_callbacks = {};
         tx_callbacks.on_sent = Sent;
@@ -88,12 +91,14 @@ void SoftwareAecCodec::Fail(D::Fault f) {
         setup_failed_ = true;
     if (pair_)
         pair_->Fail(f);
+    if (playback_ && (f == D::Fault::Setup || f == D::Fault::Format)) playback_->HardwareFault();
     PublishLocked();
     portEXIT_CRITICAL(&mux_);
 }
 void SoftwareAecCodec::OnDeviceEpoch(bool opened) {
     portENTER_CRITICAL(&mux_);
     accepting_ = false;
+    if (playback_) playback_->HardwareReset();
     valid_ = false;
     epochs_.HardwareChange();
     if (opened && pair_ && callbacks_ok_ && infrastructure_ok_ && !setup_failed_) {
@@ -139,12 +144,7 @@ void SoftwareAecCodec::EnableOutput(bool enable) {
     std::lock_guard<std::mutex> lock(lifecycle_);
     Es8311AudioCodec::EnableOutput(enable);
 }
-void SoftwareAecCodec::OutputData(std::vector<int16_t>& data) {
-    std::lock_guard<std::mutex> lock(lifecycle_);
-    // Completed DMA callback alone supplies reference. Never append submitted PCM.
-    if (Es8311AudioCodec::Write(data.data(), data.size()) != static_cast<int>(data.size()))
-        Fail(D::Fault::Setup);
-}
+#include "software_aec_playback.inc"
 void SoftwareAecCodec::SetCaptureActive(bool active) {
     portENTER_CRITICAL(&mux_);
     if (capture_active_ != active) {
@@ -179,27 +179,7 @@ bool SoftwareAecCodec::Sent(i2s_chan_handle_t, i2s_event_data_t* e, void* arg) {
 bool SoftwareAecCodec::Received(i2s_chan_handle_t, i2s_event_data_t* e, void* arg) {
     return static_cast<SoftwareAecCodec*>(arg)->Complete(e, false);
 }
-bool SoftwareAecCodec::Complete(i2s_event_data_t* e, bool tx) {
-    const int64_t stamp = esp_timer_get_time();
-    portENTER_CRITICAL_ISR(&mux_);
-    if (accepting_ && pair_) {
-        auto& discard = tx ? discard_tx_ : discard_rx_;
-        if (e->size != D::kBlock * sizeof(int16_t) || !e->dma_buf)
-            pair_->Fail(D::Fault::Format);
-        else if (discard)
-            --discard;
-        else if (tx) {
-            pair_->Tx(pair_->tx_samples(), stamp, static_cast<int16_t*>(e->dma_buf), D::kBlock);
-            last_tx_us_ = stamp;
-        } else {
-            pair_->Rx(pair_->rx_samples(), stamp, static_cast<int16_t*>(e->dma_buf), D::kBlock);
-            last_rx_us_ = stamp;
-        }
-        PublishLocked();
-    }
-    portEXIT_CRITICAL_ISR(&mux_);
-    return false;
-}
+#include "software_aec_dma.inc"
 bool SoftwareAecCodec::InputData(std::vector<int16_t>& data) {
     // The input service requests10ms AFE frames or60ms audio-test frames.
     // Consume both through the same integer timeline; never round individual DMA packets.
@@ -270,6 +250,8 @@ void SoftwareAecCodec::PollFault() {
     if (accepting_ && pair_ && now - epoch_started_us_ > D::kHoldbackUs &&
         (now - last_tx_us_ > D::kHoldbackUs || now - last_rx_us_ > D::kHoldbackUs))
         pair_->Fail(D::Fault::Timeout);
+    if (playback_ && accepting_ && epoch_started_us_ && now - epoch_started_us_ > D::kHoldbackUs &&
+        now - last_tx_us_ > D::kHoldbackUs) playback_->HardwareFault();
     PublishLocked();
     if (faulted_ && !fault_reported_) {
         fault_reported_ = true;

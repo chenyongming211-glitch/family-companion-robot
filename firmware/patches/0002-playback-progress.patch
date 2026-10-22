@@ -1,0 +1,519 @@
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -195,7 +195,14 @@
+         MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED;
+ 
+     while (true) {
+-        auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
++        auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, pdMS_TO_TICKS(20));
++        if (protocol_) {
++            family_robot::PlaybackSnapshot receipt;
++            auto* playback_codec = Board::GetInstance().GetAudioCodec();
++            for (size_t i = 0; i < family_robot::PlaybackProgress::kRecords && playback_codec->PlaybackPoll(receipt); ++i)
++                protocol_->SendPlayback(receipt);
++            audio_service_.PollPlaybackDrained();
++        }
+ 
+         if (bits & MAIN_EVENT_ERROR) {
+             if (GetDeviceState() == kDeviceStateNotifying) {
+@@ -562,7 +569,7 @@
+     });
+ 
+     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
+-        if (GetDeviceState() == kDeviceStateSpeaking) {
++        if (packet->receipt_id.connection != 0 || GetDeviceState() == kDeviceStateSpeaking) {
+             audio_service_.PushPacketToDecodeQueue(std::move(packet));
+         }
+     });
+@@ -632,16 +639,20 @@
+                 return;
+             }
+             if (strcmp(state->valuestring, "start") == 0) {
+-                Schedule([this]() {
++                const auto receipt_id = protocol_->PlaybackEventIdentity(root);
++                Schedule([this, receipt_id]() {
++                    if (receipt_id && !protocol_->PlaybackEventCurrent(receipt_id)) return;
+                     aborted_ = false;
+                     SetDeviceState(kDeviceStateSpeaking);
+                 });
+             } else if (strcmp(state->valuestring, "stop") == 0) {
+                 auto reason = cJSON_GetObjectItem(root, "reason");
+-                bool interrupted =
+-                    cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0;
+-                Schedule([this, interrupted]() {
+-                    if (interrupted)
++                bool interrupted = cJSON_IsTrue(cJSON_GetObjectItem(root, "interrupted")) ||
++                    (cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0);
++                const auto receipt_id = protocol_->PlaybackEventIdentity(root);
++                Schedule([this, interrupted, receipt_id]() {
++                    if (receipt_id && !protocol_->PlaybackEventCurrent(receipt_id)) return;
++                    if (interrupted && !receipt_id)
+                         audio_service_.ResetDecoder();
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                         if (listening_mode_ == kListeningModeManualStop) {
+@@ -1099,7 +1110,7 @@
+                 // Only AFE wake word can be detected in speaking mode
+                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+             }
+-            audio_service_.ResetDecoder();
++            if (!audio_service_.PreservingServerPlayback()) audio_service_.ResetDecoder();
+             break;
+         case kDeviceStateNotifying:
+             display->SetStatus(Lang::Strings::SPEAKING);
+@@ -1224,6 +1235,7 @@
+ void Application::AbortSpeaking(AbortReason reason) {
+     ESP_LOGI(TAG, "Abort speaking");
+     aborted_ = true;
++    if (protocol_ && protocol_->PlaybackNegotiated()) audio_service_.ResetDecoder();
+     if (protocol_) {
+         protocol_->SendAbortSpeaking(reason);
+     }
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -11,6 +11,7 @@
+ #include <functional>
+ 
+ #include "board.h"
++#include "playback_progress.h"
+ 
+ #define AUDIO_CODEC_DMA_DESC_NUM 6
+ #define AUDIO_CODEC_DMA_FRAME_NUM 240
+@@ -37,6 +38,15 @@
+     virtual void OutputData(std::vector<int16_t>& data);
+     virtual bool InputData(std::vector<int16_t>& data);
+     virtual void Start();
++    enum class PlaybackOp { Connect, Start, Admit, Release, Seal, Interrupt, Invalidate, Reset };
++    virtual bool PlaybackSupported() const { return false; }
++    virtual bool PlaybackControl(PlaybackOp, family_robot::PlaybackIdentity = {}, uint64_t = 0, size_t = 0) { return false; }
++    virtual uint32_t PlaybackGeneration() const { return 0; }
++    virtual bool PlaybackPoll(family_robot::PlaybackSnapshot&) { return false; }
++    virtual bool PlaybackBusy() const { return false; }
++    virtual void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity,
++                              uint64_t, uint32_t) { OutputData(pcm); }
++
+ 
+     // Optional software duplex experiment hooks. Ordinary codecs retain stock behavior.
+     virtual bool SoftwareReference() const { return false; }
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -183,6 +183,7 @@
+     {
+         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+         ++playback_generation_;
++        codec_->PlaybackControl(AudioCodec::PlaybackOp::Reset);
+         audio_encode_queue_.clear();
+         audio_decode_queue_.clear();
+         audio_playback_queue_.clear();
+@@ -436,7 +437,8 @@
+             callbacks_.on_playback_progress(task.playback_id, task.media_position_ms);
+         }
+ 
+-        codec_->OutputData(task.pcm);
++        codec_->OutputTagged(task.pcm, task.receipt_id, task.receipt_first, task.output_generation);
++        codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, task.receipt_id);
+ 
+         /* Update the last output time */
+         last_output_time_ = std::chrono::steady_clock::now();
+@@ -485,6 +487,7 @@
+             audio_decode_queue_.pop_front();
+             decode_in_flight_ = true;
+             const uint32_t generation = playback_generation_;
++            const uint32_t output_generation = packet->output_generation;
+             audio_queue_cv_.notify_all();
+             lock.unlock();
+ 
+@@ -493,6 +496,9 @@
+             task.timestamp = packet->timestamp;
+             task.playback_id = packet->playback_id;
+             task.media_position_ms = packet->media_position_ms;
++            task.receipt_id = packet->receipt_id;
++            task.receipt_first = packet->receipt_first;
++            task.output_generation = output_generation;
+ 
+             SetDecodeSampleRate(packet->sample_rate, packet->frame_duration);
+             bool decoded = false;
+@@ -511,6 +517,7 @@
+                 };
+                 esp_audio_dec_info_t dec_info = {};
+                 std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
++                if (packet->receipt_id && packet->receipt_first == 0) esp_opus_dec_reset(opus_decoder_);
+                 auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);
+                 decoder_lock.unlock();
+                 if (ret == ESP_AUDIO_ERR_OK) {
+@@ -538,7 +545,13 @@
+ 
+             lock.lock();
+             if (decoded && generation == playback_generation_ && !service_stopped_.load()) {
++                if (task.receipt_id && (packet->sample_rate != 24000 || packet->frame_duration != 60 || task.pcm.size() != 1440))
++                    codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, task.receipt_id);
+                 audio_playback_queue_.push_back(std::move(task));
++            } else {
++                if (generation == playback_generation_)
++                    codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, task.receipt_id);
++                codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, task.receipt_id);
+             }
+             decode_in_flight_ = false;
+             debug_statistics_.decode_count++;
+@@ -630,7 +643,8 @@
+         esp_opus_dec_close(opus_decoder_);
+         opus_decoder_ = nullptr;
+     }
+-    decoder_lock.unlock();
++    // Keep decoder_mutex_ across replacement; ResetDecoder must never observe
++    // the close/open gap or race the new handle assignment.
+     esp_opus_dec_cfg_t opus_dec_cfg = OPUS_DEC_CFG(sample_rate, frame_duration);
+     auto ret = esp_opus_dec_open(&opus_dec_cfg, sizeof(esp_opus_dec_cfg_t), &opus_decoder_);
+     if (opus_decoder_ == nullptr) {
+@@ -706,6 +720,7 @@
+ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
+     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+     const uint32_t generation = playback_generation_;
++    if (packet->receipt_id.connection == 0) packet->output_generation = codec_->PlaybackGeneration();
+     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
+         if (wait) {
+             audio_queue_cv_.wait(lock, [this, generation]() {
+@@ -713,10 +728,15 @@
+                        audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE;
+             });
+         } else {
++            codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, packet->receipt_id);
++            codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, packet->receipt_id);
+             return false;
+         }
+     }
+     if (service_stopped_.load() || generation != playback_generation_) {
++        if (generation == playback_generation_)
++            codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, packet->receipt_id);
++        codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, packet->receipt_id);
+         return false;
+     }
+     playback_drained_notified_ = false;
+@@ -818,7 +838,7 @@
+         if (!InitializeAudioEngine()) {
+             return;
+         }
+-        ResetDecoder();
++        if (!PreservingServerPlayback()) ResetDecoder();
+         audio_input_need_warmup_ = true;
+         {
+             std::lock_guard<std::mutex> lock(input_resampler_mutex_);
+@@ -846,8 +866,19 @@
+         UpdateCaptureActive();
+         /* Copy audio_testing_queue_ to audio_decode_queue_ */
+         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
++        ++playback_generation_;
++        codec_->PlaybackControl(AudioCodec::PlaybackOp::Reset);
+         audio_decode_queue_.clear();
+-        audio_decode_queue_.swap(audio_testing_queue_);
++        audio_playback_queue_.clear();
++        // Explicit new playback operation for the recorded test queue. This is
++        // the only place that retickets local test packets; server packets retain
++        // their ingress identity and cancellation token.
++        while (!audio_testing_queue_.empty()) {
++            auto packet = std::move(audio_testing_queue_.front());
++            audio_testing_queue_.pop_front();
++            packet->output_generation = codec_->PlaybackGeneration();
++            audio_decode_queue_.push_back(std::move(packet));
++        }
+         if (!audio_decode_queue_.empty()) {
+             playback_drained_notified_ = false;
+         }
+@@ -897,6 +928,14 @@
+     return audio_encode_queue_.empty() && IsPlaybackDrainedLocked() && audio_testing_queue_.empty();
+ }
+ 
++void AudioService::PollPlaybackDrained() {
++    bool notify;
++    {
++        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
++        notify = MarkPlaybackDrainedLocked();
++    }
++    if (notify && callbacks_.on_playback_drained) callbacks_.on_playback_drained();
++}
+ bool AudioService::IsPlaybackIdle() {
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+     return IsPlaybackDrainedLocked();
+@@ -907,6 +946,9 @@
+     {
+         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+         ++playback_generation_;
++        // Serialize cancellation with each DMA-queue submission, including output
++        // that was dequeued before this reset. Never hold mux_ while waiting.
++        codec_->PlaybackControl(AudioCodec::PlaybackOp::Reset);
+         std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
+         if (opus_decoder_ != nullptr) {
+             esp_opus_dec_reset(opus_decoder_);
+@@ -926,7 +968,7 @@
+ 
+ bool AudioService::IsPlaybackDrainedLocked() const {
+     return audio_decode_queue_.empty() && audio_playback_queue_.empty() && !decode_in_flight_ &&
+-           !output_in_flight_;
++           !output_in_flight_ && !codec_->PlaybackBusy();
+ }
+ 
+ bool AudioService::MarkPlaybackDrainedLocked() {
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -103,6 +103,9 @@
+     uint32_t timestamp = 0;
+     uint32_t playback_id = 0;
+     uint32_t media_position_ms = 0;
++    family_robot::PlaybackIdentity receipt_id{};
++    uint32_t receipt_first = 0;
++    uint32_t output_generation = 0;
+ };
+ 
+ struct DebugStatistics {
+@@ -130,6 +133,7 @@
+     bool IsVoiceDetected() const { return voice_detected_; }
+     bool IsIdle();
+     bool IsPlaybackIdle();
++    void PollPlaybackDrained();
+     bool IsWakeWordRunning() const {
+         return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING;
+     }
+@@ -152,10 +156,13 @@
+     void PlaySound(const std::string_view& sound);
+     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
+     void ResetDecoder();
++    void PreserveServerPlayback(bool preserve) { preserve_server_playback_.store(preserve); }
++    bool PreservingServerPlayback() const { return preserve_server_playback_.load(); }
+     void SetModelsList(srmodel_list_t* models_list);
+ 
+ private:
+     AudioCodec* codec_ = nullptr;
++    std::atomic<bool> preserve_server_playback_{false};
+     family_robot::ExperimentGate experiment_gate_;
+     family_robot::UplinkAuthorization experiment_authorization_;
+     family_robot::CaptureActivation capture_activation_;
+--- a/main/audio/codecs/es8311_audio_codec.cc
++++ b/main/audio/codecs/es8311_audio_codec.cc
+@@ -122,7 +122,11 @@
+         .role = I2S_ROLE_MASTER,
+         .dma_desc_num = AUDIO_CODEC_DMA_DESC_NUM,
+         .dma_frame_num = AUDIO_CODEC_DMA_FRAME_NUM,
++#if CONFIG_STOPWATCH_SOFTWARE_AEC
++        .auto_clear_after_cb = false,
++#else
+         .auto_clear_after_cb = true,
++#endif
+         .auto_clear_before_cb = false,
+         .intr_priority = 0,
+     };
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -2,6 +2,7 @@
+ #define PROTOCOL_H
+ 
+ #include <cJSON.h>
++#include "playback_progress.h"
+ #include <chrono>
+ #include <functional>
+ #include <string>
+@@ -14,6 +15,10 @@
+     uint32_t playback_id = 0;
+     uint32_t media_position_ms = 0;
+     std::vector<uint8_t> payload;
++    family_robot::PlaybackIdentity receipt_id{};
++    uint32_t receipt_first = 0;
++    uint32_t output_generation = 0;
++
+ };
+ 
+ struct BinaryProtocol2 {
+@@ -56,6 +61,10 @@
+     void OnConnected(std::function<void()> callback);
+     void OnDisconnected(std::function<void()> callback);
+ 
++    virtual bool PlaybackNegotiated() const { return false; }
++    virtual family_robot::PlaybackIdentity PlaybackEventIdentity(const cJSON*) const { return {}; }
++    virtual bool PlaybackEventCurrent(family_robot::PlaybackIdentity) const { return true; }
++    virtual void SendPlayback(const family_robot::PlaybackSnapshot&) {}
+     virtual bool Start() = 0;
+     virtual bool OpenAudioChannel() = 0;
+     virtual void CloseAudioChannel(bool send_goodbye = true) = 0;
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -8,6 +8,8 @@
+ #include <arpa/inet.h>
+ #include <cJSON.h>
+ #include <cstring>
++#include <cmath>
++#include <cstdio>
+ #include "assets/lang_config.h"
+ 
+ #define TAG "WS"
+@@ -75,10 +77,12 @@
+ 
+ void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
+     (void)send_goodbye;  // Websocket doesn't need to send goodbye message
++    ResetPlaybackConnection();
+     websocket_.reset();
+ }
+ 
+ bool WebsocketProtocol::OpenAudioChannel() {
++    ResetPlaybackConnection();
+     Settings settings("websocket", false);
+     std::string url = settings.GetString("url");
+     std::string token = settings.GetString("token");
+@@ -107,7 +111,12 @@
+     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+     websocket_->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+ 
+-    websocket_->OnData([this](const char* data, size_t len, bool binary) {
++    uint32_t connection;
++    {
++        std::lock_guard<std::mutex> lock(playback_mutex_);
++        connection = playback_connection_;
++    }
++    websocket_->OnData([this, connection](const char* data, size_t len, bool binary) {
+         if (binary) {
+             if (on_incoming_audio_ != nullptr) {
+                 if (version_ == 2) {
+@@ -117,27 +126,27 @@
+                     bp2->timestamp = ntohl(bp2->timestamp);
+                     bp2->payload_size = ntohl(bp2->payload_size);
+                     auto payload = (uint8_t*)bp2->payload;
+-                    on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
++                    DeliverAudio(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
+                         .sample_rate = server_sample_rate_,
+                         .frame_duration = server_frame_duration_,
+                         .timestamp = bp2->timestamp,
+-                        .payload = std::vector<uint8_t>(payload, payload + bp2->payload_size)}));
++                        .payload = std::vector<uint8_t>(payload, payload + bp2->payload_size)}), connection);
+                 } else if (version_ == 3) {
+                     BinaryProtocol3* bp3 = (BinaryProtocol3*)data;
+                     bp3->type = bp3->type;
+                     bp3->payload_size = ntohs(bp3->payload_size);
+                     auto payload = (uint8_t*)bp3->payload;
+-                    on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
++                    DeliverAudio(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
+                         .sample_rate = server_sample_rate_,
+                         .frame_duration = server_frame_duration_,
+                         .timestamp = 0,
+-                        .payload = std::vector<uint8_t>(payload, payload + bp3->payload_size)}));
++                        .payload = std::vector<uint8_t>(payload, payload + bp3->payload_size)}), connection);
+                 } else {
+-                    on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
++                    DeliverAudio(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
+                         .sample_rate = server_sample_rate_,
+                         .frame_duration = server_frame_duration_,
+                         .timestamp = 0,
+-                        .payload = std::vector<uint8_t>((uint8_t*)data, (uint8_t*)data + len)}));
++                        .payload = std::vector<uint8_t>((uint8_t*)data, (uint8_t*)data + len)}), connection);
+                 }
+             }
+         } else {
+@@ -146,8 +155,12 @@
+             auto type = cJSON_GetObjectItem(root, "type");
+             if (cJSON_IsString(type)) {
+                 if (strcmp(type->valuestring, "hello") == 0) {
+-                    ParseServerHello(root);
++                    ParseServerHello(root, connection);
+                 } else {
++                    if (strcmp(type->valuestring, "tts") == 0 && !HandlePlaybackTts(root, connection)) {
++                        cJSON_Delete(root);
++                        return;
++                    }
+                     if (on_incoming_json_ != nullptr) {
+                         on_incoming_json_(root);
+                     }
+@@ -162,7 +175,8 @@
+         last_incoming_time_ = std::chrono::steady_clock::now();
+     });
+ 
+-    websocket_->OnDisconnected([this]() {
++    websocket_->OnDisconnected([this, connection]() {
++        if (!ResetPlaybackConnection(connection)) return;
+         ESP_LOGI(TAG, "Websocket disconnected");
+         if (on_audio_channel_closed_ != nullptr) {
+             on_audio_channel_closed_();
+@@ -214,6 +228,8 @@
+     cJSON_AddBoolToObject(features, "aec", true);
+ #endif
+     cJSON_AddBoolToObject(features, "mcp", true);
++    if (Board::GetInstance().GetAudioCodec()->PlaybackSupported())
++        cJSON_AddBoolToObject(features, "playback_progress_v1", true);
+     cJSON_AddItemToObject(root, "features", features);
+     AddTextFontCapabilities(root);
+     cJSON_AddStringToObject(root, "transport", "websocket");
+@@ -230,36 +246,4 @@
+     return message;
+ }
+ 
+-void WebsocketProtocol::ParseServerHello(const cJSON* root) {
+-    auto transport = cJSON_GetObjectItem(root, "transport");
+-    if (!cJSON_IsString(transport)) {
+-        ESP_LOGE(TAG, "Missing or non-string transport in server hello");
+-        return;
+-    }
+-    if (strcmp(transport->valuestring, "websocket") != 0) {
+-        ESP_LOGE(TAG, "Unsupported transport: %s", transport->valuestring);
+-        return;
+-    }
+-
+-    auto session_id = cJSON_GetObjectItem(root, "session_id");
+-    if (cJSON_IsString(session_id)) {
+-        session_id_ = session_id->valuestring;
+-#if !CONFIG_STOPWATCH_SOFTWARE_AEC
+-        ESP_LOGI(TAG, "Session ID: %s", session_id_.c_str());
+-#endif
+-    }
+-
+-    auto audio_params = cJSON_GetObjectItem(root, "audio_params");
+-    if (cJSON_IsObject(audio_params)) {
+-        auto sample_rate = cJSON_GetObjectItem(audio_params, "sample_rate");
+-        if (cJSON_IsNumber(sample_rate)) {
+-            server_sample_rate_ = sample_rate->valueint;
+-        }
+-        auto frame_duration = cJSON_GetObjectItem(audio_params, "frame_duration");
+-        if (cJSON_IsNumber(frame_duration)) {
+-            server_frame_duration_ = frame_duration->valueint;
+-        }
+-    }
+-
+-    xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
+-}
++#include "playback_websocket.inc"
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -3,6 +3,7 @@
+ 
+ 
+ #include "protocol.h"
++#include <mutex>
+ 
+ #include <web_socket.h>
+ #include <freertos/FreeRTOS.h>
+@@ -16,6 +17,11 @@
+     ~WebsocketProtocol();
+ 
+     bool Start() override;
++    bool PlaybackNegotiated() const override;
++    family_robot::PlaybackIdentity PlaybackEventIdentity(const cJSON* root) const override;
++    bool PlaybackEventCurrent(family_robot::PlaybackIdentity id) const override;
++    void SendAbortSpeaking(AbortReason reason) override;
++    void SendPlayback(const family_robot::PlaybackSnapshot& receipt) override;
+     bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) override;
+     bool OpenAudioChannel() override;
+     void CloseAudioChannel(bool send_goodbye = true) override;
+@@ -25,8 +31,18 @@
+     EventGroupHandle_t event_group_handle_;
+     std::unique_ptr<WebSocket> websocket_;
+     int version_ = 1;
++    mutable std::mutex playback_mutex_;
++    uint32_t playback_connection_ = 0;
++    family_robot::PlaybackIdentity playback_id_{};
++    uint64_t playback_first_ = 0;
++    bool playback_negotiated_ = false, playback_receiving_ = false, playback_tracking_ = false;
++    // Only the WebSocket receive task mutates ingress order. Main polls reports;
++    // this mutex protects connection/session checks, never taken in an ISR.
++    void DeliverAudio(std::unique_ptr<AudioStreamPacket> packet, uint32_t connection);
++    bool HandlePlaybackTts(cJSON* root, uint32_t connection);
++    bool ResetPlaybackConnection(uint32_t expected = 0);
+ 
+-    void ParseServerHello(const cJSON* root);
++    void ParseServerHello(const cJSON* root, uint32_t connection);
+     bool SendText(const std::string& text) override;
+     std::string GetHelloMessage();
+ };
