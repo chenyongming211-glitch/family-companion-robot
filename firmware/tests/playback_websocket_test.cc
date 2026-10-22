@@ -22,7 +22,11 @@ struct cJSON {
 };
 static cJSON* cJSON_CreateObject(){return new cJSON;}
 static cJSON* cJSON_GetObjectItem(const cJSON* n,const char* key) {
-    if(!n) return nullptr; auto it=n->children.find(key); return it==n->children.end()?nullptr:it->second.get();
+    if (!n) {
+        return nullptr;
+    }
+    auto it = n->children.find(key);
+    return it == n->children.end() ? nullptr : it->second.get();
 }
 static bool cJSON_IsObject(const cJSON* n){return n&&n->kind==cJSON::Object;}
 static bool cJSON_IsString(const cJSON* n){return n&&n->kind==cJSON::String;}
@@ -190,7 +194,12 @@ int main(){
         std::function<void()> callback=[&]{closed.NotifyPlaybackClosed(old_connection);};
         closed.websocket_=std::make_unique<TestSocket>();
         if(!deferred)closed.websocket_->disconnect=callback;
-        closed.CloseAudioChannel();if(deferred)callback();callback();closed.CloseAudioChannel();
+        closed.CloseAudioChannel();
+        if (deferred) {
+            callback();
+        }
+        callback();
+        closed.CloseAudioChannel();
         app.RunScheduled();assert(notifications==1 && app.state==kDeviceStateIdle);
         assert(Board::GetInstance().power==PowerSaveLevel::LOW_POWER);
         // Remote callback first, then explicit close: exactly one notification.

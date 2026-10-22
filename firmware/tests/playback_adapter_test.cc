@@ -43,11 +43,25 @@ constexpr int MALLOC_CAP_INTERNAL=1,MALLOC_CAP_8BIT=2;
 static int alloc_index=0,fail_alloc=0,register_index=0,fail_register=0;
 static bool diagnostics_start=true;
 static std::vector<void*> allocations;
-static void* heap_caps_malloc(size_t n,int) { if(++alloc_index==fail_alloc)return nullptr;void* p=std::malloc(n);allocations.push_back(p);return p; }
+static void* heap_caps_malloc(size_t n,int) {
+    if (++alloc_index == fail_alloc) {
+        return nullptr;
+    }
+    void* p = std::malloc(n);
+    allocations.push_back(p);
+    return p;
+}
 static int i2s_channel_get_info(Channel* h,i2s_chan_info_t* i){assert(!h->deleted);i->is_enabled=h->enabled;return ESP_OK;}
 static int i2s_channel_disable(Channel* h){assert(!h->deleted);h->enabled=false;return ESP_OK;}
 static int i2s_channel_enable(Channel* h){assert(!h->deleted);h->enabled=true;return ESP_OK;}
-static int i2s_channel_register_event_callback(Channel* h,i2s_event_callbacks_t*,void*){assert(!h->enabled);if(++register_index==fail_register)return -1;h->callback=true;return ESP_OK;}
+static int i2s_channel_register_event_callback(Channel* h,i2s_event_callbacks_t*,void*) {
+    assert(!h->enabled);
+    if (++register_index == fail_register) {
+        return -1;
+    }
+    h->callback = true;
+    return ESP_OK;
+}
 static int i2s_del_channel(Channel* h){assert(!h->enabled);h->deleted=true;h->callback=false;return ESP_OK;}
 static Channel rebuilt[2];
 static int i2s_new_channel(i2s_chan_config_t* cfg,Channel** tx,Channel** rx){assert(cfg->dma_desc_num==6&&cfg->dma_frame_num==240&&!cfg->auto_clear_before_cb);rebuilt[0]={true,false,false,cfg->auto_clear_after_cb};rebuilt[1]=rebuilt[0];*tx=&rebuilt[0];*rx=&rebuilt[1];return ESP_OK;}
