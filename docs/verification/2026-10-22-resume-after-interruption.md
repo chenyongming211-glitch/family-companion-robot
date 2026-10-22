@@ -14,7 +14,7 @@
 
 随后用完全相同的合成音频连续做四次原生语音插话及旁支算术问答，再要求“继续数”。旧版最后一段生成稿为“一、二、三、四、五、六、七、八、九、十”，下行79个60ms帧，约4.74秒后正常 stop；未到原目标五十。一次中间接续也仅生成二至十，因计划内后续插话而提前取消。真实 API 的重复场景因此已复现接续只给短片段，不能把其中间被人工计划打断的帧数当成自然结束的长度。
 
-## 有界修复
+## 已部署的有界修改（现场接续未通过）
 
 继续沿用现有 Go 网关、千问原生语音、重连和输入重放，不修改 AEC/固件，不引入数数识别器或固定终点。
 
@@ -52,3 +52,21 @@
 2026-10-22 19:53（北京时间）已提前通知并发布上述 `c5a8f36`。切换前再次核对候选二进制与源码归档 SHA256、旧 current=`7c3a15b`；切换后 systemd active，实际 PID1315629 的 `/proc/.../exe` SHA256 与候选一致，服务器和公网健康接口均通过。回退目录保留 `7c3a15b`。设备固件没有改变；仅为下一次单轮现场复验显式重开 realtime，未开启额外原始录音。
 
 私有发布清单在 `artifacts/gateway-build-20261022-c5a8f36/deployment.json`，对照结果在 `artifacts/resume-probe-20261022/comparison.json` 及各 `baseline-multi/fixed-multi/fixed-multi-02/` 子目录。现场仅复测一次“数到50→插话问算术→继续数到50”，结果独立记录，尚不视为现场已通过。
+
+## 最新现场失败：从五十接着数五十一
+
+用户反馈能够打断，但要求继续时从五十开始，随后继续数五十一、五十二等。这同时违反了接续位置和原目标终点；`c5a8f36` 的现场接续复验失败。前面的合成小样本成功不能覆盖此失败。
+
+服务器对应接续段 `19:56:19.417629` 至 `19:56:49.917555` 正常排空结束，约30.50秒，没有因缓冲溢出或测试收尾提前截断。元数据未记录对话文字，起点五十和后续五十一等来自用户现场反馈。
+
+已告知暂停本轮测试，发送 `aec_realtime off`、`aec_diag_stop`；收到 off queued、diagnostic stopped，随后 generation115、eligible0、fault0、faults0、rx_overruns0、diagnostic active0、queue0。没有重新刷机或开启额外录音。正式 Go 仍为 `c5a8f36`，未把下面的探索代码部署到服务。
+
+### 接口与独立合成验证
+
+官方 [Omni 客户端事件](https://www.alibabacloud.com/help/en/model-studio/client-events)和[服务端事件](https://www.alibabacloud.com/help/en/model-studio/server-events)未列出按播放毫秒截断上下文的事件；音频与转写 delta 字段也没有逐词时间戳。对当前相同模型的独立连接发送 `conversation.item.truncate`，两次各等待8秒均没有确认，因此不能将其他厂商同名事件当成本接口已支持的能力。这不是证明所有未来版本均不支持。
+
+按官方 [Qwen-ASR 接入方式](https://help.aliyun.com/zh/model-studio/qwen-asr-api-reference)，同一业务空间的 `qwen3-asr-flash` 已成功识别两段各8秒、只包含本次模型合成输出前缀的音频，HTTP200，请求耗时分别482、551毫秒；不代表线上延迟上限。没有发送现场麦克风 PCM，也没有改动正式配置。
+
+第二次识别结果为一至十六。将该前缀、原用户的一至五十目标与旁支算术问答放入独立上下文，再发送合成“继续数”，生成稿从十七到五十、音频23.76秒；但中间出现一处“四十五五十五四十六”的生成稿异常，没有对新音频逐字验收，不能计为完整正确数数通过。此试验只证明补充播放片段的数据流可行，尚未获得设备真实播放 ACK，也未完成服务端异步识别、超时/迟到隔离和现场复验。
+
+私有证据 `artifacts/playback-progress-20261022/{capabilities.log,progress-resume.log}`；一次性探针位于忽略目录，未成为产品功能。下一步候选范围见[播放进度接续方案](../superpowers/specs/2026-10-22-resume-playback-progress-design.md)，状态为待评审，当前缺陷保持打开。
