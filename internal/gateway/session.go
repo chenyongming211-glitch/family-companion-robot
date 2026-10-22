@@ -38,6 +38,7 @@ type session struct {
 	currentInput           requestOrigin
 	responseOrigin         requestOrigin
 	inputCommitted         bool
+	wakePhrase             string
 	ctx                    context.Context
 	device                 *websocket.Conn
 	cfg                    Config
@@ -136,6 +137,7 @@ func (s *session) run() error {
 		s.paused = nil
 		s.currentInput = requestOrigin{}
 		s.responseOrigin = requestOrigin{}
+		s.wakePhrase = ""
 	}()
 	s.playbackEnabled = hello.Features["playback_progress_v1"]
 	features := map[string]bool(nil)
@@ -359,6 +361,7 @@ func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
 				return s.model.Send(map[string]any{"type": "input_audio_buffer.commit"})
 			}
 		case "detect": // Wake-word audio is handled by the normal audio stream.
+			s.rememberWakePhrase(v.Text)
 			s.lastActivity = time.Now()
 		default:
 			return errors.New("unsupported listen state")

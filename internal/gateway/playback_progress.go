@@ -73,6 +73,10 @@ func (s *session) pausePlayback() {
 	}
 	r.sealed = true
 	r.interrupted = true
+	if s.wakeOnly(r.origin) {
+		s.tracePlayback("wake_greeting_skipped", r)
+		return
+	}
 	if s.paused == nil {
 		s.taskSequence++
 		s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), playback: *r}
@@ -179,6 +183,7 @@ func (s *session) transcribeOrigin(itemID, text string) {
 	if itemID != "" && s.paused != nil && matches(s.paused.playback.origin) && !s.paused.playback.origin.known {
 		s.paused.playback.origin = origin
 	}
+	s.discardWakePause()
 }
 func (s *session) pausedData() map[string]any {
 	out := map[string]any{"available": s.paused != nil, "text_position": "unknown"}

@@ -35,7 +35,8 @@ func (s *session) tracePlayback(event string, r *playbackRecord) {
 		return
 	}
 	switch event {
-	case "progress_started", "invalid", "finished", "paused_created", "paused_retained", "confirmed":
+	case "progress_started", "invalid", "finished", "paused_created", "paused_retained", "confirmed",
+		"wake_greeting_skipped", "wake_pause_discarded":
 	default:
 		return
 	}
