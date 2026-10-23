@@ -141,8 +141,8 @@ func (c *Client) update(session map[string]any, revision uint64) error {
 }
 
 // ACKs are ordered by the native WebSocket protocol, which does not echo our
-// event_id. Mode updates occupy the same FIFO with revision 0 and cannot unlock
-// generation. Only one snapshot update is outstanding at a time.
+// event_id. Mode updates use revision 0; retired input snapshots keep their
+// FIFO slots. Only the token for the current snapshot may unlock generation.
 func (c *Client) AckSessionUpdate() uint64 {
 	if len(c.updates) == 0 {
 		return 0
