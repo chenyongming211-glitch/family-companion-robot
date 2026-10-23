@@ -29,13 +29,16 @@ func routingHarness(t *testing.T) (*session, *toolPeer) {
 type classificationRequest struct {
 	ctx              context.Context
 	original, latest string
+	done             <-chan struct{}
 }
 
 func controlledClassifier(s *session) (<-chan classificationRequest, chan<- taskRouteResult) {
 	requests := make(chan classificationRequest, 4)
 	responses := make(chan taskRouteResult, 4)
 	s.classifyPausedTask = func(ctx context.Context, cfg qwen.Config, original, latest string) (string, error) {
-		requests <- classificationRequest{ctx, original, latest}
+		done := make(chan struct{})
+		defer close(done)
+		requests <- classificationRequest{ctx, original, latest, done}
 		select {
 		case result := <-responses:
 			return result.action, result.err
@@ -526,4 +529,140 @@ func TestIsolatedRouteRejectsEveryMainOutputBeforeSnapshotACK(t *testing.T) {
 		t.Fatal("premature response admitted content")
 	}
 	p.quiet(t, time.Millisecond)
+}
+
+// An accepted route may still have an unacknowledged snapshot when the provider
+// commits another input. Its ACK belongs to that old input, even if the serialized
+// instructions remain identical across turns.
+func TestIsolatedRouteSnapshotACKCannotReleaseReplacementInput(t *testing.T) {
+	for _, schedule := range []string{"before-transcript", "during-classification", "after-new-snapshot", "after-canceled-replacement"} {
+		t.Run(schedule, func(t *testing.T) {
+			s, p := routingHarness(t)
+			requests, results := controlledClassifier(s)
+			original := s.paused.original
+			initialAction := "resume"
+			if schedule == "after-new-snapshot" || schedule == "after-canceled-replacement" {
+				initialAction = "side"
+			}
+			if err := s.requestResponse(); err != nil {
+				t.Fatal(err)
+			}
+			takeClassification(t, requests)
+			results <- taskRouteResult{action: initialAction}
+			if err := s.finishRouting(routeResult(t, s)); err != nil {
+				t.Fatal(err)
+			}
+			oldUpdate := p.read(t).body
+			if oldUpdate["type"] != "session.update" {
+				t.Fatal(oldUpdate)
+			}
+			oldInstructions := oldUpdate["session"].(map[string]any)["instructions"]
+			oldToken := s.sync.token
+			if !s.route.decided || oldToken == 0 {
+				t.Fatal("fixture needs accepted route awaiting snapshot ACK")
+			}
+			commit := func(id string) {
+				t.Helper()
+				if err := s.onModel(context.Background(), qwen.Event{Type: "input_audio_buffer.committed", ItemID: id}); err != nil {
+					t.Fatal(err)
+				}
+				if !s.route.active || s.currentInput.known || s.responseTaskID != "" {
+					t.Fatal("replacement did not clear accepted binding and await transcription")
+				}
+			}
+			commit("replacement")
+			if schedule == "after-canceled-replacement" {
+				s.transcribeOrigin("replacement", "旁支问题")
+				if err := s.advanceGeneration(time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				canceled := takeClassification(t, requests)
+				commit("latest")
+				select {
+				case <-canceled.ctx.Done():
+				case <-time.After(time.Second):
+					t.Fatal("replacement classifier survived cancellation")
+				}
+				select {
+				case <-canceled.done:
+				case <-time.After(time.Second):
+					t.Fatal("canceled classifier did not return")
+				}
+			}
+			item := s.currentInput.itemID
+			if schedule == "before-transcript" {
+				ackSnapshotWire(t, s, p)
+				p.quiet(t, 20*time.Millisecond)
+				if s.voiceRequested || !s.route.active {
+					t.Fatal("old ACK released untranscribed input")
+				}
+			}
+			// Avoid modifying history: for the side/side case the instruction text is
+			// deliberately unchanged, so only input-scoped ACK identity can gate voice.
+			s.transcribeOrigin(item, "继续")
+			if err := s.advanceGeneration(time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			request := takeClassification(t, requests)
+			if request.original != original.text || request.latest != "继续" {
+				t.Fatal("new classifier lost original goal or latest input")
+			}
+			if schedule == "during-classification" {
+				ackSnapshotWire(t, s, p)
+				p.quiet(t, 20*time.Millisecond)
+				if s.voiceRequested || !s.route.active {
+					t.Fatal("old ACK released unclassified input")
+				}
+			}
+			action := "resume"
+			if schedule == "after-new-snapshot" || schedule == "after-canceled-replacement" {
+				action = "side"
+			}
+			results <- taskRouteResult{action: action}
+			for s.route.active {
+				if err := s.finishRouting(routeResult(t, s)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			latestUpdate := p.read(t).body
+			if latestUpdate["type"] != "session.update" {
+				t.Fatal(latestUpdate)
+			}
+			latestInstructions := latestUpdate["session"].(map[string]any)["instructions"]
+			if s.sync.token <= oldToken {
+				t.Fatal("snapshot token reused across input cancellation")
+			}
+			if action == "side" && latestInstructions != oldInstructions {
+				t.Fatal("fixture must preserve identical instructions")
+			}
+			p.quiet(t, time.Millisecond)
+			if schedule == "after-new-snapshot" || schedule == "after-canceled-replacement" {
+				latestToken := s.sync.token
+				ackSnapshotWire(t, s, p)
+				p.quiet(t, 20*time.Millisecond)
+				if s.voiceRequested || s.sync.token != latestToken {
+					t.Fatal("old FIFO ACK authorized latest snapshot")
+				}
+			}
+			ackSnapshotWire(t, s, p)
+			p.want(t, "response.create")
+			p.quiet(t, time.Millisecond)
+			if s.paused.original != original || s.responseOrigin.itemID != item || s.route.input.itemID != item {
+				t.Fatal("released response lost original goal or latest input")
+			}
+			if (action == "resume") != (s.responseTaskID == s.paused.id) {
+				t.Fatal("released response has wrong task binding")
+			}
+			if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "latest-voice"}}); err != nil {
+				t.Fatalf("valid response disconnected after obsolete ACK: %v", err)
+			}
+			t.Cleanup(s.encoder.Close)
+			if err := s.beginPlayback(); err != nil {
+				t.Fatal(err)
+			}
+			if s.activePlayback.origin.itemID != item || s.activePlayback.taskID != s.responseTaskID {
+				t.Fatal("playback lost latest accepted binding")
+			}
+		})
+	}
 }

@@ -397,3 +397,48 @@ func TestResumeStateDeliveredClarificationAndSideAnswerPreserveOriginalGoal(t *t
 		t.Fatal("interrupted continuation retained prior block delivery status")
 	}
 }
+
+func TestResumeStateReplacementInputRequiresOwnSnapshotACKWithoutPausedTask(t *testing.T) {
+	for _, mode := range []string{"auto", "manual"} {
+		t.Run(mode, func(t *testing.T) {
+			s := newPlaybackHarness(t).s
+			s.responseID = ""
+			s.mode = mode
+			s.generation = 1
+			p := attachSnapshotModel(t, s)
+			if err := s.model.SetMode(mode); err != nil {
+				t.Fatal(err)
+			}
+			if update := p.read(t).body; update["type"] != "session.update" {
+				t.Fatal(update)
+			}
+			for _, item := range []string{"old", "latest"} {
+				if err := s.onModel(context.Background(), qwen.Event{Type: "input_audio_buffer.committed", ItemID: item}); err != nil {
+					t.Fatal(err)
+				}
+				if update := p.read(t).body; update["type"] != "session.update" {
+					t.Fatal(update)
+				}
+			}
+			if s.sync.token != 2 {
+				t.Fatalf("replacement snapshot reused token: %d", s.sync.token)
+			}
+			for _, ack := range []string{"mode", "old-input"} {
+				ackSnapshotWire(t, s, p)
+				p.quiet(t, 10*time.Millisecond)
+				if s.voiceRequested || s.sync.token != 2 {
+					t.Fatalf("%s ACK authorized replacement input", ack)
+				}
+			}
+			ackSnapshotWire(t, s, p)
+			p.want(t, "response.create")
+			if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "latest"}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(s.encoder.Close)
+			if s.responseOrigin.itemID != "latest" || s.route.active || s.responseTaskID != "" {
+				t.Fatal("ordinary response lost latest input or acquired a task binding")
+			}
+		})
+	}
+}

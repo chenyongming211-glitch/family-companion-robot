@@ -483,11 +483,6 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.inputActive = false
 		s.lastActivity = time.Now()
 	case "input_audio_buffer.committed":
-		if s.route.active && s.inputCommitted && s.currentInput.itemID != ev.ItemID {
-			s.cancelRouting()
-			s.sync = generationSync{}
-			s.voiceRequested = false
-		}
 		if ev.ItemID != "" && ev.ItemID == s.wake.inputID {
 			return nil
 		}

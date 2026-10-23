@@ -15,6 +15,8 @@ type generationSync struct {
 	sequence, token uint64
 	instructions    string
 	deadline        time.Time
+	generation      uint64
+	inputID         string
 }
 
 func (s *session) snapshotInstructions() string {
@@ -71,6 +73,8 @@ func (s *session) advanceGeneration(now time.Time) error {
 	s.sync.sequence++
 	s.sync.token = s.sync.sequence
 	s.sync.instructions = s.generationInstructions()
+	s.sync.generation = s.generation
+	s.sync.inputID = s.currentInput.itemID
 	s.sync.deadline = now.Add(snapshotACKTimeout)
 	s.traceVoice("snapshot_sent")
 	return s.model.UpdateInstructions(s.sync.instructions, s.sync.token)
@@ -85,6 +89,9 @@ func (s *session) acknowledgeSnapshot() error {
 	s.traceVoice("snapshot_acknowledged")
 	if !s.sync.requested {
 		return nil
+	}
+	if s.route.active || s.sync.generation != s.generation || s.sync.inputID != s.currentInput.itemID {
+		return s.advanceGeneration(time.Now())
 	}
 	if s.sync.instructions != s.generationInstructions() {
 		return s.advanceGeneration(time.Now())

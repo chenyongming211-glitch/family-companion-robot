@@ -210,6 +210,11 @@ func (s *session) commitOrigin(itemID string) {
 	if !s.inputCommitted || old.generation != s.generation || old.itemID != itemID {
 		s.cancelRouting()
 		s.toolContinuation = false
+		// Retire the old input's generation request without reusing its token.
+		// Its update remains in the model client's ACK FIFO and must consume its
+		// own slot, even if the replacement sends an identical snapshot first.
+		s.sync = generationSync{sequence: s.sync.sequence}
+		s.voiceRequested = false
 	}
 	s.currentInput = requestOrigin{generation: s.generation, itemID: itemID}
 	if itemID != "" && old.generation == s.generation && old.itemID == itemID {
