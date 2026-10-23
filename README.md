@@ -1,5 +1,7 @@
 # 家庭陪伴机器人：最小 Go 实时语音网关
 
+最新文字记录、跨连接/进程恢复、清空隔离及发布状态见[记录与恢复验证](docs/verification/2026-10-23-record-recovery-results.md)。网关不保存原始录音，准确文字断点仍为unknown；[三种离线定位/识别对照](docs/verification/2026-10-23-record-recovery-alignment.md)与生产启用分别验收。
+
 2026-10-23本轮实施：原请求/最新播放段分离，独立文字归属判断、输入身份与快照ACK门控已实现；未知文字断点时先澄清起点，再接受明确重读或用户指定起点；复用原生语音已有转写，未增加辅助ASR，未刷手表固件。最终构建、真实接口复验和发布状态见[本轮实施结果](docs/verification/2026-10-23-resume-state-and-alignment.md)。准确已播文字仍保持unknown，官方强制对齐目前完成离线评估。
 
 此前唤醒来源修复与固件发送失败恢复见[上一轮实施结果](docs/verification/2026-10-23-wake-recovery-results.md)；Pipecat、TEN、LiveKit和小智模块对照见[根因调查](docs/verification/2026-10-23-resume-framework-root-cause.md)。既有实机证据见[现场验证](docs/verification/2026-10-22-playback-field-results.md)，不能冒充本轮候选的现场验收。
