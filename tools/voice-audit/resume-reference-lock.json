@@ -1,0 +1,172 @@
+{
+  "investigation_date": "2026-10-23",
+  "go_source": "66c0788abc1f4ac8ad1e17d112943da839e7c236",
+  "upstreams": {
+    "pipecat": {
+      "repo": "https://github.com/pipecat-ai/pipecat",
+      "commit": "3dfcd17a112fba71c66f5b8ed5929eb2a07e74e9"
+    },
+    "ten": {
+      "repo": "https://github.com/TEN-framework/ten-framework",
+      "commit": "1493ed2394c1c972dc79c0f4d567579954f9addf",
+      "ten_ai_base_chained": "0.7.41",
+      "ten_ai_base_realtime": "0.7.22",
+      "source_files": [
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/manifest-lock.json",
+          "sha256": "33ed59f1f72c2c77b8475fe0973ebe60bb3d2d071faa09d4a7acc84135f1469f",
+          "bytes": 6011
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/manifest.json",
+          "sha256": "ee4f576f66fa06990b5bef104f5eac572b9638bc0af282847bb348605182c734",
+          "bytes": 1108
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/property.json",
+          "sha256": "1685d20a93ca25bfa97b1b11fd9695f36a87d7fbdbc94cdb2dee09a324f40690",
+          "bytes": 5142
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/README.md",
+          "sha256": "c3761955b6cf20c334022228b6fe9d294cb2065cafbb2ed21df7c9a5eedd8a2b",
+          "bytes": 3903
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/agent/__init__.py",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/agent/events.py",
+          "sha256": "98ce3c40f8cae1eec570bd2e726ab9354faf3a3a711f53b908b7879d74b452f3",
+          "bytes": 2665
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/agent/agent.py",
+          "sha256": "dbfdbbed212006d53ebed9afcc7af61f3a070ac4864a3143133d8847b768bad7",
+          "bytes": 7489
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/config.py",
+          "sha256": "1e3622bac0e63dcadf73f017d3af6b6cf1bc30a0b62da12005acd8e0c02e0c60",
+          "bytes": 122
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/manifest.json",
+          "sha256": "7dbea86744b757df1d8704b05637e525cd629fb96af6872c5aef90a0362152b3",
+          "bytes": 569
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant/tenapp/manifest-lock.json",
+          "sha256": "b14815f0282e4c25845080be080a77ee6706f35df2db3a196a99114352a476c5",
+          "bytes": 26111
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant/tenapp/property.json",
+          "sha256": "19e87c97e314c0111706a3649e3171e9bb0018aec95210975bbaa43d103a897d",
+          "bytes": 60116
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant/tenapp/ten_packages/extension/main_python/README.md",
+          "sha256": "c3761955b6cf20c334022228b6fe9d294cb2065cafbb2ed21df7c9a5eedd8a2b",
+          "bytes": 3903
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant/tenapp/ten_packages/extension/main_python/addon.py",
+          "sha256": "d29f7e53e622ebc50e31e721a15488bab9039e92f9a3c7eb17ddf69519839c72",
+          "bytes": 587
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/__init__.py",
+          "sha256": "c16ba8f055e7b94c431d1fd68f89112484a3e6ba209313046f6f1a930441b789",
+          "bytes": 181
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/extension.py",
+          "sha256": "6a57c13af85fec3c83ad1b1750d5bec895754d0a9b905b4f462a7c45474e84a4",
+          "bytes": 8976
+        },
+        {
+          "path": "ai_agents/agents/examples/voice-assistant/tenapp/ten_packages/extension/main_python/agent/agent.py",
+          "sha256": "18a5397bd4062f8cfa6d869a36e6503d1f6ac0c2f545021338a535453e7379a3",
+          "bytes": 7856
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/cosy_tts_python/cosy_tts.py",
+          "sha256": "bceea98830b409d99ae8ca0a49bd8df7ca1e95923259f2871acc3b3fbc1a9037",
+          "bytes": 9912
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/cosy_tts_python/pyproject.toml",
+          "sha256": "97952936b142bb8537237bfaaf4e8979b2979c8ee5956775bc475ef60130946f",
+          "bytes": 148
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/message_collector2/extension.py",
+          "sha256": "d7862c414767bb397a24ab663b5ce940d42704a0f50a3ca08e57cb11dea3d070",
+          "bytes": 2851
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/openai_llm2_python/extension.py",
+          "sha256": "f14806cba5230a4f661580362d1549bef1501e188df30b22bd60993ce91b1d2d",
+          "bytes": 2760
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/openai_llm2_python/helper.py",
+          "sha256": "4f3482bbe1d0b03a96e14d4c61ad5454536bfbee6236697e46e734cdda64acc7",
+          "bytes": 3139
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/openai_llm2_python/openai.py",
+          "sha256": "8e20f024de32f42d9d2fdac24864c4c67c1ed8d4127583b0cdb7135ec65f838e",
+          "bytes": 19010
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/openai_mllm_python/__init__.py",
+          "sha256": "3407d51486a7d1f73c2d5b39aa06e83d07efcb5daec6bd7dd7bae06bd78f43d7",
+          "bytes": 141
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/openai_mllm_python/extension.py",
+          "sha256": "9593a848f6d62df3c6a93a35d481b602fdfdf501ff91e5392b9d5626f8bca0b8",
+          "bytes": 26791
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/openai_mllm_python/realtime/connection.py",
+          "sha256": "49a6a1a8c43043c6f36cf79fdad1b29d352858d8c4474097ff79763e15e1c4d6",
+          "bytes": 4155
+        },
+        {
+          "path": "ai_agents/agents/ten_packages/extension/openai_mllm_python/realtime/struct.py",
+          "sha256": "757b8872930f5125724bc155e67b6d1f5f127fe376751cdd19361922eb322cf5",
+          "bytes": 29209
+        }
+      ],
+      "package_archive_sha256": {
+        "0.7.22": "407dc81f15a8db5081a5d9f37b51a9c6f6d559ad96314df9813c0a977760d42f",
+        "0.7.41": "cdff326f88576182143b53582b7e008699b9ed7616dc9b2593f009b38ef1ea6e"
+      }
+    },
+    "xiaozhi": {
+      "repo": "https://github.com/xinnan-tech/xiaozhi-esp32-server",
+      "commit": "fdf280f84aaa84211f680936cbfd98bf9d7be01b",
+      "files": {
+        "abortHandle.py": "0e60679c6e281d4969b0c6a4952e7071962c16f06fe55c7764dbf7753bc272c2",
+        "connection.py": "a1d6694197a2422d777a85cb55becb63b66278c1d23588782f39dc98a8954386",
+        "dialogue.py": "a4f7af45edd5f1e60a119eb698daba56047fb6c57dfe5c4bfcadbf28234a6602",
+        "dto.py": "6ba9742e4778bcd31980f1f9347d20aecbed065f152735ef407516b7b70d756c",
+        "test_dialogue.py": "7df77190a19979a5dddd802fa05a9add01f98c1f813df612171edc080a61336d"
+      }
+    }
+  },
+  "executed_private_scripts_sha256": {
+    "native/ablation.py": "7cb1889530e5150f8cf4ac1461fe3448aabfbc6fe5722a3d5ad73070166c90b6",
+    "native/plan.json": "285d1cf1dfb90b853b44733fbd5d146f5717f46e6ba62f2d50b6e2a12656c1a8",
+    "pipecat/frame_context_probe.py": "b2ea3eca43545c69d5cd0f3cb15cb44b3d6fb2272110f7d5fe44538a7de633c7",
+    "ten/test_actual_modules.py": "2d8a2e6a982804ab0c6c4c0578dd9a78dc0407da2982e4a224af9e9a88400046",
+    "xiaozhi/probe.py": "6519edfb5acec4c03c28fbba82898bead5440ac386815b46830dc6c346afe45c",
+    "audit/resume_audit_test.go": "340c2db656b309b0452e6f0f6c596a6621f0d9069d163d70a8c3d7514ae2c22f"
+  },
+  "portable_copies": "CLI/source/output parameterization is verified separately; native 8-call evidence comes from the private script above, not a later copy"
+}

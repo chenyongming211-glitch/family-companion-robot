@@ -33,3 +33,52 @@ python3 tools/voice-audit/cache_stress.py --source-root <prepared-source> --out 
 唤醒工具将 `ContinueWakeWordInvoke` 原文放进故障注入stub，保留方法SHA256；退出2表示发现上传失败仍继续聆听，退出0表示这三条故障路径已拒绝，其他异常需看编译/运行日志。它不覆盖真实网络、FreeRTOS调度、完整状态机或声学唤醒。
 
 缓存工具编译传入源码的环形缓存及epoch guard，用固定随机种子和标准deque作比较；同时测试分配失败和并发调用。运行ASAN/UBSAN，**未运行TSAN**；主机堆替代PSRAM，不验证ESP32性能或实时性。已有全套测试仍需运行 `python3 -m unittest discover -s firmware/tests -v`。
+
+## 接续状态与开源框架对照
+
+本轮[总报告](../../docs/verification/2026-10-23-resume-framework-root-cause.md)区分真实模型、原版框架模块、合成播放和实机。固定上游commit、源码/依赖摘要与原执行脚本摘要保存在[resume-reference-lock.json](resume-reference-lock.json)。上游checkout、依赖和原始结果不随本仓库分发，需分别保留/遵守原许可；Pipecat为BSD-2-Clause。本轮没有将它们的产品实现复制进Go网关。
+
+Go审计只用回环httptest和内存PCM，通过overlay调用当前生产方法，不连模型、不改正式文件：
+
+```sh
+python3 tools/voice-audit/resume_state_audit.py --out artifacts/new-resume-audit --race
+```
+
+这三项是**当前行为characterization**，不是修复验收。产品修复后，相应“观察现有缺口”的断言可能预期失效。`resume_state_test.go.in`不会进入日常Go包编译。
+
+Pipecat须在单独环境安装固定源码的基础包（实测Python3.13.3，无GPU/模型/extra依赖）；传入同一checkout，输出目录必须不存在：
+
+```sh
+<pipecat-venv>/bin/python tools/voice-audit/pipecat_resume_probe.py \
+  --source-root <pipecat-checkout-at-3dfcd17a> --out artifacts/new-pipecat-resume
+```
+
+脚本运行5个有/无PTS及sink落后的真实框架场景，不调用模型。它还截获原版Realtime方法发出的truncate事件；没有远端ACK或设备回报。不要将模拟sink接受数字当作人实际听到的数字。上游320项测试需另外安装pytest/pytest-asyncio/pytest-xdist，命令见分报告。
+
+TEN脚本需要隔离的runtime-root布局：`upstream/`为锁定仓库源码；`packages/ten_ai_base/`为官方0.7.41包，`packages/ten_ai_base-0.7.22/`为0.7.22包；根目录保留相应`ten_ai_base-<version>.tpkg`及`download_manifest.json`（commit/files取reference-lock中的TEN项）。它核验41个源码文件及两种包的归档SHA，使用native runtime与厂商连接的替身，运行原版Python控制代码。依赖与准备细节见[TEN报告](../../docs/verification/2026-10-23-ten-resume-comparison.md)。
+
+```sh
+<ten-venv>/bin/python tools/voice-audit/ten_resume_probe.py \
+  --runtime-root <prepared-ten-root> --suite chained --out artifacts/new-ten-chained
+<ten-venv>/bin/python tools/voice-audit/ten_resume_probe.py \
+  --runtime-root <prepared-ten-root> --suite realtime --out artifacts/new-ten-realtime
+```
+
+小智脚本使用固定源码的扁平目录，包含`dialogue.py`、`connection.py`、`abortHandle.py`、TTS的`dto.py`、上游`test_dialogue.py`；路径/来源见[报告](../../docs/verification/2026-10-23-xiaozhi-resume-comparison.md)。校验字节后动态导入模块/提取原方法，不启动完整服务。只跑两个方法级场景不需第三方依赖；加`--upstream-tests`需pytest及pytest-asyncio。
+
+```sh
+python3 tools/voice-audit/xiaozhi_resume_probe.py \
+  --source-root <pinned-flat-python-source> --out artifacts/new-xiaozhi-resume
+```
+
+## 千问合成上下文消融（会调用计费API）
+
+`native_resume_ablation.py`依赖aiohttp，直接测试原生API，**没有设备或音频播放**。提供机器合成16kHz单声道PCM16的`continue.wav`和固定JSON plan。`--env-file`可从服务器受保护文件读取配置；省略时使用继承环境中的`QWEN_REALTIME_URL`、`DASHSCOPE_API_KEY`、`QWEN_VOICE`、可选`ROBOT_INSTRUCTIONS`，不要把凭据放到参数里。
+
+```sh
+<aiohttp-venv>/bin/python tools/voice-audit/native_resume_ablation.py \
+  --plan tools/voice-audit/fixtures/resume-context-20261023.json \
+  --fixtures <synthetic-wav-directory> --out <new-private-output-directory> --trials 2
+```
+
+plan的已播1–8是人为给定的oracle，不是生产映射。每组2次、固定顺序、请求相同seed，不证明服务端确定性。具体混杂因素与原8次调用的执行身份见[消融报告](../../docs/verification/2026-10-23-native-resume-ablation.md)。portable副本增加CLI和错误退出行为，只另用本地fake provider检查成功/拒绝退出码，未用它重跑并冒充原8次实连。
