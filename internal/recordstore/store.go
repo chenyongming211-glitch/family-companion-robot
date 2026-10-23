@@ -232,12 +232,12 @@ func (s *Store) initialize() error {
 	}
 	// O_NOFOLLOW protects the lock from a preexisting symlink; flock locks its
 	// inode, so path aliases still refer to the same exclusive lock.
-	fd, err := syscall.Open(filepath.Join(s.directory, ".lock"), syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW, 0600)
+	lock, err := openStoreFile(filepath.Join(s.directory, ".lock"), syscall.O_CREAT|syscall.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("open snapshot lock: %w", err)
 	}
-	s.lock = os.NewFile(uintptr(fd), "snapshot-lock")
-	if err = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	s.lock = lock
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fmt.Errorf("%w: %v", ErrLocked, err)
 	}
 	if err = os.Chmod(s.directory, 0700); err != nil {
@@ -297,6 +297,17 @@ func (s *Store) cleanupExpired() error {
 	}
 	return nil
 }
+
+func openStoreFile(path string, flags int, mode uint32) (*os.File, error) {
+	// Set close-on-exec atomically with creation: a later CloseOnExec call
+	// leaves a window in which another goroutine can fork an inheriting child.
+	fd, err := syscall.Open(path, flags|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, mode)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
+
 func (s *Store) readFile(key string) (Snapshot, error) {
 	path := s.path(key)
 	info, err := os.Lstat(path)
@@ -312,11 +323,10 @@ func (s *Store) readFile(key string) (Snapshot, error) {
 	if info.Size() > maxFileSize {
 		return Snapshot{}, ErrTooLarge
 	}
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := openStoreFile(path, syscall.O_RDONLY, 0)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	f := os.NewFile(uintptr(fd), "snapshot")
 	b, readErr := io.ReadAll(io.LimitReader(f, maxFileSize+1))
 	closeErr := f.Close()
 	if readErr != nil {

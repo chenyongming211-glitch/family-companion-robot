@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -206,6 +209,96 @@ func TestPermissionsAndExclusiveLock(t *testing.T) {
 			s2.Close(context.Background())
 		}
 		t.Fatalf("second open: %v", err)
+	}
+}
+
+func TestExecChildDoesNotInheritStoreFiles(t *testing.T) {
+	const helperEnv = "RECORDSTORE_EXEC_HELPER"
+	if raw := os.Getenv(helperEnv); raw != "" {
+		var files map[int]string
+		if err := json.Unmarshal([]byte(raw), &files); err != nil {
+			t.Fatal(err)
+		}
+		inherited := []string{}
+		for fd, path := range files {
+			var stat syscall.Stat_t
+			if err := syscall.Fstat(fd, &stat); err == nil {
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := info.Sys().(*syscall.Stat_t)
+				if stat.Dev == want.Dev && stat.Ino == want.Ino {
+					inherited = append(inherited, path)
+				}
+			}
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(inherited); err != nil {
+			t.Fatal(err)
+		}
+		// Remain alive until the parent has closed and reopened the store.
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	dir := t.TempDir()
+	s := openTest(t, dir)
+	saveTest(t, s, "a", sample())
+	// Hold the exact descriptor-opening path used by readFile across exec, so
+	// snapshot inheritance is covered without racing the brief disk read.
+	snapshot, err := openStoreFile(devicePath(dir, "a"), syscall.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	files, err := json.Marshal(map[int]string{
+		int(s.lock.Fd()):   filepath.Join(dir, ".lock"),
+		int(snapshot.Fd()): devicePath(dir, "a"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
+	cmd.Env = append(os.Environ(), helperEnv+"="+string(files))
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stdin.Close()
+		if err := cmd.Wait(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var inherited []string
+	if err = json.NewDecoder(stdout).Decode(&inherited); err != nil {
+		t.Fatal(err)
+	}
+	if len(inherited) != 0 {
+		t.Errorf("exec child inherited store descriptors: %v", inherited)
+	}
+	if err = s.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(Options{Directory: dir, Retention: 7 * 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("reopen while exec child is alive: %v", err)
+	}
+	defer reopened.Close(context.Background())
+	if _, err = reopened.Load(context.Background(), "a"); err != nil {
+		t.Fatal(err)
 	}
 }
 
