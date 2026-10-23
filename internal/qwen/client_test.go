@@ -133,3 +133,58 @@ func TestNativeFunctionEventsAndSessionTools(t *testing.T) {
 		t.Fatal(ev)
 	}
 }
+
+func TestModeChangesDoNotRewriteImmutableVadParameters(t *testing.T) {
+	received := make(chan []map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.WriteJSON(map[string]any{"type": "session.created"})
+		var initial map[string]any
+		if c.ReadJSON(&initial) != nil {
+			return
+		}
+		c.WriteJSON(map[string]any{"type": "session.updated"})
+		all := []map[string]any{initial}
+		for i := 0; i < 3; i++ {
+			var v map[string]any
+			if c.ReadJSON(&v) != nil {
+				return
+			}
+			all = append(all, v)
+		}
+		received <- all
+	}))
+	defer server.Close()
+	c, err := Open(context.Background(), Config{URL: "ws" + strings.TrimPrefix(server.URL, "http"), VAD: "semantic_vad"}, "auto", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for _, v := range []map[string]any{{"type": "input_audio_buffer.append", "audio": "AAA="}} {
+		if err := c.Send(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.SetMode("manual"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetMode("realtime"); err != nil {
+		t.Fatal(err)
+	}
+	all := <-received
+	initial := all[0]["session"].(map[string]any)["turn_detection"].(map[string]any)
+	if initial["silence_duration_ms"] != float64(600) {
+		t.Fatal("initial VAD config changed")
+	}
+	if all[2]["session"].(map[string]any)["turn_detection"] != nil {
+		t.Fatal("manual segmentation not disabled")
+	}
+	enabled := all[3]["session"].(map[string]any)["turn_detection"].(map[string]any)
+	if len(enabled) != 1 || enabled["type"] != "semantic_vad" {
+		t.Fatal("mode toggle rewrote immutable parameters after append", enabled)
+	}
+}

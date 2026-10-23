@@ -1,79 +1,64 @@
 package gateway
 
 import (
-	"context"
-	"encoding/json"
 	"testing"
-
-	"familyrobot/internal/qwen"
-	"github.com/gorilla/websocket"
+	"time"
 )
 
-func TestWakeOnlyInterruptionLeavesSlotForActualTask(t *testing.T) {
-	h := newToolHarnessFeatures(t, map[string]bool{"playback_progress_v1": true})
-	p, _ := h.model(t)
-	detect := func(mode string) {
-		h.device.send(t, map[string]any{"type": "listen", "state": "detect", "text": "嗨小伴"})
-		h.device.send(t, map[string]any{"type": "listen", "state": "start", "mode": mode})
-		p.want(t, "session.update") // Barrier after device-originated wake metadata.
+func TestWakeOriginSurvivesLateTranscriptionAndBusinessCommit(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.generation = 3
+	s.wake.inputID = "wake"
+	s.currentInput = requestOrigin{generation: 3, itemID: "wake", wake: true}
+	s.inputCommitted = true
+	s.responseOrigin = s.currentInput
+	if err := s.beginPlayback(); err != nil {
+		t.Fatal(err)
 	}
-	detect("realtime")
-	p.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "wake-input"})
-	p.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "wake-input", "transcript": "嗨，小伴！"})
-	wantSTT(t, h.device)
-	toolParent(t, p, "greeting", 20)
-	readStart(t, h.device)
-	h.device.send(t, map[string]any{"type": "abort"})
-	readStop(t, h.device)
-	fresh, _ := h.model(t)
-	const task = "嗨小伴，请完整读这篇文章直到结尾"
-	fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "real-input"})
-	fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "real-input", "transcript": task})
-	wantSTT(t, h.device)
-	toolParent(t, fresh, "real-task", 20)
-	start := readStart(t, h.device)
-	h.device.send(t, map[string]any{"type": "abort"})
-	readStop(t, h.device)
-	next, _ := h.model(t)
-	out := localResult(t, next, "get-real", "conversation_get_paused_task", "{}")
-	if out["available"] != true || out["original_request"] != task || out["playback_id"] != start["playback_id"] {
-		t.Fatalf("real task was excluded or attached to greeting: %v", out)
+	s.started = true
+	s.commitOrigin("business")
+	s.transcribeOrigin("wake", "你好，小志。")
+	if !s.activePlayback.origin.wake || !s.activePlayback.origin.known {
+		t.Fatal("late STT changed source")
+	}
+	if s.currentInput.itemID != "business" || s.currentInput.wake {
+		t.Fatal("late wake STT stole business identity")
+	}
+	s.pausePlayback()
+	if s.paused != nil {
+		t.Fatal("greeting became a task")
+	}
+	s.transcribeOrigin("business", "你好小智，请从一数到五十")
+	s.responseOrigin = s.currentInput
+	if err := s.beginPlayback(); err != nil {
+		t.Fatal(err)
+	}
+	s.pausePlayback()
+	if s.paused == nil || s.paused.playback.origin.wake {
+		t.Fatal("business request excluded")
 	}
 }
-
-func TestLateWakeEvidenceReleasesOnlyWakePause(t *testing.T) {
-	for _, detectLate := range []bool{false, true} {
-		h := newPlaybackHarness(t)
-		h.s.responseID = ""
-		ctx := context.Background()
-		detect := func() {
-			data, _ := json.Marshal(map[string]any{"type": "listen", "state": "detect", "text": "嗨小伴"})
-			if err := h.s.onDevice(ctx, deviceEvent{kind: websocket.TextMessage, data: data}); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if !detectLate {
-			detect()
-		}
-		h.s.commitOrigin("wake")
-		if detectLate {
-			h.s.transcribeOrigin("wake", "嗨，小伴！")
-		}
-		if err := h.s.onModel(ctx, qwen.Event{Type: "response.created", Response: qwen.Response{ID: "greeting"}}); err != nil {
-			t.Fatal(err)
-		}
-		if err := h.s.beginPlayback(); err != nil {
-			t.Fatal(err)
-		}
-		h.s.started = true
-		h.s.pausePlayback()
-		if detectLate {
-			detect()
-		} else {
-			h.s.transcribeOrigin("wake", "嗨，小伴！")
-		}
-		if h.s.paused != nil {
-			t.Fatal("late matching wake evidence retained a wake-only pause")
-		}
+func TestWakeQueueAndDeadlineAreBounded(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.wake.deadline = time.Now().Add(time.Second)
+	data := make([]byte, maxWakeInputBytes)
+	if err := s.receiveInput(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.receiveInput([]byte{0, 0}); err == nil {
+		t.Fatal("accepted business prefix exceeding replay capacity")
+	}
+	if len(s.wake.queued) != maxWakeInputBytes || s.inputBytes != 0 || len(s.inputTail) != 0 {
+		t.Fatal("wake ACK queue corrupted committed/replay accounting")
+	}
+}
+func TestWakeProvenanceDoesNotRequireTranscription(t *testing.T) {
+	if !(&session{}).wakeOnly(requestOrigin{wake: true}) {
+		t.Fatal("ASR availability used as source")
+	}
+	if (&session{}).wakeOnly(requestOrigin{text: "你好小智", known: true}) {
+		t.Fatal("text used as provenance")
 	}
 }

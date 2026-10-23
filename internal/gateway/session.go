@@ -38,7 +38,8 @@ type session struct {
 	currentInput           requestOrigin
 	responseOrigin         requestOrigin
 	inputCommitted         bool
-	wakePhrase             string
+	wake                   wakeHandoff
+	listenStarted          bool
 	ctx                    context.Context
 	device                 *websocket.Conn
 	cfg                    Config
@@ -137,7 +138,7 @@ func (s *session) run() error {
 		s.paused = nil
 		s.currentInput = requestOrigin{}
 		s.responseOrigin = requestOrigin{}
-		s.wakePhrase = ""
+		s.wake = wakeHandoff{}
 	}()
 	s.playbackEnabled = hello.Features["playback_progress_v1"]
 	features := map[string]bool(nil)
@@ -210,6 +211,9 @@ func (s *session) run() error {
 			}
 		case <-ticker.C:
 			now := time.Now()
+			if !s.wake.deadline.IsZero() && !now.Before(s.wake.deadline) {
+				return errors.New("wake input handshake timed out")
+			}
 			if now.Sub(s.lastActivity) > s.cfg.IdleTimeout {
 				return errors.New("device idle timeout")
 			}
@@ -243,6 +247,10 @@ func (s *session) readDevice(ctx context.Context, cancel context.CancelFunc) {
 	}
 }
 func (s *session) connect(ctx context.Context) error {
+	if s.generation > 0 {
+		s.listenStarted = true
+		s.wake = wakeHandoff{}
+	}
 	s.responseAudioSent = false
 	s.inputActive = false
 	if s.model != nil {
@@ -291,17 +299,7 @@ func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
 		if err != nil {
 			return err
 		}
-		// Listening firmware streams silence too. Only a VAD speech interval
-		// or an explicit manual capture makes these packets user activity.
-		if s.inputActive {
-			s.lastActivity = time.Now()
-		}
-		s.inputBytes += len(pcm)
-		s.inputTail = append(s.inputTail, pcm...)
-		if len(s.inputTail) > 64000 {
-			s.inputTail = append([]byte(nil), s.inputTail[len(s.inputTail)-64000:]...)
-		}
-		return s.appendAudio(pcm)
+		return s.receiveInput(pcm)
 	}
 	if ev.kind != websocket.TextMessage {
 		return nil
@@ -334,35 +332,39 @@ func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
 			if v.Mode != "auto" && v.Mode != "manual" && v.Mode != "realtime" {
 				return errors.New("unsupported listen mode")
 			}
-			if s.responseID != "" || s.started || s.awaitingResponse || len(s.toolCalls) > 0 {
+			first := !s.listenStarted
+			if !first && !s.wake.deadline.IsZero() {
+				if v.Mode != s.mode {
+					return errors.New("listen mode changed during wake handshake")
+				}
+				return nil
+			}
+			if !first && (s.responseID != "" || s.started || s.awaitingResponse || len(s.toolCalls) > 0) {
 				if err := s.interrupt(ctx, false, false); err != nil {
 					return err
 				}
 			}
+			s.listenStarted = true
+			changed := s.mode != v.Mode
+			s.mode = v.Mode
 			s.inputActive = v.Mode == "manual"
 			if s.inputActive {
 				s.lastActivity = time.Now()
 			}
-			if s.mode != v.Mode {
-				s.mode = v.Mode
-				s.traceVoice("listen_start")
+			s.traceVoice("listen_start")
+			if !s.wake.deadline.IsZero() {
+				return s.advanceWake()
+			}
+			if changed || s.wake.manual {
+				s.wake.manual = false
 				return s.model.SetMode(v.Mode)
 			}
-			s.traceVoice("listen_start")
 		case "stop":
 			s.traceVoice("listen_stop")
-			if s.inputActive {
-				s.lastActivity = time.Now()
-			}
-			s.inputActive = false
-			if s.mode == "manual" && s.inputBytes >= 3200 && !s.manualCommit {
-				s.manualCommit = true
-				s.awaitingResponse = true
-				return s.model.Send(map[string]any{"type": "input_audio_buffer.commit"})
-			}
-		case "detect": // Wake-word audio is handled by the normal audio stream.
-			s.rememberWakePhrase(v.Text)
+			return s.stopInput()
+		case "detect":
 			s.lastActivity = time.Now()
+			return s.detectWake()
 		default:
 			return errors.New("unsupported listen state")
 		}
@@ -438,6 +440,10 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 	case "error":
 		return errors.New("upstream rejected a realtime event")
 	case "input_audio_buffer.speech_started":
+		if !s.wake.deadline.IsZero() {
+			return errors.New("unexpected VAD during wake handshake")
+		}
+		s.listenStarted = true
 		s.traceVoice("vad_started")
 		if err := s.interrupt(ctx, true, false); err != nil {
 			return err
@@ -449,13 +455,34 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.inputActive = false
 		s.lastActivity = time.Now()
 	case "input_audio_buffer.committed":
+		if ev.ItemID != "" && ev.ItemID == s.wake.inputID {
+			return nil
+		}
+		wakeCommit := s.wake.commitPending
+		if wakeCommit && ev.ItemID == "" {
+			return errors.New("wake commit identity missing")
+		}
+		if !wakeCommit && !s.wake.deadline.IsZero() {
+			return errors.New("unexpected commit during wake handshake")
+		}
+		if !wakeCommit {
+			s.listenStarted = true
+		}
 		s.traceVoice("input_committed")
 		s.commitOrigin(ev.ItemID)
-		s.inputActive = false
+		if !wakeCommit {
+			s.inputActive = false
+		}
 		s.lastActivity = time.Now()
 		s.inputTail = nil
 		s.inputBytes = 0
 		s.awaitingResponse = true
+		if wakeCommit {
+			s.currentInput.wake = true
+			s.wake.inputID = ev.ItemID
+			s.wake.commitPending = false
+			return s.advanceWake()
+		}
 		if s.manualCommit {
 			s.manualCommit = false
 			return s.model.Send(map[string]any{"type": "response.create"})
@@ -471,6 +498,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.hist.add("user", text)
 		return s.json(protocol.Control{Type: "stt", SessionID: s.id, Text: text})
 	case "response.created":
+		if !s.wake.deadline.IsZero() && !s.wake.responsePending {
+			return errors.New("unsolicited response during wake handshake")
+		}
 		if ev.Response.ID == "" || len(ev.Response.ID) > 256 {
 			return errors.New("upstream response ID missing")
 		}
@@ -480,12 +510,18 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		if s.responseID != "" || len(s.toolCalls) > 0 {
 			return errors.New("overlapping upstream responses")
 		}
+		if !s.wake.responsePending {
+			s.listenStarted = true
+		}
 		s.lastActivity = time.Now()
 		// A tool continuation shares the open TTS block and encoder. Firmware
 		// resets its decoder only at TTS start, and resumes listening on stop.
 		if !s.toolPlayback {
 			if !s.toolContinuation {
 				s.responseOrigin = s.currentInput
+				if s.wake.responsePending {
+					s.responseOrigin = s.wake.origin
+				}
 			}
 			s.encoder.Close()
 			var err error
@@ -506,6 +542,10 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.nextAudio = time.Time{}
 		s.lastAudio = time.Time{}
 		s.traceVoice("response_created")
+		if s.wake.responsePending {
+			s.wake.responsePending = false
+			return s.finishWake()
+		}
 	case "response.function_call_arguments.done":
 		return s.callTool(ev)
 	case "response.audio.delta":

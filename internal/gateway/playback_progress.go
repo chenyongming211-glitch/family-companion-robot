@@ -16,6 +16,7 @@ type requestOrigin struct {
 	itemID           string
 	text             string
 	known, truncated bool
+	wake             bool
 }
 type playbackRecord struct {
 	id                                           uint32
@@ -161,11 +162,16 @@ func (s *session) promotePlayback(r *playbackRecord) {
 // Input identities include upstream generation; playback identities instead live
 // for the entire device connection, including upstream-only reconnects.
 func (s *session) commitOrigin(itemID string) {
+	old := s.currentInput
 	s.currentInput = requestOrigin{generation: s.generation, itemID: itemID}
+	if itemID != "" && old.generation == s.generation && old.itemID == itemID {
+		s.currentInput = old
+	}
 	s.inputCommitted = true
 }
 func (s *session) transcribeOrigin(itemID, text string) {
 	origin := requestOrigin{generation: s.generation, itemID: itemID, text: limitText(text, 512), known: text != "", truncated: len([]rune(text)) > 512}
+	origin.wake = itemID != "" && itemID == s.wake.inputID
 	matches := func(o requestOrigin) bool { return o.generation == s.generation && o.itemID == itemID }
 	// With an outstanding committed identity an unrelated or anonymous STT must
 	// not replace it. Old fake peers without item IDs retain conservative support.
@@ -183,7 +189,9 @@ func (s *session) transcribeOrigin(itemID, text string) {
 	if itemID != "" && s.paused != nil && matches(s.paused.playback.origin) && !s.paused.playback.origin.known {
 		s.paused.playback.origin = origin
 	}
-	s.discardWakePause()
+	if matches(s.wake.origin) && !s.wake.origin.known {
+		s.wake.origin = origin
+	}
 }
 func (s *session) pausedData() map[string]any {
 	out := map[string]any{"available": s.paused != nil, "text_position": "unknown"}

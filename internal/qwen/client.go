@@ -108,7 +108,16 @@ func (c *Client) TurnDetection(mode string) any {
 	return map[string]any{"type": c.cfg.VAD, "threshold": 0.5, "silence_duration_ms": 600}
 }
 func (c *Client) SetMode(mode string) error {
-	return c.Send(map[string]any{"type": "session.update", "session": map[string]any{"turn_detection": c.TurnDetection(mode)}})
+	// Full VAD parameters are configured once in Open. Resending them after
+	// input_audio_buffer.append is rejected because silence_duration_ms cannot
+	// change, including when re-enabling detection after a wake-cache commit.
+	// A null->type transition restores provider defaults (observed silence
+	// duration: 800ms), rather than retaining Open's 600ms setting.
+	var detection any
+	if mode != "manual" {
+		detection = map[string]any{"type": c.cfg.VAD}
+	}
+	return c.Send(map[string]any{"type": "session.update", "session": map[string]any{"turn_detection": detection}})
 }
 func (c *Client) Send(v map[string]any) error {
 	v["event_id"] = fmt.Sprintf("fr_%d_%d", time.Now().UnixMilli(), c.sequence.Add(1))
