@@ -20,8 +20,9 @@ type toolWire struct {
 	err  error
 }
 type toolPeer struct {
-	c  *websocket.Conn
-	in chan toolWire
+	c       *websocket.Conn
+	in      chan toolWire
+	harness *toolHarness
 }
 
 func newToolPeer(c *websocket.Conn) *toolPeer {
@@ -153,6 +154,7 @@ func (h *toolHarness) model(t *testing.T) (*toolPeer, map[string]any) {
 	t.Cleanup(func() { p.c.Close() })
 	p.send(t, map[string]any{"type": "session.created"})
 	cfg := p.want(t, "session.update")["session"].(map[string]any)
+	p.harness = h
 	return p, cfg
 }
 func rpcReply(t *testing.T, p *toolPeer, req map[string]any, result any) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"familyrobot/internal/audio"
@@ -39,6 +40,10 @@ type session struct {
 	responseTaskID         string
 	sync                   generationSync
 	route                  taskRouting
+	routeSequence          uint64
+	routeResults           chan taskRouteResult
+	classifyPausedTask     func(context.Context, qwen.Config, string, string) (string, error)
+	voiceRequested         bool
 	currentInput           requestOrigin
 	responseOrigin         requestOrigin
 	inputCommitted         bool
@@ -166,7 +171,9 @@ func (s *session) run() error {
 	}
 	defer func() { s.encoder.Close() }()
 	ctx, cancel := context.WithCancel(s.ctx)
+	s.ctx = ctx
 	defer cancel()
+	defer s.cancelRouting()
 	go s.readDevice(ctx, cancel)
 	buffered, err := s.discoverTools(ctx, hello.Features["mcp"])
 	if err != nil {
@@ -199,6 +206,10 @@ func (s *session) run() error {
 			}
 			if err := s.onDevice(ctx, ev); err != nil {
 				s.alert()
+				return err
+			}
+		case result := <-s.routeResults:
+			if err := s.finishRouting(result); err != nil {
 				return err
 			}
 		case ev := <-s.events:
@@ -259,7 +270,8 @@ func (s *session) connect(ctx context.Context) error {
 		s.wake = wakeHandoff{}
 	}
 	s.sync = generationSync{}
-	s.route = taskRouting{}
+	s.cancelRouting()
+	s.voiceRequested = false
 	s.responseTaskID = ""
 	s.responseAudioSent = false
 	s.inputActive = false
@@ -394,6 +406,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	if !force && target == nil && s.responseID == "" && !s.started && !s.awaitingResponse && len(s.toolCalls) == 0 {
 		return nil
 	}
+	s.cancelRouting()
 	// Stop playback before any network reconnect. No queued old audio survives.
 	s.pausePlayback()
 	stop := protocol.Control{Type: "tts", State: "stop", Reason: "interrupted", SessionID: s.id}
@@ -446,6 +459,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 	if (ev.Type == "input_audio_buffer.committed" || ev.Type == "conversation.item.input_audio_transcription.completed") && len(ev.ItemID) > 256 {
 		return errors.New("upstream input identity exceeded limits")
 	}
+	if (s.route.active || (s.route.decided && (s.sync.requested || s.sync.token != 0))) && strings.HasPrefix(ev.Type, "response.") {
+		return errors.New("unsolicited main response during task classification")
+	}
 	switch ev.Type {
 	case "session.updated":
 		return s.acknowledgeSnapshot()
@@ -467,8 +483,10 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.inputActive = false
 		s.lastActivity = time.Now()
 	case "input_audio_buffer.committed":
-		if (s.route.active || (s.route.decided && (s.awaitingResponse || s.responseID != "" || s.sync.requested))) && s.inputCommitted && s.currentInput.itemID != ev.ItemID {
-			return errors.New("new input overtook paused task routing")
+		if s.route.active && s.inputCommitted && s.currentInput.itemID != ev.ItemID {
+			s.cancelRouting()
+			s.sync = generationSync{}
+			s.voiceRequested = false
 		}
 		if ev.ItemID != "" && ev.ItemID == s.wake.inputID {
 			return nil
@@ -520,12 +538,10 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		if s.retired.contains(ev.Response.ID) {
 			return nil
 		}
-		if s.route.active || s.route.decided {
-			if !s.route.awaitingCreated {
-				return errors.New("unsolicited response during task routing")
-			}
-			s.route.awaitingCreated = false
+		if s.route.active || (s.route.decided && (!s.voiceRequested || s.sync.requested || s.sync.token != 0)) {
+			return errors.New("unsolicited response before voice snapshot acknowledgement")
 		}
+		s.voiceRequested = false
 		if s.responseID != "" || len(s.toolCalls) > 0 {
 			return errors.New("overlapping upstream responses")
 		}
@@ -568,14 +584,8 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			return s.finishWake()
 		}
 	case "response.function_call_arguments.done":
-		if s.route.active {
-			return s.routeTool(ev)
-		}
 		return s.callTool(ev)
 	case "response.audio.delta":
-		if s.route.active {
-			return s.rejectRoutingContent(ev.Delta)
-		}
 		if ev.ResponseID == "" || ev.ResponseID != s.responseID || s.responseDone {
 			return nil
 		}
@@ -588,16 +598,10 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		}
 		return s.pending.Append(pcm)
 	case "response.audio_transcript.delta":
-		if s.route.active {
-			return s.rejectRoutingContent(ev.Delta)
-		}
 		if ev.ResponseID == s.responseID && s.responseID != "" && !s.responseDone {
 			s.draftTranscript = limitText(s.draftTranscript+ev.Delta, 2048)
 		}
 	case "response.audio_transcript.done":
-		if s.route.active {
-			return s.rejectRoutingContent(ev.Transcript)
-		}
 		if ev.ResponseID != s.responseID || s.responseID == "" || s.responseDone {
 			return nil
 		}
@@ -605,14 +609,6 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.draftTranscript = s.transcript
 		if s.started {
 			return s.tts("sentence_start", s.transcript)
-		}
-	case "response.text.delta":
-		if s.route.active {
-			return s.rejectRoutingContent(ev.Delta)
-		}
-	case "response.text.done":
-		if s.route.active {
-			return s.rejectRoutingContent(ev.Text)
 		}
 	case "response.done":
 		if ev.Response.ID != s.responseID || s.responseID == "" || s.responseDone {
@@ -625,9 +621,6 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			// Explicit aborts, failed responses and manual mode discard input.
 			replay := ev.Response.Status == "cancelled" && s.mode != "manual"
 			return s.interrupt(ctx, replay, false)
-		}
-		if s.route.active {
-			return s.finishRouting()
 		}
 		s.traceVoice("response_completed")
 		if s.pending.Len()%2 != 0 {

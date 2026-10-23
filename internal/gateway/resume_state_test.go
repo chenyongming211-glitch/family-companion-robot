@@ -224,6 +224,9 @@ func TestResumeStateLateFinalRefreshesInFlightSnapshotAndModeACKCannotAuthorize(
 	s.activePlayback = nil
 	s.devicePlayback = nil
 	p := attachSnapshotModel(t, s)
+	// This fixture exercises an existing turn's snapshot refresh. Fresh-input
+	// classification and stale classifier revisions have dedicated tests.
+	s.toolContinuation = true
 	if err := s.model.SetMode("manual"); err != nil {
 		t.Fatal(err)
 	}

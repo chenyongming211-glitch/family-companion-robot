@@ -2,14 +2,14 @@ package gateway
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"familyrobot/internal/audio"
-	"familyrobot/internal/qwen"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"familyrobot/internal/qwen"
 )
 
 func routingHarness(t *testing.T) (*session, *toolPeer) {
@@ -19,216 +19,285 @@ func routingHarness(t *testing.T) (*session, *toolPeer) {
 	s.responseID = ""
 	s.generation = 1
 	s.currentInput = requestOrigin{generation: 1, itemID: "continue", known: true, text: "继续"}
+	s.inputCommitted = true
 	s.paused = &pausedTask{id: "task-1", original: requestOrigin{known: true, text: "数到一百"}, playback: playbackRecord{id: 1, settled: true}}
 	s.snapshotRevision = 3
+	t.Cleanup(s.cancelRouting)
 	return s, attachSnapshotModel(t, s)
 }
-func startRouting(t *testing.T, s *session, p *toolPeer) {
+
+type classificationRequest struct {
+	ctx              context.Context
+	original, latest string
+}
+
+func controlledClassifier(s *session) (<-chan classificationRequest, chan<- taskRouteResult) {
+	requests := make(chan classificationRequest, 4)
+	responses := make(chan taskRouteResult, 4)
+	s.classifyPausedTask = func(ctx context.Context, cfg qwen.Config, original, latest string) (string, error) {
+		requests <- classificationRequest{ctx, original, latest}
+		select {
+		case result := <-responses:
+			return result.action, result.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return requests, responses
+}
+func takeClassification(t *testing.T, requests <-chan classificationRequest) classificationRequest {
 	t.Helper()
+	select {
+	case request := <-requests:
+		return request
+	case <-time.After(time.Second):
+		t.Fatal("classifier not started")
+		return classificationRequest{}
+	}
+}
+func routeResult(t *testing.T, s *session) taskRouteResult {
+	t.Helper()
+	select {
+	case result := <-s.routeResults:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("classifier did not return")
+		return taskRouteResult{}
+	}
+}
+func TestIsolatedRouteWaitsForMatchingTranscriptWithoutMainMutation(t *testing.T) {
+	s, p := routingHarness(t)
+	requests, results := controlledClassifier(s)
+	s.currentInput.known = false
+	s.currentInput.text = ""
 	if err := s.requestResponse(); err != nil {
 		t.Fatal(err)
 	}
-	p.read(t)
-	ackSnapshotWire(t, s, p)
-	p.want(t, "response.create")
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "route"}}); err != nil {
+	p.quiet(t, 20*time.Millisecond)
+	s.transcribeOrigin("unrelated", "继续")
+	if err := s.advanceGeneration(time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(s.encoder.Close)
-}
-func TestTaskRoutingContentFailsClosedBeforeMutationOrContinuation(t *testing.T) {
-	contents := []struct{ name, payload string }{
-		{"audio", `{"type":"response.audio.delta","response_id":"route","delta":"` + base64.StdEncoding.EncodeToString(make([]byte, audio.FrameBytes)) + `"}`},
-		{"transcript_delta", `{"type":"response.audio_transcript.delta","response_id":"route","delta":"unheard"}`},
-		{"transcript_done_only", `{"type":"response.audio_transcript.done","response_id":"route","transcript":"unheard"}`},
-		{"text_delta", `{"type":"response.text.delta","response_id":"route","delta":"unheard"}`},
-		{"text_done_only", `{"type":"response.text.done","response_id":"route","text":"unheard"}`},
+	select {
+	case <-requests:
+		t.Fatal("unrelated STT classified")
+	default:
 	}
-	for _, content := range contents {
-		for _, order := range []string{"content_only", "content_first", "function_first"} {
-			for _, action := range []string{"resume", "discard", "replace", "side"} {
-				t.Run(content.name+"/"+order+"/"+action, func(t *testing.T) {
-					s, p := routingHarness(t)
-					startRouting(t, s, p)
-					original, revision := *s.paused, s.snapshotRevision
-					function := qwen.Event{Type: "response.function_call_arguments.done", ResponseID: "route", CallID: "route-call", Name: taskRouteTool, Arguments: `{"action":"` + action + `"}`}
-					if order == "function_first" {
-						if err := s.onModel(context.Background(), function); err != nil {
-							t.Fatal(err)
-						}
-					}
-					var ev qwen.Event
-					if err := json.Unmarshal([]byte(content.payload), &ev); err != nil {
-						t.Fatal(err)
-					}
-					if err := s.onModel(context.Background(), ev); err == nil {
-						t.Error("nonempty routing content did not immediately fail closed")
-					}
-					// Even a caller ignoring the content error must never apply this
-					// decision or retry on the contaminated upstream conversation.
-					if order == "content_first" {
-						_ = s.onModel(context.Background(), function)
-					}
-					if err := s.onModel(context.Background(), qwen.Event{Type: "response.done", Response: qwen.Response{ID: "route", Status: "completed"}}); err == nil {
-						t.Error("contaminated response completion did not fail closed")
-					}
-					if err := s.finishRouting(); err == nil {
-						t.Error("direct routing completion bypassed contamination guard")
-					}
-					if s.paused == nil || *s.paused != original || s.snapshotRevision != revision || s.responseTaskID != "" || s.route.decided {
-						t.Fatal("contaminated route changed task state or binding")
-					}
-					if err := s.play(); err != nil {
-						t.Fatal(err)
-					}
-					if s.pending.Len() != 0 || s.transcript != "" || s.draftTranscript != "" || s.started || s.activePlayback != nil || len(s.playbacks) != 0 {
-						t.Fatal("contaminated route admitted content or playback")
-					}
-					p.quiet(t, time.Millisecond)
-				})
-			}
-		}
+	s.transcribeOrigin("continue", "继续")
+	if err := s.advanceGeneration(time.Now()); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestTaskRoutingEmptyContentEventsRemainHarmless(t *testing.T) {
-	s, p := routingHarness(t)
-	startRouting(t, s, p)
-	for _, typ := range []string{"response.audio.delta", "response.audio_transcript.delta", "response.audio_transcript.done", "response.text.delta", "response.text.done"} {
-		if err := s.onModel(context.Background(), qwen.Event{Type: typ, ResponseID: "route"}); err != nil {
-			t.Fatalf("empty %s: %v", typ, err)
-		}
+	request := takeClassification(t, requests)
+	if request.original != "数到一百" || request.latest != "继续" {
+		t.Fatal(request)
 	}
-	routeDecision(t, s, "resume")
-	if s.responseTaskID != "task-1" || !s.route.decided {
-		t.Fatal("empty content events blocked clean route")
+	p.quiet(t, time.Millisecond)
+	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "unsolicited"}}); err == nil {
+		t.Fatal("voice bypassed classification")
 	}
-	p.want(t, "conversation.item.create")
+	results <- taskRouteResult{action: "resume"}
+	if err := s.finishRouting(routeResult(t, s)); err != nil {
+		t.Fatal(err)
+	}
+	if s.responseTaskID != "task-1" {
+		t.Fatal("route did not bind")
+	}
 	cfg := p.read(t).body["session"].(map[string]any)
-	if cfg["tool_choice"] != "auto" || cfg["modalities"] != nil {
-		t.Fatalf("clean route did not restore stable voice controls: %v", cfg)
+	if len(cfg) != 1 || cfg["instructions"] == nil || strings.Contains(cfg["instructions"].(string), "仅输出一个英文枚举值") {
+		t.Fatalf("main config contaminated: %v", cfg)
+	}
+	p.quiet(t, time.Millisecond)
+	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "premature"}}); err == nil {
+		t.Fatal("voice bypassed snapshot ACK")
 	}
 	ackSnapshotWire(t, s, p)
 	p.want(t, "response.create")
 }
-func TestTaskRoutingStaleDecisionRetriesWithoutBinding(t *testing.T) {
+func TestIsolatedRouteRejectsUnavailableInputAndTranscriptDeadline(t *testing.T) {
+	for _, kind := range []string{"anonymous", "truncated", "empty", "whitespace", "original-truncated", "original-missing", "wrong-generation"} {
+		t.Run(kind, func(t *testing.T) {
+			s, p := routingHarness(t)
+			requests, _ := controlledClassifier(s)
+			switch kind {
+			case "anonymous":
+				s.currentInput.itemID = ""
+			case "truncated":
+				s.currentInput.truncated = true
+			case "empty":
+				s.currentInput.known = false
+				s.currentInput.text = ""
+			case "whitespace":
+				s.currentInput.text = " \n "
+			case "original-truncated":
+				s.paused.original.truncated = true
+			case "original-missing":
+				s.paused.original.known = false
+			case "wrong-generation":
+				s.currentInput.generation = 0
+			}
+			err := s.requestResponse()
+			if kind == "empty" || kind == "original-missing" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = s.advanceGeneration(time.Now().Add(taskTranscriptTimeout))
+			}
+			if err == nil {
+				t.Fatal("unavailable routing input accepted")
+			}
+			select {
+			case <-requests:
+				t.Fatal("unavailable input classified")
+			default:
+			}
+			p.quiet(t, time.Millisecond)
+		})
+	}
+}
+func TestIsolatedRouteStaleRevisionAndFailureShareThreeAttemptBudget(t *testing.T) {
+	for _, failure := range []string{"provider", "enum", "revision"} {
+		t.Run(failure, func(t *testing.T) {
+			s, p := routingHarness(t)
+			requests, results := controlledClassifier(s)
+			if err := s.requestResponse(); err != nil {
+				t.Fatal(err)
+			}
+			for i := 1; i <= 3; i++ {
+				takeClassification(t, requests)
+				response := taskRouteResult{action: "resume"}
+				switch failure {
+				case "provider":
+					response.err = errors.New("private provider details")
+				case "enum":
+					response.action = "resume explanation"
+				case "revision":
+					s.snapshotRevision++
+				}
+				results <- response
+				err := s.finishRouting(routeResult(t, s))
+				if i == 3 {
+					if err == nil {
+						t.Fatal("unbounded retry")
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if s.responseTaskID != "" || !s.route.active || s.route.decided {
+					t.Fatal("failed route released voice")
+				}
+			}
+			if s.route.attempts != 3 {
+				t.Fatal(s.route.attempts)
+			}
+			p.quiet(t, time.Millisecond)
+		})
+	}
+}
+func TestIsolatedRouteLateFinalReclassifiesThenACKsCurrentSnapshot(t *testing.T) {
 	s, p := routingHarness(t)
+	requests, results := controlledClassifier(s)
 	s.playbackEnabled = true
 	s.paused.playback = playbackRecord{id: 1, sent: 1440, sealed: true, interrupted: true, timedOut: true}
-	startRouting(t, s, p)
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.function_call_arguments.done", ResponseID: "route", CallID: "route-call", Name: "conversation_route_paused_task", Arguments: `{"action":"resume"}`}); err != nil {
+	if err := s.requestResponse(); err != nil {
 		t.Fatal(err)
 	}
+	takeClassification(t, requests)
 	receipt, _ := json.Marshal(map[string]any{"type": "playback", "state": "finished", "session_id": s.id, "playback_id": 1, "sample_rate": 24000, "played_samples": 1440, "valid": true, "basis": "i2s_dma", "interrupted": true})
-	s.receivePlayback(receipt) // a real parsed late final revises captured state
+	s.receivePlayback(receipt)
 	if s.snapshotRevision != 4 {
 		t.Fatal("late final did not revise snapshot")
 	}
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.done", Response: qwen.Response{ID: "route", Status: "completed"}}); err != nil {
+	results <- taskRouteResult{action: "resume"}
+	if err := s.finishRouting(routeResult(t, s)); err != nil {
 		t.Fatal(err)
 	}
 	if s.responseTaskID != "" {
-		t.Fatal("stale routing decision bound the response")
+		t.Fatal("stale route bound")
 	}
-	if err := s.play(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.continueTools(); err != nil {
-		t.Fatal(err)
-	}
-	p.want(t, "conversation.item.create")
-	update := p.read(t).body
-	if update["type"] != "session.update" || update["session"].(map[string]any)["tool_choice"] != "required" {
-		t.Fatalf("stale routing did not retry required tool: %v", update)
-	}
-}
-
-func routeDecision(t *testing.T, s *session, action string) {
-	t.Helper()
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.function_call_arguments.done", ResponseID: s.responseID, CallID: "decision-" + s.responseID, Name: taskRouteTool, Arguments: `{"action":"` + action + `"}`}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.done", Response: qwen.Response{ID: s.responseID, Status: "completed"}}); err != nil {
-		t.Fatal(err)
-	}
-}
-func TestTaskRoutingWireControlsAndResumeBindingThroughTools(t *testing.T) {
-	s, p := routingHarness(t)
-	if err := s.requestResponse(); err != nil {
+	p.quiet(t, time.Millisecond)
+	takeClassification(t, requests)
+	results <- taskRouteResult{action: "resume"}
+	if err := s.finishRouting(routeResult(t, s)); err != nil {
 		t.Fatal(err)
 	}
 	cfg := p.read(t).body["session"].(map[string]any)
-	if cfg["tool_choice"] != "required" || len(cfg["tools"].([]any)) != 1 || cfg["modalities"] != nil {
-		t.Fatalf("routing controls: %v", cfg)
-	}
-	p.quiet(t, 10*time.Millisecond)
-	ackSnapshotWire(t, s, p)
-	p.want(t, "response.create")
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "route"}}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(s.encoder.Close)
-	routeDecision(t, s, "resume")
-	if s.responseTaskID != "task-1" {
-		t.Fatal("route did not apply gateway-owned identity")
-	}
-	p.want(t, "conversation.item.create")
-	cfg = p.read(t).body["session"].(map[string]any)
-	if cfg["tool_choice"] != "auto" || cfg["modalities"] != nil {
-		t.Fatalf("voice controls not restored: %v", cfg)
-	}
-	for _, tool := range cfg["tools"].([]any) {
-		if tool.(map[string]any)["function"].(map[string]any)["name"] == "conversation_update_paused_task" {
-			t.Fatal("voice can redo routing")
-		}
-	}
-	p.quiet(t, 10*time.Millisecond)
-	ackSnapshotWire(t, s, p)
-	p.want(t, "response.create")
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "voice"}}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(s.encoder.Close)
-	if err := s.beginPlayback(); err != nil {
-		t.Fatal(err)
-	}
-	if s.activePlayback.taskID != "task-1" {
-		t.Fatal("voice reset binding")
-	}
-	// Device tools continue the same already-decided user turn.
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.function_call_arguments.done", ResponseID: "voice", CallID: "device", Name: "device_get_status", Arguments: `{}`}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.done", Response: qwen.Response{ID: "voice", Status: "completed"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.play(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.continueTools(); err != nil {
-		t.Fatal(err)
-	}
-	p.want(t, "conversation.item.create")
-	cfg = p.read(t).body["session"].(map[string]any)
-	if cfg["tool_choice"] != "auto" {
-		t.Fatal("device continuation rerouted")
+	if !strings.Contains(cfg["instructions"].(string), `"revision":5`) || !strings.Contains(cfg["instructions"].(string), `"played_samples":1440`) {
+		t.Fatal(cfg)
 	}
 	ackSnapshotWire(t, s, p)
 	p.want(t, "response.create")
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "voice-device"}}); err != nil {
+}
+func TestIsolatedRouteCancellationAndObsoleteResultCannotBind(t *testing.T) {
+	s, p := routingHarness(t)
+	requests, _ := controlledClassifier(s)
+	if err := s.requestResponse(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(s.encoder.Close)
-	if s.responseTaskID != "task-1" {
-		t.Fatal("device continuation lost binding")
+	request := takeClassification(t, requests)
+	old := taskRouteResult{token: s.route.token, generation: 1, taskID: s.route.taskID, revision: s.route.revision, input: s.route.input, action: "resume"}
+	s.commitOrigin("next") // new input cancels the old worker before resetting state
+	select {
+	case <-request.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("worker not canceled")
+	}
+	s.transcribeOrigin("next", "新问题")
+	if err := s.requestResponse(); err != nil {
+		t.Fatal(err)
+	}
+	takeClassification(t, requests)
+	if err := s.finishRouting(old); err != nil {
+		t.Fatal(err)
+	}
+	if s.responseTaskID != "" || !s.route.active || s.route.token == old.token {
+		t.Fatal("obsolete result escaped token validation")
+	}
+	p.quiet(t, time.Millisecond)
+}
+func TestIsolatedRouteValidatesEveryCapturedIdentity(t *testing.T) {
+	for _, field := range []string{"generation", "input", "task", "revision", "current-input", "current-task"} {
+		t.Run(field, func(t *testing.T) {
+			s, p := routingHarness(t)
+			requests, results := controlledClassifier(s)
+			s.requestResponse()
+			takeClassification(t, requests)
+			results <- taskRouteResult{action: "resume"}
+			result := routeResult(t, s)
+			switch field {
+			case "generation":
+				result.generation++
+			case "input":
+				result.input.itemID = "wrong"
+			case "task":
+				result.taskID = "wrong"
+			case "revision":
+				result.revision++
+			case "current-input":
+				s.currentInput.text = "changed"
+			case "current-task":
+				s.paused.id = "changed"
+			}
+			if err := s.finishRouting(result); err == nil {
+				t.Fatal("identity mismatch accepted")
+			}
+			if s.responseTaskID != "" {
+				t.Fatal("mismatch bound")
+			}
+			p.quiet(t, time.Millisecond)
+		})
 	}
 }
-func TestTaskRoutingSideDiscardReplace(t *testing.T) {
+func TestIsolatedRouteSideDiscardReplace(t *testing.T) {
 	for _, action := range []string{"side", "discard", "replace"} {
 		t.Run(action, func(t *testing.T) {
 			s, p := routingHarness(t)
-			startRouting(t, s, p)
-			routeDecision(t, s, action)
+			requests, results := controlledClassifier(s)
+			s.requestResponse()
+			takeClassification(t, requests)
+			results <- taskRouteResult{action: action}
+			if err := s.finishRouting(routeResult(t, s)); err != nil {
+				t.Fatal(err)
+			}
 			switch action {
 			case "side":
 				if s.paused.id != "task-1" || s.responseTaskID != "" {
@@ -240,116 +309,51 @@ func TestTaskRoutingSideDiscardReplace(t *testing.T) {
 				}
 			case "replace":
 				if s.paused.original != s.currentInput || s.paused.playback.id != 0 || s.responseTaskID != s.paused.id {
-					t.Fatal("replacement inherited old playback")
+					t.Fatal("replacement inherited task")
 				}
+			}
+			cfg := p.read(t).body["session"].(map[string]any)
+			if len(cfg) != 1 {
+				t.Fatal("main controls changed")
 			}
 		})
 	}
 }
-func TestTaskRoutingRejectedAndMissingRetryBound(t *testing.T) {
-	for _, args := range []string{"", `{"action":"bogus"}`, `{"action":"resume","task_id":"model-owned"}`} {
-		t.Run(args, func(t *testing.T) {
-			s, p := routingHarness(t)
-			startRouting(t, s, p)
-			for attempt := 1; attempt <= maxTaskRouteAttempts; attempt++ {
-				if args != "" {
-					if err := s.onModel(context.Background(), qwen.Event{Type: "response.function_call_arguments.done", ResponseID: s.responseID, CallID: fmt.Sprintf("call-%d", attempt), Name: taskRouteTool, Arguments: args}); err != nil {
-						t.Fatal(err)
-					}
-				}
-				err := s.onModel(context.Background(), qwen.Event{Type: "response.done", Response: qwen.Response{ID: s.responseID, Status: "completed"}})
-				if attempt == maxTaskRouteAttempts {
-					if err == nil {
-						t.Fatal("unbounded retry")
-					}
-					break
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				if args != "" {
-					p.want(t, "conversation.item.create")
-				}
-				cfg := p.read(t).body["session"].(map[string]any)
-				if cfg["tool_choice"] != "required" {
-					t.Fatal("rejection released voice")
-				}
-				ackSnapshotWire(t, s, p)
-				p.want(t, "response.create")
-				if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: fmt.Sprintf("route-%d", attempt)}}); err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(s.encoder.Close)
-			}
-			if s.responseTaskID != "" || s.pending.Len() != 0 {
-				t.Fatal("rejected route bound or played")
-			}
-		})
-	}
-}
-func TestTaskRoutingUnsolicitedResponseAndNewInputFailClosed(t *testing.T) {
+func TestIsolatedRouteRepeatedResumeAndDeviceContinuationKeepOriginal(t *testing.T) {
 	s, p := routingHarness(t)
-	if err := s.requestResponse(); err != nil {
-		t.Fatal(err)
-	}
-	p.read(t)
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "early"}}); err == nil {
-		t.Fatal("route bypassed snapshot ACK")
-	}
-	s.inputCommitted = true
-	if err := s.onModel(context.Background(), qwen.Event{Type: "input_audio_buffer.committed", ItemID: "new-input"}); err == nil {
-		t.Fatal("new input reused old route")
-	}
-}
-
-// Full fake-provider route exchange, used when legacy playback fixtures now
-// commit a fresh user input while a task exists.
-func completeRouteWire(t *testing.T, p *toolPeer, id, action string) {
-	t.Helper()
-	cfg := p.read(t).body
-	if cfg["type"] != "session.update" || cfg["session"].(map[string]any)["tool_choice"] != "required" {
-		t.Fatalf("expected required route update: %v", cfg)
-	}
-	p.send(t, map[string]any{"type": "session.updated"})
-	p.want(t, "response.create")
-	p.send(t, map[string]any{"type": "response.created", "response": map[string]any{"id": id}})
-	p.send(t, map[string]any{"type": "response.function_call_arguments.done", "response_id": id, "call_id": "call-" + id, "name": taskRouteTool, "arguments": `{"action":"` + action + `"}`})
-	toolDone(t, p, id)
-	output := p.want(t, "conversation.item.create")
-	if !strings.Contains(output["item"].(map[string]any)["output"].(string), `"ok":true`) {
-		t.Fatalf("route failed: %v", output)
-	}
-	cfg = p.read(t).body
-	if cfg["type"] != "session.update" || cfg["session"].(map[string]any)["tool_choice"] != "auto" {
-		t.Fatalf("expected restored voice update: %v", cfg)
-	}
-	p.send(t, map[string]any{"type": "session.updated"})
-	p.want(t, "response.create")
-}
-
-func TestTaskRoutingRepeatedResumeInterruptionsKeepTask(t *testing.T) {
-	s, p := routingHarness(t)
+	requests, results := controlledClassifier(s)
 	original := s.paused.original
 	for i := 0; i < 3; i++ {
 		id := fmt.Sprintf("turn-%d", i)
 		s.commitOrigin(id)
 		s.transcribeOrigin(id, "继续")
-		if err := s.requestResponse(); err != nil {
+		s.requestResponse()
+		takeClassification(t, requests)
+		results <- taskRouteResult{action: "resume"}
+		if err := s.finishRouting(routeResult(t, s)); err != nil {
 			t.Fatal(err)
 		}
 		p.read(t)
 		ackSnapshotWire(t, s, p)
 		p.want(t, "response.create")
-		if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: id + "-route"}}); err != nil {
+		if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: id}}); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(s.encoder.Close)
-		routeDecision(t, s, "resume")
+		// A device-tool parent yields a new voice response without rerouting.
+		if err := s.callTool(qwen.Event{ResponseID: id, CallID: id, Name: "device_get_status", Arguments: `{}`}); err != nil {
+			t.Fatal(err)
+		}
+		s.responseID = ""
+		s.toolParentDone = true
+		if err := s.continueTools(); err != nil {
+			t.Fatal(err)
+		}
 		p.want(t, "conversation.item.create")
 		p.read(t)
 		ackSnapshotWire(t, s, p)
 		p.want(t, "response.create")
-		if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: id + "-voice"}}); err != nil {
+		if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: id + "-device"}}); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(s.encoder.Close)
@@ -361,7 +365,7 @@ func TestTaskRoutingRepeatedResumeInterruptionsKeepTask(t *testing.T) {
 		s.activePlayback.settled = true
 		s.pausePlayback()
 		if s.paused.id != "task-1" || s.paused.original != original || s.paused.playback.id != uint32(i+1) || s.paused.playback.origin.itemID != id {
-			t.Fatalf("interruption %d lost task: %+v", i, s.paused)
+			t.Fatalf("interruption lost original: %+v", s.paused)
 		}
 		s.responseID = ""
 		s.started = false
@@ -369,44 +373,157 @@ func TestTaskRoutingRepeatedResumeInterruptionsKeepTask(t *testing.T) {
 		s.devicePlayback = nil
 	}
 }
-func TestTaskRoutingAbortDropsRouteAndOldGeneration(t *testing.T) {
-	h := newToolHarnessFeatures(t, map[string]bool{"playback_progress_v1": true})
-	p, _ := h.model(t)
-	root := sealedDeviceBlock(t, h, p, "root", "原任务")
-	interruptSealedBlock(t, h, p, "abort")
-	fresh, _ := h.model(t)
-	deviceDrainReceipt(t, h, root, 1440, true, true)
-	fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "continue"})
-	fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "continue", "transcript": "继续"})
-	wantSTT(t, h.device)
-	update := fresh.read(t).body
-	if update["session"].(map[string]any)["tool_choice"] != "required" {
-		t.Fatal(update)
+
+// Existing playback scenarios use the actual independent WebSocket protocol,
+// then verify that only a normal snapshot refresh reaches the voice connection.
+func completeRouteWire(t *testing.T, p *toolPeer, id, action string) {
+	t.Helper()
+	classifier, cfg := p.harness.model(t)
+	if len(cfg["modalities"].([]any)) != 1 || cfg["modalities"].([]any)[0] != "text" || cfg["input_audio_transcription"] != nil || len(cfg["tools"].([]any)) != 0 {
+		t.Fatal("classifier was not isolated")
 	}
-	fresh.send(t, map[string]any{"type": "session.updated"})
-	fresh.want(t, "response.create")
-	toolParent(t, fresh, "route-aborted", 0) // abort an unresolved, content-free route
-	h.device.send(t, map[string]any{"type": "abort"})
-	stop := readStop(t, h.device)
-	if stop["playback_id"] != nil {
-		t.Fatal("route audio opened a playback block")
+	create := classifier.want(t, "response.create")
+	if !strings.Contains(create["response"].(map[string]any)["instructions"].(string), "latest_user_text") {
+		t.Fatal("request missing from response instructions")
 	}
-	_, cfg := h.model(t)
-	if !strings.Contains(cfg["instructions"].(string), `"original_request":"原任务"`) {
-		t.Fatal("abort lost original task")
+	classifier.send(t, map[string]any{"type": "response.created", "response": map[string]any{"id": id}})
+	classifier.send(t, map[string]any{"type": "response.text.delta", "response_id": id, "delta": action})
+	classifier.send(t, map[string]any{"type": "response.text.done", "response_id": id, "text": action})
+	classifier.send(t, map[string]any{"type": "response.done", "response": map[string]any{"id": id, "status": "completed"}})
+	update := p.read(t).body
+	if update["type"] != "session.update" || len(update["session"].(map[string]any)) != 1 {
+		t.Fatalf("voice config changed: %v", update)
+	}
+	p.send(t, map[string]any{"type": "session.updated"})
+	p.want(t, "response.create")
+}
+
+func TestIsolatedRouteAbortDisconnectAndNewInputCloseClassifier(t *testing.T) {
+	for _, trigger := range []string{"abort", "manual-abort", "disconnect", "new-input"} {
+		t.Run(trigger, func(t *testing.T) {
+			h := newToolHarnessFeatures(t, map[string]bool{"playback_progress_v1": true})
+			p, _ := h.model(t)
+			root := sealedDeviceBlock(t, h, p, "root", "原任务")
+			interruptSealedBlock(t, h, p, "abort")
+			fresh, _ := h.model(t)
+			deviceDrainReceipt(t, h, root, 1440, true, true)
+			if trigger == "manual-abort" {
+				h.device.send(t, map[string]any{"type": "listen", "state": "start", "mode": "manual"})
+				fresh.want(t, "session.update")
+			}
+			fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "continue"})
+			fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "continue", "transcript": "继续"})
+			wantSTT(t, h.device)
+			classifier, cfg := h.model(t)
+			if len(cfg["modalities"].([]any)) != 1 {
+				t.Fatal("not a text classifier")
+			}
+			classifier.want(t, "response.create") // leave worker waiting for a result
+			switch trigger {
+			case "disconnect":
+				h.device.c.Close()
+			case "new-input":
+				fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "new-input"})
+				fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "new-input", "transcript": "一加一是多少"})
+				wantSTT(t, h.device)
+			default:
+				h.device.send(t, map[string]any{"type": "abort"})
+				stop := readStop(t, h.device)
+				if stop["playback_id"] != nil {
+					t.Fatal("classifier opened playback")
+				}
+				_, cfg = h.model(t)
+				if !strings.Contains(cfg["instructions"].(string), `"original_request":"原任务"`) {
+					t.Fatal("abort lost task")
+				}
+			}
+			select {
+			case event := <-classifier.in:
+				if event.err == nil {
+					t.Fatal("classifier wrote after cancellation")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("classifier socket survived cancellation")
+			}
+			if trigger == "new-input" {
+				completeRouteWire(t, fresh, "next-route", "side")
+			}
+		})
 	}
 }
 
-func TestTaskRoutingVoiceCannotBypassRestoreACK(t *testing.T) {
+func TestIsolatedRouteWorkerDeadlineCannotLeaveGenerationWaiting(t *testing.T) {
 	s, p := routingHarness(t)
-	startRouting(t, s, p)
-	routeDecision(t, s, "resume")
-	p.want(t, "conversation.item.create")
+	requests, _ := controlledClassifier(s)
+	if err := s.requestResponse(); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		request := takeClassification(t, requests)
+		err := s.advanceGeneration(time.Now().Add(snapshotACKTimeout + time.Second))
+		if attempt == 3 {
+			if err == nil {
+				t.Fatal("worker timeout did not fail closed")
+			}
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-request.ctx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("timed out worker retained context")
+		}
+	}
+	if s.responseTaskID != "" || s.route.attempts != 3 {
+		t.Fatal("timeout bound task or retried without limit")
+	}
+	p.quiet(t, time.Millisecond)
+}
+
+func TestIsolatedRouteMixedFailuresCannotResetAttemptBudget(t *testing.T) {
+	s, p := routingHarness(t)
+	requests, results := controlledClassifier(s)
+	if err := s.requestResponse(); err != nil {
+		t.Fatal(err)
+	}
+	failures := []taskRouteResult{{action: "resume explanation"}, {action: "resume"}, {err: errors.New("provider failed")}}
+	for i, response := range failures {
+		takeClassification(t, requests)
+		if i == 1 {
+			s.snapshotRevision++
+		}
+		results <- response
+		err := s.finishRouting(routeResult(t, s))
+		if i == 2 {
+			if err == nil {
+				t.Fatal("mixed failures reset budget")
+			}
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.route.attempts != 3 || s.responseTaskID != "" {
+		t.Fatal("mixed failures escaped bounds")
+	}
+	p.quiet(t, time.Millisecond)
+}
+func TestIsolatedRouteRejectsEveryMainOutputBeforeSnapshotACK(t *testing.T) {
+	s, p := routingHarness(t)
+	requests, results := controlledClassifier(s)
+	s.requestResponse()
+	takeClassification(t, requests)
+	results <- taskRouteResult{action: "resume"}
+	if err := s.finishRouting(routeResult(t, s)); err != nil {
+		t.Fatal(err)
+	}
 	p.read(t)
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "premature-voice"}}); err == nil {
-		t.Fatal("voice bypassed restore/snapshot ACK")
+	for _, typ := range []string{"response.created", "response.text.delta", "response.text.done", "response.audio.delta", "response.audio_transcript.done", "response.function_call_arguments.done", "response.done"} {
+		if err := s.onModel(context.Background(), qwen.Event{Type: typ, ResponseID: "premature", Delta: "unexpected", Response: qwen.Response{ID: "premature", Status: "completed"}}); err == nil {
+			t.Fatalf("%s bypassed main ACK", typ)
+		}
 	}
-	if s.pending.Len() != 0 {
-		t.Fatal("premature voice buffered audio")
+	if s.responseID != "" || s.pending.Len() != 0 || s.started || s.activePlayback != nil {
+		t.Fatal("premature response admitted content")
 	}
+	p.quiet(t, time.Millisecond)
 }

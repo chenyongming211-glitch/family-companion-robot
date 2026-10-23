@@ -208,7 +208,7 @@ func (s *session) promotePlayback(r *playbackRecord) {
 func (s *session) commitOrigin(itemID string) {
 	old := s.currentInput
 	if !s.inputCommitted || old.generation != s.generation || old.itemID != itemID {
-		s.route = taskRouting{}
+		s.cancelRouting()
 		s.toolContinuation = false
 	}
 	s.currentInput = requestOrigin{generation: s.generation, itemID: itemID}

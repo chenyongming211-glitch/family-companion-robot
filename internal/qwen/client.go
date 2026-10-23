@@ -132,10 +132,6 @@ func (c *Client) UpdateInstructions(instructions string, revision uint64) error 
 	return c.update(map[string]any{"instructions": instructions}, revision)
 }
 
-// UpdateGeneration changes only mutable generation controls; VAD/audio stay intact.
-func (c *Client) UpdateGeneration(instructions string, tools []map[string]any, choice string, revision uint64) error {
-	return c.update(map[string]any{"instructions": instructions, "tools": tools, "tool_choice": choice}, revision)
-}
 func (c *Client) update(session map[string]any, revision uint64) error {
 	if err := c.Send(map[string]any{"type": "session.update", "session": session}); err != nil {
 		return err
