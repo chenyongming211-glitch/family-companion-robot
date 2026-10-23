@@ -51,9 +51,9 @@
 
 - [x] Independently review Task 1 and Task 2 against this plan and fix material findings. Final re-review approved 07c6549 after HTTP Upgrade cancellation, input/ACK crossover, clarification trace and superseded playback fixes.
 - [x] Test actual Qwen VAD configuration and generation ACK gate with an isolated candidate and machine-generated inputs; no watch connection or recording. Include interruption, original goal retention, side question, resume and second interruption. Unknown text position is an expected limitation, not an accurate-resume pass.
-- [ ] Run Mac Go tests/race/vet and Linux checks/build through the established server workflow. Check exact source identity, sanitize evidence and scan tracked diff for secrets.
+- [x] Run Mac Go tests/race/vet and Linux checks/build through the established server workflow. Check exact source identity, sanitize evidence and scan tracked diff for secrets.
 - [x] Deploy only a passing gateway candidate after verifying no active device session, retain rollback, verify health and live binary hash. If active hardware traffic exists, preserve it and report the validated candidate without interrupting the user.
-- [ ] Commit/push final docs and report code, CI/build, native-provider results, alignment feasibility and field acceptance separately. Leave physical word-position and acoustic acceptance explicitly open until measured.
+- [x] Commit/push final docs and report code, CI/build, native-provider results, alignment feasibility and field acceptance separately. Leave physical word-position and acoustic acceptance explicitly open until measured.
 
 ## Task 1b: Rejected native experiment, superseded by Task 1c
 
@@ -80,3 +80,7 @@ The final source d210811 passes task ownership, but a plain continue native test
 - [x] When position is unknown and the user has not provided a start or permission to replay, request one fixed honest clarification in the native voice response. Buffer that short response until its completed transcript matches the fixed text (punctuation/space normalization only), before any audio/TTS start. Reject extra tools/text/audio over bounded size/time, no unheard-content reuse on failure. Do not introduce a separate STT/LLM/TTS chain or guess a point.
 - [x] Explicit replay/user-provided start may generate actual task content within the original goal; side questions remain isolated. Bare start answers can be understood only with gateway-owned awaiting-choice state, not manufactured playback evidence.
 - [x] TDD for held output, mismatch failure, deadlines, explicit modes, side/cancel/revision and repeated tasks; full checks/review/exact Linux/native regressions before release. Current unknown-point native output remains preserved as a failed policy sample.
+
+## Execution closure
+
+Released gateway source `07c6549`; code and verification docs pushed on main (`075a432` synchronized before this plan-only closure). Exact Linux/Mac checks, native ownership and fixed-clarification/user-choice acceptance, idle deployment, live hash/health and protected-value plus key-shape/history scan passed. Python25 tests and offline52 aligner results retained. One fast numeric semantic-VAD failure and previous failed candidates remain recorded. Accurate heard-word mapping and physical-device acceptance are explicitly open; no auxiliary ASR or firmware flash.
