@@ -186,16 +186,14 @@ func TestPausedTaskLocalToolsMutateThroughBoundedContinuationWithoutMCP(t *testi
 	fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "new"})
 	fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "new", "transcript": "实际的新任务"})
 	wantSTT(t, h.device)
-	replace := localResult(t, fresh, "replace", "conversation_update_paused_task", fmt.Sprintf(`{"action":"replace","task_id":%q,"expected_revision":%v,"new_request":"伪造任务"}`, get["task_id"], get["revision"]))
+	completeRouteWire(t, fresh, "replace-route", "replace")
+	replace := localResult(t, fresh, "replace-state", "conversation_get_paused_task", `{}`)
 	if replace["original_request"] != "实际的新任务" || replace["task_id"] == get["task_id"] || replace["text_position"] != "unknown" || replace["position_known"] != false {
 		t.Fatal(replace)
 	}
 	stale := localResult(t, fresh, "stale", "conversation_update_paused_task", fmt.Sprintf(`{"action":"discard","task_id":%q}`, get["task_id"]))
-	if stale["error"] != "task_id_mismatch" {
+	if stale["error"] != "routing_already_decided" {
 		t.Fatal(stale)
 	}
-	discard := localResult(t, fresh, "discard", "conversation_update_paused_task", fmt.Sprintf(`{"action":"discard","task_id":%q,"expected_revision":%v}`, replace["task_id"], replace["revision"]))
-	if discard["available"] != false {
-		t.Fatal(discard)
-	}
+
 }

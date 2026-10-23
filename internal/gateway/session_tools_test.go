@@ -70,7 +70,7 @@ func (p *toolPeer) want(t *testing.T, typ string) map[string]any {
 			cfg, _ := v.body["session"].(map[string]any)
 			// Existing scenario fixtures inject provider responses. Service the new
 			// generation synchronization separately; ordering tests use raw read().
-			if len(cfg) == 1 && cfg["instructions"] != nil {
+			if cfg["instructions"] != nil && (len(cfg) == 1 || cfg["tool_choice"] == "auto") {
 				continue
 			}
 		}
@@ -224,7 +224,7 @@ func TestDeviceToolsDiscoveryExecutionAndContinuation(t *testing.T) {
 	discoverTools(t, h)
 	p, cfg := h.model(t)
 	defs, ok := cfg["tools"].([]any)
-	if !ok || len(defs) != 5 {
+	if !ok || len(defs) != 4 {
 		t.Fatalf("fixed native tools missing: %v", cfg)
 	}
 	for _, def := range defs {
@@ -344,7 +344,7 @@ func TestDeviceToolsDiscoveryFailureRetainsVoiceAndBufferedEvents(t *testing.T) 
 				}
 			}
 			p, cfg := h.model(t)
-			if defs, ok := cfg["tools"].([]any); ok && len(defs) != 2 {
+			if defs, ok := cfg["tools"].([]any); ok && len(defs) != 1 {
 				t.Fatal("failed discovery exposed tools")
 			}
 			if !strings.Contains(cfg["instructions"].(string), "不可用") {

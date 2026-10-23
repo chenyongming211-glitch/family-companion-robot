@@ -5,11 +5,14 @@ import (
 	"testing"
 )
 
-func sealedDeviceBlock(t *testing.T, h *toolHarness, p *toolPeer, id, request string) map[string]any {
+func sealedDeviceBlock(t *testing.T, h *toolHarness, p *toolPeer, id, request string, route ...string) map[string]any {
 	t.Helper()
 	p.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": id + "-input"})
 	p.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": id + "-input", "transcript": request})
 	wantSTT(t, h.device)
+	if len(route) > 0 {
+		completeRouteWire(t, p, id+"-route", route[0])
+	}
 	toolParent(t, p, id, 3)
 	start := readStart(t, h.device)
 	toolDone(t, p, id)
@@ -121,7 +124,7 @@ func TestSealedSideDrainKeepsOriginalPauseAndDoesNotCrossPlaybackIDs(t *testing.
 		t.Fatal(stop)
 	}
 	fresh, _ := h.model(t)
-	side := sealedDeviceBlock(t, h, fresh, "side", "旁支问题")
+	side := sealedDeviceBlock(t, h, fresh, "side", "旁支问题", "side")
 	if side["playback_id"] == root["playback_id"] {
 		t.Fatal("playback identity reused")
 	}
@@ -160,23 +163,19 @@ func TestTaskMutationRetiresOldInterruptedDrainOwnership(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			h := newToolHarnessFeatures(t, map[string]bool{"playback_progress_v1": true})
 			p, _ := h.model(t)
-			root := sealedDeviceBlock(t, h, p, "root", "旧原任务")
+			sealedDeviceBlock(t, h, p, "root", "旧原任务")
 			interruptSealedBlock(t, h, p, "abort")
 			fresh, _ := h.model(t)
 			// This side block has locally finished interrupted; its abort control has
 			// not arrived. Mutating the paused task must retire this pending old owner.
-			side := sealedDeviceBlock(t, h, fresh, "side", "切换到的实际新请求")
+			side := sealedDeviceBlock(t, h, fresh, "side", "切换到的实际新请求", "side")
 			deviceDrainReceipt(t, h, side, 1440, true, true)
 			deviceModeBarrier(t, h, fresh, "manual")
-			localResult(t, fresh, "get", "conversation_get_paused_task", "{}")
-			got := localResult(t, fresh, "get-current", "conversation_get_paused_task", "{}")
-			if got["playback_id"] != root["playback_id"] {
-				t.Fatal(got)
-			}
-			changed := localResult(t, fresh, "mutate", "conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":%q,"expected_revision":%v}`, got["task_id"], action, got["revision"]))
-			if changed["ok"] != true {
-				t.Fatal(changed)
-			}
+			fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "mutation-input"})
+			fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "mutation-input", "transcript": "切换到的实际新请求"})
+			wantSTT(t, h.device)
+			completeRouteWire(t, fresh, "mutation-route", action)
+
 			// The mutator's pending tool continuation makes speech an applicable
 			// upstream interruption. It must not select the discarded device owner.
 			stop := interruptSealedBlock(t, h, fresh, "speech")
@@ -189,7 +188,7 @@ func TestTaskMutationRetiresOldInterruptedDrainOwnership(t *testing.T) {
 				if out["available"] != false {
 					t.Fatal(out)
 				}
-			} else if out["task_id"] != changed["task_id"] || out["original_request"] != "切换到的实际新请求" {
+			} else if out["original_request"] != "切换到的实际新请求" {
 				t.Fatal(out)
 			}
 		})

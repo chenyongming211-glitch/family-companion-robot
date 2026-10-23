@@ -1,6 +1,9 @@
 package gateway
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
 
 // Only control boundaries are recorded, never audio packets, text, upstream IDs
 // or raw event bodies. Values describe this loop's observed state, not physical
@@ -54,4 +57,13 @@ func (s *session) tracePlayback(event string, r *playbackRecord) {
 			"original_request_known", s.paused.original.known)
 	}
 	slog.Info("playback_event", args...)
+}
+
+// Fixed enums and counters only: no arguments, text, or upstream identities.
+func (s *session) traceTaskRoute(outcome string) {
+	elapsed := int64(0)
+	if !s.route.startedAt.IsZero() {
+		elapsed = time.Since(s.route.startedAt).Milliseconds()
+	}
+	slog.Info("task_route", "session", s.id, "upstream_generation", s.generation, "route_elapsed_ms", elapsed, "outcome", outcome, "action", s.route.action, "attempt", s.route.attempts, "snapshot_revision", s.snapshotRevision, "captured_revision", s.route.revision, "task_bound", s.responseTaskID != "")
 }

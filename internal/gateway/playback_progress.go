@@ -207,6 +207,10 @@ func (s *session) promotePlayback(r *playbackRecord) {
 // for the entire device connection, including upstream-only reconnects.
 func (s *session) commitOrigin(itemID string) {
 	old := s.currentInput
+	if !s.inputCommitted || old.generation != s.generation || old.itemID != itemID {
+		s.route = taskRouting{}
+		s.toolContinuation = false
+	}
 	s.currentInput = requestOrigin{generation: s.generation, itemID: itemID}
 	if itemID != "" && old.generation == s.generation && old.itemID == itemID {
 		s.currentInput = old

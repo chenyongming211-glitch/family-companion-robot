@@ -38,6 +38,7 @@ type session struct {
 	snapshotRevision       uint64
 	responseTaskID         string
 	sync                   generationSync
+	route                  taskRouting
 	currentInput           requestOrigin
 	responseOrigin         requestOrigin
 	inputCommitted         bool
@@ -258,6 +259,7 @@ func (s *session) connect(ctx context.Context) error {
 		s.wake = wakeHandoff{}
 	}
 	s.sync = generationSync{}
+	s.route = taskRouting{}
 	s.responseTaskID = ""
 	s.responseAudioSent = false
 	s.inputActive = false
@@ -465,6 +467,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.inputActive = false
 		s.lastActivity = time.Now()
 	case "input_audio_buffer.committed":
+		if (s.route.active || (s.route.decided && (s.awaitingResponse || s.responseID != "" || s.sync.requested))) && s.inputCommitted && s.currentInput.itemID != ev.ItemID {
+			return errors.New("new input overtook paused task routing")
+		}
 		if ev.ItemID != "" && ev.ItemID == s.wake.inputID {
 			return nil
 		}
@@ -515,6 +520,12 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		if s.retired.contains(ev.Response.ID) {
 			return nil
 		}
+		if s.route.active || s.route.decided {
+			if !s.route.awaitingCreated {
+				return errors.New("unsolicited response during task routing")
+			}
+			s.route.awaitingCreated = false
+		}
 		if s.responseID != "" || len(s.toolCalls) > 0 {
 			return errors.New("overlapping upstream responses")
 		}
@@ -557,8 +568,14 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			return s.finishWake()
 		}
 	case "response.function_call_arguments.done":
+		if s.route.active {
+			return s.routeTool(ev)
+		}
 		return s.callTool(ev)
 	case "response.audio.delta":
+		if s.route.active {
+			return nil
+		}
 		if ev.ResponseID == "" || ev.ResponseID != s.responseID || s.responseDone {
 			return nil
 		}
@@ -571,10 +588,16 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		}
 		return s.pending.Append(pcm)
 	case "response.audio_transcript.delta":
+		if s.route.active {
+			return nil
+		}
 		if ev.ResponseID == s.responseID && s.responseID != "" && !s.responseDone {
 			s.draftTranscript = limitText(s.draftTranscript+ev.Delta, 2048)
 		}
 	case "response.audio_transcript.done":
+		if s.route.active {
+			return nil
+		}
 		if ev.ResponseID != s.responseID || s.responseID == "" || s.responseDone {
 			return nil
 		}
@@ -594,6 +617,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			// Explicit aborts, failed responses and manual mode discard input.
 			replay := ev.Response.Status == "cancelled" && s.mode != "manual"
 			return s.interrupt(ctx, replay, false)
+		}
+		if s.route.active {
+			return s.finishRouting()
 		}
 		s.traceVoice("response_completed")
 		if s.pending.Len()%2 != 0 {
