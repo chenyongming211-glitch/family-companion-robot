@@ -22,6 +22,7 @@ type wire struct {
 	err  error
 }
 type reply struct {
+	Phase      string `json:"phase"`
 	StartMS    int64  `json:"start_ms"`
 	StopMS     int64  `json:"stop_ms"`
 	Reason     string `json:"reason"`
@@ -33,11 +34,12 @@ type reply struct {
 func main() {
 	dir := flag.String("dir", "", "fixtures")
 	out := flag.String("out", "", "result file")
-	scenario := flag.String("scenario", "interrupt", "normal, interrupt, wake-interrupt or idle")
+	scenario := flag.String("scenario", "interrupt", "normal, interrupt, wake-interrupt, resume-twice or idle")
 	order := flag.String("order", "cache-first", "cache-first or start-first")
 	receipts := flag.Bool("receipts", false, "SIMULATED receipt counters")
+	finalDelay := flag.Duration("interrupted-final-delay", 0, "SIMULATED interrupted final receipt delay, 0..5s")
 	flag.Parse()
-	if *dir == "" || *out == "" || (*order != "cache-first" && *order != "start-first") || (*scenario != "normal" && *scenario != "interrupt" && *scenario != "wake-interrupt" && *scenario != "idle") {
+	if *dir == "" || *out == "" || *finalDelay < 0 || *finalDelay > 5*time.Second || (*finalDelay != 0 && !*receipts) || (*order != "cache-first" && *order != "start-first") || (*scenario != "normal" && *scenario != "interrupt" && *scenario != "wake-interrupt" && *scenario != "resume-twice" && *scenario != "idle") {
 		fmt.Fprintln(os.Stderr, "valid dir, out, order and scenario are required")
 		os.Exit(2)
 	}
@@ -52,14 +54,18 @@ func main() {
 		os.Exit(2)
 	}
 	defer resultFile.Close()
-	result := map[string]any{"scenario": *scenario, "wake_order": *order, "simulated_receipts": *receipts, "synthetic_audio_only": true}
+	result := map[string]any{"scenario": *scenario, "wake_order": *order, "simulated_receipts": *receipts, "synthetic_audio_only": true, "interrupted_final_delay_ms": finalDelay.Milliseconds()}
 	started := time.Now()
 	var replies []reply
 	var stt []string
 	events := []map[string]any{}
 	err := func() error {
 		fixtures := map[string][]byte{}
-		for _, name := range []string{"hello", "count50", "stop", "query", "continue"} {
+		names := []string{"hello", "count50", "stop", "query", "continue"}
+		if *scenario == "resume-twice" {
+			names = append(names, "continue_restart")
+		}
+		for _, name := range names {
 			f, e := os.Open(filepath.Join(*dir, name+".wav"))
 			if e != nil {
 				return e
@@ -172,8 +178,14 @@ func main() {
 		nextAt := time.Time{}
 		active := -1
 		interjected := false
+		secondInterjected := false
 		earlyCount := false
 		var inputAt time.Time
+		type delayedFinal struct {
+			reply reply
+			at    time.Time
+		}
+		var finals []delayedFinal
 		record := func(event string) {
 			events = append(events, map[string]any{"event": event, "phase": phase, "ms": time.Since(started).Milliseconds()})
 		}
@@ -188,6 +200,13 @@ func main() {
 			case <-deadline.C:
 				return fmt.Errorf("scenario deadline phase=%s", phase)
 			case <-tick.C:
+				for len(finals) > 0 && !time.Now().Before(finals[0].at) {
+					if err := receipt("finished", finals[0].reply); err != nil {
+						return err
+					}
+					record("delayed_interrupted_final")
+					finals = finals[1:]
+				}
 				if nextName != "" && time.Now().After(nextAt) {
 					pending = append([]byte(nil), fixtures[nextName]...)
 					record("input_" + nextName)
@@ -207,11 +226,17 @@ func main() {
 					pending = append([]byte(nil), fixtures["count50"]...)
 					record("input_count50_during_greeting")
 				}
-				if (*scenario == "interrupt" || *scenario == "wake-interrupt") && phase == "count" && active >= 0 && !interjected && replies[active].Frames >= 84 {
+				if (*scenario == "interrupt" || *scenario == "wake-interrupt" || *scenario == "resume-twice") && phase == "count" && active >= 0 && !interjected && replies[active].Frames >= 84 {
 					interjected = true
 					pending = append([]byte(nil), fixtures["stop"]...)
 					inputAt = time.Now()
 					record("input_stop")
+				}
+				if *scenario == "resume-twice" && phase == "resume_first" && active >= 0 && !secondInterjected && replies[active].Frames >= 84 {
+					secondInterjected = true
+					pending = append([]byte(nil), fixtures["stop"]...)
+					inputAt = time.Now()
+					record("input_stop_second")
 				}
 			case w := <-incoming:
 				if w.err != nil {
@@ -264,7 +289,7 @@ func main() {
 					record("stt")
 				}
 				if ev.Type == "tts" && ev.State == "start" {
-					replies = append(replies, reply{StartMS: time.Since(started).Milliseconds(), PlaybackID: ev.PlaybackID})
+					replies = append(replies, reply{Phase: phase, StartMS: time.Since(started).Milliseconds(), PlaybackID: ev.PlaybackID})
 					active = len(replies) - 1
 					record("tts_start")
 				}
@@ -279,7 +304,9 @@ func main() {
 					r := &replies[active]
 					r.StopMS = time.Since(started).Milliseconds()
 					r.Reason = ev.Reason
-					if e := receipt("finished", *r); e != nil {
+					if r.Reason == "interrupted" && *finalDelay > 0 {
+						finals = append(finals, delayedFinal{*r, time.Now().Add(*finalDelay)})
+					} else if e := receipt("finished", *r); e != nil {
 						return e
 					}
 					active = -1
@@ -311,6 +338,12 @@ func main() {
 						result["interrupt_stop_ms_from_synthetic_input_queue"] = time.Since(inputAt).Milliseconds()
 						phase = "math"
 					case "math":
+						if *scenario == "resume-twice" {
+							phase = "resume_first"
+							nextName = "continue_restart"
+							nextAt = time.Now().Add(time.Second)
+							break
+						}
 						phase = "query"
 						nextName = "query"
 						nextAt = time.Now().Add(time.Second)
@@ -319,6 +352,22 @@ func main() {
 						nextName = "continue"
 						nextAt = time.Now().Add(time.Second)
 					case "continue":
+						return nil
+					case "resume_first":
+						if !secondInterjected || ev.Reason != "interrupted" {
+							return fmt.Errorf("resumed reply ended without second interruption")
+						}
+						result["second_interrupt_stop_ms_from_synthetic_input_queue"] = time.Since(inputAt).Milliseconds()
+						phase = "math_second"
+					case "math_second":
+						phase = "query_second"
+						nextName = "query"
+						nextAt = time.Now().Add(time.Second)
+					case "query_second":
+						phase = "resume_final"
+						nextName = "continue_restart"
+						nextAt = time.Now().Add(time.Second)
+					case "resume_final":
 						return nil
 					}
 				}
