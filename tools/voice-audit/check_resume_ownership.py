@@ -9,6 +9,24 @@ import json
 from pathlib import Path
 
 
+def check_snapshot_requests(trace):
+    errors = []
+    last_ack = None
+    request_count = 0
+    for event in trace:
+        if event.get("event") == "snapshot_acknowledged":
+            last_ack = event
+        if event.get("event") == "response_requested":
+            request_count += 1
+            if (last_ack is None or event.get("upstream_generation") != last_ack.get("upstream_generation")
+                    or event.get("snapshot_revision") != last_ack.get("snapshot_revision")):
+                errors.append("response_without_current_snapshot_ack")
+            last_ack = None
+    if request_count == 0:
+        errors.append("missing_generation_gate_evidence")
+    return errors, request_count
+
+
 def check(result, trace):
     errors = []
     if (result.get("scenario") != "resume-twice" or
@@ -40,19 +58,8 @@ def check(result, trace):
                and e.get("paused_playback_id") == ids[2] and e.get("paused_task_id") == task
                for e in trace):
         errors.append("final_resume_not_owned_by_original_task")
-    last_ack = None
-    request_count = 0
-    for event in trace:
-        if event.get("event") == "snapshot_acknowledged":
-            last_ack = event
-        if event.get("event") == "response_requested":
-            request_count += 1
-            if (last_ack is None or event.get("upstream_generation") != last_ack.get("upstream_generation")
-                    or event.get("snapshot_revision") != last_ack.get("snapshot_revision")):
-                errors.append("response_without_current_snapshot_ack")
-            last_ack = None
-    if request_count == 0:
-        errors.append("missing_generation_gate_evidence")
+    snapshot_errors, request_count = check_snapshot_requests(trace)
+    errors.extend(snapshot_errors)
     return {"status": "failed" if errors else "passed", "errors": sorted(set(errors)),
             "scope": "synthetic_task_ownership_and_snapshot_order",
             "paused_playback_ids": ids[:2], "final_playback_id": ids[2],

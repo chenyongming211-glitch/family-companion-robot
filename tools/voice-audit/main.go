@@ -55,6 +55,10 @@ func main() {
 	}
 	defer resultFile.Close()
 	result := map[string]any{"scenario": *scenario, "wake_order": *order, "simulated_receipts": *receipts, "synthetic_audio_only": true, "interrupted_final_delay_ms": finalDelay.Milliseconds()}
+	if *scenario == "clarify-choice" {
+		// This is an explicit synthetic user choice, never a measured heard word.
+		result["user_supplied_resume_point"] = true
+	}
 	started := time.Now()
 	var replies []reply
 	var stt []string
