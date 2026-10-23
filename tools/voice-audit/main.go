@@ -34,12 +34,12 @@ type reply struct {
 func main() {
 	dir := flag.String("dir", "", "fixtures")
 	out := flag.String("out", "", "result file")
-	scenario := flag.String("scenario", "interrupt", "normal, interrupt, wake-interrupt, resume-twice or idle")
+	scenario := flag.String("scenario", "interrupt", "normal, interrupt, wake-interrupt, resume-twice, clarify-choice or idle")
 	order := flag.String("order", "cache-first", "cache-first or start-first")
 	receipts := flag.Bool("receipts", false, "SIMULATED receipt counters")
 	finalDelay := flag.Duration("interrupted-final-delay", 0, "SIMULATED interrupted final receipt delay, 0..5s")
 	flag.Parse()
-	if *dir == "" || *out == "" || *finalDelay < 0 || *finalDelay > 5*time.Second || (*finalDelay != 0 && !*receipts) || (*order != "cache-first" && *order != "start-first") || (*scenario != "normal" && *scenario != "interrupt" && *scenario != "wake-interrupt" && *scenario != "resume-twice" && *scenario != "idle") {
+	if *dir == "" || *out == "" || *finalDelay < 0 || *finalDelay > 5*time.Second || (*finalDelay != 0 && !*receipts) || (*order != "cache-first" && *order != "start-first") || (*scenario != "normal" && *scenario != "interrupt" && *scenario != "wake-interrupt" && *scenario != "resume-twice" && *scenario != "clarify-choice" && *scenario != "idle") {
 		fmt.Fprintln(os.Stderr, "valid dir, out, order and scenario are required")
 		os.Exit(2)
 	}
@@ -64,6 +64,9 @@ func main() {
 		names := []string{"hello", "count50", "stop", "query", "continue"}
 		if *scenario == "resume-twice" {
 			names = append(names, "continue_restart")
+		}
+		if *scenario == "clarify-choice" {
+			names = append(names, "choice")
 		}
 		for _, name := range names {
 			f, e := os.Open(filepath.Join(*dir, name+".wav"))
@@ -226,7 +229,7 @@ func main() {
 					pending = append([]byte(nil), fixtures["count50"]...)
 					record("input_count50_during_greeting")
 				}
-				if (*scenario == "interrupt" || *scenario == "wake-interrupt" || *scenario == "resume-twice") && phase == "count" && active >= 0 && !interjected && replies[active].Frames >= 84 {
+				if (*scenario == "interrupt" || *scenario == "wake-interrupt" || *scenario == "resume-twice" || *scenario == "clarify-choice") && phase == "count" && active >= 0 && !interjected && replies[active].Frames >= 84 {
 					interjected = true
 					pending = append([]byte(nil), fixtures["stop"]...)
 					inputAt = time.Now()
@@ -352,6 +355,14 @@ func main() {
 						nextName = "continue"
 						nextAt = time.Now().Add(time.Second)
 					case "continue":
+						if *scenario == "clarify-choice" {
+							phase = "specified_start"
+							nextName = "choice"
+							nextAt = time.Now().Add(time.Second)
+							break
+						}
+						return nil
+					case "specified_start":
 						return nil
 					case "resume_first":
 						if !secondInterjected || ev.Reason != "interrupted" {
