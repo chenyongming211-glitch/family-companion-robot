@@ -54,3 +54,14 @@
 - [ ] Run Mac Go tests/race/vet and Linux checks/build through the established server workflow. Check exact source identity, sanitize evidence and scan tracked diff for secrets.
 - [ ] Deploy only a passing gateway candidate after verifying no active device session, retain rollback, verify health and live binary hash. If active hardware traffic exists, preserve it and report the validated candidate without interrupting the user.
 - [ ] Commit/push final docs and report code, CI/build, native-provider results, alignment feasibility and field acceptance separately. Leave physical word-position and acoustic acceptance explicitly open until measured.
+
+## Task 1b: Native-test finding — make task routing a prerequisite
+
+Native071a23f test resumed twice and generated the expected final count, but only the first resume bound its output to the original task. Optional model mutation calls are therefore insufficient, even with current snapshots. This is a failed ownership acceptance, not an accurate-resume pass. Production remains d68ec44.
+
+- [ ] First trace the missing binding with a metadata-only diagnostic (tool/action/outcome/revision, no arguments or user text). Preserve the failing native trace.
+- [ ] Add a failing deterministic peer test where a paused-task turn emits audio without a successful ownership decision, and one where a stale decision races a late final. Neither may be silently accepted as a valid resumed task.
+- [ ] Implement enforced structured routing whenever a saved task exists for a new user input. Use a dedicated side/resume/discard/replace classification tool, a restricted tools list and native `tool_choice=required`; explicit identity/revision application belongs to the gateway rather than model-copied fields. The real provider must demonstrate forced function behavior, not just acknowledge an unknown setting.
+- [ ] Wait for accepted routing and latest-snapshot ACK before releasing voice generation. Suppress routing-phase audio/draft output. Restore normal tools with `tool_choice=auto` for the actual voice response and device tools. Keep ordinary no-paused-task turns and wake greeting unchanged.
+- [ ] Revalidate a classification against its captured task/revision. If late final changes it, resynchronize and retry within a small fixed bound; never let stale arguments or a missing tool decision establish ownership. Preserve same-task binding through device-tool continuations and new playback, and isolate side replies.
+- [ ] Cover route missing/rejected/stale, new input/abort during route, ordinary manual/wake paths, device tools and second/third interruption. Run focused and complete Go/race/vet tests, independent review, then exact-source Linux/native retests. Report added routing latency separately from physical interruption timing.

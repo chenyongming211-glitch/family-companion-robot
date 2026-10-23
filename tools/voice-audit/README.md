@@ -21,6 +21,14 @@ artifacts/voice-audit --dir artifacts/synthetic-inputs --out artifacts/idle.json
 
 `--interrupted-final-delay 1500ms` 可延迟模拟的中断最终回报（需 `--receipts`，范围0至5秒），正常最终回报仍立即发送。延迟通过同一事件循环调度，不暂停上行输入，也不表示真实设备延迟。
 
+完成 `resume-twice` 后，还必须对匹配的网关元数据日志做归属验收：
+
+```sh
+python3 tools/voice-audit/check_resume_ownership.py --result <synthetic-result.json> --trace <matching-gateway.jsonl>
+```
+
+检查器要求两次成功恢复绑定、同一任务的最新播放段推进、最后恢复段仍属于原任务，以及每次生成前有同版本快照 ACK。它会拒绝“读到了五十但漏绑任务”的假通过；仍不证明声音、字词断点或精确接续。失败退出1，输出不含对话正文。检查器单测：`python3 -m unittest discover -s tools/voice-audit -p test_resume_ownership.py -v`。
+
 输出文件必须不存在。退出0和 `transport_completed` 只表示预定协议阶段结束，**不表示接续语义正确**。应核对 `input_transcripts`、`generated_text` 与网关的暂停任务事件。`wake-interrupt` 在问候中就发数数指令，再打断数数；`idle` 验证当前两分钟空闲配置，不适用于修改了超时的实例。`cache-first` 使用缓存音频→detect→start，另有 `start-first` 控制变量。除唤醒缓存突发上传外，持续以60ms节拍上传语音或静音；不会在模型说话时停止上行。插话延迟字段从合成输入入队计时，含约一个60ms节拍的排队，不能称为实际语音起点或停声时延。
 
 可选 `--receipts` 在隔离实例协商播放回报，用已接收帧计数模拟回报。虽然线上字段要求 `basis=i2s_dma`，这里**没有I2S硬件，结果必须标记为模拟**；默认不开启。探针不会执行设备MCP工具，遇到控制调用即失败。日志含合成对话文字，不能将工具改用于真实家庭音频后直接公开日志。
