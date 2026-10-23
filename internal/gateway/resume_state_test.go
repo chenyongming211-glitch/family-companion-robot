@@ -137,7 +137,7 @@ func TestResumeStateSealedInterruptedDraftIsOmitted(t *testing.T) {
 		t.Fatal("diagnostic draft unexpectedly discarded")
 	}
 }
-func TestResumeStateResumeExistingBlockAndFullFinalReleasesTask(t *testing.T) {
+func TestResumeStateResumeExistingBlockAndFullFinalRetainsTask(t *testing.T) {
 	h := newPlaybackHarness(t)
 	s := h.s
 	s.playbackEnabled = true
@@ -168,8 +168,11 @@ func TestResumeStateResumeExistingBlockAndFullFinalReleasesTask(t *testing.T) {
 	}
 	s.sealPlayback(false)
 	deliverReceipt(t, h, map[string]any{"type": "playback", "state": "finished", "session_id": s.id, "playback_id": 2, "sample_rate": 24000, "played_samples": 1440, "valid": true, "basis": "i2s_dma"})
-	if s.paused != nil || s.responseTaskID != "" {
-		t.Fatal("fully delivered resumed block kept stale task ownership")
+	if s.paused == nil || s.pausedData()["original_request"] != "原目标" {
+		t.Fatal("digital delivery deleted the original task without explicit discard or replace")
+	}
+	if s.pausedData()["latest_block_delivery_complete"] != true || s.pausedData()["text_position"] != "unknown" {
+		t.Fatalf("delivery metadata must describe only the latest digital block: %v", s.pausedData())
 	}
 }
 
@@ -311,4 +314,83 @@ func TestResumeStateSnapshotACKDeadlineFailsClosed(t *testing.T) {
 		t.Fatal("missing session.updated did not fail closed")
 	}
 	p.quiet(t, 20*time.Millisecond)
+}
+
+func TestResumeStateDeliveredClarificationAndSideAnswerPreserveOriginalGoal(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.playbackEnabled = true
+	s.generation = 1
+	s.responseOrigin = requestOrigin{generation: 1, itemID: "root", known: true, text: "从一数到一百"}
+	h.append(t, make([]byte, audio.FrameBytes))
+	h.play(t, time.Unix(100, 0))
+	s.pausePlayback()
+	id := s.paused.id
+	s.responseID = ""
+	s.started = false
+	s.activePlayback = nil
+	s.devicePlayback = nil
+	begin := func(item, text string) {
+		t.Helper()
+		s.commitOrigin(item)
+		s.transcribeOrigin(item, text)
+		if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: item}}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(s.encoder.Close)
+	}
+	resume := func() {
+		t.Helper()
+		out, _ := s.conversationTool("conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":"resume","expected_revision":%d}`, id, s.snapshotRevision))
+		if !strings.Contains(out, `"ok":true`) {
+			t.Fatalf("original task cannot be resumed: %s", out)
+		}
+	}
+	finish := func(at time.Time, text string) {
+		t.Helper()
+		s.transcript = text
+		s.responseDone = true
+		h.append(t, make([]byte, audio.FrameBytes))
+		h.play(t, at)
+		playbackID := s.activePlayback.id
+		h.play(t, at.Add(60*time.Millisecond))
+		deliverReceipt(t, h, map[string]any{"type": "playback", "state": "finished", "session_id": s.id, "playback_id": playbackID, "sample_rate": 24000, "played_samples": 1440, "valid": true, "basis": "i2s_dma"})
+	}
+	begin("continue", "继续")
+	resume()
+	finish(time.Unix(101, 0), "请问从哪个数继续？")
+	if s.paused == nil || s.paused.id != id || s.paused.original.text != "从一数到一百" {
+		t.Fatal("fully delivered clarification discarded the unfinished counting endpoint")
+	}
+	clarificationID := s.paused.playback.id
+	clarificationRevision := s.snapshotRevision
+	if s.pausedData()["latest_block_delivery_complete"] != true {
+		t.Fatal("clarification block delivery was not recorded")
+	}
+	// The answer to the clarification is input, not a replacement task.
+	s.commitOrigin("point")
+	s.transcribeOrigin("point", "从三十七继续")
+	if s.pausedData()["original_request"] != "从一数到一百" {
+		t.Fatal("continuation point replaced the original endpoint")
+	}
+	// A subsequent unrelated answer must stay unbound and leave latest task metadata intact.
+	begin("side", "一加一等于几")
+	if s.responseTaskID != "" {
+		t.Fatal("side answer inherited original task binding")
+	}
+	finish(time.Unix(102, 0), "等于二")
+	if s.paused == nil || s.paused.id != id || s.paused.playback.id != clarificationID || s.snapshotRevision != clarificationRevision {
+		t.Fatal("side-answer delivery changed the original task snapshot")
+	}
+	begin("point-again", "从三十七继续")
+	resume()
+	h.append(t, make([]byte, audio.FrameBytes))
+	h.play(t, time.Unix(103, 0))
+	s.pausePlayback()
+	if s.paused.id != id || s.pausedData()["original_request"] != "从一数到一百" || s.pausedData()["latest_request"] != "从三十七继续" || s.paused.playback.id != 4 {
+		t.Fatalf("subsequent interruption lost original task ownership: %v", s.pausedData())
+	}
+	if s.pausedData()["latest_block_delivery_complete"] != false {
+		t.Fatal("interrupted continuation retained prior block delivery status")
+	}
 }

@@ -79,7 +79,7 @@ func (s *session) interruptiblePlayback() *playbackRecord {
 }
 func (s *session) pausePlayback() {
 	r := s.interruptiblePlayback()
-	if r == nil || r.retired {
+	if r == nil {
 		return
 	}
 	r.sealed = true
@@ -92,6 +92,11 @@ func (s *session) pausePlayback() {
 	}
 	if !r.settled && r.settleUntil.IsZero() {
 		r.settleUntil = time.Now().Add(playbackSettlementTimeout)
+	}
+	// Retirement removes task ownership, not the interruption of the audio or
+	// stored tool-parent turns sharing this playback block.
+	if r.retired {
+		return
 	}
 	if s.wakeOnly(r.origin) {
 		s.tracePlayback("wake_greeting_skipped", r)
@@ -178,19 +183,7 @@ func (s *session) receivePlayback(data []byte) {
 			s.tracePlayback("progress_started", r)
 		}
 		s.promotePlayback(r)
-		s.finishTaskDelivery(r)
 		return
-	}
-}
-
-// Releasing a resumed task proves only complete digital delivery of its latest
-// normal block. It is not a semantic-completeness or acoustic acceptance claim.
-func (s *session) finishTaskDelivery(r *playbackRecord) {
-	if s.paused != nil && r.taskID == s.paused.id && s.paused.playback.id == r.id && r.sealed && !r.interrupted && r.settled && r.known && !r.invalid && r.played == r.sent {
-		s.paused = nil
-		s.responseTaskID = ""
-		s.snapshotRevision++
-		s.traceVoice("task_delivery_complete")
 	}
 }
 
@@ -266,6 +259,9 @@ func (s *session) pausedData() map[string]any {
 	out["latest_request"] = r.origin.text
 	out["latest_request_known"] = r.origin.known
 	out["interrupted"] = r.interrupted
+	// This describes the latest digital block only. A fully delivered block
+	// may be a clarification; retain the original task until discard/replace.
+	out["latest_block_delivery_complete"] = r.sealed && !r.interrupted && r.settled && r.known && !r.invalid && r.played == r.sent
 	if s.playbackEnabled && r.id != 0 {
 		out["playback_id"] = r.id
 		out["session_id"] = s.id

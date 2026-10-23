@@ -2,8 +2,12 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"familyrobot/internal/audio"
 )
 
 func TestInterruptedDraftSurvivesInterveningAnswerAsUnplayedData(t *testing.T) {
@@ -89,5 +93,54 @@ func TestInterruptedDraftsShareTheExistingHistoryBudget(t *testing.T) {
 				t.Fatal("unbounded draft or generated words presented as completed speech")
 			}
 		}
+	}
+}
+
+func TestRetiredSharedToolPlaybackStillSanitizesInterruptedParentHistory(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.playbackEnabled = true
+	s.responseOrigin = requestOrigin{known: true, text: "读完原任务"}
+	h.append(t, make([]byte, audio.FrameBytes))
+	h.play(t, time.Unix(100, 0))
+	s.pausePlayback()
+	s.started = false
+	s.activePlayback = nil
+	s.devicePlayback = nil
+	s.responseID = "tool-parent"
+	s.responseOrigin = requestOrigin{known: true, text: "继续"}
+	out, _ := s.conversationTool("conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":"resume","expected_revision":%d}`, s.paused.id, s.snapshotRevision))
+	if !strings.Contains(out, `"ok":true`) {
+		t.Fatal(out)
+	}
+	const draft = "unplayed-shared-tool-parent-secret"
+	s.transcript = draft
+	s.responseDone = true
+	s.toolCalls = map[string]*toolCallState{"discard": {}}
+	h.append(t, make([]byte, audio.FrameBytes))
+	h.play(t, time.Unix(101, 0))
+	h.play(t, time.Unix(101, 0).Add(60*time.Millisecond))
+	r := s.activePlayback
+	if !s.started || !s.toolPlayback || r == nil || len(s.hist.Turns) != 1 || s.hist.Turns[0].Delivery != "transport_sent" || s.hist.Turns[0].playbackID != r.id {
+		t.Fatal("fixture did not store a completed tool parent in an open shared TTS block")
+	}
+	out, _ = s.conversationTool("conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":"discard","expected_revision":%d}`, s.paused.id, s.snapshotRevision))
+	if !strings.Contains(out, `"ok":true`) || !r.retired {
+		t.Fatal("shared block was not retired by explicit discard")
+	}
+	// The continuation shares the retired block. Interruption still applies to
+	// its stored parent draft even though that block may no longer own a task.
+	s.pausePlayback()
+	if s.paused != nil {
+		t.Error("retired shared playback resurrected the discarded task")
+	}
+	if !r.interrupted || !r.sealed || r.settleUntil.IsZero() {
+		t.Error("retired block skipped interruption and settlement bookkeeping")
+	}
+	if s.hist.Turns[0].Delivery != "interrupted" || strings.Contains(s.hist.context(), draft) {
+		t.Error("retired shared block leaked its unplayed tool parent into rebuilt context")
+	}
+	if s.hist.Turns[0].GeneratedText != draft {
+		t.Error("internal diagnostic draft was lost")
 	}
 }
