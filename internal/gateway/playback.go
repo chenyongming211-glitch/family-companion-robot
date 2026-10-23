@@ -82,7 +82,7 @@ func (s *session) play() error {
 		}
 		// Transport completion alone never proves playback. A matching final
 		// receipt can later promote only this block's normal completed history.
-		if s.transcript != "" && !s.responseOrigin.wake && (s.records == nil || s.responseID != s.records.suppressResponse) {
+		if s.transcript != "" && !s.responseOrigin.wake && !s.suppressedResponse() {
 			s.hist.addSent(s.transcript)
 			s.hist.stampLast(s.id, s.responseID, s.responseOrigin.itemID, s.playbackSequence)
 		}

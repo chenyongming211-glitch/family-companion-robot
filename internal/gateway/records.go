@@ -82,7 +82,6 @@ type conversationRecords struct {
 	sequence, lastResult uint64
 	pending              []recordReceipt
 	clear                *recordClear
-	suppressResponse     string
 }
 
 func (r *conversationRecords) pendingCount() int {
@@ -271,7 +270,7 @@ func (s *session) recordSnapshot() recordData {
 			s.snapshotRevision++
 		}
 	}
-	if s.responseID != "" && s.responseID != s.records.suppressResponse && s.transcript != "" && !s.responseOrigin.wake {
+	if s.responseID != "" && !s.suppressedResponse() && s.transcript != "" && !s.responseOrigin.wake {
 		at := s.responseAt
 		if at.IsZero() {
 			at = time.Now()
@@ -350,7 +349,7 @@ func (s *session) pollRecords() {
 			}
 			// New input remains live during disk deletion; flush it after that
 			// FIFO barrier rather than claiming its text is already durable.
-			if err == nil && (len(s.hist.archive) > 0 || s.paused != nil || s.transcript != "" && s.responseID != r.suppressResponse && !s.responseOrigin.wake) {
+			if err == nil && (len(s.hist.archive) > 0 || s.paused != nil || s.transcript != "" && !s.suppressedResponse() && !s.responseOrigin.wake) {
 				s.checkpointRecords()
 			}
 		default:
@@ -392,13 +391,14 @@ func (s *session) startClearRecords() (<-chan error, bool) {
 	s.hist = history{}
 	s.taskDisposition = "cleared"
 	s.clearClarification()
+	s.suppressResponse = s.responseID
+	s.suppressGeneration = s.generation
 	result := make(chan error, 1)
 	if r == nil {
 		result <- nil
 		close(result)
 		return result, true
 	}
-	r.suppressResponse = s.responseID
 	done := make(chan error, 1)
 	finished := make(chan struct{})
 	r.clear = &recordClear{done: done, finished: finished}
@@ -436,7 +436,7 @@ func (s *session) finalizeRecords() {
 			s.hist.Interrupted = true
 		}
 	}
-	if s.responseID != "" && s.draftTranscript != "" && !s.responseOrigin.wake && s.responseID != s.records.suppressResponse {
+	if s.responseID != "" && s.draftTranscript != "" && !s.responseOrigin.wake && !s.suppressedResponse() {
 		s.hist.addInterrupted(s.draftTranscript)
 		s.hist.Interrupted = true
 		s.hist.stampLast(s.id, s.responseID, s.responseOrigin.itemID, s.playbackSequence)
@@ -446,4 +446,8 @@ func (s *session) finalizeRecords() {
 }
 func clearRecordsTool() map[string]any {
 	return map[string]any{"type": "function", "function": map[string]any{"name": "conversation_clear_records", "description": "仅在本轮用户明确要求清空本设备对话记录时删除本网关文字记录和暂停任务。等待 ok=true 回执才可回答清空成功；不删除云厂商留存。", "parameters": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}}}
+}
+
+func (s *session) suppressedResponse() bool {
+	return s.generation == s.suppressGeneration && s.responseID == s.suppressResponse
 }

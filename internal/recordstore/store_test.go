@@ -535,3 +535,25 @@ func TestFutureTimestampAndEnvelopeBound(t *testing.T) {
 		t.Fatalf("envelope exceeded limit: %v", err)
 	}
 }
+
+func TestIdleExpiryPhysicallyRemovesSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Options{Directory: dir, Retention: 80 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	saveTest(t, s, "idle", sample())
+	path := devicePath(dir, "idle")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(700 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("expired snapshot remains physically present with idle worker")
+}

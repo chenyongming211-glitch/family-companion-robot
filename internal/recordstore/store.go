@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,9 +73,7 @@ func Open(opts Options) (*Store, error) {
 		err := s.initialize()
 		ready <- err
 		if err == nil {
-			for job := range s.jobs {
-				job()
-			}
+			s.work()
 		}
 		if s.lock != nil {
 			s.closeErr = s.lock.Close()
@@ -425,4 +424,31 @@ func (s *Store) syncDirectory() error {
 		return syncErr
 	}
 	return closeErr
+}
+
+// One worker owns both FIFO operations and maintenance. The ticker is bounded
+// even for nanosecond retention; it cannot spin or create concurrent disk I/O.
+func (s *Store) work() {
+	cadence := s.retention / 4
+	if cadence < 25*time.Millisecond {
+		cadence = 25 * time.Millisecond
+	}
+	if cadence > time.Minute {
+		cadence = time.Minute
+	}
+	ticker := time.NewTicker(cadence)
+	defer ticker.Stop()
+	for {
+		select {
+		case job, ok := <-s.jobs:
+			if !ok {
+				return
+			}
+			job()
+		case <-ticker.C:
+			if err := s.cleanupExpired(); err != nil {
+				slog.Error("record_retention_cleanup_failed")
+			}
+		}
+	}
 }

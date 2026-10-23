@@ -29,6 +29,13 @@ type modelEvent struct {
 	err        error
 }
 type session struct {
+	clearConfirmationKey   string
+	clearToolsDisabled     bool
+	clearResult            json.RawMessage
+	suppressResponse       string
+	suppressGeneration     uint64
+	nativeClear            *nativeClearConnection
+	nativeReady            chan nativeOpenResult
 	taskDisposition        string
 	records                *conversationRecords
 	responseAt             time.Time
@@ -216,6 +223,10 @@ func (s *session) run() error {
 				s.alert()
 				return err
 			}
+		case result := <-s.nativeReady:
+			if err := s.finishNativeClear(result); err != nil {
+				return err
+			}
 		case result := <-s.routeResults:
 			if err := s.finishRouting(result); err != nil {
 				return err
@@ -285,6 +296,7 @@ func (s *session) connect(ctx context.Context) error {
 	}
 	s.clearClarification()
 	s.sync = generationSync{}
+	s.clearToolsDisabled = false
 	s.cancelRouting()
 	s.voiceRequested = false
 	s.responseTaskID = ""
@@ -307,26 +319,16 @@ func (s *session) connect(ctx context.Context) error {
 		return err
 	}
 	s.model = c
-	generation := s.generation
-	go func() {
-		for {
-			ev, err := c.Read()
-			select {
-			case s.events <- modelEvent{generation, ev, err}:
-			case <-ctx.Done():
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
+	s.readModel(ctx, c)
 	return nil
 }
 func (s *session) alert() {
 	s.json(map[string]any{"type": "alert", "status": "连接中断", "message": "语音连接暂时不可用，请重新唤醒。", "emotion": "neutral"})
 }
 func (s *session) onDevice(ctx context.Context, ev deviceEvent) error {
+	if s.nativeClear != nil {
+		return s.bufferNativeClearInput(ev)
+	}
 	if ev.kind == websocket.BinaryMessage {
 		packet, _, err := protocol.Unwrap(s.version, ev.data)
 		if err != nil {
@@ -434,7 +436,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	s.traceVoice("interrupt")
 	s.pending.Clear()
 	if s.started && s.responseID != "" {
-		if !s.responseOrigin.wake && (s.records == nil || s.responseID != s.records.suppressResponse) {
+		if !s.responseOrigin.wake && !s.suppressedResponse() {
 			s.hist.addInterrupted(s.draftTranscript)
 			s.hist.stampLast(s.id, s.responseID, s.responseOrigin.itemID, 0)
 		}
@@ -660,4 +662,21 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		}
 	}
 	return nil
+}
+
+func (s *session) readModel(ctx context.Context, c *qwen.Client) {
+	generation := s.generation
+	go func() {
+		for {
+			ev, err := c.Read()
+			select {
+			case s.events <- modelEvent{generation, ev, err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 }

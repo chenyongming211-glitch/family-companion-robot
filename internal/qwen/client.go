@@ -138,6 +138,16 @@ func (c *Client) UpdateInstructions(instructions string, revision uint64) error 
 	return c.update(map[string]any{"instructions": instructions}, revision)
 }
 
+// UpdateInstructionsWithTools changes the tool set in the same acknowledged
+// snapshot update. An explicit empty slice disables tools for receipt speech;
+// the next normal generation restores its configured tools through this FIFO.
+func (c *Client) UpdateInstructionsWithTools(instructions string, revision uint64, tools []map[string]any) error {
+	if tools == nil {
+		tools = []map[string]any{}
+	}
+	return c.update(map[string]any{"instructions": instructions, "tools": tools}, revision)
+}
+
 func (c *Client) update(session map[string]any, revision uint64) error {
 	if err := c.Send(map[string]any{"type": "session.update", "session": session}); err != nil {
 		return err

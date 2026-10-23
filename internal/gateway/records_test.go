@@ -739,3 +739,74 @@ func TestRecordsClearDoesNotRestoreRetiredPlaybackFlagsOnDisconnect(t *testing.T
 		t.Fatal("cleared playback state resurrected on disconnect")
 	}
 }
+
+func TestRecordsClearDisabledDoesNotRestoreParentText(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.generation = 1
+	s.currentInput = requestOrigin{generation: 1, itemID: "clear-now", known: true, text: "清空对话记录"}
+	s.responseID = "clear-parent"
+	s.transcript = "此前的私密内容"
+	s.responseDone = true
+	receipt, ok := s.startClearRecords()
+	if !ok {
+		t.Fatal("clear was rejected")
+	}
+	if err := <-receipt; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.play(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(s.hist.context(), "此前的私密内容") {
+		t.Fatal("successful clear restored the old parent response into temporary context")
+	}
+}
+
+func TestRecordsClearSuppressionDoesNotCrossNativeGeneration(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.generation = 1
+	s.currentInput = requestOrigin{generation: 1, itemID: "clear", known: true, text: "清空对话记录"}
+	s.responseID = "reused-native-id"
+	receipt, ok := s.startClearRecords()
+	if !ok {
+		t.Fatal("clear rejected")
+	}
+	<-receipt
+	// Response IDs are scoped by the upstream generation, as are late events.
+	s.generation++
+	s.responseID = "reused-native-id"
+	s.transcript = "new allowed response"
+	s.responseDone = true
+	if err := s.play(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.hist.context(), "new allowed response") {
+		t.Fatal("old generation suppression discarded a fresh response")
+	}
+}
+
+func TestRecordsClearDisabledSuppressesInterruptedParent(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.generation = 1
+	s.currentInput = requestOrigin{generation: 1, itemID: "clear", known: true, text: "清空对话记录"}
+	s.responseID = "clear-parent"
+	s.started = true
+	s.responseDone = true
+	s.draftTranscript = "private parent draft"
+	receipt, ok := s.startClearRecords()
+	if !ok {
+		t.Fatal("clear rejected")
+	}
+	<-receipt
+	// The storage-free fixture has no upstream URL; reconnect fails after the
+	// real stop/history path. That failure must not revive the cleared transcript.
+	if err := s.interrupt(context.Background(), false, true); err == nil {
+		t.Fatal("expected unavailable upstream")
+	}
+	if len(s.hist.Turns) != 0 || len(s.hist.archive) != 0 {
+		t.Fatal("interrupted parent returned to temporary history")
+	}
+}

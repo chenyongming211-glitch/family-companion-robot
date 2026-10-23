@@ -163,6 +163,10 @@ func (s *session) callTool(ev qwen.Event) error {
 			s.toolCalls[key].output = `{"ok":false,"error":"invalid_arguments"}`
 			return nil
 		}
+		if s.clearResult != nil {
+			s.toolCalls[key].output = string(s.clearResult)
+			return nil
+		}
 		if _, ok := s.startClearRecords(); !ok {
 			s.toolCalls[key].output = `{"ok":false,"error":"explicit_current_request_required"}`
 		} else if s.records == nil {
@@ -170,6 +174,9 @@ func (s *session) callTool(ev qwen.Event) error {
 		} else {
 			s.records.clear.toolKey = key
 			s.records.clear.generation = s.generation
+		}
+		if s.toolCalls[key].output == "" || s.toolCalls[key].output == `{"ok":true,"cleared":true}` {
+			return s.beginNativeClear(key)
 		}
 		return nil
 	}
@@ -185,7 +192,7 @@ func (s *session) callTool(ev qwen.Event) error {
 }
 
 func (s *session) continueTools() error {
-	if len(s.toolCalls) == 0 || !s.toolParentDone || s.responseID != "" {
+	if s.model == nil || len(s.toolCalls) == 0 || !s.toolParentDone || s.responseID != "" {
 		return nil
 	}
 	for _, id := range s.toolOrder {
@@ -197,6 +204,13 @@ func (s *session) continueTools() error {
 		call := s.toolCalls[id]
 		if call.generation != s.generation {
 			return errors.New("stale tool continuation")
+		}
+		if id == s.clearConfirmationKey {
+			// The old native call registry was retired. Qwen does not bind a
+			// replayed function_call to function_call_output. Publish only the
+			// actual local receipt as authoritative snapshot data on the new socket.
+			s.clearResult = json.RawMessage(call.output)
+			continue
 		}
 		if err := s.model.Send(map[string]any{"type": "conversation.item.create", "item": map[string]any{"type": "function_call_output", "call_id": call.callID, "output": call.output}}); err != nil {
 			return err
@@ -211,6 +225,8 @@ func (s *session) continueTools() error {
 }
 
 func (s *session) cancelTools() {
+	s.clearConfirmationKey = ""
+	s.clearResult = nil
 	if s.bridge != nil {
 		// Every pending bridge call belongs to this connection generation; canceling
 		// it cannot start another generation's work. Canceled outputs are discarded.

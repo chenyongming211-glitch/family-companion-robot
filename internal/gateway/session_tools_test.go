@@ -71,7 +71,7 @@ func (p *toolPeer) want(t *testing.T, typ string) map[string]any {
 			cfg, _ := v.body["session"].(map[string]any)
 			// Existing scenario fixtures inject provider responses. Service the new
 			// generation synchronization separately; ordering tests use raw read().
-			if cfg["instructions"] != nil && (len(cfg) == 1 || cfg["tool_choice"] == "auto") {
+			if cfg["instructions"] != nil && (len(cfg) == 1 || len(cfg) == 2 && cfg["tools"] != nil || cfg["tool_choice"] == "auto") {
 				continue
 			}
 		}
@@ -103,6 +103,10 @@ func newToolHarness(t *testing.T, mcp bool, configure ...func(*Config)) *toolHar
 }
 
 func newToolHarnessFeatures(t *testing.T, features map[string]bool, configure ...func(*Config)) *toolHarness {
+	return newToolHarnessStore(t, features, nil, configure...)
+}
+
+func newToolHarnessStore(t *testing.T, features map[string]bool, store ownedRecordStore, configure ...func(*Config)) *toolHarness {
 	t.Helper()
 	models := make(chan *toolPeer, 8)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +126,9 @@ func newToolHarnessFeatures(t *testing.T, features map[string]bool, configure ..
 	g, e := New(cfg)
 	if e != nil {
 		t.Fatal(e)
+	}
+	if store != nil {
+		g.records = store
 	}
 	server := httptest.NewServer(g.Handler())
 	t.Cleanup(server.Close)

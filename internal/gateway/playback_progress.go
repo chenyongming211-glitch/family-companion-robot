@@ -46,7 +46,9 @@ func (s *session) beginPlayback() error {
 		return errors.New("playback identity exhausted")
 	}
 	s.playbackSequence++
-	r := &playbackRecord{id: s.playbackSequence, origin: s.responseOrigin, taskID: s.responseTaskID}
+	// An operation receipt is not a resumable task (in particular, never
+	// restore a completed clear operation as a paused deletion request).
+	r := &playbackRecord{id: s.playbackSequence, origin: s.responseOrigin, taskID: s.responseTaskID, retired: s.clearResult != nil}
 	s.playbacks = append(s.playbacks, r)
 	if len(s.playbacks) > maxPlaybackRecords {
 		s.playbacks = s.playbacks[len(s.playbacks)-maxPlaybackRecords:]
@@ -218,6 +220,7 @@ func (s *session) promotePlayback(r *playbackRecord) {
 // Input identities include upstream generation; playback identities instead live
 // for the entire device connection, including upstream-only reconnects.
 func (s *session) resetInputRequest() error {
+	s.clearResult = nil
 	if err := s.supersedeClarification(); err != nil {
 		return err
 	}
@@ -233,6 +236,9 @@ func (s *session) resetInputRequest() error {
 func (s *session) commitOrigin(itemID string) error {
 	old := s.currentInput
 	if !s.inputCommitted || old.generation != s.generation || old.itemID != itemID {
+		if s.clearConfirmationKey != "" {
+			s.cancelTools()
+		}
 		if err := s.resetInputRequest(); err != nil {
 			return err
 		}
