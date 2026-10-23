@@ -41,7 +41,7 @@ python3 -m unittest discover -s firmware/tests -v
 
 0003 patch SHA256：`d140cb2e4751456f3f8b3788586bee2afacb8d334d9a66da22165be1559c058c`。
 
-这证明锁定上游的完整 patch 链可应用，以及实际生产方法在主机故障注入下满足恢复契约。尚未证明 ESP-IDF 6.1/ESP32S3 编译、板上 FreeRTOS 时序、真实 Wi-Fi 丢包、PSRAM 压力或远场再次唤醒成功率；候选固件 CI 应覆盖普通与软件 AEC 两款。JSON 文本返回值接口变化和新增应用声明仍需完整 MCU 构建确认，host fake 无法覆盖所有 ABI/平台编译约束。
+这证明锁定上游的完整 patch 链可应用，以及实际生产方法在主机故障注入下满足恢复契约。仅凭本节主机证据不能证明 ESP-IDF 6.1/ESP32S3 编译、板上 FreeRTOS 时序、真实 Wi-Fi 丢包、PSRAM 压力或远场再次唤醒成功率。随后普通与软件 AEC 两款完整 MCU CI 均通过，接口与声明的完整编译及离线镜像核验见[实施结果](2026-10-23-wake-recovery-results.md)；板上与声学验收仍待进行。
 
 ## 独立审查后的第二轮 RED → GREEN
 
