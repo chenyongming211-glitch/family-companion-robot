@@ -1,8 +1,16 @@
 package gateway
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type turn struct {
+	At            time.Time `json:"at"`
+	SessionID     string    `json:"session_id,omitempty"`
+	ResponseID    string    `json:"response_id,omitempty"`
+	InputID       string    `json:"input_id,omitempty"`
+	PlaybackID    uint32    `json:"playback_id,omitempty"`
 	playbackID    uint32
 	Role          string `json:"role"`
 	Text          string `json:"text,omitempty"`
@@ -10,6 +18,7 @@ type turn struct {
 	GeneratedText string `json:"generated_text,omitempty"`
 }
 type history struct {
+	archive     []turn
 	Turns       []turn `json:"turns"`
 	Interrupted bool   `json:"previous_reply_interrupted"`
 }
@@ -44,6 +53,13 @@ func (h *history) addInterrupted(generated string) {
 }
 
 func (h *history) appendTurn(t turn) {
+	if t.At.IsZero() {
+		t.At = time.Now()
+	}
+	h.archive = append(h.archive, t)
+	if len(h.archive) > 128 {
+		h.archive = h.archive[len(h.archive)-128:]
+	}
 	h.Turns = append(h.Turns, t)
 	if len(h.Turns) > 12 {
 		h.Turns = h.Turns[len(h.Turns)-12:]
@@ -62,4 +78,26 @@ func (h *history) context() string {
 	}
 	b, _ := json.Marshal(safe)
 	return string(b)
+}
+
+func (h *history) syncArchive() {
+	for _, live := range h.Turns {
+		for i := range h.archive {
+			if h.archive[i].At == live.At {
+				h.archive[i] = live
+				break
+			}
+		}
+	}
+}
+func (h *history) stampLast(sessionID, responseID, inputID string, playbackID uint32) {
+	if len(h.Turns) == 0 {
+		return
+	}
+	t := &h.Turns[len(h.Turns)-1]
+	t.SessionID = sessionID
+	t.ResponseID = responseID
+	t.InputID = inputID
+	t.PlaybackID = playbackID
+	h.syncArchive()
 }

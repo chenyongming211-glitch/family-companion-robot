@@ -145,7 +145,7 @@ func TestPlaybackTraceReportsBoundariesWithoutPrivateContentOrProgressFlood(t *t
 		if record["playback_id"] != float64(1) || record["sent_samples"] != float64(14400) || record["text_position"] != "unknown" {
 			t.Fatal(record)
 		}
-		if record["event"] == "finished" && (record["played_samples"] != float64(12240) || record["settled"] != true || record["position_known"] != true || record["paused_task_id"] != "task-1") {
+		if record["event"] == "finished" && (record["played_samples"] != float64(12240) || record["settled"] != true || record["position_known"] != true || record["paused_task_id"] != h.s.paused.id) {
 			t.Fatal(record)
 		}
 	}

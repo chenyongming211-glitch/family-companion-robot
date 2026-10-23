@@ -29,10 +29,16 @@ type playbackRecord struct {
 	timedOut, retired                            bool
 }
 type pausedTask struct {
-	awaitingResumeChoice bool
-	id                   string
-	original             requestOrigin
-	playback             playbackRecord
+	recordLatest               recordOrigin
+	resumeRequest              *recordOrigin
+	recordAt                   time.Time
+	recordSource               recordOrigin
+	sourceTaskID, resumeSource string
+	historicalPlayback         *recordPlayback
+	awaitingResumeChoice       bool
+	id                         string
+	original                   requestOrigin
+	playback                   playbackRecord
 }
 
 func (s *session) beginPlayback() error {
@@ -85,10 +91,12 @@ func (s *session) pausePlayback() {
 	}
 	r.sealed = true
 	r.interrupted = true
-	for i := range s.hist.Turns {
-		t := &s.hist.Turns[i]
-		if t.playbackID == r.id && t.Role == "assistant" {
-			t.Delivery = "interrupted"
+	for _, turns := range [][]turn{s.hist.Turns, s.hist.archive} {
+		for i := range turns {
+			t := &turns[i]
+			if t.playbackID == r.id && t.Role == "assistant" {
+				t.Delivery = "interrupted"
+			}
 		}
 	}
 	if !r.settled && r.settleUntil.IsZero() {
@@ -105,7 +113,8 @@ func (s *session) pausePlayback() {
 	}
 	if s.paused == nil {
 		s.taskSequence++
-		s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), original: r.origin, playback: *r}
+		s.taskDisposition = "active"
+		s.paused = &pausedTask{id: fmt.Sprintf("%s:task-%d", s.id, s.taskSequence), original: r.origin, playback: *r}
 		s.snapshotRevision++
 		s.tracePlayback("paused_created", r)
 	} else if r.taskID == s.paused.id {
@@ -191,11 +200,13 @@ func (s *session) receivePlayback(data []byte) {
 func (s *session) promotePlayback(r *playbackRecord) {
 	if r.sealed && !r.interrupted && r.settled && r.known && !r.invalid && r.played == r.sent {
 		promoted := false
-		for i := range s.hist.Turns {
-			t := &s.hist.Turns[i]
-			if t.playbackID == r.id && t.Delivery == "transport_sent" {
-				t.Delivery = "playback_confirmed"
-				promoted = true
+		for _, turns := range [][]turn{s.hist.Turns, s.hist.archive} {
+			for i := range turns {
+				t := &turns[i]
+				if t.playbackID == r.id && t.Delivery == "transport_sent" {
+					t.Delivery = "playback_confirmed"
+					promoted = true
+				}
 			}
 		}
 		if promoted {
@@ -280,6 +291,17 @@ func (s *session) pausedData() map[string]any {
 	p := s.paused
 	r := p.playback
 	out["task_id"] = p.id
+	if p.historicalPlayback != nil {
+		out["historical_playback"] = p.historicalPlayback
+		out["source_task_id"] = p.sourceTaskID
+		out["original_source"] = p.recordSource
+	}
+	if p.resumeSource != "" {
+		out["resume_source"] = p.resumeSource
+		if p.resumeRequest != nil {
+			out["resume_request"] = p.resumeRequest
+		}
+	}
 	out["awaiting_resume_choice"] = p.awaitingResumeChoice
 	out["original_request"] = p.original.text
 	out["original_request_known"] = p.original.known
@@ -354,6 +376,7 @@ func (s *session) conversationTool(name, args string) (string, bool) {
 			}
 			s.traceVoice("task_resume_bound")
 		case "discard":
+			s.taskDisposition = "discarded"
 			s.retireTaskPlayback()
 			s.responseTaskID = ""
 			s.paused = nil
@@ -363,7 +386,8 @@ func (s *session) conversationTool(name, args string) (string, bool) {
 			}
 			s.retireTaskPlayback()
 			s.taskSequence++
-			s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), original: s.currentInput, playback: playbackRecord{origin: s.currentInput}}
+			s.taskDisposition = "active"
+			s.paused = &pausedTask{id: fmt.Sprintf("%s:task-%d", s.id, s.taskSequence), original: s.currentInput, playback: playbackRecord{origin: s.currentInput}}
 			s.responseTaskID = s.paused.id
 			if s.activePlayback != nil {
 				s.activePlayback.taskID = s.paused.id

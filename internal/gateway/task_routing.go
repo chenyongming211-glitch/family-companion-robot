@@ -158,6 +158,14 @@ func (s *session) finishRouting(result taskRouteResult) error {
 		}
 	}
 	if s.paused != nil && (r.action == "resume" || r.action == "restart" || r.action == "resume_from") {
+		if r.action == "resume_from" || r.action == "restart" {
+			s.paused.resumeRequest = &recordOrigin{SessionID: s.id, ItemID: s.currentInput.itemID, Text: s.currentInput.text, Known: s.currentInput.known, Truncated: s.currentInput.truncated}
+		}
+		if r.action == "resume_from" {
+			s.paused.resumeSource = "user_selected"
+		} else if r.action == "restart" {
+			s.paused.resumeSource = "user_restart"
+		}
 		awaiting := r.action == "resume"
 		if s.paused.awaitingResumeChoice != awaiting {
 			s.paused.awaitingResumeChoice = awaiting

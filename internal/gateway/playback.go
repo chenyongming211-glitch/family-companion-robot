@@ -82,8 +82,11 @@ func (s *session) play() error {
 		}
 		// Transport completion alone never proves playback. A matching final
 		// receipt can later promote only this block's normal completed history.
-		s.hist.addSent(s.transcript)
-		if s.responseAudioSent && s.activePlayback != nil && s.transcript != "" {
+		if s.transcript != "" && !s.responseOrigin.wake && (s.records == nil || s.responseID != s.records.suppressResponse) {
+			s.hist.addSent(s.transcript)
+			s.hist.stampLast(s.id, s.responseID, s.responseOrigin.itemID, s.playbackSequence)
+		}
+		if s.responseAudioSent && s.activePlayback != nil && s.transcript != "" && len(s.hist.Turns) > 0 && s.hist.Turns[len(s.hist.Turns)-1].ResponseID == s.responseID {
 			s.hist.Turns[len(s.hist.Turns)-1].playbackID = s.activePlayback.id
 		}
 		if !s.toolPlayback {
@@ -103,6 +106,7 @@ func (s *session) play() error {
 		s.draftTranscript = ""
 		s.lastAudio = time.Time{}
 		s.lastActivity = time.Now()
+		s.checkpointRecords()
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"familyrobot/internal/qwen"
+	"familyrobot/internal/recordstore"
 	"github.com/gorilla/websocket"
 )
 
@@ -23,14 +24,23 @@ type Config struct {
 	Qwen                                                     qwen.Config
 	MaxSessions                                              int
 	IdleTimeout, SessionTimeout                              time.Duration
+	RecordDirectory                                          string
+	RecordRetention                                          time.Duration
 }
 type Server struct {
-	cfg    Config
-	slots  chan struct{}
-	mu     sync.Mutex
-	conns  map[*websocket.Conn]struct{}
-	ctx    context.Context
-	cancel context.CancelFunc
+	cfg       Config
+	slots     chan struct{}
+	mu        sync.Mutex
+	conns     map[*websocket.Conn]struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	records   ownedRecordStore
+	devices   map[string]bool
+	sessions  sync.WaitGroup
+	closing   bool
+	closeOnce sync.Once
+	closeDone chan struct{}
+	closeCtx  context.Context
 }
 
 func New(cfg Config) (*Server, error) {
@@ -58,16 +68,51 @@ func New(cfg Config) (*Server, error) {
 	if cfg.IdleTimeout <= 0 || cfg.SessionTimeout <= 0 {
 		return nil, errors.New("session timeouts must be positive")
 	}
+	if cfg.RecordRetention == 0 {
+		cfg.RecordRetention = 168 * time.Hour
+	}
+	if cfg.RecordRetention < 0 {
+		return nil, errors.New("record retention must be positive")
+	}
+	var records ownedRecordStore
+	if cfg.RecordDirectory != "" {
+		records, err = recordstore.Open(recordstore.Options{Directory: cfg.RecordDirectory, Retention: cfg.RecordRetention})
+		if err != nil {
+			return nil, errors.New("record storage initialization failed")
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{cfg: cfg, slots: make(chan struct{}, cfg.MaxSessions), conns: make(map[*websocket.Conn]struct{}), ctx: ctx, cancel: cancel}, nil
+	return &Server{cfg: cfg, slots: make(chan struct{}, cfg.MaxSessions), conns: make(map[*websocket.Conn]struct{}), ctx: ctx, cancel: cancel, records: records, devices: make(map[string]bool), closeDone: make(chan struct{})}, nil
 }
 func (s *Server) Active() int { return len(s.slots) }
 func (s *Server) Close() {
-	s.cancel()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for c := range s.conns {
-		c.Close()
+	s.closeOnce.Do(func() {
+		var cancel context.CancelFunc
+		s.closeCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		s.mu.Lock()
+		s.closing = true
+		s.cancel()
+		for c := range s.conns {
+			c.Close()
+		}
+		s.mu.Unlock()
+		go func() {
+			defer cancel()
+			s.sessions.Wait()
+			if s.records != nil {
+				if err := s.records.Close(s.closeCtx); err != nil {
+					slog.Error("record_store_close_failed")
+				}
+			}
+			close(s.closeDone)
+		}()
+	})
+	select {
+	case <-s.closeDone:
+	case <-s.closeCtx.Done():
+		if errors.Is(s.closeCtx.Err(), context.DeadlineExceeded) {
+			slog.Error("gateway_shutdown_drain_timeout")
+		}
 	}
 }
 func (s *Server) Handler() http.Handler {
@@ -158,6 +203,18 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "device limit reached", 429)
 		return
 	}
+	m, _ := net.ParseMAC(r.Header.Get("Device-Id"))
+	deviceID := strings.ToLower(m.String())
+	s.mu.Lock()
+	if s.closing || s.devices[deviceID] {
+		s.mu.Unlock()
+		http.Error(w, "device already connected or server closing", http.StatusConflict)
+		return
+	}
+	s.devices[deviceID] = true
+	s.sessions.Add(1)
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); delete(s.devices, deviceID); s.mu.Unlock(); s.sessions.Done() }()
 	up := websocket.Upgrader{HandshakeTimeout: 5 * time.Second, ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
 	c, err := up.Upgrade(w, r, nil)
 	if err != nil {
@@ -165,6 +222,10 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
 	s.conns[c] = struct{}{}
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.conns, c); s.mu.Unlock() }()
@@ -173,6 +234,9 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
 	sess := newSession(ctx, c, s.cfg, int(version[0]-'0'))
+	if s.records != nil {
+		sess.loadRecords(s.records, deviceID)
+	}
 	if err := sess.run(); err != nil && ctx.Err() == nil {
 		slog.Info("device_session_closed", "session", sess.id, "reason", err.Error())
 	}

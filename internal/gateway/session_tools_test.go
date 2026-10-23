@@ -226,7 +226,7 @@ func TestDeviceToolsDiscoveryExecutionAndContinuation(t *testing.T) {
 	discoverTools(t, h)
 	p, cfg := h.model(t)
 	defs, ok := cfg["tools"].([]any)
-	if !ok || len(defs) != 4 {
+	if !ok || len(defs) != 5 {
 		t.Fatalf("fixed native tools missing: %v", cfg)
 	}
 	for _, def := range defs {
@@ -346,7 +346,7 @@ func TestDeviceToolsDiscoveryFailureRetainsVoiceAndBufferedEvents(t *testing.T) 
 				}
 			}
 			p, cfg := h.model(t)
-			if defs, ok := cfg["tools"].([]any); ok && len(defs) != 1 {
+			if defs, ok := cfg["tools"].([]any); ok && len(defs) != 2 {
 				t.Fatal("failed discovery exposed tools")
 			}
 			if !strings.Contains(cfg["instructions"].(string), "不可用") {

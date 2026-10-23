@@ -26,7 +26,7 @@
 - `internal/recordstore/store.go`, `store_test.go`: 队列、原子文件、保留期限、权限、配额、锁和清空。
 - `internal/gateway/records.go`, `records_test.go`: 设备范围、文字快照、恢复、能力事实、异步回执和删除。
 - `internal/gateway/{server,session,history,session_tools,generation_sync,playback_progress}.go`: 最小接线。
-- `cmd/gateway/main.go`, `.env.example`, `.gitignore`, `README.md`: 配置与操作说明。
+- `cmd/gateway/main.go`, `deploy/server.env.example`, `deploy/family-robot.service`, `.gitignore`, `README.md`: 配置与操作说明。
 - `tools/voice-audit/` 与 `docs/verification/`: 可重复离线验证和实际结果；私有实验脚本/素材放 `.superpowers/record-recovery/`。
 
 ### Task 1: 有界异步本地快照存储
@@ -63,7 +63,7 @@ if _, err = st.Load(context.Background(), "device-b"); !errors.Is(err, ErrNotFou
 
 ### Task 2: 网关文字记录与安全恢复
 
-**Files:** create `internal/gateway/records.go`, `records_test.go`; modify gateway接线、`cmd/gateway/main.go`, `.env.example`, `.gitignore`, `README.md`.
+**Files:** create `internal/gateway/records.go`, `records_test.go`; modify gateway接线、`cmd/gateway/main.go`, `deploy/server.env.example`, `deploy/family-robot.service`, `.gitignore`, `README.md`.
 
 **Consumes:** Task 1精确接口。store 可由 Server 管理，测试可注入临时目录。
 **Produces:** 设备鉴权后获取对应快照，持久化状态变化后异步处理成功/失败；模型可读的真实记录能力；显式清空操作。
@@ -73,7 +73,7 @@ if _, err = st.Load(context.Background(), "device-b"); !errors.Is(err, ErrNotFou
 // 断言恢复保住原任务，但不能声称知道播放到哪个数字。
 if got["original_request"] != "从一完整数到五十" || got["text_position"] != "unknown" { t.Fatalf("unsafe restore: %v", got) }
 ```
-- [ ] 增加 `ROBOT_RECORD_DIR`（空则明确关闭）、`ROBOT_RECORD_RETENTION`（默认168h）。开启失败时服务拒绝启动，不悄悄降级。最多存128条有时间/身份的文字，每条512字符；模型只取最新12条，正文和任务逐条按期限裁剪，排除唤醒输入。助手生成稿附响应/播放身份、交付状态；保存有效数字采样证据，恢复不能用于新块。每次发生真正状态变化才提交，不按10ms tick重复写。
+- [ ] 增加 `ROBOT_RECORD_DIR`（空则明确关闭）、`ROBOT_RECORD_RETENTION`（默认168h）。开启失败时服务拒绝启动，不悄悄降级。systemd ProtectSystem=strict下只为记录目录增加ReadWritePaths，目录归属family-robot且0700。最多存128条有时间/身份的文字，每条512字符；模型只取最新12条，正文和任务逐条按期限裁剪，排除唤醒输入。助手生成稿附响应/播放身份、交付状态；保存有效数字采样证据，恢复不能用于新块。每次发生真正状态变化才提交，不按10ms tick重复写。
 - [ ] device ID必须来自鉴权头规范化MAC；同设备同一时间最多一个连接，避免旧连接覆写。加载有界超时，出错时能力事实明确恢复失败；恢复任务ID使用新的会话命名空间，保留原始来源和用户选起点的来源标签。
 - [ ] 将 `recording_capabilities` 作为明确数据加入当前模型快照/ACK。至少表达临时上下文有无、文字持久化开启/当前待写/成功/失败、保留期限、音频留存false、恢复错误；事实变化必须进入下一次生成前ACK。不得把数据当系统命令执行。
 - [ ] 提供明确可操作的手动清空方式：优先复用本地conversation工具 `conversation_clear_records`；仅在本轮真实转写明确要求清空本设备对话记录时允许执行。异步执行，收到持久化删除回执后才回答成功；同步清理临时history、暂停任务和恢复数据，后续快照不得复活旧内容。若采用运维命令也必须互斥、清理当前服务缓存并在文档说明，不能直接删文件后让旧内存重新写回。

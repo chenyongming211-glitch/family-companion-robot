@@ -20,3 +20,12 @@ __pycache__/
 /firmware/managed_components/
 /firmware/sdkconfig
 /firmware/sdkconfig.old
+
+# Runtime conversation snapshots and private device evidence never belong in Git.
+/records/
+/data/records/
+/runtime/
+/backups/
+*.wav
+*.pcm
+*.opus

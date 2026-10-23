@@ -29,6 +29,9 @@ type modelEvent struct {
 	err        error
 }
 type session struct {
+	taskDisposition        string
+	records                *conversationRecords
+	responseAt             time.Time
 	playbackEnabled        bool
 	playbackSequence       uint32
 	taskSequence           uint64
@@ -151,6 +154,7 @@ func (s *session) run() error {
 		s.responseOrigin = requestOrigin{}
 		s.wake = wakeHandoff{}
 	}()
+	defer s.finalizeRecords()
 	s.playbackEnabled = hello.Features["playback_progress_v1"]
 	features := map[string]bool(nil)
 	if s.playbackEnabled {
@@ -199,10 +203,12 @@ func (s *session) run() error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		changed := true
 		select {
 		case <-ctx.Done():
 			return nil
 		case ev := <-s.input:
+			changed = ev.kind == websocket.TextMessage
 			if ev.err != nil {
 				return nil
 			}
@@ -215,6 +221,7 @@ func (s *session) run() error {
 				return err
 			}
 		case ev := <-s.events:
+			changed = ev.event.Type != "response.audio.delta" && ev.event.Type != "response.audio_transcript.delta"
 			if ev.generation != s.generation {
 				continue
 			}
@@ -227,6 +234,7 @@ func (s *session) run() error {
 				return err
 			}
 		case <-ticker.C:
+			changed = false
 			now := time.Now()
 			if !s.wake.deadline.IsZero() && !now.Before(s.wake.deadline) {
 				return errors.New("wake input handshake timed out")
@@ -242,6 +250,10 @@ func (s *session) run() error {
 			if err := s.play(); err != nil {
 				return err
 			}
+		}
+		s.pollRecords()
+		if changed {
+			s.checkpointRecords()
 		}
 		if err := s.advanceGeneration(time.Now()); err != nil {
 			return err
@@ -422,7 +434,10 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	s.traceVoice("interrupt")
 	s.pending.Clear()
 	if s.started && s.responseID != "" {
-		s.hist.addInterrupted(s.draftTranscript)
+		if !s.responseOrigin.wake && (s.records == nil || s.responseID != s.records.suppressResponse) {
+			s.hist.addInterrupted(s.draftTranscript)
+			s.hist.stampLast(s.id, s.responseID, s.responseOrigin.itemID, 0)
+		}
 	}
 	s.hist.Interrupted = true
 	if !s.responseDone {
@@ -535,7 +550,10 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		if text != "" {
 			s.lastActivity = time.Now()
 		}
-		s.hist.add("user", text)
+		if text != "" && !s.currentInput.wake && s.listenStarted && !s.wake.commitPending && (s.wake.inputID == "" || ev.ItemID != s.wake.inputID) {
+			s.hist.add("user", text)
+			s.hist.stampLast(s.id, "", ev.ItemID, 0)
+		}
 		return s.json(protocol.Control{Type: "stt", SessionID: s.id, Text: text})
 	case "response.created":
 		if !s.wake.deadline.IsZero() && !s.wake.responsePending {
@@ -580,6 +598,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.toolContinuation = false
 		s.sync.requested = false
 		s.responseID = ev.Response.ID
+		s.responseAt = time.Now()
 		s.responseAudioSent = false
 		s.awaitingResponse = false
 		s.responseDone = false
