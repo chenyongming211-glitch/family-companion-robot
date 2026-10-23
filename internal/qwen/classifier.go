@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +20,26 @@ const classifierInstructions = "仅输出一个英文枚举值：side、resume�
 func ClassifyPausedTask(ctx context.Context, cfg Config, original, latest string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	d := websocket.Dialer{HandshakeTimeout: 8 * time.Second, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+	var stopClose func() bool
+	defer func() {
+		if stopClose != nil {
+			stopClose()
+		}
+	}()
+	d := websocket.Dialer{
+		HandshakeTimeout: 8 * time.Second,
+		TLSClientConfig:  &tls.Config{MinVersion: tls.VersionTLS12},
+		NetDialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			netConn, err := (&net.Dialer{}).DialContext(dialCtx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			// Watch from TCP creation through TLS/Upgrade and response reads.
+			// Gorilla cancels dialCtx after upgrading, so watch the session ctx.
+			stopClose = context.AfterFunc(ctx, func() { netConn.Close() })
+			return netConn, nil
+		},
+	}
 	conn, resp, err := d.DialContext(ctx, cfg.URL, http.Header{"Authorization": []string{"Bearer " + cfg.APIKey}})
 	if err != nil {
 		if resp != nil {
@@ -28,8 +48,6 @@ func ClassifyPausedTask(ctx context.Context, cfg Config, original, latest string
 		return "", errors.New("classifier connection failed")
 	}
 	defer conn.Close()
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
 	deadline, _ := ctx.Deadline()
 	conn.SetReadDeadline(deadline)
 	conn.SetWriteDeadline(deadline)

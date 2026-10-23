@@ -3,6 +3,7 @@ package qwen
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,6 +146,61 @@ func TestIsolatedClassifierCancellationClosesHandshakeAndRead(t *testing.T) {
 		})
 	}
 }
+
+func TestIsolatedClassifierCancellationClosesHTTPUpgrade(t *testing.T) {
+	entered := make(chan struct{})
+	closed := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Take ownership after receiving the Upgrade request, but never send 101.
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		t.Cleanup(func() { conn.Close() })
+		close(entered)
+		_, err = rw.ReadByte()
+		closed <- err
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	type result struct {
+		action string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		action, err := ClassifyPausedTask(ctx, Config{URL: "ws" + strings.TrimPrefix(server.URL, "http")}, "原任务", "继续")
+		done <- result{action, err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("classifier did not send HTTP Upgrade request")
+	}
+	start := time.Now()
+	cancel()
+	select {
+	case got := <-done:
+		if got.action != "" || got.err == nil || got.err.Error() != "classifier connection failed" {
+			t.Fatalf("cancelled upgrade result: %q, %v", got.action, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("classifier blocked during HTTP Upgrade after cancellation")
+	}
+	select {
+	case err := <-closed:
+		if err != io.EOF {
+			t.Fatalf("HTTP Upgrade socket did not close cleanly: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HTTP Upgrade socket survived cancellation")
+	}
+	t.Logf("cancelled HTTP Upgrade returned and closed socket in %s", time.Since(start))
+}
+
 func TestIsolatedClassifierSecretSafeErrors(t *testing.T) {
 	cfg, _ := classifierPeer(t, []map[string]any{{"type": "error", "error": map[string]any{"message": "private-test-key 原任务"}}}, "")
 	_, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续")
