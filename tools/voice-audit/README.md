@@ -17,6 +17,10 @@ artifacts/voice-audit --dir artifacts/synthetic-inputs --out artifacts/wake-over
 artifacts/voice-audit --dir artifacts/synthetic-inputs --out artifacts/idle.json --scenario idle --order cache-first
 ```
 
+`--scenario resume-twice --receipts` 另需机器合成的 `continue_restart.wav`：明确请求继续原任务，并允许位置未知时从一重读、终点仍为五十。它会在第一次恢复播放期间再次插话，再查询任务并恢复。此用例验证任务归属和重复打断，**从一重读不是准确接续通过**。每段输出新增 `phase`，便于独立检查生成内容。
+
+`--interrupted-final-delay 1500ms` 可延迟模拟的中断最终回报（需 `--receipts`，范围0至5秒），正常最终回报仍立即发送。延迟通过同一事件循环调度，不暂停上行输入，也不表示真实设备延迟。
+
 输出文件必须不存在。退出0和 `transport_completed` 只表示预定协议阶段结束，**不表示接续语义正确**。应核对 `input_transcripts`、`generated_text` 与网关的暂停任务事件。`wake-interrupt` 在问候中就发数数指令，再打断数数；`idle` 验证当前两分钟空闲配置，不适用于修改了超时的实例。`cache-first` 使用缓存音频→detect→start，另有 `start-first` 控制变量。除唤醒缓存突发上传外，持续以60ms节拍上传语音或静音；不会在模型说话时停止上行。插话延迟字段从合成输入入队计时，含约一个60ms节拍的排队，不能称为实际语音起点或停声时延。
 
 可选 `--receipts` 在隔离实例协商播放回报，用已接收帧计数模拟回报。虽然线上字段要求 `basis=i2s_dma`，这里**没有I2S硬件，结果必须标记为模拟**；默认不开启。探针不会执行设备MCP工具，遇到控制调用即失败。日志含合成对话文字，不能将工具改用于真实家庭音频后直接公开日志。
