@@ -574,7 +574,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		return s.callTool(ev)
 	case "response.audio.delta":
 		if s.route.active {
-			return nil
+			return s.rejectRoutingContent(ev.Delta)
 		}
 		if ev.ResponseID == "" || ev.ResponseID != s.responseID || s.responseDone {
 			return nil
@@ -589,14 +589,14 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		return s.pending.Append(pcm)
 	case "response.audio_transcript.delta":
 		if s.route.active {
-			return nil
+			return s.rejectRoutingContent(ev.Delta)
 		}
 		if ev.ResponseID == s.responseID && s.responseID != "" && !s.responseDone {
 			s.draftTranscript = limitText(s.draftTranscript+ev.Delta, 2048)
 		}
 	case "response.audio_transcript.done":
 		if s.route.active {
-			return nil
+			return s.rejectRoutingContent(ev.Transcript)
 		}
 		if ev.ResponseID != s.responseID || s.responseID == "" || s.responseDone {
 			return nil
@@ -605,6 +605,14 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.draftTranscript = s.transcript
 		if s.started {
 			return s.tts("sentence_start", s.transcript)
+		}
+	case "response.text.delta":
+		if s.route.active {
+			return s.rejectRoutingContent(ev.Delta)
+		}
+	case "response.text.done":
+		if s.route.active {
+			return s.rejectRoutingContent(ev.Text)
 		}
 	case "response.done":
 		if ev.Response.ID != s.responseID || s.responseID == "" || s.responseDone {

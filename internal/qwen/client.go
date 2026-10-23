@@ -31,6 +31,7 @@ type Event struct {
 	ItemID     string   `json:"item_id"`
 	Delta      string   `json:"delta"`
 	Transcript string   `json:"transcript"`
+	Text       string   `json:"text"`
 	Response   Response `json:"response"`
 }
 type Client struct {

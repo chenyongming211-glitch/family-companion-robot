@@ -23,6 +23,7 @@ type taskRouting struct {
 	input           requestOrigin
 	action, callID  string
 	rejected        bool
+	contaminated    bool
 	attempts        int
 	deadline        time.Time
 }
@@ -68,8 +69,22 @@ func (s *session) routeTool(ev qwen.Event) error {
 	}
 	return nil
 }
+
+// Discarding output locally cannot remove unheard assistant content from the
+// upstream conversation. Never reuse that context for routing or voice.
+func (s *session) rejectRoutingContent(content string) error {
+	if content == "" {
+		return nil
+	}
+	s.route.contaminated = true
+	s.traceTaskRoute("contaminated")
+	return errors.New("paused task routing generated content")
+}
 func (s *session) finishRouting() error {
 	r := &s.route
+	if r.contaminated {
+		return errors.New("paused task routing context contaminated")
+	}
 	outcome := "accepted"
 	switch {
 	case r.rejected:

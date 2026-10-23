@@ -36,20 +36,80 @@ func startRouting(t *testing.T, s *session, p *toolPeer) {
 	}
 	t.Cleanup(s.encoder.Close)
 }
-func TestTaskRoutingSuppressesAudioAndFailsClosedWithoutDecision(t *testing.T) {
+func TestTaskRoutingContentFailsClosedBeforeMutationOrContinuation(t *testing.T) {
+	contents := []struct{ name, payload string }{
+		{"audio", `{"type":"response.audio.delta","response_id":"route","delta":"` + base64.StdEncoding.EncodeToString(make([]byte, audio.FrameBytes)) + `"}`},
+		{"transcript_delta", `{"type":"response.audio_transcript.delta","response_id":"route","delta":"unheard"}`},
+		{"transcript_done_only", `{"type":"response.audio_transcript.done","response_id":"route","transcript":"unheard"}`},
+		{"text_delta", `{"type":"response.text.delta","response_id":"route","delta":"unheard"}`},
+		{"text_done_only", `{"type":"response.text.done","response_id":"route","text":"unheard"}`},
+	}
+	for _, content := range contents {
+		for _, order := range []string{"content_only", "content_first", "function_first"} {
+			for _, action := range []string{"resume", "discard", "replace", "side"} {
+				t.Run(content.name+"/"+order+"/"+action, func(t *testing.T) {
+					s, p := routingHarness(t)
+					startRouting(t, s, p)
+					original, revision := *s.paused, s.snapshotRevision
+					function := qwen.Event{Type: "response.function_call_arguments.done", ResponseID: "route", CallID: "route-call", Name: taskRouteTool, Arguments: `{"action":"` + action + `"}`}
+					if order == "function_first" {
+						if err := s.onModel(context.Background(), function); err != nil {
+							t.Fatal(err)
+						}
+					}
+					var ev qwen.Event
+					if err := json.Unmarshal([]byte(content.payload), &ev); err != nil {
+						t.Fatal(err)
+					}
+					if err := s.onModel(context.Background(), ev); err == nil {
+						t.Error("nonempty routing content did not immediately fail closed")
+					}
+					// Even a caller ignoring the content error must never apply this
+					// decision or retry on the contaminated upstream conversation.
+					if order == "content_first" {
+						_ = s.onModel(context.Background(), function)
+					}
+					if err := s.onModel(context.Background(), qwen.Event{Type: "response.done", Response: qwen.Response{ID: "route", Status: "completed"}}); err == nil {
+						t.Error("contaminated response completion did not fail closed")
+					}
+					if err := s.finishRouting(); err == nil {
+						t.Error("direct routing completion bypassed contamination guard")
+					}
+					if s.paused == nil || *s.paused != original || s.snapshotRevision != revision || s.responseTaskID != "" || s.route.decided {
+						t.Fatal("contaminated route changed task state or binding")
+					}
+					if err := s.play(); err != nil {
+						t.Fatal(err)
+					}
+					if s.pending.Len() != 0 || s.transcript != "" || s.draftTranscript != "" || s.started || s.activePlayback != nil || len(s.playbacks) != 0 {
+						t.Fatal("contaminated route admitted content or playback")
+					}
+					p.quiet(t, time.Millisecond)
+				})
+			}
+		}
+	}
+}
+
+func TestTaskRoutingEmptyContentEventsRemainHarmless(t *testing.T) {
 	s, p := routingHarness(t)
 	startRouting(t, s, p)
-	if err := s.onModel(context.Background(), qwen.Event{Type: "response.audio.delta", ResponseID: "route", Delta: base64.StdEncoding.EncodeToString(make([]byte, audio.FrameBytes))}); err != nil {
-		t.Fatal(err)
+	for _, typ := range []string{"response.audio.delta", "response.audio_transcript.delta", "response.audio_transcript.done", "response.text.delta", "response.text.done"} {
+		if err := s.onModel(context.Background(), qwen.Event{Type: typ, ResponseID: "route"}); err != nil {
+			t.Fatalf("empty %s: %v", typ, err)
+		}
 	}
-	if s.pending.Len() != 0 {
-		t.Error("routing audio admitted before an ownership decision")
+	routeDecision(t, s, "resume")
+	if s.responseTaskID != "task-1" || !s.route.decided {
+		t.Fatal("empty content events blocked clean route")
 	}
-	s.route.attempts = maxTaskRouteAttempts
-	err := s.onModel(context.Background(), qwen.Event{Type: "response.done", Response: qwen.Response{ID: "route", Status: "completed"}})
-	if err == nil {
-		t.Fatal("missing routing decision accepted")
+	p.want(t, "conversation.item.create")
+	cfg := p.read(t).body["session"].(map[string]any)
+	if cfg["tool_choice"] != "auto" || cfg["modalities"] != nil {
+		t.Fatalf("clean route did not restore stable voice controls: %v", cfg)
 	}
+	ackSnapshotWire(t, s, p)
+	p.want(t, "response.create")
 }
 func TestTaskRoutingStaleDecisionRetriesWithoutBinding(t *testing.T) {
 	s, p := routingHarness(t)
@@ -325,7 +385,7 @@ func TestTaskRoutingAbortDropsRouteAndOldGeneration(t *testing.T) {
 	}
 	fresh.send(t, map[string]any{"type": "session.updated"})
 	fresh.want(t, "response.create")
-	toolParent(t, fresh, "route-aborted", 3) // noncooperating provider emits audio
+	toolParent(t, fresh, "route-aborted", 0) // abort an unresolved, content-free route
 	h.device.send(t, map[string]any{"type": "abort"})
 	stop := readStop(t, h.device)
 	if stop["playback_id"] != nil {
