@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func classifierPeer(t *testing.T, events []map[string]any, stall string) (Config, <-chan struct{}) {
+func classifierPeer(t *testing.T, events []map[string]any, stall string, wantChoice ...bool) (Config, <-chan struct{}) {
 	t.Helper()
 	closed := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,8 +49,9 @@ func classifierPeer(t *testing.T, events []map[string]any, stall string) (Config
 		if !ok || !strings.HasPrefix(prefix, "仅输出一个英文枚举值：") {
 			t.Error("missing proven response instructions")
 		}
+		awaiting := len(wantChoice) > 0 && wantChoice[0]
 		var input map[string]any
-		if json.Unmarshal([]byte(data), &input) != nil || len(input) != 3 || input["original_request"] != "原任务" || input["latest_user_text"] != "继续" || input["text_position"] != "unknown" {
+		if json.Unmarshal([]byte(data), &input) != nil || len(input) != 4 || input["awaiting_resume_choice"] != awaiting || input["original_request"] != "原任务" || input["latest_user_text"] != "继续" || input["text_position"] != "unknown" {
 			t.Errorf("classifier data: %v", input)
 		}
 		for _, event := range events {
@@ -72,11 +73,11 @@ func enumEvents(text string) []map[string]any {
 	}
 }
 func TestIsolatedClassifierStrictEnumAndDedicatedTextProtocol(t *testing.T) {
-	for _, text := range []string{"side", "resume", "discard", "replace", " \nresume\t", "resuming", "{\"action\":\"resume\"}", "side resume", "resume explanation", ""} {
+	for _, text := range []string{"side", "resume", "restart", "resume_from", "discard", "replace", " \nresume\t", "resuming", "{\"action\":\"resume\"}", "side resume", "resume explanation", ""} {
 		t.Run(text, func(t *testing.T) {
 			cfg, closed := classifierPeer(t, enumEvents(text), "")
-			got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续")
-			valid := text == "side" || text == "resume" || text == "discard" || text == "replace" || strings.TrimSpace(text) == "resume"
+			got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", false)
+			valid := text == "side" || text == "resume" || text == "restart" || text == "resume_from" || text == "discard" || text == "replace" || strings.TrimSpace(text) == "resume"
 			if valid && (err != nil || got != strings.TrimSpace(text)) {
 				t.Fatalf("got %q, %v", got, err)
 			}
@@ -121,7 +122,7 @@ func TestIsolatedClassifierRejectsMalformedOrUnexpectedOutput(t *testing.T) {
 	for name, events := range cases {
 		t.Run(name, func(t *testing.T) {
 			cfg, _ := classifierPeer(t, events, "")
-			got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续")
+			got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", false)
 			if err == nil || got != "" {
 				t.Fatalf("accepted %q", got)
 			}
@@ -134,7 +135,7 @@ func TestIsolatedClassifierCancellationClosesHandshakeAndRead(t *testing.T) {
 			cfg, closed := classifierPeer(t, nil, stall)
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 			defer cancel()
-			_, err := ClassifyPausedTask(ctx, cfg, "原任务", "继续")
+			_, err := ClassifyPausedTask(ctx, cfg, "原任务", "继续", false)
 			if err == nil {
 				t.Fatal("cancel ignored")
 			}
@@ -172,7 +173,7 @@ func TestIsolatedClassifierCancellationClosesHTTPUpgrade(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		action, err := ClassifyPausedTask(ctx, Config{URL: "ws" + strings.TrimPrefix(server.URL, "http")}, "原任务", "继续")
+		action, err := ClassifyPausedTask(ctx, Config{URL: "ws" + strings.TrimPrefix(server.URL, "http")}, "原任务", "继续", false)
 		done <- result{action, err}
 	}()
 	select {
@@ -203,7 +204,7 @@ func TestIsolatedClassifierCancellationClosesHTTPUpgrade(t *testing.T) {
 
 func TestIsolatedClassifierSecretSafeErrors(t *testing.T) {
 	cfg, _ := classifierPeer(t, []map[string]any{{"type": "error", "error": map[string]any{"message": "private-test-key 原任务"}}}, "")
-	_, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续")
+	_, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", false)
 	if err == nil || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "原任务") || strings.Contains(err.Error(), cfg.URL) {
 		t.Fatalf("unsafe error: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestIsolatedClassifierNativeEnvelopeWithOmittedItemText(t *testing.T) {
 		{"type": "response.done", "response": map[string]any{"id": "classify", "status": "completed", "output": []any{final}}},
 	}
 	cfg, _ := classifierPeer(t, events, "")
-	got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续")
+	got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", false)
 	if err != nil || got != "resume" {
 		t.Fatalf("native envelope rejected: %q %v", got, err)
 	}
@@ -235,7 +236,7 @@ func TestIsolatedClassifierRejectsDuplicateConversationOutput(t *testing.T) {
 	created := map[string]any{"type": "conversation.item.created", "item": item}
 	events = append(events[:1], append([]map[string]any{created, created}, events[1:]...)...)
 	cfg, _ := classifierPeer(t, events, "")
-	if got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续"); err == nil || got != "" {
+	if got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", false); err == nil || got != "" {
 		t.Fatal("duplicate conversation output accepted")
 	}
 }
@@ -243,7 +244,7 @@ func TestIsolatedClassifierRejectsUnexpectedInitialOutput(t *testing.T) {
 	events := enumEvents("resume")
 	events[0]["response"].(map[string]any)["output"] = []any{map[string]any{"type": "function_call"}}
 	cfg, _ := classifierPeer(t, events, "")
-	if got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续"); err == nil || got != "" {
+	if got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", false); err == nil || got != "" {
 		t.Fatal("unexpected initial output accepted")
 	}
 }
@@ -265,9 +266,17 @@ func TestIsolatedClassifierBoundsEventCountAndBytes(t *testing.T) {
 			}
 			events = append(events, enumEvents("resume")[2:]...)
 			cfg, _ := classifierPeer(t, events, "")
-			if got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续"); err == nil || got != "" {
+			if got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", false); err == nil || got != "" {
 				t.Fatal("classifier limit ignored")
 			}
 		})
+	}
+}
+
+func TestIsolatedClassifierCapturesGatewayAwaitingChoice(t *testing.T) {
+	cfg, _ := classifierPeer(t, enumEvents("resume_from"), "", true)
+	got, err := ClassifyPausedTask(context.Background(), cfg, "原任务", "继续", true)
+	if err != nil || got != "resume_from" {
+		t.Fatalf("choice: %q %v", got, err)
 	}
 }

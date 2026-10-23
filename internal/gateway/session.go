@@ -42,7 +42,8 @@ type session struct {
 	route                  taskRouting
 	routeSequence          uint64
 	routeResults           chan taskRouteResult
-	classifyPausedTask     func(context.Context, qwen.Config, string, string) (string, error)
+	classifyPausedTask     func(context.Context, qwen.Config, string, string, bool) (string, error)
+	clarification          clarificationGuard
 	voiceRequested         bool
 	currentInput           requestOrigin
 	responseOrigin         requestOrigin
@@ -141,6 +142,7 @@ func (s *session) run() error {
 		return err
 	}
 	defer func() {
+		s.clearClarification()
 		s.playbacks = nil
 		s.activePlayback = nil
 		s.devicePlayback = nil
@@ -269,6 +271,7 @@ func (s *session) connect(ctx context.Context) error {
 		s.listenStarted = true
 		s.wake = wakeHandoff{}
 	}
+	s.clearClarification()
 	s.sync = generationSync{}
 	s.cancelRouting()
 	s.voiceRequested = false
@@ -425,6 +428,7 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 	if !s.responseDone {
 		s.model.Send(map[string]any{"type": "response.cancel"})
 	}
+	s.clearClarification()
 	s.responseID = ""
 	s.responseAudioSent = false
 	s.responseDone = false
@@ -458,6 +462,12 @@ func (s *session) interrupt(ctx context.Context, replay, force bool) error {
 func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 	if (ev.Type == "input_audio_buffer.committed" || ev.Type == "conversation.item.input_audio_transcription.completed") && len(ev.ItemID) > 256 {
 		return errors.New("upstream input identity exceeded limits")
+	}
+	if ev.ResponseID != "" && s.retired.contains(ev.ResponseID) || ev.Type == "response.created" && s.retired.contains(ev.Response.ID) || ev.Type == "response.done" && s.retired.contains(ev.Response.ID) {
+		return nil
+	}
+	if err := s.guardClarification(ev); err != nil {
+		return err
 	}
 	if (s.route.active || (s.route.decided && (s.sync.requested || s.sync.token != 0))) && strings.HasPrefix(ev.Type, "response.") {
 		return errors.New("unsolicited main response during task classification")

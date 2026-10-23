@@ -12,6 +12,12 @@ func (s *session) play() error {
 	// A ticker stamp may have waited behind model or MCP I/O. Observe the
 	// clock when processing playback instead of using that queued stamp.
 	now := s.playbackNow()
+	if err := s.checkClarificationDeadline(now); err != nil {
+		return err
+	}
+	if s.clarification.active && !s.clarification.verified {
+		return nil
+	}
 	if s.responseID == "" || now.Before(s.nextAudio) {
 		return nil
 	}
@@ -85,6 +91,7 @@ func (s *session) play() error {
 			s.activePlayback = nil
 		}
 		s.hist.Interrupted = false
+		s.clarification = clarificationGuard{}
 		s.retired.add(s.responseID)
 		s.responseID = ""
 		s.responseAudioSent = false

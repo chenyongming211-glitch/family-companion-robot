@@ -16,6 +16,7 @@ const taskTranscriptTimeout = 8 * time.Second
 type taskRouting struct {
 	startedAt       time.Time
 	active, decided bool
+	awaitingChoice  bool
 	taskID          string
 	revision        uint64
 	input           requestOrigin
@@ -72,6 +73,7 @@ func (s *session) advanceRouting(now time.Time) error {
 	s.routeSequence++
 	r.token = s.routeSequence
 	r.taskID = s.paused.id
+	r.awaitingChoice = s.paused.awaitingResumeChoice
 	r.revision = s.snapshotRevision
 	r.input = s.currentInput
 	r.attempts++
@@ -91,11 +93,12 @@ func (s *session) advanceRouting(now time.Time) error {
 	if classify == nil {
 		classify = qwen.ClassifyPausedTask
 	}
+	awaiting := r.awaitingChoice
 	original, latest, results := s.paused.original.text, s.currentInput.text, s.routeResults
 	s.traceTaskRoute("requested")
 	go func() {
 		defer cancel()
-		result.action, result.err = classify(ctx, cfg, original, latest)
+		result.action, result.err = classify(ctx, cfg, original, latest, awaiting)
 		select {
 		case results <- result:
 		case <-ctx.Done():
@@ -119,14 +122,14 @@ func (s *session) finishRouting(result taskRouteResult) error {
 	}
 	outcome := "accepted"
 	switch result.action {
-	case "side", "resume", "discard", "replace":
+	case "side", "resume", "restart", "resume_from", "discard", "replace":
 	default:
 		outcome = "rejected"
 	}
 	if result.err != nil {
 		outcome = "rejected"
 	}
-	if s.snapshotRevision != result.revision {
+	if s.snapshotRevision != result.revision || s.paused.awaitingResumeChoice != r.awaitingChoice {
 		outcome = "stale"
 	}
 	if outcome != "accepted" {
@@ -141,13 +144,24 @@ func (s *session) finishRouting(result taskRouteResult) error {
 	}
 	r.action = result.action
 	if r.action != "side" {
-		args, _ := json.Marshal(map[string]any{"task_id": r.taskID, "expected_revision": r.revision, "action": r.action})
+		action := r.action
+		if action == "restart" || action == "resume_from" {
+			action = "resume"
+		}
+		args, _ := json.Marshal(map[string]any{"task_id": r.taskID, "expected_revision": r.revision, "action": action})
 		output, _ := s.conversationTool("conversation_update_paused_task", string(args))
 		var accepted struct {
 			OK bool `json:"ok"`
 		}
 		if json.Unmarshal([]byte(output), &accepted) != nil || !accepted.OK {
 			return errors.New("paused task routing action failed")
+		}
+	}
+	if s.paused != nil && (r.action == "resume" || r.action == "restart" || r.action == "resume_from") {
+		awaiting := r.action == "resume"
+		if s.paused.awaitingResumeChoice != awaiting {
+			s.paused.awaitingResumeChoice = awaiting
+			s.snapshotRevision++
 		}
 	}
 	s.traceTaskRoute("accepted")

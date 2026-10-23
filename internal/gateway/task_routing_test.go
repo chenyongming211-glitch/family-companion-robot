@@ -30,15 +30,16 @@ type classificationRequest struct {
 	ctx              context.Context
 	original, latest string
 	done             <-chan struct{}
+	awaiting         bool
 }
 
 func controlledClassifier(s *session) (<-chan classificationRequest, chan<- taskRouteResult) {
 	requests := make(chan classificationRequest, 4)
 	responses := make(chan taskRouteResult, 4)
-	s.classifyPausedTask = func(ctx context.Context, cfg qwen.Config, original, latest string) (string, error) {
+	s.classifyPausedTask = func(ctx context.Context, cfg qwen.Config, original, latest string, awaiting bool) (string, error) {
 		done := make(chan struct{})
 		defer close(done)
-		requests <- classificationRequest{ctx, original, latest, done}
+		requests <- classificationRequest{ctx, original, latest, done, awaiting}
 		select {
 		case result := <-responses:
 			return result.action, result.err
@@ -210,7 +211,7 @@ func TestIsolatedRouteLateFinalReclassifiesThenACKsCurrentSnapshot(t *testing.T)
 	if s.snapshotRevision != 4 {
 		t.Fatal("late final did not revise snapshot")
 	}
-	results <- taskRouteResult{action: "resume"}
+	results <- taskRouteResult{action: "restart"}
 	if err := s.finishRouting(routeResult(t, s)); err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,7 @@ func TestIsolatedRouteLateFinalReclassifiesThenACKsCurrentSnapshot(t *testing.T)
 	}
 	p.quiet(t, time.Millisecond)
 	takeClassification(t, requests)
-	results <- taskRouteResult{action: "resume"}
+	results <- taskRouteResult{action: "restart"}
 	if err := s.finishRouting(routeResult(t, s)); err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +333,7 @@ func TestIsolatedRouteRepeatedResumeAndDeviceContinuationKeepOriginal(t *testing
 		s.transcribeOrigin(id, "继续")
 		s.requestResponse()
 		takeClassification(t, requests)
-		results <- taskRouteResult{action: "resume"}
+		results <- taskRouteResult{action: "restart"}
 		if err := s.finishRouting(routeResult(t, s)); err != nil {
 			t.Fatal(err)
 		}
@@ -540,7 +541,7 @@ func TestIsolatedRouteSnapshotACKCannotReleaseReplacementInput(t *testing.T) {
 			s, p := routingHarness(t)
 			requests, results := controlledClassifier(s)
 			original := s.paused.original
-			initialAction := "resume"
+			initialAction := "restart"
 			if schedule == "after-new-snapshot" || schedule == "after-canceled-replacement" {
 				initialAction = "side"
 			}
@@ -614,7 +615,7 @@ func TestIsolatedRouteSnapshotACKCannotReleaseReplacementInput(t *testing.T) {
 					t.Fatal("old ACK released unclassified input")
 				}
 			}
-			action := "resume"
+			action := "restart"
 			if schedule == "after-new-snapshot" || schedule == "after-canceled-replacement" {
 				action = "side"
 			}
@@ -650,7 +651,7 @@ func TestIsolatedRouteSnapshotACKCannotReleaseReplacementInput(t *testing.T) {
 			if s.paused.original != original || s.responseOrigin.itemID != item || s.route.input.itemID != item {
 				t.Fatal("released response lost original goal or latest input")
 			}
-			if (action == "resume") != (s.responseTaskID == s.paused.id) {
+			if (action == "restart") != (s.responseTaskID == s.paused.id) {
 				t.Fatal("released response has wrong task binding")
 			}
 			if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "latest-voice"}}); err != nil {

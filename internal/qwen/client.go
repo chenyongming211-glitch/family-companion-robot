@@ -19,20 +19,26 @@ type Config struct {
 	Tools                                 []map[string]any
 }
 type Response struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID         string            `json:"id"`
+	Status     string            `json:"status"`
+	Output     []json.RawMessage `json:"output"`
+	Modalities []string          `json:"modalities"`
 }
 type Event struct {
-	Type       string   `json:"type"`
-	CallID     string   `json:"call_id"`
-	Name       string   `json:"name"`
-	Arguments  string   `json:"arguments"`
-	ResponseID string   `json:"response_id"`
-	ItemID     string   `json:"item_id"`
-	Delta      string   `json:"delta"`
-	Transcript string   `json:"transcript"`
-	Text       string   `json:"text"`
-	Response   Response `json:"response"`
+	Type         string          `json:"type"`
+	CallID       string          `json:"call_id"`
+	Name         string          `json:"name"`
+	Arguments    string          `json:"arguments"`
+	ResponseID   string          `json:"response_id"`
+	ItemID       string          `json:"item_id"`
+	Delta        string          `json:"delta"`
+	Transcript   string          `json:"transcript"`
+	Text         string          `json:"text"`
+	Response     Response        `json:"response"`
+	Item         json.RawMessage `json:"item"`
+	Part         json.RawMessage `json:"part"`
+	OutputIndex  *int            `json:"output_index"`
+	ContentIndex *int            `json:"content_index"`
 }
 type Client struct {
 	conn     *websocket.Conn

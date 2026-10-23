@@ -29,9 +29,10 @@ type playbackRecord struct {
 	timedOut, retired                            bool
 }
 type pausedTask struct {
-	id       string
-	original requestOrigin
-	playback playbackRecord
+	awaitingResumeChoice bool
+	id                   string
+	original             requestOrigin
+	playback             playbackRecord
 }
 
 func (s *session) beginPlayback() error {
@@ -209,6 +210,7 @@ func (s *session) commitOrigin(itemID string) {
 	old := s.currentInput
 	if !s.inputCommitted || old.generation != s.generation || old.itemID != itemID {
 		s.cancelRouting()
+		s.clearClarification()
 		s.toolContinuation = false
 		// Retire the old input's generation request without reusing its token.
 		// Its update remains in the model client's ACK FIFO and must consume its
@@ -259,6 +261,7 @@ func (s *session) pausedData() map[string]any {
 	p := s.paused
 	r := p.playback
 	out["task_id"] = p.id
+	out["awaiting_resume_choice"] = p.awaitingResumeChoice
 	out["original_request"] = p.original.text
 	out["original_request_known"] = p.original.known
 	out["original_request_truncated"] = p.original.truncated

@@ -107,5 +107,17 @@ func (s *session) acknowledgeSnapshot() error {
 	s.sync.requested = false
 	s.voiceRequested = true
 	s.traceVoice("response_requested")
-	return s.model.Send(map[string]any{"type": "response.create"})
+	create := map[string]any{"type": "response.create"}
+	if s.route.decided {
+		switch s.route.action {
+		case "resume":
+			s.clarification = clarificationGuard{active: true, generation: s.generation, input: s.currentInput, taskID: s.responseTaskID, deadline: time.Now().Add(clarificationTimeout)}
+			create["response"] = map[string]any{"instructions": clarificationInstructions}
+		case "restart":
+			create["response"] = map[string]any{"instructions": "用户明确允许从头重来。现在执行网关快照 original_request 的完整原任务，保持原范围和终点；不要把重读起点说成测得的播放位置。"}
+		case "resume_from":
+			create["response"] = map[string]any{"instructions": "用户明确指定了接续起点。根据当前用户输入指定的起点继续执行网关快照 original_request 的原任务，保持原范围和终点；这是用户选择的起点，不是测得的播放位置。"}
+		}
+	}
+	return s.model.Send(create)
 }
