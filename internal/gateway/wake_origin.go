@@ -80,7 +80,7 @@ func (s *session) advanceWake() error {
 	s.wake.responsePending = true
 	s.wake.origin = s.currentInput
 	s.awaitingResponse = true
-	return s.model.Send(map[string]any{"type": "response.create"})
+	return s.requestResponse()
 }
 func (s *session) finishWake() error {
 	queued, stop := s.wake.queued, s.wake.stopPending

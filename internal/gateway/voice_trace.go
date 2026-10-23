@@ -9,7 +9,7 @@ func (s *session) traceVoice(event string) {
 	switch event {
 	case "listen_start", "listen_stop", "device_abort", "vad_started", "vad_stopped",
 		"input_committed", "transcription_ready", "response_created", "response_completed",
-		"response_cancelled", "tts_start", "tts_stop", "interrupt":
+		"response_cancelled", "tts_start", "tts_stop", "interrupt", "snapshot_sent", "snapshot_acknowledged", "response_requested", "task_resume_bound", "task_delivery_complete":
 	default:
 		return
 	}
@@ -25,7 +25,7 @@ func (s *session) traceVoice(event string) {
 	}
 	slog.Info("voice_event", "event", event, "session", s.id, "mode", mode,
 		"upstream_generation", s.generation, "response_open", s.responseID != "",
-		"speaking", s.started, "pending_ms", pendingMS, "input_bytes", s.inputBytes)
+		"speaking", s.started, "pending_ms", pendingMS, "input_bytes", s.inputBytes, "snapshot_revision", s.snapshotRevision, "snapshot_token", s.sync.token, "task_bound", s.responseTaskID != "")
 }
 
 // Record only ledger boundaries, never each periodic receipt or request text.
@@ -35,12 +35,12 @@ func (s *session) tracePlayback(event string, r *playbackRecord) {
 		return
 	}
 	switch event {
-	case "progress_started", "invalid", "finished", "paused_created", "paused_retained", "confirmed",
+	case "progress_started", "invalid", "finished", "paused_created", "paused_retained", "paused_resumed", "confirmed",
 		"wake_greeting_skipped", "wake_pause_discarded":
 	default:
 		return
 	}
-	known := s.playbackEnabled && r.known && !r.invalid
+	known := s.playbackEnabled && r.known && !r.invalid && !r.timedOut
 	var played any
 	if known {
 		played = r.played
@@ -51,7 +51,7 @@ func (s *session) tracePlayback(event string, r *playbackRecord) {
 	if s.paused != nil {
 		args = append(args, "paused_task_id", s.paused.id,
 			"paused_playback_id", s.paused.playback.id,
-			"original_request_known", s.paused.playback.origin.known)
+			"original_request_known", s.paused.original.known)
 	}
 	slog.Info("playback_event", args...)
 }

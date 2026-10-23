@@ -168,11 +168,12 @@ func TestTaskMutationRetiresOldInterruptedDrainOwnership(t *testing.T) {
 			side := sealedDeviceBlock(t, h, fresh, "side", "切换到的实际新请求")
 			deviceDrainReceipt(t, h, side, 1440, true, true)
 			deviceModeBarrier(t, h, fresh, "manual")
-			got := localResult(t, fresh, "get", "conversation_get_paused_task", "{}")
+			localResult(t, fresh, "get", "conversation_get_paused_task", "{}")
+			got := localResult(t, fresh, "get-current", "conversation_get_paused_task", "{}")
 			if got["playback_id"] != root["playback_id"] {
 				t.Fatal(got)
 			}
-			changed := localResult(t, fresh, "mutate", "conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":%q}`, got["task_id"], action))
+			changed := localResult(t, fresh, "mutate", "conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":%q,"expected_revision":%v}`, got["task_id"], action, got["revision"]))
 			if changed["ok"] != true {
 				t.Fatal(changed)
 			}
@@ -206,13 +207,14 @@ func TestUnsettledTaskMutationDoesNotResurrectOnLateFinalOrSpeech(t *testing.T) 
 				t.Fatal(initialStop)
 			}
 			fresh, _ := h.model(t)
-			old := localResult(t, fresh, "get", "conversation_get_paused_task", "{}")
+			localResult(t, fresh, "get", "conversation_get_paused_task", "{}")
+			old := localResult(t, fresh, "get-current", "conversation_get_paused_task", "{}")
 			if old["settled"] != false {
 				t.Fatal(old)
 			}
 			fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "transcript": "当前实际替换请求"})
 			h.device.want(t, "stt")
-			changed := localResult(t, fresh, "mutate", "conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":%q}`, old["task_id"], action))
+			changed := localResult(t, fresh, "mutate", "conversation_update_paused_task", fmt.Sprintf(`{"task_id":%q,"action":%q,"expected_revision":%v}`, old["task_id"], action, old["revision"]))
 			if changed["ok"] != true {
 				t.Fatal(changed)
 			}

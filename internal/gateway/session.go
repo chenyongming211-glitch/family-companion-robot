@@ -35,6 +35,9 @@ type session struct {
 	activePlayback         *playbackRecord
 	devicePlayback         *playbackRecord
 	paused                 *pausedTask
+	snapshotRevision       uint64
+	responseTaskID         string
+	sync                   generationSync
 	currentInput           requestOrigin
 	responseOrigin         requestOrigin
 	inputCommitted         bool
@@ -226,6 +229,9 @@ func (s *session) run() error {
 				return err
 			}
 		}
+		if err := s.advanceGeneration(time.Now()); err != nil {
+			return err
+		}
 		if err := s.continueTools(); err != nil {
 			s.alert()
 			return err
@@ -251,6 +257,8 @@ func (s *session) connect(ctx context.Context) error {
 		s.listenStarted = true
 		s.wake = wakeHandoff{}
 	}
+	s.sync = generationSync{}
+	s.responseTaskID = ""
 	s.responseAudioSent = false
 	s.inputActive = false
 	if s.model != nil {
@@ -437,6 +445,8 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		return errors.New("upstream input identity exceeded limits")
 	}
 	switch ev.Type {
+	case "session.updated":
+		return s.acknowledgeSnapshot()
 	case "error":
 		return errors.New("upstream rejected a realtime event")
 	case "input_audio_buffer.speech_started":
@@ -483,10 +493,8 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			s.wake.commitPending = false
 			return s.advanceWake()
 		}
-		if s.manualCommit {
-			s.manualCommit = false
-			return s.model.Send(map[string]any{"type": "response.create"})
-		}
+		s.manualCommit = false
+		return s.requestResponse()
 	case "conversation.item.input_audio_transcription.completed":
 		s.traceVoice("transcription_ready")
 		s.toolCount = 0
@@ -518,6 +526,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		// resets its decoder only at TTS start, and resumes listening on stop.
 		if !s.toolPlayback {
 			if !s.toolContinuation {
+				s.responseTaskID = ""
 				s.responseOrigin = s.currentInput
 				if s.wake.responsePending {
 					s.responseOrigin = s.wake.origin
@@ -533,6 +542,7 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		}
 		s.toolPlayback = false
 		s.toolContinuation = false
+		s.sync.requested = false
 		s.responseID = ev.Response.ID
 		s.responseAudioSent = false
 		s.awaitingResponse = false

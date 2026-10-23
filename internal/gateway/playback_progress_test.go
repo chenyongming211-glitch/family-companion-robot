@@ -173,19 +173,20 @@ func TestPausedTaskLocalToolsMutateThroughBoundedContinuationWithoutMCP(t *testi
 	h.device.send(t, map[string]any{"type": "abort"})
 	readStop(t, h.device)
 	fresh, _ := h.model(t)
-	get := localResult(t, fresh, "get", "conversation_get_paused_task", "{}")
+	localResult(t, fresh, "get", "conversation_get_paused_task", "{}")
+	get := localResult(t, fresh, "get-current", "conversation_get_paused_task", "{}")
 	wrong := localResult(t, fresh, "wrong", "conversation_update_paused_task", `{"action":"discard","task_id":"wrong"}`)
 	if wrong["error"] != "task_id_mismatch" {
 		t.Fatal(wrong)
 	}
-	noSTT := localResult(t, fresh, "unknown", "conversation_update_paused_task", fmt.Sprintf(`{"action":"replace","task_id":%q}`, get["task_id"]))
+	noSTT := localResult(t, fresh, "unknown", "conversation_update_paused_task", fmt.Sprintf(`{"action":"replace","task_id":%q,"expected_revision":%v}`, get["task_id"], get["revision"]))
 	if noSTT["error"] != "current_request_unknown" {
 		t.Fatal(noSTT)
 	}
 	fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "new"})
 	fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "new", "transcript": "实际的新任务"})
 	wantSTT(t, h.device)
-	replace := localResult(t, fresh, "replace", "conversation_update_paused_task", fmt.Sprintf(`{"action":"replace","task_id":%q,"new_request":"伪造任务"}`, get["task_id"]))
+	replace := localResult(t, fresh, "replace", "conversation_update_paused_task", fmt.Sprintf(`{"action":"replace","task_id":%q,"expected_revision":%v,"new_request":"伪造任务"}`, get["task_id"], get["revision"]))
 	if replace["original_request"] != "实际的新任务" || replace["task_id"] == get["task_id"] || replace["text_position"] != "unknown" || replace["position_known"] != false {
 		t.Fatal(replace)
 	}
@@ -193,7 +194,7 @@ func TestPausedTaskLocalToolsMutateThroughBoundedContinuationWithoutMCP(t *testi
 	if stale["error"] != "task_id_mismatch" {
 		t.Fatal(stale)
 	}
-	discard := localResult(t, fresh, "discard", "conversation_update_paused_task", fmt.Sprintf(`{"action":"discard","task_id":%q}`, replace["task_id"]))
+	discard := localResult(t, fresh, "discard", "conversation_update_paused_task", fmt.Sprintf(`{"action":"discard","task_id":%q,"expected_revision":%v}`, replace["task_id"], replace["revision"]))
 	if discard["available"] != false {
 		t.Fatal(discard)
 	}

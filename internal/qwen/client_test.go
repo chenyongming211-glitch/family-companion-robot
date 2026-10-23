@@ -184,7 +184,7 @@ func TestModeChangesDoNotRewriteImmutableVadParameters(t *testing.T) {
 		t.Fatal("manual segmentation not disabled")
 	}
 	enabled := all[3]["session"].(map[string]any)["turn_detection"].(map[string]any)
-	if len(enabled) != 1 || enabled["type"] != "semantic_vad" {
+	if len(enabled) != 3 || enabled["type"] != "semantic_vad" || enabled["create_response"] != false || enabled["interrupt_response"] != true {
 		t.Fatal("mode toggle rewrote immutable parameters after append", enabled)
 	}
 }

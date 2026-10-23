@@ -49,4 +49,17 @@ func (h *history) appendTurn(t turn) {
 		h.Turns = h.Turns[len(h.Turns)-12:]
 	}
 }
-func (h *history) context() string { b, _ := json.Marshal(h); return string(b) }
+func (h *history) context() string {
+	// Retain generated drafts internally for diagnostics. Interrupted drafts have
+	// no validated text boundary, so never put their unplayed content in context.
+	safe := history{Interrupted: h.Interrupted, Turns: make([]turn, 0, len(h.Turns))}
+	for _, t := range h.Turns {
+		if t.Delivery == "interrupted" {
+			t.GeneratedText = ""
+			t.Text = ""
+		}
+		safe.Turns = append(safe.Turns, t)
+	}
+	b, _ := json.Marshal(safe)
+	return string(b)
+}

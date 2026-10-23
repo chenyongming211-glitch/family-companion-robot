@@ -377,7 +377,7 @@ func TestPlaybackPartialFinalFrameAndStopOrdering(t *testing.T) {
 		t.Fatal("response finalized before its final 60ms frame elapsed")
 	}
 	expectPlayback(t, h.play(t, start.Add(121*time.Millisecond)), "stop")
-	if !reflect.DeepEqual(h.s.hist.Turns, []turn{{Role: "assistant", Delivery: "transport_sent", GeneratedText: "完整回复"}}) {
+	if !reflect.DeepEqual(h.s.hist.Turns, []turn{{playbackID: 1, Role: "assistant", Delivery: "transport_sent", GeneratedText: "完整回复"}}) {
 		t.Fatalf("completed response history = %v", h.s.hist.Turns)
 	}
 	if h.s.responseID != "" || h.s.started || h.s.responseDone || h.s.transcript != "" {

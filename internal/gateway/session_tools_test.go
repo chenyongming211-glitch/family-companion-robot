@@ -63,11 +63,23 @@ func (p *toolPeer) read(t *testing.T) toolWire {
 }
 func (p *toolPeer) want(t *testing.T, typ string) map[string]any {
 	t.Helper()
-	v := p.read(t)
-	if v.body["type"] != typ {
-		t.Fatalf("wire type = %v, want %s", v.body, typ)
+	for {
+		v := p.read(t)
+		if v.body["type"] == "session.update" {
+			p.send(t, map[string]any{"type": "session.updated"})
+			cfg, _ := v.body["session"].(map[string]any)
+			// Existing scenario fixtures inject provider responses. Service the new
+			// generation synchronization separately; ordering tests use raw read().
+			if len(cfg) == 1 && cfg["instructions"] != nil {
+				continue
+			}
+		}
+		if v.body["type"] != typ {
+			t.Fatalf("wire type = %v, want %s", v.body, typ)
+		}
+		return v.body
 	}
-	return v.body
+
 }
 func (p *toolPeer) quiet(t *testing.T, d time.Duration) {
 	t.Helper()
@@ -141,7 +153,6 @@ func (h *toolHarness) model(t *testing.T) (*toolPeer, map[string]any) {
 	t.Cleanup(func() { p.c.Close() })
 	p.send(t, map[string]any{"type": "session.created"})
 	cfg := p.want(t, "session.update")["session"].(map[string]any)
-	p.send(t, map[string]any{"type": "session.updated"})
 	return p, cfg
 }
 func rpcReply(t *testing.T, p *toolPeer, req map[string]any, result any) {

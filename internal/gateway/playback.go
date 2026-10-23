@@ -45,6 +45,7 @@ func (s *session) play() error {
 		s.responseAudioSent = true
 		if s.activePlayback != nil {
 			s.activePlayback.sent += 1440
+			s.refreshTaskPlayback(s.activePlayback)
 		}
 		s.lastAudio = s.playbackNow()
 		s.lastActivity = time.Now()
@@ -76,7 +77,7 @@ func (s *session) play() error {
 		// Transport completion alone never proves playback. A matching final
 		// receipt can later promote only this block's normal completed history.
 		s.hist.addSent(s.transcript)
-		if s.playbackEnabled && s.responseAudioSent && s.activePlayback != nil && s.transcript != "" {
+		if s.responseAudioSent && s.activePlayback != nil && s.transcript != "" {
 			s.hist.Turns[len(s.hist.Turns)-1].playbackID = s.activePlayback.id
 		}
 		if !s.toolPlayback {

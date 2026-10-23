@@ -37,8 +37,8 @@ func TestInterruptedDraftSurvivesInterveningAnswerAsUnplayedData(t *testing.T) {
 			}
 			fresh, setup := h.model(t)
 			instructions := setup["instructions"].(string)
-			if !strings.Contains(instructions, `"delivery":"interrupted"`) || !strings.Contains(instructions, `"generated_text":"`+draft+`"`) {
-				t.Fatal("reconnection dropped the unfinished draft or its explicit unplayed marker")
+			if !strings.Contains(instructions, `"delivery":"interrupted"`) || strings.Contains(instructions, draft) {
+				t.Fatal("reconnection must preserve interruption marker and omit unplayed draft")
 			}
 			if strings.Contains(instructions, `"text":"`+draft+`"`) {
 				t.Fatal("generated but unplayed words became an ordinary completed assistant turn")
@@ -60,7 +60,7 @@ func TestInterruptedDraftSurvivesInterveningAnswerAsUnplayedData(t *testing.T) {
 			h.device.want(t, "tts")
 			_, setup = h.model(t)
 			instructions = setup["instructions"].(string)
-			if !strings.Contains(instructions, `"generated_text":"`+draft+`"`) || !strings.Contains(instructions, `"delivery":"transport_sent","generated_text":"等于二"`) {
+			if strings.Contains(instructions, draft) || !strings.Contains(instructions, `"delivery":"transport_sent","generated_text":"等于二"`) {
 				t.Fatal("answering the side question discarded the unfinished original task")
 			}
 		})

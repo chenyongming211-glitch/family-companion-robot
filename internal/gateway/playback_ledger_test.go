@@ -166,11 +166,11 @@ func TestPausedTaskLocalMutationAndRequestBounds(t *testing.T) {
 		t.Fatal(out)
 	}
 	s.currentInput = requestOrigin{generation: 1, text: "实际的新请求", known: true}
-	out, _ = s.conversationTool("conversation_update_paused_task", fmt.Sprintf(`{"action":"replace","task_id":%q,"new_request":"模型自编"}`, id))
+	out, _ = s.conversationTool("conversation_update_paused_task", fmt.Sprintf(`{"action":"replace","task_id":%q,"expected_revision":%d,"new_request":"模型自编"}`, id, s.snapshotRevision))
 	if !strings.Contains(out, "实际的新请求") || strings.Contains(out, "模型自编") || s.paused.id == id {
 		t.Fatal(out)
 	}
-	out, _ = s.conversationTool("conversation_update_paused_task", fmt.Sprintf(`{"action":"discard","task_id":%q}`, s.paused.id))
+	out, _ = s.conversationTool("conversation_update_paused_task", fmt.Sprintf(`{"action":"discard","task_id":%q,"expected_revision":%d}`, s.paused.id, s.snapshotRevision))
 	if s.paused != nil || !strings.Contains(out, `"available":false`) {
 		t.Fatal(out)
 	}

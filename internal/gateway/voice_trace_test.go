@@ -77,7 +77,7 @@ func TestVoiceTraceHasTimingMetadataWithoutConversationOrCredentials(t *testing.
 	}
 	allowed := map[string]bool{"time": true, "level": true, "msg": true,
 		"event": true, "session": true, "mode": true, "upstream_generation": true,
-		"response_open": true, "speaking": true, "pending_ms": true, "input_bytes": true}
+		"response_open": true, "speaking": true, "pending_ms": true, "input_bytes": true, "snapshot_revision": true, "snapshot_token": true, "task_bound": true}
 	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
 		var record map[string]any
 		if err := json.Unmarshal([]byte(line), &record); err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"familyrobot/internal/protocol"
 )
@@ -23,9 +24,13 @@ type playbackRecord struct {
 	sent, played                                 uint64
 	known, invalid, settled, sealed, interrupted bool
 	origin                                       requestOrigin
+	taskID                                       string
+	settleUntil                                  time.Time
+	timedOut, retired                            bool
 }
 type pausedTask struct {
 	id       string
+	original requestOrigin
 	playback playbackRecord
 }
 
@@ -34,12 +39,16 @@ func (s *session) beginPlayback() error {
 		return errors.New("playback identity exhausted")
 	}
 	s.playbackSequence++
-	r := &playbackRecord{id: s.playbackSequence, origin: s.responseOrigin}
+	r := &playbackRecord{id: s.playbackSequence, origin: s.responseOrigin, taskID: s.responseTaskID}
 	s.playbacks = append(s.playbacks, r)
 	if len(s.playbacks) > maxPlaybackRecords {
 		s.playbacks = s.playbacks[len(s.playbacks)-maxPlaybackRecords:]
 	}
 	s.activePlayback = r
+	if s.paused != nil && r.taskID == s.paused.id {
+		s.paused.playback = *r
+		s.snapshotRevision++
+	}
 	if s.playbackEnabled {
 		s.devicePlayback = r
 	}
@@ -50,6 +59,7 @@ func (s *session) sealPlayback(interrupted bool) {
 		r.sealed = true
 		r.interrupted = interrupted
 		s.promotePlayback(r)
+		s.refreshTaskPlayback(r)
 	}
 }
 
@@ -69,21 +79,41 @@ func (s *session) interruptiblePlayback() *playbackRecord {
 }
 func (s *session) pausePlayback() {
 	r := s.interruptiblePlayback()
-	if r == nil {
+	if r == nil || r.retired {
 		return
 	}
 	r.sealed = true
 	r.interrupted = true
+	for i := range s.hist.Turns {
+		t := &s.hist.Turns[i]
+		if t.playbackID == r.id && t.Role == "assistant" {
+			t.Delivery = "interrupted"
+		}
+	}
+	if !r.settled && r.settleUntil.IsZero() {
+		r.settleUntil = time.Now().Add(playbackSettlementTimeout)
+	}
 	if s.wakeOnly(r.origin) {
 		s.tracePlayback("wake_greeting_skipped", r)
 		return
 	}
 	if s.paused == nil {
 		s.taskSequence++
-		s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), playback: *r}
+		s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), original: r.origin, playback: *r}
+		s.snapshotRevision++
 		s.tracePlayback("paused_created", r)
+	} else if r.taskID == s.paused.id {
+		s.paused.playback = *r
+		s.snapshotRevision++
+		s.tracePlayback("paused_resumed", r)
 	} else {
 		s.tracePlayback("paused_retained", r)
+	}
+}
+func (s *session) refreshTaskPlayback(r *playbackRecord) {
+	if r != nil && s.paused != nil && r.taskID == s.paused.id && s.paused.playback.id == r.id && s.paused.playback != *r {
+		s.paused.playback = *r
+		s.snapshotRevision++
 	}
 }
 func (s *session) receivePlayback(data []byte) {
@@ -93,6 +123,10 @@ func (s *session) receivePlayback(data []byte) {
 	p, err := protocol.ParsePlayback(data)
 	if err != nil || p.SessionID != s.id {
 		return
+	}
+	var before playbackRecord
+	if s.paused != nil {
+		before = s.paused.playback
 	}
 	records := s.playbacks
 	if s.paused != nil {
@@ -120,6 +154,7 @@ func (s *session) receivePlayback(data []byte) {
 		}
 		if p.State == "finished" && r.sealed {
 			r.settled = true
+			r.timedOut = false
 			r.interrupted = r.interrupted || p.Interrupted
 		}
 		// A normal final resolves device ownership. An interrupted final may
@@ -130,6 +165,9 @@ func (s *session) receivePlayback(data []byte) {
 		}
 		if s.paused != nil && s.paused.playback.id == r.id {
 			s.paused.playback = *r
+			if before != *r {
+				s.snapshotRevision++
+			}
 		}
 		switch {
 		case p.State == "finished" && r.settled:
@@ -140,9 +178,22 @@ func (s *session) receivePlayback(data []byte) {
 			s.tracePlayback("progress_started", r)
 		}
 		s.promotePlayback(r)
+		s.finishTaskDelivery(r)
 		return
 	}
 }
+
+// Releasing a resumed task proves only complete digital delivery of its latest
+// normal block. It is not a semantic-completeness or acoustic acceptance claim.
+func (s *session) finishTaskDelivery(r *playbackRecord) {
+	if s.paused != nil && r.taskID == s.paused.id && s.paused.playback.id == r.id && r.sealed && !r.interrupted && r.settled && r.known && !r.invalid && r.played == r.sent {
+		s.paused = nil
+		s.responseTaskID = ""
+		s.snapshotRevision++
+		s.traceVoice("task_delivery_complete")
+	}
+}
+
 func (s *session) promotePlayback(r *playbackRecord) {
 	if r.sealed && !r.interrupted && r.settled && r.known && !r.invalid && r.played == r.sent {
 		promoted := false
@@ -188,24 +239,32 @@ func (s *session) transcribeOrigin(itemID, text string) {
 	}
 	if itemID != "" && s.paused != nil && matches(s.paused.playback.origin) && !s.paused.playback.origin.known {
 		s.paused.playback.origin = origin
+		s.snapshotRevision++
+	}
+	if itemID != "" && s.paused != nil && matches(s.paused.original) && !s.paused.original.known {
+		s.paused.original = origin
+		s.snapshotRevision++
 	}
 	if matches(s.wake.origin) && !s.wake.origin.known {
 		s.wake.origin = origin
 	}
 }
 func (s *session) pausedData() map[string]any {
-	out := map[string]any{"available": s.paused != nil, "text_position": "unknown"}
+	out := map[string]any{"available": s.paused != nil, "text_position": "unknown", "revision": s.snapshotRevision}
 	if s.paused == nil {
 		return out
 	}
 	p := s.paused
 	r := p.playback
 	out["task_id"] = p.id
-	out["original_request"] = r.origin.text
-	out["original_request_known"] = r.origin.known
-	out["original_request_truncated"] = r.origin.truncated
-	out["position_known"] = s.playbackEnabled && r.known && !r.invalid
+	out["original_request"] = p.original.text
+	out["original_request_known"] = p.original.known
+	out["original_request_truncated"] = p.original.truncated
+	out["position_known"] = s.playbackEnabled && r.known && !r.invalid && !r.timedOut
 	out["settled"] = r.settled
+	out["settlement_timed_out"] = r.timedOut
+	out["latest_request"] = r.origin.text
+	out["latest_request_known"] = r.origin.known
 	out["interrupted"] = r.interrupted
 	if s.playbackEnabled && r.id != 0 {
 		out["playback_id"] = r.id
@@ -213,12 +272,28 @@ func (s *session) pausedData() map[string]any {
 		out["sample_rate"] = 24000
 		out["sent_samples"] = r.sent
 	}
-	if s.playbackEnabled && r.known && !r.invalid {
+	if s.playbackEnabled && r.known && !r.invalid && !r.timedOut {
 		out["played_samples"] = r.played
 	} else {
 		out["played_samples"] = nil
 	}
 	return out
+}
+func (s *session) retireTaskPlayback() {
+	if s.paused == nil {
+		return
+	}
+	for _, r := range s.playbacks {
+		if r.id == s.paused.playback.id || r.taskID == s.paused.id {
+			r.retired = true
+		}
+	}
+	if s.activePlayback != nil && (s.activePlayback.id == s.paused.playback.id || s.activePlayback.taskID == s.paused.id) {
+		s.activePlayback.retired = true
+	}
+	if s.devicePlayback != nil && s.devicePlayback.retired {
+		s.devicePlayback = nil
+	}
 }
 func (s *session) conversationTool(name, args string) (string, bool) {
 	if name != "conversation_get_paused_task" && name != "conversation_update_paused_task" {
@@ -229,8 +304,9 @@ func (s *session) conversationTool(name, args string) (string, bool) {
 		return string(b), true
 	}
 	var input struct {
-		Action string `json:"action"`
-		TaskID string `json:"task_id"`
+		Action           string  `json:"action"`
+		TaskID           string  `json:"task_id"`
+		ExpectedRevision *uint64 `json:"expected_revision"`
 	}
 	if json.Unmarshal([]byte(args), &input) != nil {
 		return fail("invalid_arguments")
@@ -239,18 +315,39 @@ func (s *session) conversationTool(name, args string) (string, bool) {
 		if s.paused == nil || input.TaskID != s.paused.id {
 			return fail("task_id_mismatch")
 		}
+		if input.ExpectedRevision == nil || *input.ExpectedRevision != s.snapshotRevision {
+			return fail("revision_mismatch")
+		}
 		switch input.Action {
+		case "resume":
+			s.responseTaskID = s.paused.id
+			if s.activePlayback != nil {
+				s.activePlayback.taskID = s.paused.id
+				s.paused.playback = *s.activePlayback
+			}
+			s.traceVoice("task_resume_bound")
 		case "discard":
+			s.retireTaskPlayback()
+			s.responseTaskID = ""
 			s.paused = nil
 		case "replace":
 			if !s.currentInput.known || s.currentInput.generation != s.generation {
 				return fail("current_request_unknown")
 			}
+			s.retireTaskPlayback()
 			s.taskSequence++
-			s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), playback: playbackRecord{origin: s.currentInput}}
+			s.paused = &pausedTask{id: fmt.Sprintf("task-%d", s.taskSequence), original: s.currentInput, playback: playbackRecord{origin: s.currentInput}}
+			s.responseTaskID = s.paused.id
+			if s.activePlayback != nil {
+				s.activePlayback.taskID = s.paused.id
+				s.activePlayback.retired = false
+				s.activePlayback.origin = s.currentInput
+				s.paused.playback = *s.activePlayback
+			}
 		default:
 			return fail("invalid_action")
 		}
+		s.snapshotRevision++
 		// An explicit task mutation supersedes any already-finished interruption
 		// awaiting its control event; that event must not resurrect discarded work.
 		if s.devicePlayback != nil && s.devicePlayback.settled {
@@ -265,6 +362,6 @@ func (s *session) conversationTool(name, args string) (string, bool) {
 func conversationTools() []map[string]any {
 	return []map[string]any{
 		{"type": "function", "function": map[string]any{"name": "conversation_get_paused_task", "description": "读取暂停原任务和设备采样位置；text_position=unknown，不代表已知道暂停字词。", "parameters": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}}},
-		{"type": "function", "function": map[string]any{"name": "conversation_update_paused_task", "description": "按匹配 task_id 显式放弃或切换暂停任务；replace 仅使用当前实际用户转写，新任务的播放位置重置为 unknown，不继承旧位置。", "parameters": map[string]any{"type": "object", "properties": map[string]any{"task_id": map[string]any{"type": "string"}, "action": map[string]any{"type": "string", "enum": []string{"discard", "replace"}}}, "required": []string{"task_id", "action"}, "additionalProperties": false}}},
+		{"type": "function", "function": map[string]any{"name": "conversation_update_paused_task", "description": "按匹配 task_id 和 expected_revision 显式 resume 续答、discard 放弃或 replace 切换暂停任务；resume 绑定后续回复属于同一任务；replace 仅使用当前实际用户转写，新任务的播放位置重置为 unknown，不继承旧位置。", "parameters": map[string]any{"type": "object", "properties": map[string]any{"task_id": map[string]any{"type": "string"}, "expected_revision": map[string]any{"type": "integer", "minimum": 0}, "action": map[string]any{"type": "string", "enum": []string{"resume", "discard", "replace"}}}, "required": []string{"task_id", "action", "expected_revision"}, "additionalProperties": false}}},
 	}
 }
