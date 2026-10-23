@@ -12,7 +12,8 @@ func (s *session) traceVoice(event string) {
 	switch event {
 	case "listen_start", "listen_stop", "device_abort", "vad_started", "vad_stopped",
 		"input_committed", "transcription_ready", "response_created", "response_completed",
-		"response_cancelled", "tts_start", "tts_stop", "interrupt", "snapshot_sent", "snapshot_acknowledged", "response_requested", "task_resume_bound", "task_delivery_complete":
+		"response_cancelled", "tts_start", "tts_stop", "interrupt", "snapshot_sent", "snapshot_acknowledged", "response_requested", "task_resume_bound", "task_delivery_complete",
+		"clarification_verified", "clarification_rejected":
 	default:
 		return
 	}

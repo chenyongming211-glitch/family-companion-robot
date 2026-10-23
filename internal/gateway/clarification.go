@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode"
 
+	"familyrobot/internal/protocol"
 	"familyrobot/internal/qwen"
 )
 
@@ -39,6 +40,40 @@ func normalizeClarification(text string) string {
 func isClarification(text string) bool {
 	return len(text) <= 2048 && normalizeClarification(text) == normalizeClarification(clarificationText)
 }
+
+// A replacement input is already present upstream. Close only this question's
+// admitted playback, without reconnecting or cancelling that new input. Held
+// questions never acquired a device block and need only silent cleanup.
+func (s *session) supersedeClarification() error {
+	if !s.clarification.active {
+		return nil
+	}
+	if s.started {
+		target := s.activePlayback
+		s.pausePlayback()
+		stop := protocol.Control{Type: "tts", State: "stop", Reason: "interrupted", SessionID: s.id}
+		if s.playbackEnabled && target != nil {
+			stop.PlaybackID = target.id
+		}
+		if err := s.json(stop); err != nil {
+			return err
+		}
+		s.traceVoice("interrupt")
+		s.hist.addInterrupted(s.draftTranscript)
+		if target != nil {
+			s.hist.Turns[len(s.hist.Turns)-1].playbackID = target.id
+		}
+		s.hist.Interrupted = true
+		s.started = false
+		s.activePlayback = nil
+		s.devicePlayback = nil
+		s.nextAudio = time.Time{}
+		s.lastAudio = time.Time{}
+	}
+	s.clearClarification()
+	return nil
+}
+
 func (s *session) clearClarification() {
 	if !s.clarification.active {
 		return

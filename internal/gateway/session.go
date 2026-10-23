@@ -507,7 +507,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 			s.listenStarted = true
 		}
 		s.traceVoice("input_committed")
-		s.commitOrigin(ev.ItemID)
+		if err := s.commitOrigin(ev.ItemID); err != nil {
+			return err
+		}
 		if !wakeCommit {
 			s.inputActive = false
 		}
@@ -527,7 +529,9 @@ func (s *session) onModel(ctx context.Context, ev qwen.Event) error {
 		s.traceVoice("transcription_ready")
 		s.toolCount = 0
 		text := limitText(ev.Transcript, 2048)
-		s.transcribeOrigin(ev.ItemID, ev.Transcript)
+		if err := s.transcribeOrigin(ev.ItemID, ev.Transcript); err != nil {
+			return err
+		}
 		if text != "" {
 			s.lastActivity = time.Now()
 		}

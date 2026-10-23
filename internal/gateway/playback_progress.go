@@ -206,28 +206,43 @@ func (s *session) promotePlayback(r *playbackRecord) {
 
 // Input identities include upstream generation; playback identities instead live
 // for the entire device connection, including upstream-only reconnects.
-func (s *session) commitOrigin(itemID string) {
+func (s *session) resetInputRequest() error {
+	if err := s.supersedeClarification(); err != nil {
+		return err
+	}
+	s.cancelRouting()
+	s.toolContinuation = false
+	// Retire the old input's request without reusing its token. Its update
+	// remains in the model client's ACK FIFO and must consume its own slot.
+	s.sync = generationSync{sequence: s.sync.sequence}
+	s.voiceRequested = false
+	return nil
+}
+
+func (s *session) commitOrigin(itemID string) error {
 	old := s.currentInput
 	if !s.inputCommitted || old.generation != s.generation || old.itemID != itemID {
-		s.cancelRouting()
-		s.clearClarification()
-		s.toolContinuation = false
-		// Retire the old input's generation request without reusing its token.
-		// Its update remains in the model client's ACK FIFO and must consume its
-		// own slot, even if the replacement sends an identical snapshot first.
-		s.sync = generationSync{sequence: s.sync.sequence}
-		s.voiceRequested = false
+		if err := s.resetInputRequest(); err != nil {
+			return err
+		}
 	}
 	s.currentInput = requestOrigin{generation: s.generation, itemID: itemID}
 	if itemID != "" && old.generation == s.generation && old.itemID == itemID {
 		s.currentInput = old
 	}
 	s.inputCommitted = true
+	return nil
 }
-func (s *session) transcribeOrigin(itemID, text string) {
+func (s *session) transcribeOrigin(itemID, text string) error {
 	origin := requestOrigin{generation: s.generation, itemID: itemID, text: limitText(text, 512), known: text != "", truncated: len([]rune(text)) > 512}
 	origin.wake = itemID != "" && itemID == s.wake.inputID
 	matches := func(o requestOrigin) bool { return o.generation == s.generation && o.itemID == itemID }
+	replacesQuestion := s.clarification.active && (!s.inputCommitted || matches(s.currentInput)) && origin != s.clarification.input
+	if replacesQuestion {
+		if err := s.resetInputRequest(); err != nil {
+			return err
+		}
+	}
 	// With an outstanding committed identity an unrelated or anonymous STT must
 	// not replace it. Old fake peers without item IDs retain conservative support.
 	if !s.inputCommitted || matches(s.currentInput) {
@@ -252,6 +267,10 @@ func (s *session) transcribeOrigin(itemID, text string) {
 	if matches(s.wake.origin) && !s.wake.origin.known {
 		s.wake.origin = origin
 	}
+	if replacesQuestion {
+		return s.requestResponse()
+	}
+	return nil
 }
 func (s *session) pausedData() map[string]any {
 	out := map[string]any{"available": s.paused != nil, "text_position": "unknown", "revision": s.snapshotRevision}
