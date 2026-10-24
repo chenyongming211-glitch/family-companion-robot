@@ -9,6 +9,7 @@ final class RealtimeClient: @unchecked Sendable {
  var status:((String)->Void)?,ended:((Bool)->Void)?
  private var session:URLSession?,socket:URLSessionWebSocketTask?,audio:AudioPipeline?,encoder:OpusEncoder?
  private let playback=RealtimePlaybackState()
+ private let pending=RealtimePendingOutput()
  private var closed=false,ready=false,sending=false,sessionID=""
  private var outgoing:[URLSessionWebSocketTask.Message]=[],input:[Int16]=[]
  private var fixture:RealtimeFixture?
@@ -78,6 +79,7 @@ final class RealtimeClient: @unchecked Sendable {
  private func message(_ message:URLSessionWebSocketTask.Message)throws{
   switch message {
   case .data(let packet):
+   if pending.hasPending{try pending.packet(packet);return}
    guard ready,let audio,packet.count<=4000 else{throw ClientFailure("audio_before_hello")}
    try playback.packet();try audio.enqueue(packet)
    if playback.accepted==1440{metadata("realtime.first_playback_packet",["generation":playback.generation])}
@@ -105,8 +107,26 @@ final class RealtimeClient: @unchecked Sendable {
     }
    } else {
     guard ready,e["session_id"] as? String==sessionID else{throw ClientFailure("session_mismatch")}
-    if type=="tts" {
-     switch e["state"] as? String {
+    if type=="tts" {try tts(e)}
+    else if type=="stt"{metadata("realtime.stt",["characters":(e["text"] as? String)?.count ?? 0])}
+    else if type=="alert"{throw ClientFailure("gateway_alert")}
+   }
+  @unknown default:throw ClientFailure("unsupported_websocket_message")
+  }
+ }
+ private func tts(_ e:[String:Any])throws{
+  if pending.hasPending {
+   if e["state"] as? String=="stop" && e["reason"] as? String=="interrupted" {
+    // The interrupted reply is still waiting behind a normally sealed tail.
+    // Revoke it before it reaches CoreAudio; the completed reply still drains.
+    pending.clear();fixture?.interrupted();metadata("realtime.pending_interrupted");return
+   }
+   try pending.control(e);return
+  }
+  if e["state"] as? String=="start" && playback.active && playback.sealed {
+   try pending.control(e);metadata("realtime.normal_tail_wait");return
+  }
+  switch e["state"] as? String {
      case "start":
       guard let audio else{throw ClientFailure("audio_missing")}
       let token=try playback.start();try audio.begin();transcript="";outputFixtureIndex=fixture?.index ?? -1
@@ -127,11 +147,6 @@ final class RealtimeClient: @unchecked Sendable {
        fixture?.interrupted();playback.interrupt();audio?.end();transcript=""
       } else if playback.active && playback.seal(){finishOutput()}
      default:throw ClientFailure("invalid_tts_state")
-     }
-    }else if type=="stt"{metadata("realtime.stt",["characters":(e["text"] as? String)?.count ?? 0])}
-    else if type=="alert"{throw ClientFailure("gateway_alert")}
-   }
-  @unknown default:throw ClientFailure("unsupported_websocket_message")
   }
  }
  private func finishOutput(){
@@ -140,6 +155,15 @@ final class RealtimeClient: @unchecked Sendable {
   playback.finish();audio?.end()
   fixture?.outputCompleted(index:outputFixtureIndex,generatedText:transcript)
   transcript=""
+  guard !closed else{return}
+  do {
+   for event in pending.take() {
+    switch event {
+    case .control(let e):try tts(e)
+    case .packet(let data):try message(.data(data))
+    }
+   }
+  }catch{fail((error as? ClientFailure)?.description ?? "pending_output")}
  }
  private func inputPCM(_ pcm:[Int16]){
   guard ready,!closed,let encoder else{return}
@@ -153,6 +177,7 @@ final class RealtimeClient: @unchecked Sendable {
   guard !closed else{return};closed=true;ready=false
   fixture?.stop();fixture=nil;audio?.stop();audio=nil;encoder=nil;playback.interrupt()
   outgoing.removeAll();input.removeAll();socket?.cancel(with:.normalClosure,reason:nil);socket=nil
+  pending.clear()
   session?.invalidateAndCancel();session=nil;metadata("realtime.closed",["success":success]);ended?(success)
  }
 }

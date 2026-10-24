@@ -22,6 +22,24 @@ import Foundation
   for _ in 0..<16 {try state.packet()}
   do {try state.packet();preconditionFailure("unbounded output queue")}catch{}
   do {_=try state.observe(samples:30000,generation:state.generation);preconditionFailure("false playback evidence")}catch{}
+  state.interrupt()
+  let tail=try state.start();try state.packet();precondition(!state.seal())
+  let pending=RealtimePendingOutput()
+  try pending.control(["type":"tts","state":"start"])
+  try pending.packet(Data([1,2]))
+  precondition(pending.hasPending && state.active)
+  let tailDone=try state.observe(samples:1440,generation:tail);precondition(tailDone)
+  state.finish()
+  for event in pending.take() {
+   switch event {
+   case .control: _=try state.start()
+   case .packet: try state.packet()
+   }
+  }
+  precondition(state.active && state.accepted==1440 && !pending.hasPending,"normal tail failed to hand off")
+  for _ in 0..<16 {try pending.packet(Data([1]))}
+  do {try pending.packet(Data([1]));preconditionFailure("unbounded pending audio")}catch{}
+  pending.clear();precondition(!pending.hasPending)
   print("PASS realtime state: endpoint, normal completion, interrupted generations, bounded queue and receipts")
  }
 }

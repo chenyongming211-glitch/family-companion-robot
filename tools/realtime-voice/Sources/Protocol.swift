@@ -44,3 +44,26 @@ final class RealtimePlaybackState {
  func finish(){active=false;sealed=false}
  func interrupt(){generation += 1;active=false;sealed=false;accepted=0;completed=0}
 }
+
+enum RealtimePendingEvent {
+ case control([String:Any])
+ case packet(Data)
+}
+
+// A normal server stop seals transport, not the Mac output. Hold at most one
+// second of following audio while its previous CoreAudio tail completes.
+final class RealtimePendingOutput {
+ private var events:[RealtimePendingEvent]=[]
+ private var packets=0,controls=0
+ var hasPending:Bool{!events.isEmpty}
+ func packet(_ data:Data)throws{
+  guard packets<16,data.count<=4000 else{throw ClientFailure("pending_audio_overflow")}
+  packets += 1;events.append(.packet(data))
+ }
+ func control(_ event:[String:Any])throws{
+  guard controls<16 else{throw ClientFailure("pending_control_overflow")}
+  controls += 1;events.append(.control(event))
+ }
+ func take()->[RealtimePendingEvent]{let copy=events;clear();return copy}
+ func clear(){events.removeAll();packets=0;controls=0}
+}
