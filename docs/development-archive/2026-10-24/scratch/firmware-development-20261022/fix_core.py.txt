@@ -1,0 +1,29 @@
+from pathlib import Path
+root=Path('.superpowers/firmware-development-20261022/aec-work/main')
+def edit(name,old,new):
+ p=root/name;s=p.read_text();assert old in s,(name,old[:70]);p.write_text(s.replace(old,new,1))
+edit('audio/audio_service.h','    uint32_t capture_generation_ = 0;','    std::atomic<uint32_t> capture_generation_{0};\n    std::atomic<uint32_t> permitted_fault_generation_{0};')
+edit('audio/audio_service.cc','    experiment_uplink_requested_ = enabled;','''    if (enabled && codec_->ReferenceFaulted()) permitted_fault_generation_ = codec_->CaptureGeneration();
+    experiment_uplink_requested_ = enabled;''')
+edit('audio/audio_service.cc','''    if (experiment_gate_.Set(experiment_uplink_requested_.load(), codec_->CaptureGeneration())) {''','''    const auto generation = codec_->CaptureGeneration();
+    const bool permitted = experiment_uplink_requested_.load() &&
+        (!codec_->ReferenceFaulted() || permitted_fault_generation_.load() == generation);
+    if (experiment_gate_.Set(permitted, generation)) {''')
+edit('application.cc','''    auto led = board.GetLed();
+    led->OnStateChanged();''','''    auto led = board.GetLed();
+    if (new_state != kDeviceStateSpeaking && new_state != kDeviceStateListening) {
+        audio_service_.SetExperimentUplink(false);
+    }
+    led->OnStateChanged();''')
+edit('audio/engines/afe_audio_engine.cc','''        const bool enable_aec = reference_valid && ((bits & kWakeWordEnabled) ||''','''        const bool enable_aec = reference_valid && (codec_->SoftwareReference() || (bits & kWakeWordEnabled) ||''')
+edit('audio/audio_codec.h','''    virtual void RecordDiagnostic(uint8_t stream''','''    virtual void ResetDiagnosticStream(uint8_t stream) { (void)stream; }
+    virtual void RecordDiagnostic(uint8_t stream''')
+edit('audio/audio_service.cc','''            audio_engine_->ResetCapture();
+            UpdateExperimentGate();''','''            codec_->ResetDiagnosticStream(1);
+            audio_engine_->ResetCapture();
+            UpdateExperimentGate();''')
+edit('audio/engines/afe_audio_engine.cc','''            output_buffer_.clear();
+            afe_iface_->reset_buffer(afe_data_);''','''            output_buffer_.clear();
+            wake_word_audio_cache_.Clear();
+            codec_->ResetDiagnosticStream(2);
+            afe_iface_->reset_buffer(afe_data_);''')

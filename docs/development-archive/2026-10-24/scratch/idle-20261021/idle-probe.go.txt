@@ -1,0 +1,161 @@
+// Diagnostic client only: synthetic speech/PCM silence, never live microphone.
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"time"
+
+	"familyrobot/internal/audio"
+	"github.com/gorilla/websocket"
+)
+
+type wire struct {
+	kind int
+	data []byte
+	err  error
+}
+
+func run() error {
+	mode := os.Args[1]
+	var input []byte
+	if mode == "conversation" {
+		f, err := os.Open(os.Args[2])
+		if err != nil {
+			return errors.New("fixture unavailable")
+		}
+		input, err = audio.ReadWAV(f)
+		f.Close()
+		if err != nil {
+			return errors.New("invalid fixture")
+		}
+	}
+	c, response, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:18000/xiaozhi/v1/", http.Header{
+		"Authorization": []string{"Bearer " + os.Getenv("ROBOT_DEVICE_TOKEN")},
+		"Device-Id":     []string{os.Getenv("ROBOT_ALLOWED_DEVICE")},
+	})
+	if err != nil {
+		if response != nil {
+			response.Body.Close()
+		}
+		return errors.New("gateway dial failed")
+	}
+	defer c.Close()
+	c.SetReadLimit(65536)
+	c.SetReadDeadline(time.Now().Add(50 * time.Second))
+	if err = c.WriteJSON(map[string]any{"type": "hello", "version": 1, "transport": "websocket", "audio_params": map[string]any{"format": "opus", "sample_rate": 16000, "channels": 1, "frame_duration": 60}}); err != nil {
+		return errors.New("hello failed")
+	}
+	var hello map[string]any
+	if c.ReadJSON(&hello) != nil || hello["type"] != "hello" {
+		return errors.New("invalid hello")
+	}
+	if c.WriteJSON(map[string]any{"type": "listen", "state": "start", "mode": "auto"}) != nil {
+		return errors.New("listen failed")
+	}
+	enc, err := audio.NewEncoderAtRate(16000)
+	if err != nil {
+		return err
+	}
+	defer enc.Close()
+	events := make(chan wire, 64)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			k, b, e := c.ReadMessage()
+			select {
+			case events <- wire{k, b, e}:
+			case <-done:
+				return
+			}
+			if e != nil {
+				return
+			}
+		}
+	}()
+	tick := time.NewTicker(60 * time.Millisecond)
+	defer tick.Stop()
+	started := time.Now()
+	var stopped time.Time
+	position, sent, frames, stt, starts, stops := 0, 0, 0, 0, 0, 0
+	playing := false
+	for {
+		select {
+		case <-tick.C:
+			frame := make([]byte, 1920)
+			if position < len(input) {
+				copy(frame, input[position:])
+				position += 1920
+			}
+			packet, e := enc.Encode(frame)
+			if e != nil {
+				return e
+			}
+			// The reader observes the authoritative close, including write races.
+			c.WriteMessage(websocket.BinaryMessage, packet)
+			sent++
+		case ev := <-events:
+			if ev.err != nil {
+				elapsed := time.Since(started)
+				if elapsed < 5800*time.Millisecond || elapsed > 40*time.Second {
+					return errors.New("close outside expected interval")
+				}
+				if sent < 80 {
+					return errors.New("insufficient continuous input")
+				}
+				if mode == "silence" && (frames != 0 || stt != 0) {
+					return errors.New("silence generated conversation")
+				}
+				post := int64(0)
+				if mode == "conversation" {
+					if frames == 0 || stt == 0 || starts != 1 || stops != 1 {
+						return errors.New("conversation did not finish normally")
+					}
+					post = time.Since(stopped).Milliseconds()
+					if post < 5800 || post > 9000 {
+						return errors.New("post-reply idle window invalid")
+					}
+				}
+				return json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true, "mode": mode, "input_frames": sent, "output_frames": frames, "stt_events": stt, "tts_starts": starts, "tts_stops": stops, "total_ms": elapsed.Milliseconds(), "idle_after_stop_ms": post, "candidate_idle_timeout_ms": 6000})
+			}
+			if ev.kind == websocket.BinaryMessage {
+				if !playing {
+					return errors.New("audio outside playback")
+				}
+				frames++
+				continue
+			}
+			var v struct{ Type, State string }
+			if json.Unmarshal(ev.data, &v) != nil {
+				return errors.New("invalid event")
+			}
+			switch v.Type {
+			case "alert":
+				return errors.New("gateway alerted")
+			case "stt":
+				stt++
+			case "tts":
+				if v.State == "start" {
+					playing = true
+					starts++
+				}
+				if v.State == "stop" {
+					playing = false
+					stops++
+					stopped = time.Now()
+				}
+			}
+		}
+	}
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "idle_probe_failed:", err)
+		os.Exit(1)
+	}
+}

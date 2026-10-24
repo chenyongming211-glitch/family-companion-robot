@@ -1,0 +1,42 @@
+"""Bounded serial metadata only. No PCM, raw console log, or cloud audio capture."""
+import datetime,json,os,pathlib,re,serial,time
+os.umask(0o077)
+out=pathlib.Path('/Users/chen/code/家庭陪伴机器人/artifacts/playback-field-20261022/run2')
+out.mkdir(mode=0o700)
+commands=out/'serial-commands.jsonl';commands.touch(mode=0o600,exist_ok=False)
+s=serial.Serial(port=None,baudrate=115200,timeout=.1)
+s.dtr=True;s.rts=False;s.port='/dev/cu.usbmodem21201';s.open()
+start=time.monotonic();nextstats=start+2;buf=b'';consumed=0
+allowed={'aec_stats','aec_diag_stop','aec_realtime on','aec_realtime off'}
+try:
+ with (out/'device-metadata.jsonl').open('x') as f:
+  def emit(kind,value):
+   item={'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'elapsed':round(time.monotonic()-start,3),'kind':kind,'value':value}
+   f.write(json.dumps(item)+'\n');f.flush();print(json.dumps(item),flush=True)
+  emit('monitor','ready; no PCM capture')
+  s.write(b'aec_diag_stop\r\n')
+  while time.monotonic()-start<900 and not (out/'end-monitor').exists():
+   chunk=s.read(8192)
+   if chunk:
+    buf+=chunk
+    while b'\n' in buf:
+     raw,buf=buf.split(b'\n',1)
+     line=re.sub(r'\x1b\[[0-9;]*m','',raw.decode(errors='replace'))
+     if line.startswith(('aec_init ','aec_format ','aec_stats ','aec_diag ','aec_realtime ')):
+      emit('aec',line)
+      if line.startswith('aec_stats ') and re.search(r'\bfault=[1-9]',line):
+       s.write(b'aec_realtime off\r\naec_diag_stop\r\n');emit('fault','realtime off requested')
+     m=re.search(r'StateMachine: State: ([a-z_]+) -> ([a-z_]+)',line)
+     if m:emit('state',{'from':m[1],'to':m[2]})
+     if any(x in line for x in ('Guru Meditation','assert failed','Backtrace:','abort() was called')):emit('crash_marker',line[:240])
+    if len(buf)>16384:buf=b''
+   pending=commands.read_text().splitlines()
+   for line in pending[consumed:]:
+    command=json.loads(line)
+    if command not in allowed:raise RuntimeError('unapproved serial command')
+    s.write((command+'\r\n').encode());s.flush();emit('command',command)
+   consumed=len(pending)
+   if time.monotonic()>=nextstats:
+    s.write(b'aec_stats\r\n');s.flush();nextstats=time.monotonic()+15
+  emit('monitor','finished; realtime mode left unchanged')
+finally:s.close()

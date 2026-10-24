@@ -1,0 +1,85 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work/main/audio/codecs')
+p=w/'es8311_audio_codec.cc';s=p.read_text();start=s.index('    i2s_chan_config_t chan_cfg');end=s.index('\n    i2s_std_config_t std_cfg',start);cfg=s[start:end];s=s[:start]+'    CreateI2sChannels();\n'+s[end:];p.write_text(s)
+p=w/'es8311_audio_codec.h';s=p.read_text().replace('    void RecreateDuplexForOrdinaryWrite();','    void CreateI2sChannels();\n    void RecreateDuplexForOrdinaryWrite();');p.write_text(s)
+p=Path('firmware/overlays/main/audio/es8311_output_ownership.inc');s=p.read_text();p.write_text('void Es8311AudioCodec::CreateI2sChannels() {\n'+cfg+'\n}\n'+s)
+p=Path('firmware/tests/playback_adapter_test.cc');s=p.read_text().replace('#include <vector>','#include <vector>\n#include <cstdlib>\n#include <new>');s=s.replace('    enum class Fault {Format};','    static constexpr int kRate=24000;\n    enum class Fault {Format,Setup};');i=s.index('// Only platform/class plumbing');s=s[:i]+'''namespace family_robot { using DuplexReference=::D; }
+struct Channel { bool enabled=true, callback=false, deleted=false, auto_clear=false; };
+using i2s_chan_handle_t=Channel*;
+struct i2s_chan_info_t { bool is_enabled; };
+struct i2s_event_callbacks_t { bool (*on_sent)(i2s_chan_handle_t,i2s_event_data_t*,void*)=nullptr; bool (*on_recv)(i2s_chan_handle_t,i2s_event_data_t*,void*)=nullptr; };
+struct i2s_chan_config_t {int id,role,dma_desc_num,dma_frame_num;bool auto_clear_after_cb,auto_clear_before_cb;int intr_priority;};
+struct audio_codec_i2s_cfg_t {int port;Channel *rx_handle,*tx_handle;};
+constexpr int ESP_OK=0,I2S_NUM_0=0,I2S_ROLE_MASTER=0,AUDIO_CODEC_DMA_DESC_NUM=6,AUDIO_CODEC_DMA_FRAME_NUM=240;
+constexpr int MALLOC_CAP_INTERNAL=1,MALLOC_CAP_8BIT=2;
+#define ESP_ERROR_CHECK(expr) assert((expr)==ESP_OK)
+static int alloc_index=0,fail_alloc=0,register_index=0,fail_register=0;
+static bool diagnostics_start=true;
+static std::vector<void*> allocations;
+static void* heap_caps_malloc(size_t n,int) { if(++alloc_index==fail_alloc)return nullptr;void* p=std::malloc(n);allocations.push_back(p);return p; }
+static int i2s_channel_get_info(Channel* h,i2s_chan_info_t* i){assert(!h->deleted);i->is_enabled=h->enabled;return ESP_OK;}
+static int i2s_channel_disable(Channel* h){assert(!h->deleted);h->enabled=false;return ESP_OK;}
+static int i2s_channel_enable(Channel* h){assert(!h->deleted);h->enabled=true;return ESP_OK;}
+static int i2s_channel_register_event_callback(Channel* h,i2s_event_callbacks_t*,void*){assert(!h->enabled);if(++register_index==fail_register)return -1;h->callback=true;return ESP_OK;}
+static int i2s_del_channel(Channel* h){assert(!h->enabled);h->deleted=true;h->callback=false;return ESP_OK;}
+static Channel rebuilt[2];
+static int i2s_new_channel(i2s_chan_config_t* cfg,Channel** tx,Channel** rx){assert(cfg->dma_desc_num==6&&cfg->dma_frame_num==240&&!cfg->auto_clear_before_cb);rebuilt[0]={true,false,false,cfg->auto_clear_after_cb};rebuilt[1]=rebuilt[0];*tx=&rebuilt[0];*rx=&rebuilt[1];return ESP_OK;}
+static void audio_codec_delete_data_if(void*){}
+static void* audio_codec_new_i2s_data(audio_codec_i2s_cfg_t* c){assert(!c->tx_handle->callback&&!c->rx_handle->callback);return c->tx_handle;}
+class SoftwareAecCodec;
+class AecDiagnostics { public:explicit AecDiagnostics(SoftwareAecCodec&){} bool Start(){return diagnostics_start;} };
+// SDK/class plumbing is stubbed; production allocation, callback registration,
+// fault decisions, channel deletion/recreation and writer dispatch execute below.
+''' + s[i:];s=s.replace('    size_t written=0;', '''    size_t written=0;
+    Channel initial_[2];Channel *tx_handle_=&initial_[0],*rx_handle_=&initial_[1];
+    void *dev_=nullptr,*data_if_=initial_;
+    bool callback_refill_=true;int duplex_pins_[5]{};
+    void CreateI2sChannels();
+    void RecreateDuplexForOrdinaryWrite();
+    void CreateDuplexChannels(int,int,int,int,int){CreateI2sChannels();}
+''');s=s.replace('    bool accepting_=true,output_enabled_=true;','''    bool accepting_=true,output_enabled_=true,refill_mode_=true;
+    bool callbacks_ok_=false,infrastructure_ok_=false,input_reference_=false;
+    int input_channels_=1;
+    AecDiagnostics* diagnostics_=nullptr;
+    void InitializePlayback(int,int);
+    void StartPlaybackInfrastructure();
+    void UseOrdinaryOutput();
+    void Fail(D::Fault){if(playback_)playback_->HardwareFault();}
+    bool PlaybackSupported()const{return refill_mode_&&playback_&&callbacks_ok_&&infrastructure_ok_;}
+    static bool Sent(Channel*,i2s_event_data_t* e,void* p){return static_cast<SoftwareAecCodec*>(p)->Complete(e,true);}
+    static bool Received(Channel*,i2s_event_data_t* e,void* p){return static_cast<SoftwareAecCodec*>(p)->Complete(e,false);}
+''');s=s.replace('#include "software_aec_playback.inc"','#include "es8311_output_ownership.inc"\n#include "software_aec_initialization.inc"\n#include "software_aec_playback.inc"');start=s.index('    SoftwareAecCodec allocation_failure;');s=s[:start]+'''    // Inject each optional initialization failure through the actual initializer.
+    // Allocation order: reference, playback tracker, diagnostics. Registration:
+    // TX first, RX second (partial registration must also be removed).
+    for(int fault=0;fault<7;++fault) {
+        alloc_index=register_index=0;fail_alloc=fault>=1&&fault<=3?fault:0;
+        fail_register=fault==4?1:(fault==5?2:0);diagnostics_start=fault!=6;
+        SoftwareAecCodec initialized;initialized.playback_=nullptr;initialized.pair_=nullptr;
+        initialized.accepting_=false;
+        initialized.InitializePlayback(24000,24000);
+        initialized.StartPlaybackInfrastructure();
+        if(!fault) {
+            assert(initialized.PlaybackSupported()&&initialized.refill_mode_);
+            assert(initialized.tx_handle_->callback&&initialized.rx_handle_->callback);
+            initialized.OutputData(pcm);assert(initialized.written==0);
+        } else {
+            assert(!initialized.PlaybackSupported()&&!initialized.refill_mode_);
+            assert(initialized.input_channels_==1&&!initialized.input_reference_);
+            assert(initialized.initial_[0].deleted&&initialized.initial_[1].deleted);
+            assert(initialized.tx_handle_->auto_clear&&!initialized.tx_handle_->callback);
+            assert(initialized.rx_handle_->auto_clear&&!initialized.rx_handle_->callback);
+            assert(!initialized.PlaybackBusy());PlaybackSnapshot report;
+            assert(!initialized.PlaybackPoll(report));
+            initialized.OutputData(pcm);assert(initialized.written==pcm.size());
+            auto token=initialized.PlaybackGeneration();initialized.PlaybackControl(Op::Reset);
+            initialized.OutputTagged(pcm,{},0,token);assert(initialized.written==pcm.size());
+            initialized.OutputData(pcm);assert(initialized.written==pcm.size()*2);
+            // Even an erroneously delayed invocation cannot refill ordinary DMA.
+            int16_t normal[240];std::fill_n(normal,240,17);i2s_event_data_t ev{normal,sizeof(normal)};
+            initialized.Complete(&ev,true);assert(normal[0]==17);
+        }
+    }
+    for(auto* allocation:allocations)std::free(allocation);
+    puts("production adapter cancellation/ISR serialization and initialization fallback passed");
+}
+''';p.write_text(s)

@@ -1,0 +1,51 @@
+import json,os,pathlib,shlex,subprocess,sys,tarfile
+os.umask(0o077)
+root=pathlib.Path.cwd(); base=root/'.superpowers/wake-fix-20261023'; art=root/'artifacts/wake-fix-20261023'
+ssh=['ssh','-S','/tmp/family-robot-wake-fix-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+remote='/tmp/family-robot-wake-fix-go-v1'
+if sys.argv[1]=='prepare':
+ with tarfile.open(base/'probe.tar','w') as t:
+  t.add(base/'probe.go',arcname='cmd/overnightprobe/main.go')
+  for name in ['stop','query','continue']:t.add(base/(name+'.wav'),arcname='fixtures/'+name+'.wav')
+  for name in ['hello','count50']:t.add(root/'artifacts/playback-field-20261022/synthetic-inputs'/(name+'.wav'),arcname='fixtures/'+name+'.wav')
+ subprocess.run(ssh+['umask 077; mkdir -p '+remote+'; cat > '+remote+'/probe.tar'],input=(base/'probe.tar').read_bytes(),check=True)
+ cmd='set -eu; cd '+remote+'; tar xf /tmp/family-robot-playback-go-c6f2787c8044/source.tar; tar xf probe.tar; PATH=/opt/family-robot/toolchains/go1.27.3/bin:/usr/bin:/bin go build -o probe ./cmd/overnightprobe'
+ subprocess.run(ssh+[cmd],check=True);sys.exit()
+case,scenario,order,receipts=sys.argv[1:]
+program=r'''import hashlib,json,os,pathlib,shlex,subprocess,sys,time,urllib.request
+base,case,scenario,order,receipts=sys.argv[1:]
+assert case.replace('-','').isalnum()
+candidate=base+'/gateway-debug'
+assert pathlib.Path(candidate).is_file()
+env=os.environ.copy()
+for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+ if not line.strip() or line.lstrip().startswith('#'):continue
+ k,_,v=line.partition('=');env[k]=shlex.split(v)[0] if shlex.split(v) else ''
+port=18002 if scenario=='idle' else 18001
+env['ROBOT_LISTEN_ADDR']='127.0.0.1:'+str(port);env['ROBOT_SMOKE_URL']='ws://127.0.0.1:'+str(port)+'/xiaozhi/v1/'
+with open(base+'/'+case+'-gateway.jsonl','w') as log:
+ p=subprocess.Popen([candidate],env=env,stdout=log,stderr=log)
+ try:
+  for i in range(50):
+   if p.poll() is not None:raise RuntimeError('isolated_gateway_exited')
+   try:
+    assert json.load(urllib.request.urlopen('http://127.0.0.1:'+str(port)+'/healthz',timeout=1))['status']=='ok';break
+   except Exception:time.sleep(.1)
+  else:raise RuntimeError('isolated_gateway_unhealthy')
+  cmd=[base+'/probe','--dir','/tmp/family-robot-overnight-go/fixtures','--out',base+'/'+case+'.json','--scenario',scenario,'--order',order]
+  if receipts=='true':cmd+=['--receipts']
+  r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=245)
+  print(r.stdout)
+  if r.returncode:print(r.stderr)
+  raise SystemExit(r.returncode)
+ finally:
+  p.terminate()
+  try:p.wait(timeout=5)
+  except subprocess.TimeoutExpired:p.kill();p.wait()
+'''
+r=subprocess.run(ssh+['sudo -n python3 - '+' '.join(shlex.quote(a) for a in [remote,case,scenario,order,receipts])],input=program,text=True,capture_output=True)
+(art/(case+'.json')).write_text(r.stdout+r.stderr)
+print(r.stdout+r.stderr)
+for name in [case+'-gateway.jsonl']:
+ q=subprocess.run(ssh+['sudo -n cat '+remote+'/'+name],capture_output=True,text=True);(art/name).write_text(q.stdout)
+sys.exit(r.returncode)

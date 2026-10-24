@@ -1,0 +1,74 @@
+import json,hashlib,re,unicodedata,statistics
+from pathlib import Path
+R=Path(__file__).resolve().parent
+M=json.loads((R/'manifest.json').read_text());cases={c['name']:c for c in M['cases']}
+cn=['零','一','二','三','四','五','六','七','八','九','十']
+def num(n):
+ n=int(n)
+ return cn[n] if n<11 else ('十'+cn[n%10] if n<20 else cn[n//10]+'十'+(cn[n%10] if n%10 else '')) if n<=50 else str(n)
+variant=str.maketrans('陽們園後飯點檢務橋紅歐', '阳们园后饭点检务桥红欧')
+def norm(t,rich=True):
+ if rich:
+  t=t.translate(variant)
+  t=re.sub(r'(?<!\d)(\d+)\.(\d+)(?!\d)',lambda m:num(m[1])+'点'+''.join(cn[int(x)] for x in m[2]),t)
+  t=re.sub(r'\d+',lambda m:num(m[0]),t)
+ return ''.join(x.lower() for x in t if not x.isspace() and not unicodedata.category(x).startswith('P'))
+def edits(a,b):
+ p=list(range(len(b)+1))
+ for i,x in enumerate(a):
+  q=[i+1]
+  for j,y in enumerate(b):q.append(min(q[-1]+1,p[j+1]+1,p[j]+(x!=y)))
+  p=q
+ return p[-1]
+def groups(c,r):
+ source=c.get('full_source_units',[])
+ if c['name']=='silence-full-draft':source=[{'index':i,'text':x} for i,x in enumerate(M['sources']['count']['units'][j]['text'] for j in range(10))]
+ if c.get('source_start_frame',0):source=[u for u in source if u['start_frame']>=c['source_start_frame']]
+ spans=r.get('spans',[]);out=[];cursor=0
+ for u in source:
+  text=norm(u['text']);found=None
+  for a in range(cursor,len(spans)):
+   for b in range(a,len(spans)):
+    if norm(''.join(x['text'] for x in spans[a:b+1]))==text:
+     found=(a,b);break
+   if found:break
+  if found is None:continue
+  a,b=found;p=spans[a:b+1]
+  out.append({'index':u['index'],'text':u['text'],'start':p[0]['start'],'end':p[-1]['end'],'positive_constituents':all(x['end']>x['start'] for x in p)})
+  cursor=b+1
+ return out
+out={'protocol':'Rich normalization folds explicit variant table and numbers <=50/decimal; raw CER separately. Does not correct 红 to 虹, homophones, or split concatenated tokens. A matching constructed unit must coincide with returned token boundaries; no interpolation. Diagnostic last-end rule is unsafe, not production contract.','cases':[]}
+for method in ['qwen','whisper']:
+ report=json.loads((R/f'{method}-results.json').read_text());vals=[]
+ for r in report['cases']:
+  if r['iteration']!=1:continue
+  c=cases[r['name']];s=r.get('spans',[]);d=r['audio_duration'];base={'method':method,'name':r['name'],'inference_seconds':r['inference_seconds'],'empty':not s,'zero_duration':sum(x['end']<=x['start'] for x in s),'outside_audio':sum(x['start']<0 or x['end']>d for x in s),'model_exception':r.get('error')}
+  if 'truth_units' in c:
+   gs=groups(c,r);truth=c['truth_units'];truth_ids=[x['index'] for x in truth]
+   # Identity-based completion set; matched fully recognized unit ending within clip.
+   picked=[g for g in gs if g['end']<=d and g['end']>g['start']]
+   pred=[x['index'] for x in picked];last=max(pred,default=-1);tl=max(truth_ids,default=-1)
+   omitted=[x for x in truth_ids if x not in pred];extra=[x for x in pred if x not in truth_ids]
+   base.update(truth_complete_units=truth_ids,matched_candidate_units=gs,diagnostic_completed=pred,diagnostic_last_correct=last==tl,diagnostic_omitted_units=omitted,diagnostic_false_completed_units=extra,diagnostic_resume_skips_units=max(0,last-tl),diagnostic_resume_repeats_units=max(0,tl-last),strict_eligibility='unknown: device mapping absent; acoustic coverage not attested')
+   true_text=''.join(x['text'] for x in truth)
+   # Partial unit at cut has unknown intended phonetic transcript: do not score its characters as ASR insertion.
+   if c['audio_complete']:
+    base['raw_cer_complete']=edits(norm(true_text,False),norm(r.get('text',''),False))/max(1,len(norm(true_text,False)))
+    base['normalized_cer_complete']=edits(norm(true_text),norm(r.get('text','')))/max(1,len(norm(true_text)))
+   errors=[]
+   for u in truth:
+    g=next((x for x in gs if x['index']==u['index']),None)
+    if g:errors.append({'unit':u['text'],'end_error_seconds':g['end']-u['end'],'start_error_seconds':g['start']-u['start']})
+   base['matched_unit_support_errors']=errors
+  else:base['timing_truth']='unlabelled_native_continuous; not scored'
+  out['cases'].append(base)
+ # summarize all 12 constructed conditions, not unlabelled native.
+ rows=[x for x in out['cases'] if x['method']==method and 'truth_complete_units' in x]
+ out[method]={'constructed_conditions':len(rows),'last_correct_diagnostic':sum(x['diagnostic_last_correct'] for x in rows),'false_completed_units_diagnostic':sum(len(x['diagnostic_false_completed_units']) for x in rows),'omitted_units_diagnostic':sum(len(x['diagnostic_omitted_units']) for x in rows),'empty_conditions':sum(x['empty'] for x in rows),'zero_span_conditions':sum(x['zero_duration']>0 for x in rows),'out_of_range_conditions':sum(x['outside_audio']>0 for x in rows),'repeat2_inference_median_seconds':statistics.median(x['inference_seconds'] for x in rows),'max_peak_rss_bytes':max(x['peak_process_rss_bytes'] for x in report['cases'])}
+ # Full-source unit-end/start support errors independently constructed, not phonetic timings.
+ rows=[x for x in rows if x['name'] in ['count-full','ordinary-full','terms-full']];es=[abs(e['end_error_seconds']) for x in rows for e in x['matched_unit_support_errors']];ss=[abs(e['start_error_seconds']) for x in rows for e in x['matched_unit_support_errors']]
+ out[method].update(full_source_matched_units=len(es),full_source_end_mae_seconds=statistics.mean(es),full_source_max_end_error_seconds=max(es),full_source_start_mae_seconds=statistics.mean(ss),full_source_max_start_error_seconds=max(ss))
+(R/'scores.json').write_text(json.dumps(out,ensure_ascii=False,indent=2)+'\n')
+print(json.dumps({k:v for k,v in out.items() if k!='cases'},ensure_ascii=False,indent=2))
+for c in out['cases']:
+ if 'truth_complete_units' in c:print(c['method'],c['name'],'truth',c['truth_complete_units'],'pred',c['diagnostic_completed'],'false',c['diagnostic_false_completed_units'],'omitted',c['diagnostic_omitted_units'],'zero/out',c['zero_duration'],c['outside_audio'])

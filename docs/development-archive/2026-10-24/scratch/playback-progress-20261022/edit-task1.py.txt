@@ -1,0 +1,135 @@
+from pathlib import Path
+import shutil
+root=Path('.superpowers/playback-progress-20261022')
+base=root/'task1-base'; work=root/'task1-work'
+if not work.exists(): shutil.copytree(base,work)
+def edit(path,old,new):
+ p=work/path;s=p.read_text();assert old in s,(path,old);p.write_text(s.replace(old,new))
+# Shared types live in an overlay available for both build variants.
+edit('main/audio/audio_codec.h','#include "board.h"','#include "board.h"\n#include "playback_progress.h"')
+edit('main/audio/audio_codec.h','    virtual void Start();','''    virtual void Start();
+    enum class PlaybackOp { Connect, Start, Admit, Release, Seal, Interrupt, Invalidate, Reset };
+    virtual bool PlaybackSupported() const { return false; }
+    virtual bool PlaybackControl(PlaybackOp, family_robot::PlaybackIdentity = {}, uint64_t = 0, size_t = 0) { return false; }
+    virtual uint32_t PlaybackGeneration() const { return 0; }
+    virtual bool PlaybackPoll(family_robot::PlaybackSnapshot&) { return false; }
+    virtual bool PlaybackBusy() const { return false; }
+    virtual void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity,
+                              uint64_t, uint32_t) { OutputData(pcm); }
+''')
+edit('main/audio/codecs/es8311_audio_codec.cc','.auto_clear_after_cb = true,','.auto_clear_after_cb = !CONFIG_STOPWATCH_SOFTWARE_AEC,')
+edit('main/protocols/protocol.h','#include <cJSON.h>','#include <cJSON.h>\n#include "playback_progress.h"')
+edit('main/protocols/protocol.h','    std::vector<uint8_t> payload;','''    std::vector<uint8_t> payload;
+    family_robot::PlaybackIdentity receipt_id{};
+    uint64_t receipt_first = 0;
+''')
+edit('main/protocols/protocol.h','    virtual bool Start() = 0;','''    virtual bool PlaybackNegotiated() const { return false; }
+    virtual family_robot::PlaybackIdentity PlaybackEventIdentity() const { return {}; }
+    virtual bool PlaybackEventCurrent(family_robot::PlaybackIdentity) const { return true; }
+    virtual void SendPlayback(const family_robot::PlaybackSnapshot&) {}
+    virtual bool Start() = 0;''')
+edit('main/audio/audio_service.h','    uint32_t media_position_ms = 0;','''    uint32_t media_position_ms = 0;
+    family_robot::PlaybackIdentity receipt_id{};
+    uint64_t receipt_first = 0;
+    uint32_t output_generation = 0;''')
+# All early queue rejects release the admission. This includes wait/reset races.
+edit('main/audio/audio_service.cc','''        } else {
+            return false;
+        }
+    }
+    if (service_stopped_.load() || generation != playback_generation_) {
+        return false;
+    }
+    playback_drained_notified_ = false;''','''        } else {
+            codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, packet->receipt_id);
+            codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, packet->receipt_id);
+            return false;
+        }
+    }
+    if (service_stopped_.load() || generation != playback_generation_) {
+        codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, packet->receipt_id);
+        codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, packet->receipt_id);
+        return false;
+    }
+    playback_drained_notified_ = false;''')
+edit('main/audio/audio_service.cc','''            task.media_position_ms = packet->media_position_ms;''','''            task.media_position_ms = packet->media_position_ms;
+            task.receipt_id = packet->receipt_id;
+            task.receipt_first = packet->receipt_first;
+            task.output_generation = output_generation;''')
+edit('main/audio/audio_service.cc','''            const uint32_t generation = playback_generation_;
+            audio_queue_cv_.notify_all();''','''            const uint32_t generation = playback_generation_;
+            const uint32_t output_generation = codec_->PlaybackGeneration();
+            audio_queue_cv_.notify_all();''')
+edit('main/audio/audio_service.cc','''                audio_playback_queue_.push_back(std::move(task));
+            }
+            decode_in_flight_ = false;''','''                if (task.receipt_id && (packet->sample_rate != 24000 || packet->frame_duration != 60 || task.pcm.size() != 1440))
+                    codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, task.receipt_id);
+                audio_playback_queue_.push_back(std::move(task));
+            } else {
+                codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, task.receipt_id);
+                codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, task.receipt_id);
+            }
+            decode_in_flight_ = false;''')
+edit('main/audio/audio_service.cc','''        codec_->OutputData(task.pcm);''','''        codec_->OutputTagged(task.pcm, task.receipt_id, task.receipt_first, task.output_generation);
+        codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, task.receipt_id);''')
+edit('main/audio/audio_service.cc','''        ++playback_generation_;
+        std::unique_lock<std::mutex> decoder_lock''','''        ++playback_generation_;
+        // Serialize cancellation with each DMA-queue submission, including output
+        // that was dequeued before this reset. Never hold mux_ while waiting.
+        codec_->PlaybackControl(AudioCodec::PlaybackOp::Reset);
+        std::unique_lock<std::mutex> decoder_lock''')
+# Prepare start synchronously in the receive callback. Later UI/AFE changes may
+# not clear admitted server audio. Ordinary, non-negotiated behavior is unchanged.
+edit('main/audio/audio_service.h','    void ResetDecoder();','''    void ResetDecoder();
+    void PreserveServerPlayback(bool preserve) { preserve_server_playback_.store(preserve); }
+    bool PreservingServerPlayback() const { return preserve_server_playback_.load(); }''')
+edit('main/audio/audio_service.h','    AudioCodec* codec_ = nullptr;','    AudioCodec* codec_ = nullptr;\n    std::atomic<bool> preserve_server_playback_{false};')
+edit('main/audio/audio_service.cc','''        ResetDecoder();
+        audio_input_need_warmup_ = true;''','''        if (!PreservingServerPlayback()) ResetDecoder();
+        audio_input_need_warmup_ = true;''')
+# Draining includes the additional PCM/DMA queue, polled by main every 20ms.
+edit('main/audio/audio_service.cc','''           !output_in_flight_;''','''           !output_in_flight_ && !codec_->PlaybackBusy();''')
+# Main task poll has no Schedule queue, bounded 16 reports per wake. Using the
+# existing event wait timeout avoids another task/stack/timer allocation.
+edit('main/application.cc','''auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);''','''auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, pdMS_TO_TICKS(20));
+        if (protocol_) {
+            family_robot::PlaybackSnapshot receipt;
+            auto* playback_codec = Board::GetInstance().GetAudioCodec();
+            for (size_t i = 0; i < family_robot::PlaybackProgress::kRecords && playback_codec->PlaybackPoll(receipt); ++i)
+                protocol_->SendPlayback(receipt);
+            if (pending_listening_start_ && audio_service_.IsPlaybackIdle())
+                bits |= MAIN_EVENT_PLAYBACK_DRAINED;
+        }''')
+edit('main/application.cc','''        if (GetDeviceState() == kDeviceStateSpeaking) {
+            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        }
+    });''','''        if (packet->receipt_id || GetDeviceState() == kDeviceStateSpeaking) {
+            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        }
+    });''')
+edit('main/application.cc','''                Schedule([this]() {
+                    aborted_ = false;
+                    SetDeviceState(kDeviceStateSpeaking);
+                });''','''                const auto receipt_id = protocol_->PlaybackEventIdentity();
+                Schedule([this, receipt_id]() {
+                    if (receipt_id && !protocol_->PlaybackEventCurrent(receipt_id)) return;
+                    aborted_ = false;
+                    SetDeviceState(kDeviceStateSpeaking);
+                });''')
+edit('main/application.cc','''                Schedule([this, interrupted]() {
+                    if (interrupted)
+                        audio_service_.ResetDecoder();''','''                const auto receipt_id = protocol_->PlaybackEventIdentity();
+                Schedule([this, interrupted, receipt_id]() {
+                    if (receipt_id && !protocol_->PlaybackEventCurrent(receipt_id)) return;
+                    if (interrupted && !receipt_id)
+                        audio_service_.ResetDecoder();''')
+edit('main/application.cc','''            audio_service_.ResetDecoder();
+            break;
+        case kDeviceStateNotifying:''','''            if (!audio_service_.PreservingServerPlayback()) audio_service_.ResetDecoder();
+            break;
+        case kDeviceStateNotifying:''')
+# Local abort stops software queue immediately, retains completed DMA tail tags.
+edit('main/application.cc','''    aborted_ = true;
+    if (protocol_) {''','''    aborted_ = true;
+    if (protocol_ && protocol_->PlaybackNegotiated()) audio_service_.ResetDecoder();
+    if (protocol_) {''')

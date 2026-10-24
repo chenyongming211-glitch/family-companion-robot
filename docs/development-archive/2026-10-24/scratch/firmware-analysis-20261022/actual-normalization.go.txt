@@ -1,0 +1,12 @@
+package main
+import("unicode";"strings";"encoding/json";"os")
+func normalizeWakePhrase(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, text)
+}
+
+func main(){for _,p:=range [][2]string{{"你好小智","你好，小智。"},{"你好小智","你好，小志。"}} {json.NewEncoder(os.Stdout).Encode(map[string]any{"wake":p[0],"synthetic_transcript":p[1],"normalized_equal":normalizeWakePhrase(p[0])==normalizeWakePhrase(p[1])})}}

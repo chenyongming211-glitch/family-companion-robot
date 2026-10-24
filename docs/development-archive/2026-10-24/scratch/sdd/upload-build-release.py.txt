@@ -1,0 +1,9 @@
+import subprocess,json,shlex
+from pathlib import Path
+m=json.loads(Path('/tmp/family-robot-controls-release.json').read_text());remote='/tmp/'+m['version'];ssh=['ssh','-S','/tmp/family-robot-controls-%C','-o','BatchMode=yes','ubuntu@82.156.48.111'];q=shlex.quote
+subprocess.run(ssh+['mkdir -m 0700 '+q(remote)],check=True)
+subprocess.run(['scp','-p','-o','ControlPath=/tmp/family-robot-controls-%C','-o','BatchMode=yes',m['archive'],'.superpowers/sdd/linux-build-release.sh','ubuntu@82.156.48.111:'+remote+'/'],check=True)
+archive=remote+'/'+Path(m['archive']).name;src=remote+'/src'
+cmd='mkdir '+q(src)+' && tar -xzf '+q(archive)+' -C '+q(src)+' && sh '+q(remote+'/linux-build-release.sh')+' '+q(m['version'])+' '+q(src)+' '+q(archive)+' '+q(m['archive_sha256'])
+r=subprocess.run(ssh+[cmd],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+Path('artifacts/device-controls-20261021/linux-tests.log').write_text(r.stdout);print(r.stdout);raise SystemExit(r.returncode)

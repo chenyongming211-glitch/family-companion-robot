@@ -1,0 +1,65 @@
+"""Explicit onsite window only. Does not enable realtime; stops only capture; operator ends RT after playback."""
+import importlib.util, threading, time, serial, json, re, os, sys, subprocess, datetime
+from pathlib import Path
+os.umask(0o077)
+root=Path(sys.argv[1]);ready=threading.Event();stop=threading.Event();errors=[];states=[]
+ssh=['ssh','-S','/tmp/family-robot-field-20261022.sock','-o','BatchMode=yes','-o','ConnectTimeout=5','ubuntu@82.156.48.111']
+def server(command):
+ p=subprocess.run(ssh+[command],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
+ if p.returncode:raise RuntimeError('server metadata collection failed')
+ return p.stdout
+server_start=server('date -u +%Y-%m-%dT%H:%M:%SZ').strip()
+spec=importlib.util.spec_from_file_location('capture','firmware/tools/capture_aec.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+def collect():
+ try:m.capture('192.168.3.3',9000,110,root,source='192.168.3.5',stop_event=stop,on_ready=lambda *a:ready.set())
+ except Exception as e:errors.append(type(e).__name__);ready.set()
+t=threading.Thread(target=collect,daemon=True);t.start()
+if not ready.wait(5) or errors:stop.set();t.join(timeout=1);raise SystemExit('receiver unavailable; nothing requested')
+s=serial.Serial(port=None,baudrate=115200,timeout=.15);s.dtr=True;s.rts=False;s.port='/dev/cu.usbmodem21201'
+start=time.monotonic();next_stats=start+10;buf=b'';fault=False;requested=False;final_lines=[]
+try:
+ s.open()
+ with (root/'console.log').open('wb') as raw:
+  def consume(chunk,final=False):
+   global buf,fault
+   if not chunk:return
+   raw.write(chunk);raw.flush();buf+=chunk
+   while b'\n' in buf:
+    line,buf=buf.split(b'\n',1);text=re.sub(r'\x1b\[[0-9;]*m','',line.decode(errors='replace'))
+    state=re.search(r'[IWE] \((\d+)\) StateMachine: State: ([a-z_]+) -> ([a-z_]+)',text)
+    if state:
+     item={'elapsed':round(time.monotonic()-start,3),'device_ms':int(state[1]),'from':state[2],'to':state[3]};states.append(item);print('STATE',json.dumps(item),flush=True)
+    if text.startswith(('aec_stats ','aec_diag ','aec_format ','aec_realtime ')):
+     print(text,flush=True)
+     if final:final_lines.append(text)
+     if text.startswith('aec_stats ') and re.search(r'\bfault=[1-9]',text):fault=True
+  try:
+   s.write(b'aec_diag_start 192.168.3.3 9000 90\r\naec_stats\r\n');s.flush();requested=True
+   print('SYNC_CAPTURE_REQUESTED',flush=True)
+   while time.monotonic()-start<94 and not fault and not errors and not (root/'finish-requested').exists():
+    consume(s.read(8192))
+    if time.monotonic()>=next_stats:s.write(b'aec_stats\r\n');s.flush();next_stats+=10
+  finally:
+   if requested:
+    s.write(b'aec_diag_stop\r\naec_stats\r\n');s.flush()
+    until=time.monotonic()+3
+    while time.monotonic()<until:consume(s.read(8192),True)
+finally:
+ if s.is_open:s.close()
+ stop.set();t.join(timeout=3)
+ record={'capture_seconds':90,'server_start_utc':server_start,'host_end_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'states':states,'collector_errors':errors,'fault_observed':fault,'teardown_lines':final_lines,'explicit_window':True,'realtime_teardown':'unchanged; operator must end it after playback'}
+ (root/'state-timeline.json').write_text(json.dumps(record,indent=2)+'\n')
+ try:
+  # Only already-sanitized event records; discard any text outside the allowlist.
+  logs=server('sudo -n journalctl -u family-robot --since '+server_start+' --no-pager -o cat')
+  allowed={'time','level','msg','event','session','mode','upstream_generation','response_open','speaking','pending_ms','input_bytes','protocol','input_frame_ms','server_aec_requested','reason'}
+  records=[]
+  for line in logs.splitlines():
+   try:v=json.loads(line)
+   except ValueError:continue
+   if v.get('msg') in ('voice_event','device_connected','device_session_closed'):
+    records.append({k:v[k] for k in v.keys()&allowed})
+  (root/'gateway-events.jsonl').write_text(''.join(json.dumps(x,separators=(',',':'))+'\n' for x in records))
+  print('GATEWAY_METADATA_RECORDS',len(records),flush=True)
+ except Exception as e:print('GATEWAY_METADATA_FAILED',type(e).__name__,flush=True)
+ print('CAPTURE_STOPPED_REALTIME_UNCHANGED',flush=True)

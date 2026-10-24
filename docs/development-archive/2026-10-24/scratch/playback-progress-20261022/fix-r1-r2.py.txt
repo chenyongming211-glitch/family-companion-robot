@@ -1,0 +1,133 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work')
+def edit(file,old,new):
+ p=w/file;s=p.read_text();assert old in s,(file,old);p.write_text(s.replace(old,new))
+p=Path('firmware/overlays/main/audio/playback_progress.h');s=p.read_text().replace('struct PlaybackSnapshot {','''struct PlaybackEvent {
+    PlaybackIdentity identity{};
+    uint32_t lease = 0;
+    explicit operator bool() const { return bool(identity); }
+};
+struct PlaybackSnapshot {''');p.write_text(s)
+edit('main/protocols/protocol.h','OnAudioChannelClosed(std::function<void()> callback)','OnAudioChannelClosed(std::function<void(uint32_t)> callback)')
+edit('main/protocols/protocol.h','std::function<void()> on_audio_channel_closed_;','std::function<void(uint32_t)> on_audio_channel_closed_;')
+edit('main/protocols/protocol.cc','OnAudioChannelClosed(std::function<void()> callback)','OnAudioChannelClosed(std::function<void(uint32_t)> callback)')
+edit('main/protocols/mqtt_protocol.cc','on_audio_channel_closed_();','on_audio_channel_closed_(0);')
+edit('main/protocols/protocol.h','virtual family_robot::PlaybackIdentity PlaybackEventIdentity','virtual family_robot::PlaybackEvent PlaybackEventIdentity')
+edit('main/protocols/protocol.h','PlaybackEventCurrent(family_robot::PlaybackIdentity)','PlaybackEventCurrent(family_robot::PlaybackEvent)')
+edit('main/protocols/protocol.h','    virtual bool PlaybackNegotiated()','    virtual uint32_t AudioChannelEpoch() const { return 0; }\n    virtual bool PlaybackNegotiated()')
+edit('main/protocols/websocket_protocol.h','family_robot::PlaybackIdentity PlaybackEventIdentity','family_robot::PlaybackEvent PlaybackEventIdentity')
+edit('main/protocols/websocket_protocol.h','PlaybackEventCurrent(family_robot::PlaybackIdentity id)','PlaybackEventCurrent(family_robot::PlaybackEvent event)')
+edit('main/protocols/websocket_protocol.h','    bool PlaybackNegotiated() const override;','    uint32_t AudioChannelEpoch() const override;\n    bool PlaybackNegotiated() const override;')
+edit('main/protocols/websocket_protocol.h','    uint32_t playback_connection_ = 0;','    uint32_t playback_connection_ = 0, socket_connection_ = 0, playback_event_lease_ = 0;')
+edit('main/protocols/websocket_protocol.h','bool ResetPlaybackConnection(uint32_t expected = 0);','bool ResetPlaybackConnection(uint32_t expected = 0, uint32_t* closed_epoch = nullptr);\n    void NotifyPlaybackClosed(uint32_t connection);')
+edit('main/protocols/websocket_protocol.cc','''        connection = playback_connection_;''','''        connection = playback_connection_;
+        socket_connection_ = connection;''')
+edit('main/protocols/websocket_protocol.cc','''        if (!ResetPlaybackConnection(connection)) return;
+        ESP_LOGI(TAG, "Websocket disconnected");
+        if (on_audio_channel_closed_ != nullptr) {
+            on_audio_channel_closed_();
+        }''','''        NotifyPlaybackClosed(connection);''')
+# Exact UI production methods become include-shared to exercise real Schedule work.
+edit('main/application.cc','''    protocol_->OnAudioChannelClosed([this, &board]() {
+        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        Schedule([this]() {
+            auto display = Board::GetInstance().GetDisplay();
+            display->SetChatMessage("system", "");
+            SetDeviceState(kDeviceStateIdle);
+        });
+    });''','''    protocol_->OnAudioChannelClosed([this](uint32_t epoch) { ScheduleAudioChannelClosed(epoch); });''')
+edit('main/application.cc','''                Schedule([this, receipt_id]() {
+                    if (receipt_id && !protocol_->PlaybackEventCurrent(receipt_id)) return;
+                    aborted_ = false;
+                    SetDeviceState(kDeviceStateSpeaking);
+                });''','''                SchedulePlaybackStart(receipt_id);''')
+edit('main/application.cc','''                Schedule([this, interrupted, receipt_id]() {
+                    if (receipt_id && !protocol_->PlaybackEventCurrent(receipt_id)) return;
+                    if (interrupted && !receipt_id)
+                        audio_service_.ResetDecoder();
+                    if (GetDeviceState() == kDeviceStateSpeaking) {
+                        if (listening_mode_ == kListeningModeManualStop) {
+                            SetDeviceState(kDeviceStateIdle);
+                        } else {
+                            SetDeviceState(kDeviceStateListening);
+                        }
+                    }
+                });''','''                SchedulePlaybackStop(receipt_id, interrupted);''')
+edit('main/application.h','    AudioService audio_service_;','''    AudioService audio_service_;
+    void ScheduleAudioChannelClosed(uint32_t epoch);
+    void SchedulePlaybackStart(family_robot::PlaybackEvent event);
+    void SchedulePlaybackStop(family_robot::PlaybackEvent event, bool interrupted);''')
+p=w/'main/application.cc';p.write_text(p.read_text()+'\n#include "playback_application.inc"\n')
+p=Path('firmware/overlays/main/audio/playback_websocket.inc');s=p.read_text().replace('ResetPlaybackConnection(uint32_t expected)','ResetPlaybackConnection(uint32_t expected, uint32_t* closed_epoch)').replace('''    playback_negotiated_ = playback_receiving_ = playback_tracking_ = false;''','''    if (closed_epoch) *closed_epoch = playback_connection_;
+    playback_negotiated_ = playback_receiving_ = playback_tracking_ = false;''')
+s=s.replace('family_robot::PlaybackIdentity WebsocketProtocol::PlaybackEventIdentity','family_robot::PlaybackEvent WebsocketProtocol::PlaybackEventIdentity')
+s=s.replace('''    if (!cJSON_IsNumber(connection) || !cJSON_IsNumber(id)) return {};
+    return {static_cast<uint32_t>(connection->valuedouble), static_cast<uint32_t>(id->valuedouble)};''','''    auto* lease = cJSON_GetObjectItem(root, "_device_playback_lease");
+    if (!cJSON_IsNumber(connection) || !cJSON_IsNumber(id) || !cJSON_IsNumber(lease)) return {};
+    return {{static_cast<uint32_t>(connection->valuedouble), static_cast<uint32_t>(id->valuedouble)},
+            static_cast<uint32_t>(lease->valuedouble)};''')
+s=s.replace('PlaybackEventCurrent(family_robot::PlaybackIdentity id)','PlaybackEventCurrent(family_robot::PlaybackEvent event)').replace('return playback_negotiated_ && id == playback_id_;','''return playback_negotiated_ && event.identity == playback_id_ &&
+        event.lease == playback_event_lease_ && event.lease != UINT32_MAX;''')
+s=s.replace('''    cJSON_DeleteItemFromObject(root, "_device_playback_connection");''','''    cJSON_DeleteItemFromObject(root, "_device_playback_connection");
+    cJSON_DeleteItemFromObject(root, "_device_playback_lease");''')
+s=s.replace('''        playback_id_ = id; playback_first_ = 0; playback_receiving_ = true;''','''        if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
+        playback_id_ = id; playback_first_ = 0; playback_receiving_ = true;''')
+s=s.replace('''        if (interrupted) Application::GetInstance().GetAudioService().ResetDecoder();
+        else codec''','''        if (interrupted) {
+            if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
+            Application::GetInstance().GetAudioService().ResetDecoder();
+        } else codec''')
+s=s.replace('''    cJSON_AddNumberToObject(root, "_device_playback_connection", connection);''','''    cJSON_AddNumberToObject(root, "_device_playback_connection", connection);
+    cJSON_AddNumberToObject(root, "_device_playback_lease", playback_event_lease_);''')
+s=s.replace('''        if (playback_negotiated_) playback_receiving_ = false;''','''        if (playback_negotiated_) {
+            playback_receiving_ = false;
+            if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
+        }''')
+a=s.index('void WebsocketProtocol::CloseAudioChannel(')
+s=s[:a]+'''uint32_t WebsocketProtocol::AudioChannelEpoch() const {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    return playback_connection_;
+}
+void WebsocketProtocol::NotifyPlaybackClosed(uint32_t connection) {
+    uint32_t closed_epoch;
+    if (!ResetPlaybackConnection(connection, &closed_epoch)) return;
+    if (on_audio_channel_closed_) on_audio_channel_closed_(closed_epoch);
+}
+void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
+    (void)send_goodbye;
+    if (!websocket_) return;
+    // Claim this physical socket's close before destruction. Synchronous, delayed
+    // and repeated transport callbacks then fail the old-epoch check harmlessly.
+    NotifyPlaybackClosed(socket_connection_);
+    websocket_.reset();
+}
+'''
+p.write_text(s.rstrip()+'\n')
+Path('firmware/overlays/main/audio/playback_application.inc').write_text('''// Actual scheduled application transitions, also compiled by the native harness.
+void Application::ScheduleAudioChannelClosed(uint32_t epoch) {
+    Schedule([this, epoch] {
+        if (epoch && (!protocol_ || protocol_->AudioChannelEpoch() != epoch)) return;
+        auto& board = Board::GetInstance();
+        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        board.GetDisplay()->SetChatMessage("system", "");
+        SetDeviceState(kDeviceStateIdle);
+    });
+}
+void Application::SchedulePlaybackStart(family_robot::PlaybackEvent event) {
+    Schedule([this, event] {
+        if (event && (!protocol_ || !protocol_->PlaybackEventCurrent(event))) return;
+        aborted_ = false;
+        SetDeviceState(kDeviceStateSpeaking);
+    });
+}
+void Application::SchedulePlaybackStop(family_robot::PlaybackEvent event, bool interrupted) {
+    Schedule([this, event, interrupted] {
+        if (event && (!protocol_ || !protocol_->PlaybackEventCurrent(event))) return;
+        if (interrupted && !event) audio_service_.ResetDecoder();
+        if (GetDeviceState() == kDeviceStateSpeaking) {
+            SetDeviceState(listening_mode_ == kListeningModeManualStop
+                ? kDeviceStateIdle : kDeviceStateListening);
+        }
+    });
+}
+''')

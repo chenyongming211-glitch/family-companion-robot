@@ -1,0 +1,83 @@
+"""Isolated provider compatibility probe. custom mode is NOT stock LiveKit support."""
+import asyncio,base64,collections,json,logging,sys,time,wave
+from pathlib import Path
+from urllib.parse import urlsplit,urlunsplit
+import aiohttp
+from livekit.agents.llm._realtime.openai import RealtimeModel,RealtimeSession
+from livekit.agents.types import APIConnectOptions
+from openai.types.realtime.realtime_audio_input_turn_detection import SemanticVad
+logging.disable(logging.CRITICAL)
+MODE=sys.argv[1]; results=[];tasks=[]; counts=collections.Counter();started=time.monotonic()
+def emit(d): print(json.dumps({'t':round(time.monotonic()-started,3),**d},ensure_ascii=False),flush=True)
+if MODE=='custom':
+ def config(self):
+  return {'type':'session.update','session':{'modalities':['text','audio'],'voice':'Tina','input_audio_format':'pcm16','output_audio_format':'pcm16','input_audio_sample_rate':16000,'output_audio_sample_rate':24000,'input_audio_transcription':None,'turn_detection':{'type':'semantic_vad'},'instructions':'请简短用中文回答。'}}
+ RealtimeSession._create_session_update_event=config
+async def main():
+ env={}
+ for line in Path('/etc/family-robot/server.env').read_text().splitlines():
+  if '=' in line and not line.startswith('#'):
+   k,v=line.split('=',1);env[k]=v.strip().strip('\"').strip("'")
+ u=urlsplit(env['QWEN_REALTIME_URL']);base=urlunsplit((u.scheme,u.netloc,u.path,'',''))
+ async with aiohttp.ClientSession() as http:
+  m=RealtimeModel(model='qwen3.8-omni-flash-realtime',base_url=base,api_key=env['DASHSCOPE_API_KEY'],voice=env.get('QWEN_VOICE','Tina'),turn_detection=SemanticVad(type='semantic_vad'),input_audio_transcription=None,input_audio_noise_reduction=None,http_session=http,conn_options=APIConnectOptions(max_retry=0,timeout=10))
+  s=m.session()
+  @s.on('openai_server_event_received')
+  def server(e):
+   typ=e.get('type');counts[typ]+=1
+   if typ in ['error','session.updated']: emit({'raw':e})
+   if typ=='response.done': emit({'response_status':e.get('response',{}).get('status')})
+   if typ=='response.created': emit({'response_metadata':e.get('response',{}).get('metadata')})
+   if MODE=='custom':
+    maps={'response.audio.delta':'response.output_audio.delta','response.audio.done':'response.output_audio.done','response.audio_transcript.delta':'response.output_audio_transcript.delta','response.audio_transcript.done':'response.output_audio_transcript.done','conversation.item.created':'conversation.item.added'}
+    e['type']=maps.get(typ,typ)
+    if typ=='response.created' and len(s._response_created_futures)==1:
+     e['response']['metadata']={'client_event_id':next(iter(s._response_created_futures))}
+  @s.on('generation_created')
+  def generation(ev): tasks.append(asyncio.create_task(consume(ev)))
+  async def consume(ev):
+   r={'response_id':ev.response_id,'bytes':0,'frames':0,'transcript':''};results.append(r)
+   async def audio(msg):
+    async for frame in msg.audio_stream:r['bytes']+=len(frame.data);r['frames']+=1
+   async def text(msg):
+    async for delta in msg.text_stream:r['transcript']+=delta
+   try:
+    async for msg in ev.message_stream:
+     r['message_id']=msg.message_id
+     await asyncio.gather(audio(msg),text(msg))
+   except Exception as e:r['exception']=type(e).__name__
+   emit({'consumed':r})
+  @s.on('error')
+  def error(e):emit({'framework_error':type(e.error).__name__})
+  async def send_fixture(name):
+   p=Path('/tmp/family-robot-playback-go-9cd1edbe5aba')/(name+'.wav')
+   with wave.open(str(p)) as w:
+    assert (w.getframerate(),w.getnchannels(),w.getsampwidth())==(16000,1,2)
+    data=w.readframes(w.getnframes())
+   emit({'fixture':name,'seconds':len(data)/32000})
+   for i in range(0,len(data),640):
+    s.send_event({'type':'input_audio_buffer.append','audio':base64.b64encode(data[i:i+640]).decode()});await asyncio.sleep(.02)
+   for _ in range(80):
+    s.send_event({'type':'input_audio_buffer.append','audio':base64.b64encode(bytes(640)).decode()});await asyncio.sleep(.02)
+  await asyncio.sleep(2)
+  if MODE=='stock':
+   try:await asyncio.wait_for(s.generate_reply(instructions='只用中文说你好。'),8)
+   except Exception as e:emit({'reply_future_error':type(e).__name__})
+   await asyncio.sleep(3)
+  else:
+   await send_fixture('count50');await asyncio.sleep(.05)
+   emit({'operation':'interrupt','consumed_bytes_before':[r['bytes'] for r in results]});s.interrupt();await asyncio.sleep(1)
+   if results and results[0].get('message_id'):
+    emit({'operation':'truncate_test_boundary_500ms_not_playback'})
+    s.truncate(message_id=results[0]['message_id'],modalities=['audio'],audio_end_ms=500)
+   await asyncio.sleep(2)
+   await send_fixture('hello');await asyncio.sleep(7)
+   try:await asyncio.wait_for(s.generate_reply(instructions='请继续刚才数数的任务，数到五十为止。'),8)
+   except Exception as e:emit({'reply_future_error':type(e).__name__})
+   await asyncio.sleep(7)
+  emit({'raw_event_counts':dict(counts),'results':results,'mode':MODE})
+  try:await asyncio.wait_for(s.aclose(),5)
+  except Exception as e:emit({'close_error':type(e).__name__})
+  for t in tasks:t.cancel()
+  await asyncio.gather(*tasks,return_exceptions=True)
+asyncio.run(main())

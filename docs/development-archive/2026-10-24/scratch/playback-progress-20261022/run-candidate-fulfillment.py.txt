@@ -1,0 +1,42 @@
+"""Run exact verified candidate privately; retain continuous input and never touch live service."""
+import json,os,pathlib,shlex,subprocess,sys
+os.umask(0o077)
+head=sys.argv[1];case=sys.argv[2];abort=sys.argv[3] if len(sys.argv)>3 else '0'
+assert len(head)==40 and all(c in '0123456789abcdef' for c in head)
+assert case.replace('-','').isalnum() and abort.isdigit()
+meta=json.loads(pathlib.Path('artifacts/device-playback-20261022/go-'+head[:12]+'/verification.json').read_text())
+assert meta['returncode']==0
+program=r'''import hashlib,json,os,pathlib,shlex,subprocess,sys,time,urllib.request
+candidate,expected,case,abort=sys.argv[1:]
+base='/tmp/family-robot-playback-go-9cd1edbe5aba'
+assert hashlib.sha256(pathlib.Path(candidate+'/voice-gateway').read_bytes()).hexdigest()==expected
+probeEnv=os.environ.copy()
+for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+ if not line.strip() or line.lstrip().startswith('#'):continue
+ k,sep,v=line.partition('=')
+ if sep:probeEnv[k]=shlex.split(v)[0] if shlex.split(v) else ''
+probeEnv['ROBOT_LISTEN_ADDR']='127.0.0.1:18001'
+probeEnv['ROBOT_SMOKE_URL']='ws://127.0.0.1:18001/xiaozhi/v1/'
+with open(candidate+'/gateway-'+case+'.log','w') as log:
+ p=subprocess.Popen([candidate+'/voice-gateway'],env=probeEnv,stdout=log,stderr=log)
+ try:
+  for i in range(30):
+   if p.poll() is not None:raise RuntimeError('candidate_exited')
+   try:
+    assert json.load(urllib.request.urlopen('http://127.0.0.1:18001/healthz',timeout=1))['status']=='ok';break
+   except Exception:time.sleep(.1)
+  else:raise RuntimeError('isolated_probe_unhealthy')
+  r=subprocess.run([base+'/synthetic-continuous-smoke','--input',base+'/hello.wav','--followup',base+'/count50.wav','--mode','realtime','--abort-after',abort,'--out',candidate+'/'+case],env=probeEnv,capture_output=True,text=True,timeout=100)
+  print(r.stdout)
+  if r.returncode:print(r.stderr)
+  raise SystemExit(r.returncode)
+ finally:
+  p.terminate()
+  try:p.wait(timeout=5)
+  except subprocess.TimeoutExpired:p.kill();p.wait()
+'''
+cmd='sudo -n python3 - '+' '.join(shlex.quote(s) for s in [meta['remote_directory'],meta['binary_sha256'],case,abort])
+r=subprocess.run(['ssh','-S','/tmp/family-robot-playback-field-20261022.sock','-o','BatchMode=yes','ubuntu@82.156.48.111',cmd],input=program,text=True,capture_output=True)
+pathlib.Path('artifacts/playback-field-20261022/'+case+'.json').write_text(r.stdout+r.stderr)
+print(r.stdout+r.stderr)
+raise SystemExit(r.returncode)

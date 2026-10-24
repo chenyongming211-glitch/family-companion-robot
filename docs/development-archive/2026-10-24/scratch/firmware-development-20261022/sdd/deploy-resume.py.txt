@@ -1,0 +1,42 @@
+import subprocess,json,shlex,datetime,os,sys
+from pathlib import Path
+os.umask(0o077)
+root=Path('/Users/chen/code/家庭陪伴机器人')
+m=json.loads((Path(sys.argv[1])).read_text())
+program=r'''
+import os,sys,json,time,subprocess,urllib.request,hashlib,datetime
+version,old,expected,archive_expected=sys.argv[1:]
+root='/opt/family-robot';current=root+'/current';new=root+'/releases/'+version
+assert os.path.realpath(current)==old,'live_version_changed'
+assert hashlib.sha256(open(new+'/gateway','rb').read()).hexdigest()==expected,'candidate_hash_changed'
+assert hashlib.sha256(open(new+'/source.tar.gz','rb').read()).hexdigest()==archive_expected,'source_archive_changed'
+previous_pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','family-robot.service'],text=True).strip()
+def point(path):
+ tmp=root+'/current.prefix-next-'+str(os.getpid())
+ os.symlink(path,tmp);os.replace(tmp,current)
+point(new)
+try:
+ subprocess.run(['systemctl','restart','family-robot.service'],check=True)
+ healthy=False
+ for _ in range(12):
+  try:
+   result=json.load(urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=1));healthy=result.get('status')=='ok'
+  except Exception:pass
+  if healthy:break
+  time.sleep(.25)
+ assert healthy,'health_failed'
+ subprocess.run(['systemctl','is-active','--quiet','family-robot.service'],check=True)
+ pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','family-robot.service'],text=True).strip()
+ livehash=hashlib.sha256(open('/proc/'+pid+'/exe','rb').read()).hexdigest();assert livehash==expected,'live_hash_mismatch'
+ assert os.path.realpath(current)==new,'active_symlink_mismatch'
+ print(json.dumps({'status':'ok','time_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'version':version,'pid':int(pid),'previous_pid':int(previous_pid),'gateway_sha256':livehash,'health':result,'rollback_path':old,'current':new}))
+except Exception:
+ point(old);subprocess.run(['systemctl','restart','family-robot.service'],check=True);raise
+'''
+args=['sudo','-n','python3','-',m['version'],m['production_release_after'],m['binary_sha256'],m['source_archive_sha256']]
+ssh=['ssh','-S','/tmp/family-robot-field-20261022.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+p=subprocess.run(ssh+[' '.join(shlex.quote(x) for x in args)],input=program,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+out=Path(sys.argv[1]).parent;(out/'deployment.log').write_text(p.stdout);print(p.stdout)
+if p.returncode==0:
+ (out/'deployment.json').write_text(json.dumps(json.loads(p.stdout),indent=2))
+raise SystemExit(p.returncode)

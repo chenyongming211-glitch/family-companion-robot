@@ -1,0 +1,52 @@
+"""Promote only a verified field candidate, with health/hash checks and rollback."""
+import datetime, hashlib, json, os, pathlib, re, shlex, subprocess, sys
+os.umask(0o077)
+head=sys.argv[1]
+assert re.fullmatch('[0-9a-f]{40}',head)
+root=pathlib.Path('/Users/chen/code/家庭陪伴机器人')
+meta=json.loads((root/'artifacts/wake-fix-20261023'/('go-'+head[:12])/'verification.json').read_text())
+assert meta['returncode']==0 and meta['source_head']==head
+version='voice-gateway-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+head[:7]
+program=r'''
+import datetime,hashlib,json,os,pathlib,shutil,subprocess,sys,time,urllib.request
+version,scratch,expected,source_expected=sys.argv[1:]
+base='/opt/family-robot';current=base+'/current';old=os.path.realpath(current);new=base+'/releases/'+version
+def sha(path):return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+def health():return json.load(urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2))
+assert old==base+'/releases/voice-gateway-20261022T154320Z-c6f2787','live_release_changed'
+assert sha(old+'/gateway')=='23febec890015b5f31b9a266f8a5b03d568b25a54c638c88594eda649b12a809','old_binary_changed'
+assert health().get('active_sessions')==0,'active_session_present'
+assert sha(scratch+'/voice-gateway')==expected and sha(scratch+'/source.tar')==source_expected
+os.mkdir(new,0o755)
+for src,dest,mode in [('voice-gateway','gateway',0o755),('source.tar','source.tar',0o644)]:
+ shutil.copyfile(scratch+'/'+src,new+'/'+dest);os.chmod(new+'/'+dest,mode)
+def point(path):
+ tmp=base+'/current.playback-next-'+str(os.getpid());os.symlink(path,tmp);os.replace(tmp,current)
+assert health().get('active_sessions')==0,'session_arrived_before_promotion'
+point(new)
+try:
+ subprocess.run(['systemctl','restart','family-robot.service'],check=True)
+ for i in range(20):
+  try:
+   result=health()
+   if result.get('status')=='ok':break
+  except Exception:pass
+  time.sleep(.25)
+ else:raise RuntimeError('health_failed')
+ subprocess.run(['systemctl','is-active','--quiet','family-robot.service'],check=True)
+ pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','family-robot.service'],text=True).strip()
+ assert sha('/proc/'+pid+'/exe')==expected and os.path.realpath(current)==new
+ print(json.dumps({'time_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'version':version,'source_head':version.rsplit('-',1)[-1],'current':new,'rollback_path':old,'gateway_sha256':expected,'health':result,'pid':int(pid)}))
+except Exception:
+ point(old);subprocess.run(['systemctl','restart','family-robot.service'],check=True);raise
+'''
+args=['sudo','-n','python3','-',version,meta['remote_directory'],meta['binary_sha256'],meta['source_archive_sha256']]
+ssh=['ssh','-S','/tmp/family-robot-wake-fix-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+r=subprocess.run(ssh+[' '.join(shlex.quote(x) for x in args)],input=program,text=True,capture_output=True)
+out=root/'artifacts/wake-fix-20261023'
+(out/'deployment.log').write_text(r.stdout+r.stderr)
+if r.returncode==0:
+ result=json.loads(r.stdout);result['source_head']=head
+ (out/'deployment.json').write_text(json.dumps(result,indent=2)+'\n')
+print(r.stdout+r.stderr)
+raise SystemExit(r.returncode)

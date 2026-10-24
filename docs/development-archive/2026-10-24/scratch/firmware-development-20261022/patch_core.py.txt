@@ -1,0 +1,267 @@
+from pathlib import Path
+root=Path('.superpowers/firmware-development-20261022/aec-work/main')
+def edit(name,old,new):
+ p=root/name;s=p.read_text();assert old in s,(name,old[:100]);p.write_text(s.replace(old,new,1))
+edit('audio/audio_codec.h','    virtual void Start();','''    virtual void Start();
+
+    // Optional software duplex experiment hooks. Ordinary codecs retain stock behavior.
+    virtual bool SoftwareReference() const { return false; }
+    virtual bool ReferenceValid() const { return true; }
+    virtual bool ReferenceFaulted() const { return false; }
+    virtual uint32_t CaptureGeneration() const { return 0; }
+    virtual void SetCaptureActive(bool active) { (void)active; }
+    virtual void RecordDiagnostic(uint8_t stream, const int16_t* pcm, size_t frames,
+                                  uint8_t channels) {
+        (void)stream; (void)pcm; (void)frames; (void)channels;
+    }
+''')
+edit('audio/codecs/es8311_audio_codec.h','public:\n    Es8311AudioCodec','''protected:
+    // Runs after mono open/reconfiguration, or before physical close. Override
+    // only to establish/disarm a DMA observation epoch; must not call Application.
+    virtual void OnDeviceEpoch(bool opened) { (void)opened; }
+
+public:
+    Es8311AudioCodec''')
+edit('audio/codecs/es8311_audio_codec.cc','        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(dev_, output_volume_));','''        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(dev_, output_volume_));
+        OnDeviceEpoch(true);''')
+edit('audio/codecs/es8311_audio_codec.cc','        ESP_ERROR_CHECK(esp_codec_dev_close(dev_));','''        OnDeviceEpoch(false);
+        ESP_ERROR_CHECK(esp_codec_dev_close(dev_));''')
+edit('audio/codecs/es8311_audio_codec.cc','        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(dev_, (void*)dest, samples * sizeof(int16_t)));','''        if (esp_codec_dev_read(dev_, (void*)dest, samples * sizeof(int16_t)) != ESP_CODEC_DEV_OK) return 0;''')
+edit('audio/codecs/es8311_audio_codec.cc','        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(dev_, (void*)data, samples * sizeof(int16_t)));','''        if (esp_codec_dev_write(dev_, (void*)data, samples * sizeof(int16_t)) != ESP_CODEC_DEV_OK) return 0;''')
+edit('boards/m5stack/stopwatch/m5stack_stopwatch.cc','#include "codecs/es8311_audio_codec.h"','''#include "codecs/es8311_audio_codec.h"
+#if CONFIG_STOPWATCH_SOFTWARE_AEC
+#include "software_aec_codec.h"
+#endif''')
+edit('boards/m5stack/stopwatch/m5stack_stopwatch.cc','        static Es8311AudioCodec audio_codec(','''#if CONFIG_STOPWATCH_SOFTWARE_AEC
+        static SoftwareAecCodec audio_codec(
+#else
+        static Es8311AudioCodec audio_codec(
+#endif''')
+edit('Kconfig.projbuild','config USE_DEVICE_AEC','''config STOPWATCH_SOFTWARE_AEC
+    bool "StopWatch completed-DMA software AEC laboratory experiment"
+    default n
+    depends on BOARD_TYPE_M5STACK_STOPWATCH && USE_AUDIO_PROCESSOR && SPIRAM
+    depends on !I2S_ISR_IRAM_SAFE
+    help
+        Logical MR from physical mono ES8311 DMA. Observation only at boot.
+        Requires the unique USB-console experiment variant. No acoustic acceptance.
+
+config STOPWATCH_AEC_OFFSET_SAMPLES
+    int "Fixed playback reference lookback (physical 24k samples)"
+    depends on STOPWATCH_SOFTWARE_AEC
+    range -2400 2400
+    default 0
+    help
+        Positive selects older TX samples; calibrate with bounded raw/AEC capture.
+        Completion timestamp phase is not the physical speaker-to-mic delay.
+
+config USE_DEVICE_AEC''')
+edit('Kconfig.projbuild','|| BOARD_TYPE_ATK_DNESP32S3_BOX3)','|| BOARD_TYPE_ATK_DNESP32S3_BOX3 || STOPWATCH_SOFTWARE_AEC)')
+p=root/'boards/m5stack/stopwatch/config.json';import json
+j=json.loads(p.read_text());base=j['builds'][0];j['builds'].append({'name':'m5stack-stopwatch-software-aec','sdkconfig_append':base['sdkconfig_append']+['CONFIG_USE_AUDIO_PROCESSOR=y','CONFIG_STOPWATCH_SOFTWARE_AEC=y','CONFIG_USE_DEVICE_AEC=y','CONFIG_I2S_ISR_IRAM_SAFE=n','CONFIG_ESP_CONSOLE_UART_DEFAULT=n','CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y','CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n','CONFIG_ESP_CONSOLE_SECONDARY_NONE=y']});p.write_text(json.dumps(j,indent=4)+'\n')
+# Core send gate: queued and in-flight encodes carry a capture/control epoch.
+edit('audio/audio_service.h','#include "audio_codec.h"','#include "audio_codec.h"\n#include "experiment_gate.h"')
+edit('audio/audio_service.h','    uint32_t timestamp = 0;','    uint32_t uplink_epoch = 0;\n    uint32_t timestamp = 0;')
+edit('audio/audio_service.h','    void EnableDeviceAec(bool enable);','''    void EnableDeviceAec(bool enable);
+    void SetExperimentUplink(bool enabled);
+''')
+edit('audio/audio_service.h','    AudioCodec* codec_ = nullptr;','''    AudioCodec* codec_ = nullptr;
+    family_robot::ExperimentGate experiment_gate_;
+    std::atomic<bool> experiment_uplink_requested_{false};
+    uint32_t capture_generation_ = 0;
+    bool capture_faulted_ = false;
+    void UpdateExperimentGate();
+    void UpdateCaptureActive();''')
+# Engine epoch hook only changes the experiment; default implementations unused elsewhere.
+edit('audio/audio_engine.h','    virtual void Feed(std::vector<int16_t>&& data) = 0;','''    virtual void Feed(std::vector<int16_t>&& data) = 0;
+    virtual void SetOutputEpoch(uint32_t epoch) { (void)epoch; }
+    virtual uint32_t OutputEpoch() const { return 0; }
+    virtual void ResetCapture() {}
+''')
+edit('audio/audio_service.cc','    audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {','''    audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {''')
+edit('audio/audio_service.cc','bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {','''void AudioService::SetExperimentUplink(bool enabled) {
+    if (!codec_->SoftwareReference()) return;
+    experiment_uplink_requested_ = enabled;
+    UpdateExperimentGate();
+}
+
+void AudioService::UpdateExperimentGate() {
+    if (!codec_->SoftwareReference()) return;
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    // Faulted auto fallback may send mono, but the fault transition invalidates
+    // every queued/in-flight result from the prior AEC epoch first.
+    if (experiment_gate_.Set(experiment_uplink_requested_.load(), codec_->CaptureGeneration())) {
+        audio_encode_queue_.clear();
+        audio_send_queue_.clear();
+        audio_engine_->SetOutputEpoch(experiment_gate_.epoch());
+    }
+}
+
+void AudioService::UpdateCaptureActive() {
+    const auto bits = xEventGroupGetBits(event_group_);
+    codec_->SetCaptureActive(bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING |
+                                   AS_EVENT_AUDIO_TESTING_RUNNING));
+}
+
+bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {''')
+# Immediately after InputData and before resampler: generation and fault trigger reset.
+old='''        if (!codec_->InputData(data)) {
+            return false;
+        }'''
+new='''        if (!codec_->InputData(data)) {
+            UpdateExperimentGate();
+            return false;
+        }
+        if (codec_->SoftwareReference() &&
+            (capture_generation_ != codec_->CaptureGeneration() || capture_faulted_ != codec_->ReferenceFaulted())) {
+            capture_generation_ = codec_->CaptureGeneration();
+            capture_faulted_ = codec_->ReferenceFaulted();
+            {
+                std::lock_guard<std::mutex> lock(input_resampler_mutex_);
+                if (input_resampler_) esp_ae_rate_cvt_reset(input_resampler_);
+            }
+            audio_engine_->ResetCapture();
+            UpdateExperimentGate();
+            return false;
+        }'''
+edit('audio/audio_service.cc',old,new)
+# diagnostic raw after joint resampling, before AFE (capture-only window)
+edit('audio/audio_service.cc','    /* Update the last input time */','''    if (codec_->SoftwareReference()) {
+        codec_->RecordDiagnostic(1, data.data(), data.size() / codec_->input_channels(), codec_->input_channels());
+    }
+    /* Update the last input time */''')
+# no redundant enable reset in experimental speaking/listening transitions
+edit('audio/audio_service.cc','void AudioService::EnableVoiceProcessing(bool enable) {','''void AudioService::EnableVoiceProcessing(bool enable) {
+    if (codec_->SoftwareReference() && IsAudioProcessorRunning() == enable) return;''')
+# Pause is explicit and clears consumer queue immediately; arm AFTER existing warmup.
+edit('audio/audio_service.cc','        if (audio_input_need_warmup_.exchange(false)) {','''        if (audio_input_need_warmup_.exchange(false)) {
+            codec_->SetCaptureActive(false);''')
+edit('audio/audio_service.cc','        /* Used for audio testing in NetworkConfiguring mode','''        UpdateCaptureActive();
+
+        /* Used for audio testing in NetworkConfiguring mode''')
+# disarm on disable when no other consumer remains; enabling happens input task
+for marker in ['AS_EVENT_WAKE_WORD_RUNNING','AS_EVENT_AUDIO_PROCESSOR_RUNNING']:
+ old='''        xEventGroupClearBits(event_group_, '''+marker+''');
+    }
+}'''
+ new='''        xEventGroupClearBits(event_group_, '''+marker+''');
+        UpdateCaptureActive();
+    }
+}'''
+ edit('audio/audio_service.cc',old,new)
+edit('audio/audio_service.cc','''        xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING);
+        /* Copy''','''        xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING);
+        UpdateCaptureActive();
+        /* Copy''')
+edit('audio/audio_service.cc','''        /* If the task is to send queue, we need to set the timestamp */''','''        if (codec_->SoftwareReference() && type == kAudioTaskTypeEncodeToSendQueue) {
+            task.uplink_epoch = audio_engine_->OutputEpoch();
+            if (!experiment_gate_.Allows(task.uplink_epoch)) return;
+        }
+        /* If the task is to send queue, we need to set the timestamp */''')
+edit('audio/audio_service.cc','''                            /* Never let a full send queue''','''                            if (codec_->SoftwareReference() &&
+                                (!experiment_gate_.Allows(task.uplink_epoch) ||
+                                 capture_generation_ != codec_->CaptureGeneration())) continue;
+                            /* Never let a full send queue''')
+edit('audio/audio_service.cc','''    if (audio_send_queue_.empty()) {
+        return nullptr;
+    }''','''    if (codec_->SoftwareReference() &&
+        (!experiment_gate_.Allows(experiment_gate_.epoch()) ||
+         capture_generation_ != codec_->CaptureGeneration())) {
+        audio_send_queue_.clear();
+        return nullptr;
+    }
+    if (audio_send_queue_.empty()) {
+        return nullptr;
+    }''')
+# AFE reset handshake: no invalid reference fed while enabling/disabling AEC.
+edit('audio/engines/afe_audio_engine.h','    void Feed(std::vector<int16_t>&& data) override;','''    void Feed(std::vector<int16_t>&& data) override;
+    void SetOutputEpoch(uint32_t epoch) override;
+    uint32_t OutputEpoch() const override { return emitted_epoch_; }
+    void ResetCapture() override;''')
+edit('audio/engines/afe_audio_engine.h','    AudioCodec* codec_ = nullptr;','''    std::atomic<uint32_t> output_epoch_{0};
+    uint32_t emitted_epoch_ = 0;
+    std::atomic<bool> capture_reset_pending_{false};
+    std::atomic<bool> applied_reference_valid_{false};
+    AudioCodec* codec_ = nullptr;''')
+edit('audio/engines/afe_audio_engine.cc','void AfeAudioEngine::Feed(std::vector<int16_t>&& data) {','''void AfeAudioEngine::SetOutputEpoch(uint32_t epoch) {
+    output_epoch_ = epoch;
+    ResetCapture();
+}
+
+void AfeAudioEngine::ResetCapture() {
+    control_generation_.fetch_add(1);
+    capture_reset_pending_ = true;
+}
+
+void AfeAudioEngine::Feed(std::vector<int16_t>&& data) {''')
+edit('audio/engines/afe_audio_engine.cc','''    input_buffer_.insert(input_buffer_.end(), data.begin(), data.end());''','''    if (codec_->SoftwareReference() &&
+        (capture_reset_pending_.load() || applied_reference_valid_.load() != codec_->ReferenceValid())) {
+        capture_reset_pending_ = true;
+        return;
+    }
+    input_buffer_.insert(input_buffer_.end(), data.begin(), data.end());''')
+edit('audio/engines/afe_audio_engine.cc','''        const bool enable_aec = (bits & kWakeWordEnabled) ||
+                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));''','''        const bool reference_valid = codec_->ReferenceValid();
+        const bool enable_aec = reference_valid && ((bits & kWakeWordEnabled) ||
+                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled)));
+        applied_reference_valid_ = reference_valid;''')
+edit('audio/engines/afe_audio_engine.cc','''        ApplyPendingReset();
+        if ((xEventGroupGetBits(event_group_) & kAfeActive) == 0)''','''        if (capture_reset_pending_.exchange(false)) {
+            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            input_buffer_.clear();
+            output_buffer_.clear();
+            afe_iface_->reset_buffer(afe_data_);
+            ApplyAfeControls();
+        }
+        ApplyPendingReset();
+        if ((xEventGroupGetBits(event_group_) & kAfeActive) == 0)''')
+edit('audio/engines/afe_audio_engine.cc','''        auto* result = afe_iface_->fetch_with_delay(afe_data_, portMAX_DELAY);''','''        const uint32_t epoch = output_epoch_.load();
+        const uint32_t capture = codec_->CaptureGeneration();
+        auto* result = afe_iface_->fetch_with_delay(afe_data_,
+            codec_->SoftwareReference() ? pdMS_TO_TICKS(20) : portMAX_DELAY);''')
+edit('audio/engines/afe_audio_engine.cc','''        if (generation != control_generation_.load() ||''','''        if (generation != control_generation_.load() || epoch != output_epoch_.load() ||
+            capture != codec_->CaptureGeneration() || capture_reset_pending_.load() ||
+            (codec_->SoftwareReference() && applied_reference_valid_.load() != codec_->ReferenceValid()) ||''')
+edit('audio/engines/afe_audio_engine.cc','''        EventBits_t bits = xEventGroupGetBits(event_group_);
+        if (bits & kWakeWordEnabled)''','''        emitted_epoch_ = epoch;
+        if (codec_->SoftwareReference()) {
+            codec_->RecordDiagnostic(2, result->data, result->data_size / sizeof(int16_t), 1);
+        }
+        EventBits_t bits = xEventGroupGetBits(event_group_);
+        if (bits & kWakeWordEnabled)''')
+# Application default observer; marked stop resets decoder only, preserving mic/DMA.
+edit('application.cc','#elif CONFIG_USE_DEVICE_AEC\n    aec_mode_ = kAecOnDeviceSide;','''#elif CONFIG_STOPWATCH_SOFTWARE_AEC
+    aec_mode_ = kAecOff;
+#elif CONFIG_USE_DEVICE_AEC
+    aec_mode_ = kAecOnDeviceSide;''')
+edit('application.cc','''            } else if (strcmp(state->valuestring, "stop") == 0) {
+                Schedule([this]() {''','''            } else if (strcmp(state->valuestring, "stop") == 0) {
+                auto reason = cJSON_GetObjectItem(root, "reason");
+                bool interrupted = cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0;
+                Schedule([this, interrupted]() {
+                    if (interrupted) audio_service_.ResetDecoder();''')
+# Experiment observer needs auto playback drain even while local processor remains active.
+edit('application.cc','''            if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {''','''            if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
+                (board.GetAudioCodec()->SoftwareReference() && listening_mode_ != kListeningModeRealtime)) {''')
+edit('application.cc','''                audio_service_.EnableVoiceProcessing(false);
+                // Only AFE wake word''','''                audio_service_.SetExperimentUplink(false);
+                if (!board.GetAudioCodec()->SoftwareReference()) audio_service_.EnableVoiceProcessing(false);
+                else audio_service_.EnableVoiceProcessing(true);
+                // Only AFE wake word''')
+edit('application.cc','''    protocol_->SendStartListening(listening_mode_);
+    audio_service_.EnableVoiceProcessing(true);''','''    protocol_->SendStartListening(listening_mode_);
+    audio_service_.SetExperimentUplink(true);
+    audio_service_.EnableVoiceProcessing(true);''')
+# close gate on all non-dialogue states; observer keeps local AEC independent of mode.
+edit('application.cc','''void Application::SetAecMode(AecMode mode) {
+    aec_mode_ = mode;''','''void Application::SetAecMode(AecMode mode) {
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (codec->SoftwareReference() && mode != kAecOff && !codec->ReferenceValid()) return;
+    audio_service_.SetExperimentUplink(false);
+    aec_mode_ = mode;''')
+edit('application.cc','''                audio_service_.EnableDeviceAec(false);
+                display->ShowNotification(Lang::Strings::RTC_MODE_OFF);''','''                audio_service_.EnableDeviceAec(board.GetAudioCodec()->SoftwareReference() &&
+                                               board.GetAudioCodec()->ReferenceValid());
+                display->ShowNotification(Lang::Strings::RTC_MODE_OFF);''')
+# exact function has Board binding already; insert state gate there.
+s=(root/'application.cc').read_text();start=s.index('void Application::HandleStateChangedEvent');print(s[start:start+320])

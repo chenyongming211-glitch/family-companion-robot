@@ -1,0 +1,33 @@
+import io,json,pathlib,shlex,subprocess,sys,tarfile
+head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+archive=subprocess.check_output(['git','archive',head])
+history=subprocess.check_output(['git','log','--format=fuller','-p','--binary','origin/main..'+head])
+buffer=io.BytesIO(archive)
+with tarfile.open(fileobj=buffer,mode='a') as target:
+ entry=tarfile.TarInfo('_new_commit_history_diff.txt');entry.size=len(history);target.addfile(entry,io.BytesIO(history))
+archive=buffer.getvalue()
+program=r'''import io,json,pathlib,re,shlex,sys,tarfile
+env={}
+for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+ if not line.strip() or line.lstrip().startswith('#'):continue
+ k,_,v=line.partition('=');words=shlex.split(v);env[k]=words[0] if words else ''
+secrets={k:v.encode() for k,v in env.items() if k in ['DASHSCOPE_API_KEY','ROBOT_DEVICE_TOKEN','ROBOT_OTA_SECRET'] and len(v)>8}
+hits=[];files=0
+patterns={"api_key_shape":re.compile(rb"sk-ws-[A-Za-z0-9_.-]{20,}|sk-[A-Za-z0-9_-]{32,}"),"private_key_block":re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")}
+with tarfile.open(fileobj=sys.stdin.buffer,mode='r|') as archive:
+ for entry in archive:
+  if not entry.isfile():continue
+  files+=1;data=archive.extractfile(entry).read()
+  for name,value in secrets.items():
+   if value in data:hits.append({'path':entry.name,'protected_field':name})
+  for name,pattern in patterns.items():
+   if pattern.search(data):hits.append({'path':entry.name,'protected_pattern':name})
+print(json.dumps({'files_scanned':files,'protected_fields_scanned':sorted(secrets),'hits':hits}))
+raise SystemExit(bool(hits))'''
+ssh=['ssh','-S','/tmp/family-robot-resume-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111','sudo -n python3 -c '+shlex.quote(program)]
+r=subprocess.run(ssh,input=archive,capture_output=True)
+payload={'source_head':head,'returncode':r.returncode}
+try:payload.update(json.loads(r.stdout))
+except Exception:payload['error']='scan_failed_without_raw_output'
+pathlib.Path('artifacts/resume-state-alignment-20261023/secret-scan.json').write_text(json.dumps(payload,indent=2)+'\n')
+print(json.dumps(payload));raise SystemExit(r.returncode)

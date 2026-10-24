@@ -1,0 +1,27 @@
+
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <deque>
+#include <iostream>
+#include <random>
+#include <thread>
+#include <vector>
+#include "wake_word_audio_cache.h"
+#include "experiment_gate.h"
+bool fail_allocation=false;
+int main(){
+ WakeWordAudioCache fail;assert(!fail.Initialize(0));fail_allocation=true;assert(!fail.Initialize(32000));fail_allocation=false;assert(fail.Initialize(32000));assert(fail.Initialize(32000));assert(!fail.Initialize(64));
+ std::mt19937 rng(20261023);size_t comparisons=0;
+ for(size_t cap:{size_t(1),size_t(17),size_t(32000)}){WakeWordAudioCache cache;assert(cache.Initialize(cap));std::deque<int16_t> expected;
+ for(int op=0;op<12000;++op){unsigned choice=rng()%8;
+ if(choice==0){cache.Clear();expected.clear();}
+ else if(choice<6){size_t n=op%97==0?cap+201:rng()%201;std::vector<int16_t> in(n);for(auto& s:in)s=static_cast<int16_t>(rng());cache.Store(in.data(),in.size());for(auto s:in){expected.push_back(s);if(expected.size()>cap)expected.pop_front();}}
+ else{size_t offset=rng()%(cap+3),n=rng()%(cap+3);std::vector<int16_t> result(n+1,123);size_t got=cache.Read(offset,result.data(),n);size_t want=offset<expected.size()?std::min(n,expected.size()-offset):0;assert(got==want);for(size_t i=0;i<got;++i)assert(result[i]==expected[offset+i]);assert(result[n]==123);++comparisons;}
+ assert(cache.Size()==expected.size());assert(cache.Read(0,nullptr,100)==0);cache.Store(nullptr,100);
+ }
+ }
+ WakeWordAudioCache concurrent;assert(concurrent.Initialize(32000));std::thread a([&]{int16_t pcm[480]{};for(int i=0;i<10000;++i)concurrent.Store(pcm,480);});std::thread b([&]{int16_t pcm[480]{};for(int i=0;i<10000;++i){assert(concurrent.Read(0,pcm,480)<=480);assert(concurrent.Size()<=32000);}});std::thread c([&]{for(int i=0;i<10000;++i)concurrent.Clear();});a.join();b.join();c.join();
+ for(uint32_t batch:{0u,1u,100u,0xffffffffu})for(uint32_t gen:{0u,1u,100u,0xffffffffu}){assert(family_robot::WakeBatchValid(batch,batch,gen,gen));assert(!family_robot::WakeBatchValid(batch,batch+1,gen,gen));assert(!family_robot::WakeBatchValid(batch,batch,gen,gen+1));}
+ std::cout<<"{\"seed\":20261023,\"cache_operations\":36000,\"value_comparisons\":"<<comparisons<<",\"concurrent_calls\":40000,\"wake_batch_checks\":48,\"status\":\"passed\"}\n";
+}

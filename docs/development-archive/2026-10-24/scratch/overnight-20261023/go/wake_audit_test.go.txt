@@ -1,0 +1,6 @@
+package gateway
+import("testing";"encoding/json";"fmt";"familyrobot/internal/audio")
+func TestAuditWakeOriginBoundaries(t *testing.T){
+ cases:=[]struct{name,text string;shouldExclude bool}{{"exact","你好小智",true},{"punctuation","你好，小智。",true},{"homophone-zhi","你好，小志。",true},{"homophone-xiao","你好，小知。",true},{"alternate-homophone","你好小智啊",true},{"wake-with-command","你好小智，从一数到五十",false},{"genuine-name-question","你好小智是什么意思",false}}
+ for _,c:=range cases{t.Run(c.name,func(t *testing.T){h:=newPlaybackHarness(t);s:=h.s;s.generation=1;s.rememberWakePhrase("你好小智");s.commitOrigin("wake");s.transcribeOrigin("wake",c.text);s.responseOrigin=s.currentInput;s.responseID="greeting";h.append(t,make([]byte,audio.FrameBytes));h.play(t,h.now);s.pausePlayback();got:=s.paused==nil;b,_:=json.Marshal(map[string]any{"case":c.name,"wake_only_fixture":c.shouldExclude,"excluded":got,"desired_contract_pass":got==c.shouldExclude});fmt.Println("WAKE_AUDIT "+string(b));if got!=c.shouldExclude{t.Errorf("pure-wake fixture retained as resumable task: %s",c.name)}})}
+}

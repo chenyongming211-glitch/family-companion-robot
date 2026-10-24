@@ -1,0 +1,33 @@
+"""Verify a committed Go candidate in a new Linux scratch directory; never deploy."""
+import hashlib,json,os,pathlib,re,subprocess,sys
+root=pathlib.Path(__file__).resolve().parents[2]
+head=sys.argv[1]
+assert re.fullmatch(r"[0-9a-f]{40}",head)
+assert subprocess.check_output(["git","rev-parse",head],cwd=root,text=True).strip()==head
+out=root/"artifacts"/"wake-fix-20261023"/("go-"+head[:12])
+out.mkdir(mode=0o700,exist_ok=False)
+archive=out/"source.tar"
+with archive.open("xb") as f:
+ os.chmod(archive,0o600)
+ subprocess.run(["git","archive","--format=tar",head,"cmd","internal","go.mod","go.sum","tools/voice-audit"],cwd=root,stdout=f,check=True)
+digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+remote="/tmp/family-robot-wake-fix-exact-"+head[:12]
+ssh=["ssh","-S","/tmp/family-robot-wake-fix-20261023.sock","-o","BatchMode=yes","-o","ConnectTimeout=8","ubuntu@82.156.48.111"]
+# All inserted fields are locally generated paths containing only fixed ASCII and hex.
+subprocess.run(ssh+["umask 077; mkdir "+remote+" && cat > "+remote+"/source.tar"],stdin=archive.open("rb"),check=True)
+command="set -eu; cd "+remote+"; printf '%s  source.tar\n' "+digest+" | sha256sum -c -; tar xf source.tar; export PATH=/opt/family-robot/toolchains/go1.27.3/bin:/usr/bin:/bin; go version; pkg-config --modversion opus; go test -race -count=1 ./...; go vet ./...; go build -trimpath -o voice-gateway ./cmd/gateway; go build -trimpath -o probe ./tools/voice-audit; sha256sum voice-gateway; go version -m voice-gateway"
+log=out/"linux.log"
+with log.open("x") as f:
+ os.chmod(log,0o600)
+ result=subprocess.run(ssh+[command],stdout=f,stderr=subprocess.STDOUT)
+if result.returncode == 0:
+ matches=re.findall(r"^([0-9a-f]{64})  voice-gateway$",log.read_text(),re.M)
+ assert len(matches)==1
+ binary_digest=matches[0]
+else:
+ binary_digest=None
+meta={"binary_sha256":binary_digest,"source_head":head,"source_archive_sha256":digest,"remote_directory":remote,"returncode":result.returncode,"log":str(log),"deployed":False,"candidate_downloaded":False}
+(out/"verification.json").write_text(json.dumps(meta,indent=2)+"\n")
+os.chmod(out/"verification.json",0o600)
+print(json.dumps(meta))
+sys.exit(result.returncode)

@@ -1,0 +1,24 @@
+import json,os,pathlib,subprocess,sys
+os.umask(0o077)
+head=sys.argv[1];root=pathlib.Path.cwd();base=root/'artifacts/resume-state-alignment-20261023'
+meta=json.loads((base/('go-'+head[:12])/'verification.json').read_text())
+assert meta['returncode']==0 and meta['source_head']==head
+ssh=['ssh','-S','/tmp/family-robot-resume-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+subprocess.run(ssh+['umask 077; cat > '+meta['remote_directory']+'/provider_proxy.py'],input=(root/'.superpowers/resume-state-alignment/provider_proxy.py').read_bytes(),check=True)
+results=[]
+for case,runner,scenario,order,delay in [
+ ('final-d210-resume-twice','run_native_proxy_direct.py','resume-twice','cache-first','5s'),
+ ('final-d210-normal','run_native_proxy_direct.py','normal','start-first','0s'),
+ ('final-d210-manual','run_smoke_direct.py','interrupt','cache-first','0s'),
+ ('final-d210-plain-continue','run_native_proxy_direct.py','interrupt','cache-first','5s')]:
+ print(json.dumps({'starting':case}),flush=True)
+ r=subprocess.run([sys.executable,str(root/'.superpowers/resume-state-alignment'/runner),head,case,scenario,order,delay],text=True,capture_output=True)
+ (base/(case+'-driver.log')).write_text(r.stdout+r.stderr)
+ result={'case':case,'exit':r.returncode}
+ if scenario=='resume-twice' and r.returncode==0:
+  q=subprocess.run([sys.executable,'tools/voice-audit/check_resume_ownership.py','--result',str(base/(case+'.json')),'--trace',str(base/(case+'-gateway.jsonl'))],text=True,capture_output=True)
+  (base/(case+'-verdict.json')).write_text(q.stdout+q.stderr);result['ownership_check_exit']=q.returncode
+ print(json.dumps(result),flush=True);results.append(result)
+ if r.returncode or result.get('ownership_check_exit',0):break
+(base/'final-native-suite.json').write_text(json.dumps({'source_head':head,'results':results},indent=2)+'\n')
+raise SystemExit(0 if len(results)==4 and all(r['exit']==0 and r.get('ownership_check_exit',0)==0 for r in results) else 1)

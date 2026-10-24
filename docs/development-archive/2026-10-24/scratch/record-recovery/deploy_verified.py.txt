@@ -1,0 +1,63 @@
+import datetime,json,os,pathlib,shlex,subprocess,sys
+os.umask(0o077)
+head=sys.argv[1];root=pathlib.Path.cwd();art=root/'artifacts/record-recovery-20261023'
+meta=json.loads((art/('go-'+head[:12])/'verification.json').read_text())
+assert meta['returncode']==0 and meta['source_head']==head
+version='voice-gateway-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+head[:7]
+program=r'''
+import datetime,hashlib,json,os,pathlib,pwd,grp,shutil,subprocess,sys,time,urllib.request
+version,head,scratch,expected,source_expected=sys.argv[1:]
+base='/opt/family-robot';current=base+'/current';old=os.path.realpath(current);new=base+'/releases/'+version
+def sha(path):return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+def health():return json.load(urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2))
+assert old==base+'/releases/voice-gateway-20261023T044640Z-07c6549','live_release_changed'
+assert sha(old+'/gateway')=='0cad1459cf026a7d60449ccda452695294ab8575648f843effa2a896c617eaa6','old_binary_changed'
+assert health().get('active_sessions')==0,'active_session_present'
+assert sha(scratch+'/gateway')==expected and sha(scratch+'/source.tar')==source_expected
+os.mkdir(new,0o755)
+for name,mode in [('gateway',0o755),('source.tar',0o644)]:
+ shutil.copyfile(scratch+'/'+name,new+'/'+name);os.chmod(new+'/'+name,mode)
+(pathlib.Path(new)/'manifest.json').write_text(json.dumps({'source_head':head,'gateway_sha256':expected,'source_archive_sha256':source_expected},indent=2)+'\n')
+def point(path):
+ tmp=base+'/current.resume-next-'+str(os.getpid());os.symlink(path,tmp);os.replace(tmp,current)
+assert health().get('active_sessions')==0,'session_arrived_before_promotion'
+envfile=pathlib.Path('/etc/family-robot/server.env')
+envbackup=envfile.read_bytes()
+service_dir=pathlib.Path('/etc/systemd/system/family-robot.service.d')
+service_dir.mkdir(mode=0o755,exist_ok=True)
+override=service_dir/'records.conf'
+assert not override.exists(),'record override already exists'
+recorddir=pathlib.Path('/var/lib/family-robot/records')
+assert not recorddir.exists(),'unexpected existing records directory'
+recorddir.mkdir(mode=0o700)
+os.chown(recorddir,pwd.getpwnam('family-robot').pw_uid,grp.getgrnam('family-robot').gr_gid)
+os.chmod(recorddir,0o700)
+backup=pathlib.Path('/etc/family-robot/server.env.before-records-'+head[:12])
+backup.write_bytes(envbackup);os.chmod(backup,0o600)
+newenv='\n'.join(line for line in envbackup.decode().splitlines() if not line.startswith(('ROBOT_RECORD_DIR=','ROBOT_RECORD_RETENTION=')))+'\nROBOT_RECORD_DIR=/var/lib/family-robot/records\nROBOT_RECORD_RETENTION=168h\n'
+try:
+ envfile.write_text(newenv)
+ override.write_text('[Service]\nReadWritePaths=/var/lib/family-robot/records\n')
+ subprocess.run(['systemctl','daemon-reload'],check=True)
+ point(new)
+ subprocess.run(['systemctl','restart','family-robot.service'],check=True)
+ for i in range(20):
+  try:
+   result=health()
+   if result.get('status')=='ok':break
+  except Exception:pass
+  time.sleep(.25)
+ else:raise RuntimeError('health_failed')
+ subprocess.run(['systemctl','is-active','--quiet','family-robot.service'],check=True)
+ pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','family-robot.service'],text=True).strip()
+ assert sha('/proc/'+pid+'/exe')==expected and os.path.realpath(current)==new
+ print(json.dumps({'time_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'version':version,'source_head':head,'current':new,'rollback_path':old,'gateway_sha256':expected,'health':result,'pid':int(pid),'record_directory':str(recorddir),'record_directory_mode':oct(recorddir.stat().st_mode&0o777),'retention_hours':168,'environment_backup':str(backup)}))
+except Exception:
+ envfile.write_bytes(envbackup);override.unlink(missing_ok=True);subprocess.run(['systemctl','daemon-reload'],check=True);point(old);subprocess.run(['systemctl','restart','family-robot.service'],check=True);raise
+'''
+ssh=['ssh','-S','/tmp/family-robot-records-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+args=[version,head,meta['remote_directory'],meta['gateway_sha256'],meta['source_archive_sha256']]
+r=subprocess.run(ssh+['sudo -n python3 - '+' '.join(shlex.quote(x) for x in args)],input=program,text=True,capture_output=True)
+(art/'deployment.log').write_text(r.stdout+r.stderr)
+if r.returncode==0:(art/'deployment.json').write_text(r.stdout)
+print(r.stdout+r.stderr);raise SystemExit(r.returncode)

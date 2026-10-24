@@ -1,0 +1,41 @@
+import json,sys,wave,re
+from pathlib import Path
+import numpy as np
+root=Path(sys.argv[1]);groups={}
+for line in (root/'index.jsonl').read_text().splitlines():
+ d=json.loads(line);g=groups.setdefault(d['segment'],{'first':d,'last':d,'valid':True});g['last']=d;g['valid'] &= d['reference_valid']
+def read(name):
+ with wave.open(str(root/name)) as w:return np.frombuffer(w.readframes(w.getnframes()),dtype='<i2').reshape(-1,w.getnchannels()).astype(float)
+def correlation(a,b,lags,minimum=1000):
+ if len(a)<minimum or len(b)<minimum or not np.any(a) or not np.any(b):return None
+ n=len(a)+len(b)-1;nf=1<<(n-1).bit_length();v=np.fft.irfft(np.fft.rfft(a,nf)*np.conj(np.fft.rfft(b,nf)),nf);cs=np.r_[0,np.cumsum(a*a)];ys=np.r_[0,np.cumsum(b*b)];best=None
+ for lag in lags:
+  lo=max(0,int(lag));hi=min(len(a),len(b)+int(lag))
+  if hi-lo<minimum:continue
+  den=np.sqrt(max(cs[hi]-cs[lo],0)*max(ys[hi-lag]-ys[lo-lag],0))
+  if not den:continue
+  score=float(v[lag%nf]/den)
+  if best is None or abs(score)>abs(best[1]):best=(int(lag),score)
+ return best
+rms=lambda a:float(np.sqrt(np.mean(a*a)))
+results=[]
+for name,g in groups.items():
+ d=g['first']
+ if d['stream']!=2 or not g['valid']:continue
+ matches=[(n,r) for n,r in groups.items() if r['first']['stream']==1 and r['first']['generation']==d['generation'] and r['valid']]
+ afe=read(name)[:,0]
+ candidates=[]
+ for rn,rg in matches:
+  rd=rg['first'];raw=read(rn);hint=round((d['timestamp_us']-rd['timestamp_us'])*.016)
+  # Producer timestamps only bound a search. Require ample real overlapping data.
+  minimum=max(1000,int(.8*min(len(raw),len(afe))))
+  found=correlation(raw[:,0],afe,np.arange(hint-5000,hint+5001),minimum)
+  if found:candidates.append((abs(found[1]),rn,raw,found))
+ if not candidates:continue
+ _,rn,raw,(lag,score)=max(candidates,key=lambda x:x[0]);lo=max(0,lag);hi=min(len(raw),len(afe)+lag)
+ m=raw[lo:hi,0];r=raw[lo:hi,1];y=afe[lo-lag:hi-lag]
+ assert len(m)==len(y) and len(m)>0
+ mr=correlation(m,r,np.arange(-160,161));yr=correlation(y,r,np.arange(-160,161))
+ item={'raw':rn,'afe':name,'gen':d['generation'],'lag_samples':lag,'mic_afe_corr':round(score,4),'aligned_seconds':len(m)/16000,'mic_rms':round(rms(m),1),'afe_rms':round(rms(y),1),'ref_rms':round(rms(r),1),'level_reduction_db':round(20*np.log10(max(rms(m),1e-9)/max(rms(y),1e-9)),2),'mic_ref_peak':None if mr is None else [mr[0],round(mr[1],4)],'afe_ref_peak':None if yr is None else [yr[0],round(yr[1],4)],'raw_slice':[lo,hi],'afe_slice':[lo-lag,hi-lag]};results.append(item);print(json.dumps(item))
+report={'exploratory_only':True,'method':'FFT correlation with normalized substantial overlap within continuous valid matching-generation segments, producer times constrain search only; no gap stitching','warning':'No automatic speech labels, ERLE, calibrated offset, acoustic pass or realtime-enable decision. Mixed speech/noise invalidates interpreting level reduction as echo attenuation.','segments':results}
+(root/'alignment-exploration.json').write_text(json.dumps(report,indent=2,allow_nan=False)+'\n')

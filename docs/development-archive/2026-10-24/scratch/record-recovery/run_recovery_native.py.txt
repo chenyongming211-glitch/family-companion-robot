@@ -1,0 +1,98 @@
+import io,json,os,pathlib,shlex,subprocess,sys,tarfile
+os.umask(0o077)
+root=pathlib.Path.cwd();head=sys.argv[1];mode=sys.argv[2] if len(sys.argv)>2 else 'full'
+assert mode in ['full','privacy']
+art=root/'artifacts/record-recovery-20261023'
+out=art/('native-'+head[:12]+'-'+mode);out.mkdir(exist_ok=False)
+meta=json.loads((art/('go-'+head[:12])/'verification.json').read_text())
+assert meta['source_head']==head and meta['returncode']==0
+remote=meta['remote_directory']; ssh=['ssh','-S','/tmp/family-robot-records-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+buf=io.BytesIO()
+with tarfile.open(fileobj=buf,mode='w') as t:
+ t.add(root/'.superpowers/record-recovery/probe.go',arcname='tools/private-recovery/main.go')
+ for f in sorted((art/'fixtures').glob('*.wav')):t.add(f,arcname='fixtures/'+f.name)
+subprocess.run(ssh+['cat > '+shlex.quote(remote+'/native-fixtures.tar')+' && tar xf '+shlex.quote(remote+'/native-fixtures.tar')+' -C '+shlex.quote(remote)+' && cd '+shlex.quote(remote)+' && /opt/family-robot/toolchains/go1.27.3/bin/go build -trimpath -o recovery-probe ./tools/private-recovery'],input=buf.getvalue(),check=True)
+program=r'''
+import datetime,hashlib,json,os,pathlib,shlex,subprocess,sys,time,urllib.request
+base=sys.argv[1];mode=sys.argv[2];env=os.environ.copy()
+for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+ if not line.strip() or line.lstrip().startswith('#'):continue
+ k,_,v=line.partition('=');env[k]=shlex.split(v)[0] if shlex.split(v) else ''
+env['ROBOT_LISTEN_ADDR']='127.0.0.1:18003';env['ROBOT_SMOKE_URL']='ws://127.0.0.1:18003/xiaozhi/v1/'
+env['ROBOT_RECORD_DIR']=base+'/isolated-records-'+mode;env['ROBOT_RECORD_RETENTION']='168h'
+state=pathlib.Path(env['ROBOT_RECORD_DIR']);assert not state.exists(),'use fresh candidate dir'
+log=open(base+'/native-recovery-'+mode+'-gateway.jsonl','x');p=None
+summary={'time_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'synthetic_input_only':True,'simulated_receipts':True,'production_untouched':True,'runs':[]}
+def start():
+ global p
+ p=subprocess.Popen([base+'/gateway'],env=env,stdout=log,stderr=log)
+ for i in range(80):
+  if p.poll() is not None:raise RuntimeError('isolated gateway exited')
+  try:
+   assert json.load(urllib.request.urlopen('http://127.0.0.1:18003/healthz',timeout=1))['status']=='ok';return
+  except Exception:time.sleep(.1)
+ raise RuntimeError('gateway startup timeout')
+def stop():
+ global p
+ if p is None:return
+ p.terminate()
+ try:p.wait(timeout=12)
+ except subprocess.TimeoutExpired:p.kill();p.wait();raise RuntimeError('gateway failed graceful drain')
+ assert p.returncode==0,'nonzero graceful shutdown'
+ p=None
+ time.sleep(.3)
+def probe(case,scenario):
+ cmd=[base+'/recovery-probe','--dir',base+'/fixtures','--out',base+'/'+case+'.json','--scenario',scenario,'--order','start-first','--receipts']
+ r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=245)
+ if r.returncode:raise RuntimeError('native probe failed '+case+': '+r.stderr[-200:])
+ result=json.loads(pathlib.Path(base+'/'+case+'.json').read_text())
+ summary['runs'].append({'case':case,'status':result['status'],'replies':result['replies'],'input_transcripts':result['input_transcripts']})
+ time.sleep(.5)
+ snapshots=[json.loads(f.read_text())['data'] for f in state.glob('*.json')]
+ if len(snapshots)!=1:raise RuntimeError('expected one isolated device snapshot')
+ snapshot=snapshots[0];task=snapshot.get('task');turns=snapshot.get('turns') or []
+ observed={'case':case,'task_present':bool(task),'task_disposition':snapshot.get('task_disposition'),'text_records':len(turns),'original_request':task.get('original',{}).get('text') if task else None,'historical_playback':task.get('historical_playback') if task else None,'latest_request':task.get('latest_request') if task else None}
+ summary.setdefault('state_after_runs',[]).append(observed)
+ should_have_task=case in ['records-seed','records-same-process-reconnect','records-after-restart','records-reseed']
+ if bool(task)!=should_have_task:raise RuntimeError('persisted task presence mismatch '+case)
+ if len(turns)+(1 if snapshot.get('draft') else 0)>128:raise RuntimeError('record count bound exceeded')
+ if should_have_task:
+  original=observed['original_request'] or ''
+  if not any(v in original for v in ['50','五十']):raise RuntimeError('lost original endpoint '+case)
+ if case=='records-clear' and snapshot.get('task_disposition')!='cleared':raise RuntimeError('clear disposition missing')
+ return result
+try:
+ if mode=='privacy':
+  start();probe('records-clear-secret','clear-secret');stop()
+  summary['status']='completed'
+ else:
+  start();probe('records-seed','seed');probe('records-same-process-reconnect','inspect');stop()
+  assert state.exists(),'record directory absent'
+  saved=[f for f in state.iterdir() if f.suffix=='.json']
+  assert saved,'no persisted snapshots'
+  summary['seed_files']=[{'size':f.stat().st_size,'mode':oct(f.stat().st_mode&0o777)} for f in saved]
+  start();probe('records-after-restart','recover');stop()
+  start();probe('records-discard','discard');stop()
+  start();probe('records-after-discard','inspect');stop()
+  start();probe('records-reseed','seed');probe('records-clear','forget');stop()
+  start();probe('records-after-clear','inspect');probe('records-capabilities','capabilities');stop()
+  summary['status']='completed'
+except Exception as e:
+ summary['status']='failed';summary['error']=str(e)
+finally:
+ if p is not None:
+  try:stop()
+  except Exception as e:summary['shutdown_error']=str(e)
+ log.close()
+ pathlib.Path(base+'/native-recovery-'+mode+'-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n')
+ print(json.dumps(summary,ensure_ascii=False))
+if summary['status']!='completed':raise SystemExit(1)
+'''
+r=subprocess.run(ssh+['sudo -n python3 - '+shlex.quote(remote)+' '+shlex.quote(mode)],input=program,text=True,capture_output=True)
+(out/'native-recovery-driver.log').write_text(r.stdout+r.stderr)
+for suffix in ['summary.json','gateway.jsonl']:
+ name='native-recovery-'+mode+'-'+suffix
+ q=subprocess.run(ssh+['sudo -n cat '+shlex.quote(remote+'/'+name)],capture_output=True,text=True);(out/name).write_text(q.stdout)
+print('native_recovery_returncode',r.returncode)
+if r.returncode:print(r.stdout[-1500:]+r.stderr[-500:])
+raise SystemExit(r.returncode)

@@ -1,0 +1,16 @@
+import json,urllib.request,pathlib,concurrent.futures,hashlib,subprocess
+base=pathlib.Path(__file__).parent
+sha=json.loads((base/'commit.json').read_text())['sha']
+tree=json.loads((base/'tree.json').read_text())['tree']
+prefixes=['ai_agents/agents/ten_packages/extension/openai_mllm_python/','ai_agents/agents/ten_packages/extension/openai_llm2_python/','ai_agents/agents/ten_packages/extension/qwen3_tts_python/','ai_agents/agents/ten_packages/extension/cosy_tts_python/','ai_agents/agents/ten_packages/extension/message_collector2/','ai_agents/agents/examples/voice-assistant/tenapp/ten_packages/extension/main_python/','ai_agents/agents/examples/voice-assistant-realtime/tenapp/ten_packages/extension/main_python/']
+files=[t for t in tree if t['type']=='blob' and (any(t['path'].startswith(p) for p in prefixes) or t['path'] in ['ai_agents/agents/examples/voice-assistant/tenapp/manifest.json','ai_agents/agents/examples/voice-assistant/tenapp/manifest-lock.json','ai_agents/agents/examples/voice-assistant/tenapp/property.json','ai_agents/agents/examples/voice-assistant-realtime/tenapp/property.json','ai_agents/agents/examples/voice-assistant-realtime/tenapp/manifest-lock.json','ai_agents/agents/examples/voice-assistant-realtime/tenapp/manifest.json'])]
+def fetch(t):
+ p=t['path'];req=urllib.request.Request(f'https://raw.githubusercontent.com/TEN-framework/ten-framework/{sha}/{p}',headers={'User-Agent':'codex-ten-investigation'});out=base/'upstream'/p;data=out.read_bytes() if out.exists() else subprocess.check_output(['curl','--noproxy','*','-4','--connect-timeout','8','--max-time','20','--fail','-L','-sS',req.full_url]);out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(data);return dict(path=p,sha256=hashlib.sha256(data).hexdigest(),bytes=len(data))
+r=[]
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+ futures={pool.submit(fetch,t):t['path'] for t in files}
+ for f in concurrent.futures.as_completed(futures):
+  try:r.append(f.result())
+  except Exception as e:print('FAILED',futures[f],type(e).__name__,str(e),flush=True)
+(base/'download_manifest.json').write_text(json.dumps({'repo':'https://github.com/TEN-framework/ten-framework','commit':sha,'files':r},indent=2))
+print('downloaded',len(r),'bytes',sum(t['bytes'] for t in r))

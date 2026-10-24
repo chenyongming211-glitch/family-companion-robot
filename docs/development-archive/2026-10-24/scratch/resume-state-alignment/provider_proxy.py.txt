@@ -1,0 +1,54 @@
+import asyncio,base64,hashlib,json,os,sys
+from aiohttp import web,ClientSession,WSMsgType,ClientWSTimeout
+sequence=0
+async def endpoint(request):
+ global sequence
+ sequence+=1;sid=sequence
+ route_mode=False;classifier=False
+ down=web.WebSocketResponse(max_msg_size=2<<20);await down.prepare(request)
+ async with ClientSession() as http:
+  async with http.ws_connect(os.environ['QWEN_REALTIME_URL'],headers={'Authorization':'Bearer '+os.environ['DASHSCOPE_API_KEY']},max_msg_size=2<<20,timeout=ClientWSTimeout(ws_receive=90)) as up:
+   async def copy(src,dst,direction):
+    nonlocal route_mode,classifier
+    async for msg in src:
+     if msg.type==WSMsgType.TEXT:
+      ev=json.loads(msg.data);record=None
+      if direction=='gateway' and ev.get('type')=='session.update' and 'tool_choice' in ev.get('session',{}):route_mode=ev['session']['tool_choice']=='required'
+      if direction=='gateway' and ev.get('type')=='session.update':
+       cfg=ev.get('session',{})
+       if 'modalities' in cfg:classifier=cfg['modalities']==['text']
+       names=[]
+       for tool in cfg.get('tools',[]):
+        name=tool.get('function',{}).get('name')
+        names.append(name if name in ['conversation_get_paused_task','conversation_update_paused_task','conversation_route_paused_task'] else 'device_or_other')
+       print(json.dumps({'event':'session_config','connection':sid,'classifier':classifier,'keys':sorted(cfg),'modalities':cfg.get('modalities'),'tools':names,'has_asr':bool(cfg.get('input_audio_transcription'))}),flush=True)
+      if direction=='gateway' and ev.get('type')=='response.create':print(json.dumps({'event':'generation_request','connection':sid,'classifier':classifier,'has_response_instructions':bool(ev.get('response',{}).get('instructions'))}),flush=True)
+      if direction=='provider' and classifier and ev.get('type')=='response.text.done':
+       value=ev.get('text','').strip()
+       print(json.dumps({'event':'classification_text','connection':sid,'action':value if value in ['side','resume','restart','resume_from','discard','replace'] else 'invalid','characters':len(value)}),flush=True)
+
+      if direction=='provider' and route_mode and ev.get('type') in ['response.audio.delta','response.audio_transcript.delta','response.audio_transcript.done','response.text.delta','response.text.done']:
+       count=len(ev.get('delta',ev.get('transcript',ev.get('text',''))))
+       if count:print(json.dumps({'event':'hidden_route_content','type':ev['type'],'encoded_characters':count,'connection':sid}),flush=True)
+      if direction=='provider' and ev.get('type')=='response.function_call_arguments.done':
+       try:a=json.loads(ev.get('arguments','{}'))
+       except Exception:a={}
+       name=ev.get('name');name=name if name in ['conversation_get_paused_task','conversation_update_paused_task','conversation_route_turn','conversation_route_paused_task'] else 'other'
+       action=a.get('action');action=action if action in ['side','resume','restart','resume_from','discard','replace'] else None
+       record={'event':'tool_call','name':name,'action':action,'expected_revision':a.get('expected_revision')}
+      elif direction=='gateway' and ev.get('type')=='conversation.item.create' and ev.get('item',{}).get('type')=='function_call_output':
+       try:a=json.loads(ev['item'].get('output','{}'))
+       except Exception:a={}
+       err=a.get('error');err=err if err in ['revision_mismatch','task_id_mismatch','invalid_action','invalid_arguments','current_request_unknown'] else ('other' if err else None)
+       record={'event':'tool_output','ok':a.get('ok'),'error':err,'revision':a.get('revision'),'playback_id':a.get('playback_id')}
+      if record:print(json.dumps(dict(record,connection=sid)),flush=True)
+      await dst.send_str(msg.data)
+     elif msg.type==WSMsgType.BINARY:await dst.send_bytes(msg.data)
+     else:break
+   tasks=[asyncio.create_task(copy(down,up,'gateway')),asyncio.create_task(copy(up,down,'provider'))]
+   await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
+   for task in tasks:task.cancel()
+   await asyncio.gather(*tasks,return_exceptions=True)
+ await down.close();return down
+app=web.Application();app.router.add_get('/qwen',endpoint)
+web.run_app(app,host='127.0.0.1',port=18004,print=None)

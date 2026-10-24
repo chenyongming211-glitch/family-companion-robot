@@ -1,0 +1,62 @@
+import pathlib,subprocess,json,os
+os.umask(0o077)
+program=r'''import asyncio,base64,json,pathlib,shlex,wave,time,collections
+import aiohttp
+async def main():
+ env={}
+ for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+  if not line.strip() or line.lstrip().startswith('#'):continue
+  k,_,v=line.partition('=');env[k]=shlex.split(v)[0] if shlex.split(v) else ''
+ start=time.monotonic(); schema={}; audio=[]; text=[]; samples=0; chars=0
+ def fields(obj,prefix=''):
+  out=set()
+  if isinstance(obj,dict):
+   for k,v in obj.items():
+    path=prefix+'.'+k if prefix else k;out.add(path)
+    out.update(fields(v,path))
+  elif isinstance(obj,list):
+   for v in obj:out.update(fields(v,prefix+'[]'))
+  return out
+ async with aiohttp.ClientSession() as http:
+  async with http.ws_connect(env['QWEN_REALTIME_URL'],headers={'Authorization':'Bearer '+env['DASHSCOPE_API_KEY']},max_msg_size=2<<20,timeout=aiohttp.ClientWSTimeout(ws_receive=35)) as ws:
+   async def read():
+    raw=await ws.receive()
+    if raw.type!=aiohttp.WSMsgType.TEXT:raise RuntimeError('provider_closed')
+    ev=json.loads(raw.data);typ=ev.get('type','unknown');schema.setdefault(typ,set()).update(fields(ev))
+    if typ=='error':raise RuntimeError('provider_rejected_protocol')
+    return ev
+   assert (await read())['type']=='session.created'
+   await ws.send_json({'type':'session.update','session':{
+    'modalities':['text','audio'],'turn_detection':None,
+    'instructions':env.get('ROBOT_INSTRUCTIONS','你是友善、耐心的中文家庭语音助手。')+' 用户请求数数时，请直接完整数出所有数字，不要省略或只说即将开始。',
+    'input_audio_transcription':{'model':'qwen3-asr-flash-realtime'},
+    'audio':{'input':{'format':{'type':'pcm','sample_rate':16000,'sample_format':'s16le','channels':1,'packing':'interleaved','channel_layout':'mono'}},'output':{'voice':env.get('QWEN_VOICE','Tina'),'format':{'type':'pcm','sample_rate':24000}}}}})
+   while (await read())['type']!='session.updated':pass
+   with wave.open('/tmp/family-robot-overnight-go/fixtures/count50.wav','rb') as f:
+    assert f.getframerate()==16000 and f.getnchannels()==1 and f.getsampwidth()==2
+    pcm=f.readframes(f.getnframes())
+   for offset in range(0,len(pcm),6400):await ws.send_json({'type':'input_audio_buffer.append','audio':base64.b64encode(pcm[offset:offset+6400]).decode()})
+   await ws.send_json({'type':'input_audio_buffer.commit'})
+   while (await read())['type']!='input_audio_buffer.committed':pass
+   await ws.send_json({'type':'response.create'})
+   status='unknown'
+   while time.monotonic()-start<40:
+    ev=await read();typ=ev['type'];ms=round((time.monotonic()-start)*1000)
+    if typ=='response.audio.delta':
+     n=len(base64.b64decode(ev['delta']));assert n%2==0;samples+=n//2;audio.append({'arrival_ms':ms,'cumulative_samples':samples})
+    elif typ=='response.audio_transcript.delta':
+     chars+=len(ev['delta']);text.append({'arrival_ms':ms,'cumulative_characters':chars})
+    elif typ=='response.done':status=ev.get('response',{}).get('status','unknown');break
+   result={'probe':'native_schema_only_manual_single_response','synthetic_input_only':True,'audio_saved':False,'audio_played':False,'instructions':'isolated minimal fulfillment prompt; not production response comparison','status':status,'event_fields':{k:sorted(v) for k,v in schema.items()},'audio_sample_rate':24000,'generated_samples':samples,'audio_deltas':audio,'transcript_deltas':text,'device_receipts':False,'text_position':'unknown'}
+   print(json.dumps(result))
+try:asyncio.run(main())
+except Exception as e:
+ print(json.dumps({'probe_error':type(e).__name__}));raise SystemExit(1)
+'''
+ssh=['ssh','-S','/tmp/family-robot-wake-fix-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111','sudo -n /tmp/family-robot-livekit-audit-7a7547e/venv/bin/python -']
+r=subprocess.run(ssh,input=program,text=True,capture_output=True)
+p=pathlib.Path('artifacts/wake-fix-20261023/alignment-capability.json');p.write_text(r.stdout+r.stderr)
+if r.returncode:print(r.stdout+r.stderr)
+else:
+ v=json.loads(r.stdout);print(json.dumps({'status':v['status'],'audio_chunks':len(v['audio_deltas']),'transcript_chunks':len(v['transcript_deltas']),'generated_seconds':v['generated_samples']/24000,'output_fields':{k:f for k,f in v['event_fields'].items() if k.startswith('response.audio')}}))
+raise SystemExit(r.returncode)

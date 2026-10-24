@@ -1,0 +1,159 @@
+from pathlib import Path
+root=Path('.superpowers/firmware-development-20261022/aec-work/main')
+p=root/'audio/audio_codec.h';s=p.read_text().replace('    virtual uint32_t CaptureGeneration()', '    virtual uint32_t WakeAudioGeneration() const { return CaptureGeneration(); }\n    virtual uint32_t CaptureGeneration()');p.write_text(s)
+p=root/'audio/audio_engine.h';s=p.read_text().replace('    virtual void EncodeWakeWordData()', '    virtual bool WakeAudioBatchValid() const { return true; }\n    virtual void EncodeWakeWordData()');p.write_text(s)
+p=root/'audio/audio_service.h';s=p.read_text().replace('    void EncodeWakeWord();', '    void EncodeWakeWord();\n    bool WakeAudioBatchValid() const { return audio_engine_ && audio_engine_->WakeAudioBatchValid(); }');p.write_text(s)
+p=root/'audio/engines/afe_audio_engine.h';s=p.read_text().replace('    void EncodeWakeWordData() override;', '''    bool WakeAudioBatchValid() const override {
+        return !codec_ || !codec_->SoftwareReference() || wake_batch_generation_.load() == codec_->WakeAudioGeneration();
+    }
+    void EncodeWakeWordData() override;''');s=s.replace('    std::deque<std::vector<uint8_t>> wake_word_opus_;','''    struct WakePacket {
+        std::vector<uint8_t> opus;
+        uint32_t batch=0, generation=0;
+    };
+    std::atomic<uint32_t> wake_batch_{0}, wake_batch_generation_{0};
+    std::atomic<bool> wake_encode_running_{false};
+    uint32_t worker_wake_batch_=0, worker_wake_generation_=0;
+    uint32_t wake_cache_generation_=0;
+    std::deque<WakePacket> wake_word_opus_;''');p.write_text(s)
+p=root/'audio/engines/afe_audio_engine.cc';s=p.read_text().replace('''            wake_word_audio_cache_.Clear();
+            codec_->ResetDiagnosticStream(2);''','''            if (wake_cache_generation_ != codec_->WakeAudioGeneration()) {
+                wake_word_audio_cache_.Clear();
+                wake_cache_generation_ = codec_->WakeAudioGeneration();
+            }
+            codec_->ResetDiagnosticStream(2);''');s=s.replace('''#if CONFIG_SEND_WAKE_WORD_DATA
+    wake_word_audio_cache_.Store''','''#if CONFIG_SEND_WAKE_WORD_DATA
+    if (codec_->SoftwareReference() && wake_cache_generation_ != codec_->WakeAudioGeneration()) {
+        wake_word_audio_cache_.Clear();
+        wake_cache_generation_ = codec_->WakeAudioGeneration();
+    }
+    wake_word_audio_cache_.Store''');a=s.index('void AfeAudioEngine::EncodeWakeWordData()');s=s[:a]+'''void AfeAudioEngine::EncodeWakeWordData() {
+    if (wake_detector_ == WakeDetector::kMultiNet) {
+        custom_wake_word_->EncodeWakeWordData();
+        return;
+    }
+    if (wake_detector_ != WakeDetector::kWakeNet) return;
+
+    {
+        std::lock_guard<std::mutex> lock(wake_word_mutex_);
+        const auto batch=++wake_batch_;
+        const auto generation=codec_->WakeAudioGeneration();
+        wake_batch_generation_=generation;
+        wake_word_opus_.clear();
+        // The static task stack cannot host overlapping encoders. Reject the
+        // overlapping audio batch rather than exposing the previous invocation.
+        if (wake_encode_running_.exchange(true)) {
+            wake_word_opus_.push_back({{},batch,generation});
+            wake_word_cv_.notify_all();
+            return;
+        }
+        worker_wake_batch_=batch;
+        worker_wake_generation_=generation;
+    }
+    const size_t stack_size=4096*6;
+    if (!wake_word_encode_task_stack_) wake_word_encode_task_stack_=static_cast<StackType_t*>(heap_caps_malloc(stack_size,MALLOC_CAP_SPIRAM));
+    if (!wake_word_encode_task_buffer_) wake_word_encode_task_buffer_=static_cast<StaticTask_t*>(heap_caps_malloc(sizeof(StaticTask_t),MALLOC_CAP_INTERNAL));
+    if (!wake_word_encode_task_stack_ || !wake_word_encode_task_buffer_) {
+        std::lock_guard<std::mutex> lock(wake_word_mutex_);
+        wake_encode_running_=false;
+        wake_word_opus_.push_back({{},wake_batch_.load(),wake_batch_generation_.load()});
+        wake_word_cv_.notify_all();
+        return;
+    }
+    wake_word_encode_task_=xTaskCreateStatic([](void* arg) {
+        auto* engine=static_cast<AfeAudioEngine*>(arg);
+        const auto batch=engine->worker_wake_batch_;
+        const auto generation=engine->worker_wake_generation_;
+        auto valid=[&] {
+            return batch==engine->wake_batch_.load() &&
+                (!engine->codec_->SoftwareReference() || generation==engine->codec_->WakeAudioGeneration());
+        };
+        esp_opus_enc_config_t config=AS_OPUS_ENC_CONFIG();
+        void* encoder=nullptr;
+        const auto ret=esp_opus_enc_open(&config,sizeof(config),&encoder);
+        if (ret==ESP_AUDIO_ERR_OK && encoder) {
+            int frame_size=0,out_size=0;
+            esp_opus_enc_get_frame_size(encoder,&frame_size,&out_size);
+            frame_size/=sizeof(int16_t);
+            if (frame_size>0 && out_size>0) {
+                std::vector<int16_t> input(frame_size);
+                const size_t samples=engine->wake_word_audio_cache_.Size();
+                for(size_t offset=0;offset+size_t(frame_size)<=samples && valid();offset+=frame_size) {
+                    if (engine->wake_word_audio_cache_.Read(offset,input.data(),frame_size)!=size_t(frame_size)) break;
+                    std::vector<uint8_t> output(out_size);
+                    esp_audio_enc_in_frame_t in={};
+                    in.buffer=reinterpret_cast<uint8_t*>(input.data()); in.len=frame_size*sizeof(int16_t);
+                    esp_audio_enc_out_frame_t out={};
+                    out.buffer=output.data(); out.len=out_size;
+                    if (esp_opus_enc_process(encoder,&in,&out)==ESP_AUDIO_ERR_OK) {
+                        output.resize(out.encoded_bytes);
+                        std::lock_guard<std::mutex> lock(engine->wake_word_mutex_);
+                        if (valid()) {
+                            engine->wake_word_opus_.push_back({std::move(output),batch,generation});
+                            engine->wake_word_cv_.notify_all();
+                        }
+                    }
+                }
+            }
+            esp_opus_enc_close(encoder);
+        }
+        if (valid()) engine->wake_word_audio_cache_.Clear();
+        {
+            std::lock_guard<std::mutex> lock(engine->wake_word_mutex_);
+            if (batch==engine->wake_batch_.load()) engine->wake_word_opus_.push_back({{},batch,generation});
+            engine->wake_encode_running_=false;
+            engine->wake_word_cv_.notify_all();
+        }
+        vTaskDelete(nullptr);
+    },"encode_wake_word",stack_size,this,2,wake_word_encode_task_stack_,wake_word_encode_task_buffer_);
+    if (!wake_word_encode_task_) {
+        std::lock_guard<std::mutex> lock(wake_word_mutex_);
+        wake_encode_running_=false;
+        wake_word_opus_.push_back({{},wake_batch_.load(),wake_batch_generation_.load()});
+        wake_word_cv_.notify_all();
+    }
+}
+
+bool AfeAudioEngine::GetWakeWordOpus(std::vector<uint8_t>& opus) {
+    if (wake_detector_==WakeDetector::kMultiNet) return custom_wake_word_->GetWakeWordOpus(opus);
+    if (wake_detector_!=WakeDetector::kWakeNet) return false;
+    std::unique_lock<std::mutex> lock(wake_word_mutex_);
+    wake_word_cv_.wait(lock,[this] {return !wake_word_opus_.empty();});
+    auto packet=std::move(wake_word_opus_.front());
+    wake_word_opus_.pop_front();
+    if (packet.batch!=wake_batch_.load() ||
+        (codec_->SoftwareReference() && packet.generation!=codec_->WakeAudioGeneration())) {
+        opus.clear(); return false;
+    }
+    opus=std::move(packet.opus);
+    return !opus.empty();
+}
+''';p.write_text(s)
+p=root/'application.cc';s=p.read_text().replace('''    while (auto packet = audio_service_.PopWakeWordPacket()) {
+        protocol_->SendAudio(std::move(packet));
+    }
+    // Set the chat state''','''    while (auto packet = audio_service_.PopWakeWordPacket()) {
+        if (!audio_service_.WakeAudioBatchValid()) break;
+        protocol_->SendAudio(std::move(packet));
+    }
+    if (!audio_service_.WakeAudioBatchValid()) {
+        SetAecMode(kAecOff);
+        return;
+    }
+    // Set the chat state''');p.write_text(s)
+p=root/'boards/m5stack/stopwatch/config.json';import json;j=json.loads(p.read_text());j['builds'][1]['sdkconfig_append'].remove('CONFIG_SEND_WAKE_WORD_DATA=n');p.write_text(json.dumps(j,indent=4)+'\n')
+p=Path('firmware/overlays/main/boards/m5stack/stopwatch/software_aec_codec.h');s=p.read_text().replace('    uint32_t CaptureGeneration()', '    uint32_t WakeAudioGeneration() const override { return wake_generation_.load(); }\n    uint32_t CaptureGeneration()').replace('capture_generation_{0}, aec_ready_generation_', 'capture_generation_{0}, wake_generation_{0}, aec_ready_generation_');p.write_text(s)
+p=Path('firmware/overlays/main/boards/m5stack/stopwatch/software_aec_codec.cc');s=p.read_text().replace('''        ++capture_generation_;
+        ++faults_;''','''        ++capture_generation_;
+        ++wake_generation_;
+        ++faults_;''').replace('''    ++capture_generation_;
+    if (opened''','''    ++capture_generation_;
+    ++wake_generation_;
+    if (opened''').replace('''        ++capture_generation_;
+        if (pair_)''','''        ++capture_generation_;
+        // Suspending after WakeNet detection freezes a valid preroll snapshot.
+        // Resumption, hardware transitions and faults invalidate that snapshot.
+        if (active) ++wake_generation_;
+        if (pair_)''');s=s.replace('''        portENTER_CRITICAL(&mux_);
+        const size_t count''','''        portENTER_CRITICAL(&mux_);
+        if (!capture_active_) { portEXIT_CRITICAL(&mux_); return false; }
+        const size_t count''');p.write_text(s)

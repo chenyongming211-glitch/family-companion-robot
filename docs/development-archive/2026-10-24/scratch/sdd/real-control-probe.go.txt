@@ -1,0 +1,254 @@
+// Diagnostic fixture only: real gateway/Qwen with simulated MCP device state.
+package main
+
+import (
+	"encoding/json"
+	"familyrobot/internal/audio"
+	"fmt"
+	"github.com/gorilla/websocket"
+	"net/http"
+	"os"
+	"time"
+)
+
+type incoming struct {
+	kind int
+	data []byte
+	err  error
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "control_probe_failed", err)
+		os.Exit(1)
+	}
+}
+func run() error {
+	f, err := os.Open(os.Args[1])
+	if err != nil {
+		return fmt.Errorf("input_missing")
+	}
+	pcm, err := audio.ReadWAV(f)
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("input_invalid")
+	}
+	target := os.Args[2]
+	expected := os.Args[3]
+	token := os.Getenv("ROBOT_DEVICE_TOKEN")
+	device := os.Getenv("ROBOT_ALLOWED_DEVICE")
+	if token == "" || device == "" {
+		return fmt.Errorf("config_missing")
+	}
+	url := os.Getenv("ROBOT_SMOKE_URL")
+	if url == "" {
+		url = "ws://127.0.0.1:8000/xiaozhi/v1/"
+	}
+	c, resp, err := websocket.DefaultDialer.Dial(url, http.Header{"Authorization": []string{"Bearer " + token}, "Device-Id": []string{device}, "Protocol-Version": []string{"1"}})
+	if err != nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return fmt.Errorf("dial_failed")
+	}
+	defer c.Close()
+	c.SetReadLimit(65536)
+	c.SetReadDeadline(time.Now().Add(45 * time.Second))
+	if err = c.WriteJSON(map[string]any{"type": "hello", "version": 1, "transport": "websocket", "features": map[string]bool{"mcp": true}, "audio_params": map[string]any{"format": "opus", "sample_rate": 16000, "channels": 1, "frame_duration": 60}}); err != nil {
+		return fmt.Errorf("hello_write")
+	}
+	events := make(chan incoming, 64)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			k, d, e := c.ReadMessage()
+			select {
+			case events <- incoming{k, d, e}:
+			case <-done:
+				return
+			}
+			if e != nil {
+				return
+			}
+		}
+	}()
+	enc, err := audio.NewEncoderAtRate(16000)
+	if err != nil {
+		return err
+	}
+	defer enc.Close()
+	ticker := time.NewTicker(60 * time.Millisecond)
+	defer ticker.Stop()
+	failSet := os.Getenv("ROBOT_PROBE_FAIL_SET") == "1"
+	volume, brightness := 35, 65
+	fadeBrightness := os.Getenv("ROBOT_PROBE_FADE_BRIGHTNESS") == "1"
+	var fadeStart time.Time
+	fadeFrom, fadeTarget := 65, 65
+	listed := false
+	sent := false
+	committed := false
+	pos := 0
+	playing := false
+	frames := 0
+	var frameTimes []float64
+	var commands []string
+	var outputs, inputs []string
+	started := time.Now()
+	sid := ""
+	for {
+		select {
+		case <-ticker.C:
+			if !listed {
+				continue
+			}
+			if !sent {
+				if err = c.WriteJSON(map[string]any{"type": "listen", "state": "start", "mode": "manual", "session_id": sid}); err != nil {
+					return fmt.Errorf("listen_write")
+				}
+				sent = true
+			}
+			if pos < len(pcm) {
+				frame := make([]byte, 1920)
+				copy(frame, pcm[pos:])
+				pos += 1920
+				p, e := enc.Encode(frame)
+				if e != nil {
+					return e
+				}
+				if e = c.WriteMessage(websocket.BinaryMessage, p); e != nil {
+					return fmt.Errorf("audio_write")
+				}
+			} else if !committed {
+				committed = true
+				if err = c.WriteJSON(map[string]any{"type": "listen", "state": "stop", "session_id": sid}); err != nil {
+					return fmt.Errorf("commit_write")
+				}
+			}
+		case ev := <-events:
+			if ev.err != nil {
+				return fmt.Errorf("read_or_deadline")
+			}
+			if ev.kind == websocket.BinaryMessage {
+				if !playing {
+					return fmt.Errorf("audio_without_start")
+				}
+				frames++
+				frameTimes = append(frameTimes, float64(time.Since(started).Microseconds())/1000)
+				continue
+			}
+			var v map[string]json.RawMessage
+			if json.Unmarshal(ev.data, &v) != nil {
+				return fmt.Errorf("invalid_json")
+			}
+			var kind string
+			json.Unmarshal(v["type"], &kind)
+			switch kind {
+			case "hello":
+				json.Unmarshal(v["session_id"], &sid)
+			case "mcp":
+				var rpc struct {
+					ID     uint64 `json:"id"`
+					Method string `json:"method"`
+					Params struct {
+						Name      string         `json:"name"`
+						Arguments map[string]int `json:"arguments"`
+					} `json:"params"`
+				}
+				if json.Unmarshal(v["payload"], &rpc) != nil {
+					return fmt.Errorf("invalid_mcp")
+				}
+				var result any
+				switch rpc.Method {
+				case "initialize":
+					result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "simulated-stopwatch", "version": "2.5.2"}}
+				case "tools/list":
+					result = map[string]any{"tools": []map[string]any{{"name": "self.get_device_status"}, {"name": "self.audio_speaker.set_volume"}, {"name": "self.screen.set_brightness"}}}
+					listed = true
+				case "tools/call":
+					commands = append(commands, rpc.Params.Name)
+					text := "true"
+					switch rpc.Params.Name {
+					case "self.get_device_status":
+						if fadeBrightness && !fadeStart.IsZero() {
+							steps := int(time.Since(fadeStart) / (5 * time.Millisecond))
+							brightness = fadeFrom
+							if fadeTarget < fadeFrom {
+								brightness -= steps
+								if brightness < fadeTarget {
+									brightness = fadeTarget
+								}
+							} else {
+								brightness += steps
+								if brightness > fadeTarget {
+									brightness = fadeTarget
+								}
+							}
+						}
+						b, _ := json.Marshal(map[string]any{"audio_speaker": map[string]int{"volume": volume}, "screen": map[string]int{"brightness": brightness}, "network": map[string]string{"ssid": "private_fixture_ssid"}})
+						text = string(b)
+					case "self.audio_speaker.set_volume":
+						if failSet {
+							text = "false"
+						} else {
+							volume = rpc.Params.Arguments["volume"]
+						}
+					case "self.screen.set_brightness":
+						if failSet {
+							text = "false"
+						} else {
+							if fadeBrightness {
+								fadeFrom = brightness
+								fadeTarget = rpc.Params.Arguments["brightness"]
+								fadeStart = time.Now()
+							} else {
+								brightness = rpc.Params.Arguments["brightness"]
+							}
+						}
+					default:
+						return fmt.Errorf("unexpected_device_tool")
+					}
+					result = map[string]any{"content": []map[string]string{{"type": "text", "text": text}}, "isError": failSet && rpc.Params.Name != "self.get_device_status"}
+				default:
+					return fmt.Errorf("unexpected_mcp_method")
+				}
+				if err = c.WriteJSON(map[string]any{"type": "mcp", "session_id": sid, "payload": map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": result}}); err != nil {
+					return fmt.Errorf("mcp_write")
+				}
+			case "stt":
+				var text string
+				json.Unmarshal(v["text"], &text)
+				inputs = append(inputs, text)
+			case "alert":
+				return fmt.Errorf("gateway_alert")
+			case "tts":
+				var state, text string
+				json.Unmarshal(v["state"], &state)
+				json.Unmarshal(v["text"], &text)
+				if state == "start" {
+					playing = true
+				}
+				if state == "sentence_start" {
+					outputs = append(outputs, text)
+				}
+				if state == "stop" {
+					if !playing {
+						return fmt.Errorf("phantom_stop")
+					}
+					actual := fmt.Sprint(volume)
+					if target == "brightness" {
+						actual = fmt.Sprint(brightness)
+					}
+					ok := actual == expected && frames > 0
+					result := map[string]any{"ok": ok, "fixture": "real_qwen_simulated_mcp", "setter_failure_fixture": failSet, "brightness_fade_fixture": fadeBrightness, "input": inputs, "output": outputs, "commands": commands, "volume": volume, "brightness": brightness, "frames": frames, "frame_times_ms": frameTimes}
+					b, _ := json.Marshal(result)
+					fmt.Println(string(b))
+					if !ok {
+						return fmt.Errorf("target_not_met")
+					}
+					return nil
+				}
+			}
+		}
+	}
+}

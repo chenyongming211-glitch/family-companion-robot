@@ -1,0 +1,27 @@
+import subprocess,pathlib
+program=r'''import asyncio,base64,json,pathlib,shlex
+import aiohttp
+async def main():
+ env={}
+ for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+  if not line.strip() or line.lstrip().startswith('#'):continue
+  k,_,v=line.partition('=');env[k]=shlex.split(v)[0] if shlex.split(v) else ''
+ async with aiohttp.ClientSession() as http:
+  async with http.ws_connect(env['QWEN_REALTIME_URL'],headers={'Authorization':'Bearer '+env['DASHSCOPE_API_KEY']},timeout=aiohttp.ClientWSTimeout(ws_receive=5)) as ws:
+   async def wait(typ):
+    for i in range(30):
+     ev=json.loads((await ws.receive()).data)
+     if ev['type']=='error':print(json.dumps({'error':ev['error'].get('param'),'message':ev['error'].get('message')}));raise RuntimeError('native rejected VAD test')
+     if ev['type']==typ:return ev
+    raise RuntimeError('missing ack')
+   await wait('session.created')
+   results=[]
+   for mode in [{'type':'semantic_vad','threshold':.5,'silence_duration_ms':600},None,{'type':'semantic_vad'}]:
+    await ws.send_json({'type':'session.update','session':{'turn_detection':mode}})
+    ev=await wait('session.updated');results.append({'requested':mode,'effective':ev.get('session',{}).get('turn_detection')})
+    if mode is None:await ws.send_json({'type':'input_audio_buffer.append','audio':base64.b64encode(bytes(3200)).decode()})
+   print(json.dumps({'silent_audio_only':True,'results':results}))
+asyncio.run(main())
+'''
+r=subprocess.run(['ssh','-S','/tmp/family-robot-wake-fix-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111','sudo -n /tmp/family-robot-livekit-audit-7a7547e/venv/bin/python -'],input=program,text=True,capture_output=True)
+pathlib.Path('artifacts/wake-fix-20261023/vad-config-probe.json').write_text(r.stdout+r.stderr);print(r.stdout+r.stderr);raise SystemExit(r.returncode)

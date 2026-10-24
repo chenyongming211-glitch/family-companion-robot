@@ -1,0 +1,18 @@
+from pathlib import Path
+import hashlib,tarfile,datetime,json,os
+root=Path('/Users/chen/code/家庭陪伴机器人');files=[]
+for directory in ['internal','cmd','deploy']:
+ files.extend(p for p in (root/directory).rglob('*') if p.is_file())
+files.extend(root/n for n in ['go.mod','go.sum','README.md','THIRD_PARTY_NOTICES.txt'])
+files=sorted(set(files),key=lambda p:str(p.relative_to(root)))
+h=hashlib.sha256()
+for p in files:
+ if p.suffix=='.go' or p.name in ['go.mod','go.sum']:
+  h.update(str(p.relative_to(root)).encode()+b'\0'+p.read_bytes()+b'\0')
+source_sha=h.hexdigest();version='voice-gateway-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+source_sha[:8]
+archive=Path('/tmp')/(version+'.tar.gz')
+with tarfile.open(archive,'w:gz') as tar:
+ for p in files:tar.add(p,arcname=str(p.relative_to(root)),recursive=False)
+manifest={'version':version,'archive':str(archive),'source_sha256':source_sha,'source_hash_scope':'sorted relative path NUL content NUL for all cmd/internal .go files plus go.mod/go.sum','archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'previous_version':'voice-gateway-20261021T143537Z-76b1e38a'}
+Path('/tmp/family-robot-controls-release.json').write_text(json.dumps(manifest,indent=2));os.chmod('/tmp/family-robot-controls-release.json',0o600)
+print(json.dumps(manifest,indent=2))

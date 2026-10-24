@@ -1,0 +1,94 @@
+"""Passive, bounded WS control comparison. Never writes packets, headers, credentials or audio."""
+import json,struct,subprocess,threading,unicodedata,sys,time
+proc=subprocess.Popen(['tcpdump','-i','any','-s','0','-U','-w','-','tcp port 8000'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+timer=threading.Timer(100,proc.terminate);timer.start()
+def read(n):
+ b=b''
+ while len(b)<n:
+  a=proc.stdout.read(n-len(b))
+  if not a:raise EOFError
+  b+=a
+ return b
+def norm(s):return ''.join(c.lower() for c in s if not c.isspace() and not unicodedata.category(c).startswith('P'))
+flows={};states={};started=time.monotonic();completed=False
+try:
+ h=read(24);endian='<' if h[:4] in [b'\xd4\xc3\xb2\xa1',b'\x4d\x3c\xb2\xa1'] else '>'
+ link=struct.unpack(endian+'I',h[20:24])[0]&0xffff
+ print(json.dumps({'capture_ready':True,'packet_storage':False,'extra_audio_recording':False}),flush=True)
+ while time.monotonic()-started<95:
+  ph=read(16);size=struct.unpack(endian+'IIII',ph)[2]
+  if size>262144:raise RuntimeError('capture_limit')
+  b=read(size)
+  if link==276:offset=20;ethertype=int.from_bytes(b[:2],'big')
+  elif link==113:offset=16;ethertype=int.from_bytes(b[14:16],'big')
+  elif link==1:offset=14;ethertype=int.from_bytes(b[12:14],'big')
+  else:raise RuntimeError('unsupported_link')
+  if ethertype!=0x0800 or len(b)<offset+20:continue
+  ip=b[offset:];ihl=(ip[0]&15)*4
+  if ip[0]>>4!=4 or ip[9]!=6:continue
+  tcp=ip[ihl:];src,dst=struct.unpack('!HH',tcp[:4]);seq=int.from_bytes(tcp[4:8],'big');thl=(tcp[12]>>4)*4
+  data=tcp[thl:int.from_bytes(ip[2:4],'big')-ihl]
+  if not data:continue
+  inbound=dst==8000
+  if not inbound and src!=8000:continue
+  remote=(ip[12:16],src) if inbound else (ip[16:20],dst)
+  key=(remote,inbound)
+  if key not in flows:
+   if len(flows)>=16:continue
+   flows[key]={'next':seq,'buf':bytearray(),'pending':{},'http':False,'ignore':False,'fragment':None}
+  f=flows[key]
+  if f['ignore']:continue
+  if seq<f['next']:
+   overlap=f['next']-seq
+   if overlap>=len(data):continue
+   data=data[overlap:];seq=f['next']
+  if seq>f['next']:
+   if len(f['pending'])<32:f['pending'][seq]=data
+   continue
+  while data:
+   f['buf'].extend(data);f['next']+=len(data);data=f['pending'].pop(f['next'],b'')
+  buf=f['buf']
+  if len(buf)>65536:f['ignore']=True;buf.clear();continue
+  if not f['http']:
+   i=buf.find(b'\r\n\r\n')
+   if i<0:continue
+   header=bytes(buf[:i]).lower()
+   if b'upgrade: websocket' not in header:f['ignore']=True;buf.clear();continue
+   del buf[:i+4];f['http']=True
+  while len(buf)>=2:
+   fin=bool(buf[0]&128);op=buf[0]&15;masked=bool(buf[1]&128);n=buf[1]&127;pos=2
+   if n==126:
+    if len(buf)<4:break
+    n=int.from_bytes(buf[2:4],'big');pos=4
+   elif n==127:
+    if len(buf)<10:break
+    n=int.from_bytes(buf[2:10],'big');pos=10
+   if n>65536:f['ignore']=True;buf.clear();break
+   maskpos=pos
+   if masked:pos+=4
+   if len(buf)<pos+n:break
+   payload=bytes(buf[pos:pos+n]);mask=bytes(buf[maskpos:maskpos+4]);del buf[:pos+n]
+   if op not in (0,1):continue
+   if masked:payload=bytes(c^mask[i%4] for i,c in enumerate(payload))
+   if op==1:f['fragment']=payload
+   elif f['fragment'] is not None:f['fragment']+=payload
+   if not fin:continue
+   payload=f['fragment'];f['fragment']=None
+   if not payload or len(payload)>16384:continue
+   try:ev=json.loads(payload)
+   except Exception:continue
+   state=states.setdefault(remote,{})
+   if inbound and ev.get('type')=='listen' and ev.get('state')=='detect':state['device_wake']=ev.get('text','')
+   elif not inbound and ev.get('type')=='stt' and 'input' not in state:state['input']=ev.get('text','')
+   if 'device_wake' in state and 'input' in state:
+    a,c=norm(state['device_wake']),norm(state['input'])
+    result={'comparison_complete':True,'wake_marker_received':True,'wake_normalized_runes':len(a),'input_normalized_runes':len(c),'exact_normalized_match':a==c,'packet_storage':False,'extra_audio_recording':False}
+    # Only reveal this explicitly requested short wake utterance; never later conversation.
+    if len(a)<=8 and len(c)<=8:result.update(device_wake_text=state['device_wake'],first_wake_transcript=state['input'])
+    print(json.dumps(result,ensure_ascii=False),flush=True);completed=True;raise EOFError
+except EOFError:
+ if not completed:print(json.dumps({'comparison_complete':False,'reason':'window_ended_without_complete_wake_pair','packet_storage':False}),flush=True)
+finally:
+ timer.cancel();proc.terminate()
+ try:proc.wait(timeout=3)
+ except subprocess.TimeoutExpired:proc.kill();proc.wait()

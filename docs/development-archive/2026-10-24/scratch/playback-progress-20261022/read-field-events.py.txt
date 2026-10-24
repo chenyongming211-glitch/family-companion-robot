@@ -1,0 +1,15 @@
+"""Fetch only allowlisted gateway metadata; never save raw journal output."""
+import json,os,pathlib,subprocess
+os.umask(0o077)
+out=pathlib.Path('/Users/chen/code/家庭陪伴机器人/artifacts/playback-field-20261022')
+ssh=['ssh','-S','/tmp/family-robot-playback-field-20261022.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+r=subprocess.run(ssh+["sudo -n journalctl -u family-robot --since '2026-10-22 14:49:00 UTC' -n 3000 --no-pager -o cat"],text=True,capture_output=True,check=True)
+keys={'time','level','msg','event','session','mode','upstream_generation','response_open','speaking','pending_ms','input_bytes','protocol','input_frame_ms','server_aec_requested','playback_progress_enabled','playback_id','sent_samples','played_samples','position_known','settled','interrupted','text_position','paused_task_id','paused_playback_id','original_request_known'}
+events=[]
+for line in r.stdout.splitlines():
+ try:item=json.loads(line)
+ except ValueError:continue
+ if item.get('msg') in {'voice_event','playback_event','device_connected','device_session_closed'}:
+  events.append({k:v for k,v in item.items() if k in keys})
+(out/'gateway-events.jsonl').write_text(''.join(json.dumps(e)+'\n' for e in events))
+for e in events[-40:]:print(json.dumps(e))

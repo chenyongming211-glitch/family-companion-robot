@@ -1,0 +1,36 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work')
+p=w/'main/protocols/protocol.h';s=p.read_text().replace('    uint64_t receipt_first = 0;','    uint64_t receipt_first = 0;\n    bool server_audio = false;');p.write_text(s)
+p=w/'main/protocols/websocket_protocol.h';s=p.read_text().replace('bool playback_negotiated_ = false, playback_receiving_ = false;','bool playback_negotiated_ = false, playback_receiving_ = false, playback_tracking_ = false;');p.write_text(s)
+p=w/'main/protocols/websocket_protocol.cc';s=p.read_text()
+s=s.replace('playback_connection_ != 0 && cJSON_IsString(session_id)','playback_connection_ != 0 && playback_connection_ != UINT32_MAX && cJSON_IsString(session_id)')
+s=s.replace('playback_negotiated_ = playback_receiving_ = false;','playback_negotiated_ = playback_receiving_ = playback_tracking_ = false;')
+s=s.replace('''        Application::GetInstance().GetAudioService().ResetDecoder();
+        playback_id_ = id;''','''        if (!playback_id_ || playback_receiving_)
+            Application::GetInstance().GetAudioService().ResetDecoder();
+        playback_id_ = id;''')
+s=s.replace('''        codec->PlaybackControl(AudioCodec::PlaybackOp::Start, id);''','''        playback_tracking_ = codec->PlaybackControl(AudioCodec::PlaybackOp::Start, id);''')
+s=s.replace('''            packet->receipt_id = playback_id_;
+            packet->receipt_first = playback_first_;''','''            packet->server_audio = true;
+            if (!playback_tracking_) {
+                // Capacity exhaustion degrades to ordinary speech with no receipt.
+                // Output still carries the cancellation generation.
+            } else {
+            packet->receipt_id = playback_id_;
+            packet->receipt_first = playback_first_;''')
+s=s.replace('''            playback_first_ += 1440;
+        }
+    }
+    if (on_incoming_audio_)''','''            playback_first_ += 1440;
+            }
+        }
+    }
+    if (on_incoming_audio_)''')
+p.write_text(s)
+p=w/'main/application.cc';s=p.read_text().replace('if (packet->receipt_id || GetDeviceState()','if (packet->server_audio || GetDeviceState()')
+s=s.replace('''bool interrupted =
+                    cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0;''','''bool interrupted = cJSON_IsTrue(cJSON_GetObjectItem(root, "interrupted")) ||
+                    (cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0);''')
+p.write_text(s)
+p=w/'main/audio/audio_service.cc';s=p.read_text().replace('''                auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);''','''                if (packet->receipt_id && packet->receipt_first == 0) esp_opus_dec_reset(opus_decoder_);
+                auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);''');p.write_text(s)

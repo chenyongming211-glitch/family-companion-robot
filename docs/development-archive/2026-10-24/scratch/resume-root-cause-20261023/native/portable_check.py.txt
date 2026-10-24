@@ -1,0 +1,38 @@
+"""Check audit CLI success/error exits against loopback protocol peers, not a model."""
+import asyncio,json,os,pathlib,sys,tempfile,wave
+from aiohttp import web
+ROOT=pathlib.Path.cwd()
+async def run(reject):
+ async def handler(req):
+  ws=web.WebSocketResponse();await ws.prepare(req);await ws.send_json({'type':'session.created'})
+  async for message in ws:
+   v=json.loads(message.data);typ=v['type']
+   if typ=='session.update':
+    assert v['session']['turn_detection'] is None
+    if reject:await ws.send_json({'type':'error','error':{'code':'synthetic_rejection'}})
+    else:await ws.send_json({'type':'session.updated'})
+   elif typ=='input_audio_buffer.commit':
+    await ws.send_json({'type':'input_audio_buffer.committed'})
+    await ws.send_json({'type':'conversation.item.input_audio_transcription.completed','transcript':'synthetic continue'})
+   elif typ=='response.create':
+    await ws.send_json({'type':'response.audio_transcript.done','transcript':'synthetic protocol result'})
+    await ws.send_json({'type':'response.done','response':{'status':'completed'}})
+  return ws
+ app=web.Application();app.router.add_get('/realtime',handler);runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start();port=site._server.sockets[0].getsockname()[1]
+ try:
+  with tempfile.TemporaryDirectory() as d:
+   root=pathlib.Path(d);fixtures=root/'fixtures';fixtures.mkdir()
+   with wave.open(str(fixtures/'continue.wav'),'wb') as f:f.setparams((1,2,16000,0,'NONE','not compressed'));f.writeframes(bytes(6400))
+   out=root/'out';env=dict(os.environ,QWEN_REALTIME_URL=f'ws://127.0.0.1:{port}/realtime',DASHSCOPE_API_KEY='[REDACTED_CREDENTIAL_LITERAL]')
+   p=await asyncio.create_subprocess_exec(sys.executable,'tools/voice-audit/native_resume_ablation.py','--plan','tools/voice-audit/fixtures/resume-context-20261023.json','--fixtures',str(fixtures),'--out',str(out),'--trials','1',env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+   stdout,stderr=await asyncio.wait_for(p.communicate(),10)
+   assert p.returncode==(1 if reject else 0),(p.returncode,stderr.decode())
+   files=list(out.glob('*.json'));assert len(files)==4
+   for f in files:
+    v=json.loads(f.read_text());assert ('probe_error' in v)==reject
+   assert b'fake-only' not in stdout+stderr
+   return {'loopback_only':True,'rejected':reject,'exit_code':p.returncode,'results':len(files),'model_called':False}
+ finally:await runner.cleanup()
+async def main():
+ result=[await run(False),await run(True)];pathlib.Path('artifacts/resume-root-cause-20261023/native/portable-cli-check.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
+asyncio.run(main())

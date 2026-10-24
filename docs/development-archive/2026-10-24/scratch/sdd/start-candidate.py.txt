@@ -1,0 +1,6 @@
+import subprocess,json,shlex
+from pathlib import Path
+m=json.loads(Path('/tmp/family-robot-controls-release.json').read_text());q=shlex.quote;src='/tmp/'+m['version']+'/src';ssh=['ssh','-S','/tmp/family-robot-controls-%C','-o','BatchMode=yes','ubuntu@82.156.48.111']
+cmd='cd '+q(src)+' && mkdir -p .diagnostics && cp /tmp/family-robot-controls-validation/real-control-probe.go .diagnostics/main.go && /opt/family-robot/toolchains/go1.27.3/bin/go build -trimpath -o /tmp/family-robot-controls-validation/control-probe .diagnostics/main.go && sudo -n systemd-run --quiet --collect --unit=family-robot-controls-candidate-'+m['source_sha256'][:8]+' --uid=family-robot --gid=family-robot --working-directory=/var/lib/family-robot --property=EnvironmentFile=/etc/family-robot/server.env --property=RuntimeMaxSec=1800 --property=MemoryMax=256M /usr/bin/env ROBOT_LISTEN_ADDR=127.0.0.1:18000 '+q('/opt/family-robot/releases/'+m['version']+'/gateway')
+subprocess.run(ssh+[cmd],check=True)
+subprocess.run(ssh+['curl --retry 4 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:18000/healthz'],check=True)

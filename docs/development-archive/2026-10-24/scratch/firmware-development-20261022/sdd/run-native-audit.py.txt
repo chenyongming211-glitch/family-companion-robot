@@ -1,0 +1,25 @@
+import subprocess,pathlib,shlex,json,concurrent.futures
+base=pathlib.Path('/Users/chen/code/家庭陪伴机器人')
+out=base/'artifacts/voice-reference-audit-20261022'
+ssh=['ssh','-S','/tmp/family-robot-field-20261022.sock','-o','BatchMode=yes','-o','ConnectTimeout=8','ubuntu@82.156.48.111']
+q=shlex.quote
+srcdir='/tmp/family-robot-build-c5a8f36/src'
+def command(s,**kw):return subprocess.run(ssh+[s],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,**kw)
+for name in ['same-session','capability']:
+    remote=srcdir+'/.diagnostics-'+name
+    code=(base/('.superpowers/firmware-development-20261022/sdd/'+name+'-probe/main.go')).read_text()
+    p=command('mkdir -p '+q(remote)+' && cat > '+q(remote+'/main.go'),input=code,timeout=15)
+    p.check_returncode()
+    p=command('cd '+q(srcdir)+' && /opt/family-robot/toolchains/go1.27.3/bin/go build -trimpath -o '+q('/tmp/family-robot-'+name+'-audit')+' '+q('./.diagnostics-'+name),timeout=45)
+    (out/(name+'-audit-build.log')).write_text(p.stdout);p.check_returncode()
+def run(label,name,args):
+    a=['sudo','-n','systemd-run','--quiet','--pipe','--wait','--collect','--unit=family-robot-audit-'+label,'--property=EnvironmentFile=/etc/family-robot/server.env','--property=RuntimeMaxSec=75','--property=MemoryMax=256M','/tmp/family-robot-'+name+'-audit']+args
+    p=command(' '.join(map(q,a)),timeout=85)
+    (out/(label+'.log')).write_text(p.stdout+'\nexit '+str(p.returncode)+'\n')
+    print(label+' '+p.stdout+'\nexit '+str(p.returncode),flush=True)
+fixtures='/tmp/family-robot-resume-fixed-multi-02/'
+def caps():
+    for op in ['create','delete','truncate']:run('capability-'+op,'capability',[fixtures+'count.wav',op])
+with concurrent.futures.ThreadPoolExecutor(2) as pool:
+    work=[pool.submit(run,'same-session-timeline','same-session',[fixtures+'count.wav',fixtures+'stop.wav',fixtures+'continue.wav']),pool.submit(caps)]
+    for f in work:f.result()

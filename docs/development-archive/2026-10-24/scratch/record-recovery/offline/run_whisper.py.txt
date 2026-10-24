@@ -1,0 +1,23 @@
+import time,json,hashlib,platform,resource,importlib.metadata,wave,sys
+from pathlib import Path
+START=time.perf_counter()
+import whisper,torch,numpy as np
+ROOT=Path(__file__).resolve().parent
+torch.set_num_threads(4)
+model=whisper.load_model(str(ROOT/'models/tiny.pt'),device='cpu')
+init=time.perf_counter()-START
+sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest()
+report={'model':'official OpenAI Whisper tiny multilingual','weights_sha256':sha(ROOT/'models/tiny.pt'),'runtime':{'python':platform.python_version(),'platform':platform.platform(),'packages':{p:importlib.metadata.version(p) for p in ['openai-whisper','torch','numpy','numba','tiktoken']}},'source_sha256':{p:sha(Path(whisper.__file__).parent/p) for p in ['__init__.py','transcribe.py','timing.py','tokenizer.py']},'manifest_sha256':sha(ROOT/'manifest.json'),'runner_sha256':sha(__file__),'backend':'cpu','torch_threads':torch.get_num_threads(),'init_seconds_including_imports':init,'parameters':{'language':'zh','task':'transcribe','fp16':False,'temperature':0,'word_timestamps':True,'condition_on_previous_text':False,'initial_prompt':None,'beam_size':None,'hallucination_silence_threshold':None},'cases':[]}
+for c in json.loads((ROOT/'manifest.json').read_text())['cases']:
+ p=ROOT/c['audio']
+ # Read existing PCM and resample via official ffmpeg preprocessing if necessary.
+ audio=whisper.load_audio(str(p))
+ for i in range(2):
+  t=time.perf_counter();r={'name':c['name'],'iteration':i,'audio_sha256':sha(p),'audio_duration':len(audio)/16000}
+  try:
+   out=model.transcribe(audio,**report['parameters'],verbose=False)
+   r.update(text=out['text'],spans=[{'text':w['word'],'start':w['start'],'end':w['end'],'probability':w['probability']} for s in out['segments'] for w in s.get('words',[])],segments=out['segments'])
+  except Exception as e:r['error']=f'{type(e).__name__}: {e}'
+  r['inference_seconds']=time.perf_counter()-t;r['peak_process_rss_bytes']=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+  report['cases'].append(r);(ROOT/'whisper-results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+  print(json.dumps({k:r[k] for k in ['name','iteration','inference_seconds','text'] if k in r},ensure_ascii=False),flush=True)

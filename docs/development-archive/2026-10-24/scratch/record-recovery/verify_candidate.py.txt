@@ -1,0 +1,21 @@
+import gzip,hashlib,json,os,pathlib,shlex,subprocess,sys
+os.umask(0o077)
+root=pathlib.Path.cwd()
+head=subprocess.check_output(['git','rev-parse',sys.argv[1] if len(sys.argv)>1 else 'HEAD'],text=True).strip()
+assert len(head)==40 and all(c in '0123456789abcdef' for c in head)
+out=root/'artifacts/record-recovery-20261023'/('go-'+head[:12]);out.mkdir(exist_ok=False)
+archive=subprocess.check_output(['git','archive',head,'cmd','internal','tools/voice-audit','go.mod','go.sum'])
+(out/'source.tar').write_bytes(archive)
+remote='/tmp/family-robot-records-'+head[:12]
+ssh=['ssh','-S','/tmp/family-robot-records-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+subprocess.run(ssh+['umask 077; mkdir '+shlex.quote(remote)+' && cat > '+shlex.quote(remote+'/source.tar')],input=archive,check=True)
+program='set -eu; cd '+shlex.quote(remote)+'; tar xf source.tar; export PATH=/opt/family-robot/toolchains/go1.27.3/bin:/usr/bin:/bin; go test -race -count=1 ./...; go vet ./...; go build -trimpath -o gateway ./cmd/gateway; go build -trimpath -o probe ./tools/voice-audit; sha256sum gateway probe'
+with (out/'linux.log').open('w') as f:
+ r=subprocess.run(ssh+[program],stdout=f,stderr=subprocess.STDOUT)
+meta={'source_head':head,'source_archive_sha256':hashlib.sha256(archive).hexdigest(),'remote_directory':remote,'returncode':r.returncode}
+if r.returncode==0:
+ for name in ['gateway','probe']:
+  data=gzip.decompress(subprocess.check_output(ssh+['gzip -c '+shlex.quote(remote+'/'+name)]))
+  (out/name).write_bytes(data);meta[name+'_sha256']=hashlib.sha256(data).hexdigest()
+(out/'verification.json').write_text(json.dumps(meta,indent=2)+'\n')
+print(json.dumps(meta));raise SystemExit(r.returncode)

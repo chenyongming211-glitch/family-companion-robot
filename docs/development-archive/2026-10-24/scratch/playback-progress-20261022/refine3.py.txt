@@ -1,0 +1,15 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work')
+for file in ['main/protocols/protocol.h','main/audio/audio_service.h']:
+ p=w/file;s=p.read_text().replace('uint64_t receipt_first = 0;','uint32_t receipt_first = 0;').replace('    bool server_audio = false;\n','');p.write_text(s)
+p=w/'main/protocols/websocket_protocol.cc';s=p.read_text().replace('''            packet->server_audio = true;
+            packet->output_generation''','''            packet->receipt_id = {playback_connection_, 0};
+            packet->output_generation''')
+s=s.replace('''            if (!playback_tracking_) {''','''            if (playback_first_ > UINT32_MAX - 1440) {
+                Board::GetInstance().GetAudioCodec()->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, playback_id_);
+                playback_tracking_ = false; // fail closed at the compact frame-offset bound
+            }
+            if (!playback_tracking_) {''')
+s=s.replace('packet->receipt_first = playback_first_;','packet->receipt_first = static_cast<uint32_t>(playback_first_);');p.write_text(s)
+p=w/'main/audio/audio_service.cc';s=p.read_text().replace('!packet->server_audio','packet->receipt_id.connection == 0');p.write_text(s)
+p=w/'main/application.cc';s=p.read_text().replace('packet->server_audio ||','packet->receipt_id.connection != 0 ||');p.write_text(s)

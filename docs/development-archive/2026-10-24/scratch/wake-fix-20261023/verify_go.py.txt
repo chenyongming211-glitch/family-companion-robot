@@ -1,0 +1,15 @@
+import hashlib,json,pathlib,subprocess,tarfile,sys
+root=pathlib.Path.cwd();case=sys.argv[1];assert case.replace('-','').isalnum();out=root/'artifacts/wake-fix-20261023'/case;out.mkdir(parents=True,exist_ok=False)
+archive=out/'source.tar'
+with tarfile.open(archive,'w') as t:
+ for n in ['cmd','internal','tools/voice-audit','go.mod','go.sum']:
+  p=root/n
+  for f in sorted(p.rglob('*')) if p.is_dir() else [p]:
+   if f.is_file() and '__pycache__' not in f.parts:t.add(f,arcname=str(f.relative_to(root)))
+remote='/tmp/family-robot-wake-fix-'+case
+ssh=['ssh','-S','/tmp/family-robot-wake-fix-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+subprocess.run(ssh+['umask 077; mkdir '+remote+' && cat > '+remote+'/source.tar'],input=archive.read_bytes(),check=True)
+cmd='set -eu; cd '+remote+'; tar xf source.tar; export PATH=/opt/family-robot/toolchains/go1.27.3/bin:/usr/bin:/bin; go test -race -count=1 ./...; go vet ./...; go build -trimpath -o gateway ./cmd/gateway; go build -trimpath -o probe ./tools/voice-audit; sha256sum gateway probe'
+with (out/'linux.log').open('w') as f:r=subprocess.run(ssh+[cmd],stdout=f,stderr=subprocess.STDOUT)
+meta={'source_archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'base_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'remote':remote,'returncode':r.returncode,'uncommitted_candidate':True}
+(out/'verification.json').write_text(json.dumps(meta,indent=2)+'\n');print(json.dumps(meta));raise SystemExit(r.returncode)

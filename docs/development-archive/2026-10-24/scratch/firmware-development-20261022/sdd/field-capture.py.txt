@@ -1,0 +1,35 @@
+import importlib.util, threading, time, serial, json, re, os, sys
+from pathlib import Path
+os.umask(0o077)
+spec=importlib.util.spec_from_file_location('capture','firmware/tools/capture_aec.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+root=Path(sys.argv[1]);ready=threading.Event();stop=threading.Event();errors=[]
+def collect():
+ try:m.capture('192.168.3.3',9000,100,root,source='192.168.3.5',stop_event=stop,on_ready=lambda *a:ready.set())
+ except Exception as e:errors.append(type(e).__name__);ready.set()
+t=threading.Thread(target=collect);t.start()
+if not ready.wait(5) or errors:raise SystemExit('receiver unavailable')
+s=serial.Serial(port=None,baudrate=115200,timeout=.15);s.dtr=True;s.rts=False;s.port='/dev/cu.usbmodem21201';s.open()
+start=time.monotonic();next_stats=start+10;buf=b'';states=[]
+with s,(root/'console.log').open('wb') as raw:
+ s.write(b'aec_diag_start 192.168.3.3 9000 90\r\naec_stats\r\n');s.flush()
+ print('RECEIVER_READY_AND_CAPTURE_REQUESTED',flush=True)
+ while time.monotonic()-start<94:
+  chunk=s.read(8192)
+  if chunk:
+   raw.write(chunk);raw.flush();buf+=chunk
+   while b'\n' in buf:
+    line,buf=buf.split(b'\n',1);text=re.sub(r'\x1b\[[0-9;]*m','',line.decode(errors='replace'))
+    state=re.search(r'[IWE] \((\d+)\) StateMachine: State: ([a-z_]+) -> ([a-z_]+)',text)
+    if state:
+     item={'elapsed':round(time.monotonic()-start,3),'device_ms':int(state[1]),'from':state[2],'to':state[3]};states.append(item);print('STATE',json.dumps(item),flush=True)
+    if text.startswith(('aec_stats ','aec_diag ','aec_format ','aec_realtime ')):print(text,flush=True)
+  if time.monotonic()>=next_stats:
+   s.write(b'aec_stats\r\n');s.flush();next_stats+=10
+ s.write(b'aec_diag_stop\r\naec_stats\r\n');s.flush()
+ deadline=time.monotonic()+2
+ while time.monotonic()<deadline:
+  chunk=s.read(8192)
+  if chunk:raw.write(chunk)
+(root/'state-timeline.json').write_text(json.dumps({'capture_seconds':90,'states':states,'collector_errors':errors},indent=2)+'\n')
+t.join();print('CAPTURE_COMPLETE',flush=True)

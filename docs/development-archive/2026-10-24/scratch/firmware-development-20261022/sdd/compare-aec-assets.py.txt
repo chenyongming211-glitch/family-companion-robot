@@ -1,0 +1,54 @@
+"""Read-only resource comparison against the existing private backup."""
+from pathlib import Path
+import hashlib,json,os,struct
+root=Path('artifacts/firmware-experiment-20261022-15fbc73')
+def digest(b):return hashlib.sha256(b).hexdigest()
+def parse(data):
+ n,check,length=struct.unpack_from('<III',data)
+ assert 0<n<=1024 and n*44<=length and 12+length<=len(data)
+ assert sum(data[12:12+length])&65535==check
+ entries={};payloads={}
+ for i in range(n):
+  raw,size,offset,width,height=struct.unpack_from('<32sIIHH',data,12+i*44)
+  name=raw.split(b'\0')[0].decode();start=12+n*44+offset
+  assert name not in entries and start>=12+n*44 and start+2+size<=12+length
+  assert data[start:start+2]==b'ZZ'
+  content=data[start+2:start+2+size]
+  entries[name]={'bytes':size,'sha256':digest(content),'width':width,'height':height}
+  payloads[name]=content
+ return {'files':n,'used_bytes':12+length,'checksum_valid':True,'entries':entries},payloads
+
+def normalized_index(data):
+ index=json.loads(data);result=dict(index);mapping={}
+ for e in result.pop('emoji_collection'):
+  assert isinstance(e,dict) and isinstance(e.get('name'),str) and e['name'] not in mapping
+  mapping[e['name']]=e
+ result['emoji_collection_by_unique_name']=mapping
+ return result
+
+def models(data):
+ n=struct.unpack_from('<I',data)[0];assert 0<n<=32;pos=4;entries={}
+ for i in range(n):
+  raw,count=struct.unpack_from('<32sI',data,pos);pos+=36
+  model=raw.split(b'\0')[0].decode();assert count<=128
+  for j in range(count):
+   name,offset,size=struct.unpack_from('<32sII',data,pos);pos+=40
+   key=model+'/'+name.split(b'\0')[0].decode()
+   assert key not in entries and offset+size<=len(data)
+   entries[key]={'bytes':size,'sha256':digest(data[offset:offset+size])}
+ return entries
+
+backup=Path('artifacts/firmware-rollback-20261022/backup-assets-full-partition.bin').read_bytes()
+b,bp=parse(backup);results={}
+for variant in ['original','software-aec']:
+ data=(root/(variant+'-evidence/build/generated_assets.bin')).read_bytes();a,ap=parse(data)
+ names_equal=set(a['entries'])==set(b['entries'])
+ other=sorted((set(a['entries'])|set(b['entries']))-{'index.json','srmodels.bin'})
+ other_equal=names_equal and all(a['entries'].get(k)==b['entries'].get(k) for k in other)
+ index_equal=normalized_index(ap['index.json'])==normalized_index(bp['index.json'])
+ model_equal=models(ap['srmodels.bin'])==models(bp['srmodels.bin'])
+ result={'candidate_sha256':digest(data),'candidate_files':a['files'],'backup_files':b['files'],'both_payload_checksums_valid':True,'candidate_used_bytes':a['used_bytes'],'backup_used_bytes':b['used_bytes'],'same_asset_names':names_equal,'other_entry_count':len(other),'all_other_entry_metadata_and_hashes_equal':other_equal,'normalized_index_meaning_equal':index_equal,'named_model_file_bytes_equal':model_equal,'all_named_resources_semantically_equal':other_equal and index_equal and model_equal,'full_partition_byte_equal':backup==data+b'\xff'*(len(backup)-len(data)),'current_device_resources_verified':False,'source_contract':'locked main/assets.cc12-byte header+44-byte table+ZZ marker+stored_len checksum; named emoji lookup; build_default_assets.py named SR model format','scope':'offline saved backup only; confirm current device bytes and runtime in notified field window; no automatic rollback/acoustic claim'}
+ results[variant]=result
+p=root/'full-resource-semantic-verification.json'
+with p.open('x') as f:os.chmod(p,0o600);json.dump(results,f,indent=2);f.write('\n')
+for name,r in results.items():print(json.dumps({'variant':name,**r}))

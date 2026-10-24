@@ -1,0 +1,16 @@
+import subprocess,json,shlex
+from pathlib import Path
+ssh=['ssh','-S','/tmp/family-robot-controls-%C','-o','BatchMode=yes','ubuntu@82.156.48.111'];q=shlex.quote;dest=Path('artifacts/device-controls-20261021');results=[]
+version=json.loads(Path('/tmp/family-robot-controls-release.json').read_text())['version']
+for fixture,target,expected,fail in [('volume-60','volume','60',False),('volume-plus-10','volume','45',False),('brightness-30','brightness','30',False),('screen-off','brightness','0',False),('volume-60','volume','35',True),('count','volume','35',False)]:
+ label=fixture+('-failure' if fail else '');args=['sudo','-n','systemd-run','--quiet','--pipe','--wait','--collect','--property=EnvironmentFile=/etc/family-robot/server.env','/usr/bin/env','ROBOT_SMOKE_URL=ws://127.0.0.1:18000/xiaozhi/v1/']
+ if fail:args.append('ROBOT_PROBE_FAIL_SET=1')
+ if target=='brightness':args.append('ROBOT_PROBE_FADE_BRIGHTNESS=1')
+ args+=['/tmp/family-robot-controls-validation/control-probe','/tmp/family-robot-controls-validation/'+fixture+'.wav',target,expected]
+ r=subprocess.run(ssh+[' '.join(q(a) for a in args)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+ (dest/(label+'-real-model.log')).write_text(r.stdout)
+ parsed=[json.loads(line) for line in r.stdout.splitlines() if line.startswith('{')]
+ if parsed:
+  result=parsed[-1];result['version']=version;(dest/(label+'-real-model.json')).write_text(json.dumps(result,ensure_ascii=False,indent=2));small={k:v for k,v in result.items() if k!='frame_times_ms'};results.append(small);print(json.dumps(small,ensure_ascii=False),flush=True)
+ if r.returncode!=0 or not parsed or not parsed[-1].get('ok'):print('probe_failed',label,flush=True);raise SystemExit(1)
+(dest/'real-model-summary.json').write_text(json.dumps(results,ensure_ascii=False,indent=2))

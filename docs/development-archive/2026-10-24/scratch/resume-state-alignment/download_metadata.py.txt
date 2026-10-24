@@ -1,0 +1,14 @@
+import urllib.request, json, pathlib, hashlib, concurrent.futures
+base=pathlib.Path('.superpowers/resume-state-alignment')
+files=json.loads((base/'modelscope-files.json').read_text())['Data']['Files']
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def get(f):
+ if f['Name'] in ('.gitattributes', 'README.md', 'model.safetensors'): return
+ url='https://modelscope.cn/api/v1/models/Qwen/Qwen3-ForcedAligner-0.6B/repo?Revision='+f['Revision']+'&FilePath='+f['Path']
+ data=opener.open(url,timeout=60).read()
+ assert hashlib.sha256(data).hexdigest()==f['Sha256'],f['Name']
+ (base/'model'/f['Name']).write_bytes(data)
+ return f['Name']
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+ for name in ex.map(get, files):
+  if name: print(name,flush=True)

@@ -1,0 +1,43 @@
+import pathlib,subprocess,shlex,os,json
+os.umask(0o077)
+ssh=['ssh','-S','/tmp/family-robot-resume-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+base='/tmp/family-robot-resume-07c654940379/fixtures/'
+subprocess.run(ssh+['cat > '+base+'choice37-slow.wav'],input=pathlib.Path('artifacts/resume-state-alignment-20261023/fixtures/choice37-slow.wav').read_bytes(),check=True)
+program=r'''import asyncio,base64,json,pathlib,shlex,time,wave
+import aiohttp
+async def main():
+ env={}
+ for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+  if not line.strip() or line.lstrip().startswith('#'):continue
+  k,_,v=line.partition('=');a=shlex.split(v);env[k]=a[0] if a else ''
+ results=[]
+ async with aiohttp.ClientSession() as http:
+  for name,mode in [('choice','manual'),('choice','semantic_vad'),('choice37-slow','semantic_vad')]:
+   with wave.open('/tmp/family-robot-resume-07c654940379/fixtures/'+name+'.wav','rb') as f:pcm=f.readframes(f.getnframes())
+   async with http.ws_connect(env['QWEN_REALTIME_URL'],headers={'Authorization':'Bearer '+env['DASHSCOPE_API_KEY']},timeout=aiohttp.ClientWSTimeout(ws_receive=10),max_msg_size=2<<20) as ws:
+    async def read():
+     msg=await ws.receive()
+     if msg.type!=aiohttp.WSMsgType.TEXT:raise RuntimeError('closed')
+     return json.loads(msg.data)
+    await read();await ws.send_json({'type':'session.update','session':{'modalities':['text','audio'],'instructions':'你在等待用户回答从哪个数字继续。','turn_detection':None if mode=='manual' else {'type':mode,'threshold':.5,'silence_duration_ms':800,'create_response':False,'interrupt_response':True},'input_audio_transcription':{'model':'qwen3-asr-flash-realtime'},'audio':{'input':{'format':{'type':'pcm','sample_rate':16000,'sample_format':'s16le','channels':1,'packing':'interleaved','channel_layout':'mono'}},'output':{'voice':env.get('QWEN_VOICE','Tina'),'format':{'type':'pcm','sample_rate':24000}}}}})
+    while (await read()).get('type')!='session.updated':pass
+    events=[]
+    async def send():
+     for offset in range(0,len(pcm)+32000*4,1920):
+      await ws.send_json({'type':'input_audio_buffer.append','audio':base64.b64encode(pcm[offset:offset+1920].ljust(1920,b'\0')).decode()});await asyncio.sleep(.06)
+     if mode=='manual':await ws.send_json({'type':'input_audio_buffer.commit'})
+    task=asyncio.create_task(send());text=None;error=None
+    try:
+     end=time.monotonic()+12
+     while time.monotonic()<end:
+      ev=await asyncio.wait_for(read(),timeout=8);events.append(ev.get('type'))
+      if ev.get('type')=='conversation.item.input_audio_transcription.completed':text=ev.get('transcript');break
+      if ev.get('type')=='error':error=ev.get('error',{}).get('code');break
+    except asyncio.TimeoutError:pass
+    finally:task.cancel();await asyncio.gather(task,return_exceptions=True)
+    results.append({'fixture':name,'mode':mode,'input_seconds':len(pcm)/32000,'events':events,'transcript':text,'error':error})
+ print(json.dumps({'synthetic_audio_only':True,'no_gateway':True,'no_output_audio':True,'results':results},ensure_ascii=False))
+asyncio.run(main())
+'''
+r=subprocess.run(ssh+['sudo -n /tmp/family-robot-livekit-audit-7a7547e/venv/bin/python -'],input=program,text=True,capture_output=True)
+pathlib.Path('artifacts/resume-state-alignment-20261023/choice-vad-controls.json').write_text(r.stdout+r.stderr);print(r.stdout+r.stderr);raise SystemExit(r.returncode)

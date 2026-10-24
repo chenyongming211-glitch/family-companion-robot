@@ -1,0 +1,561 @@
+package gateway
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"familyrobot/internal/audio"
+	"familyrobot/internal/qwen"
+)
+
+const fixedClarificationTest = "我还不能确认刚才停在哪儿。请告诉我从哪里继续，或从头再来。"
+
+func clarificationHarness(t *testing.T) (*playbackHarness, *toolPeer, map[string]any) {
+	t.Helper()
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.responseID = ""
+	s.generation = 1
+	s.currentInput = requestOrigin{generation: 1, itemID: "continue", known: true, text: "继续"}
+	s.inputCommitted = true
+	s.paused = &pausedTask{id: "task-1", original: requestOrigin{known: true, text: "从一数到五十"}, playback: playbackRecord{id: 8, settled: true}}
+	s.snapshotRevision = 3
+	t.Cleanup(s.cancelRouting)
+	p := attachSnapshotModel(t, s)
+	requests, results := controlledClassifier(s)
+	if err := s.requestResponse(); err != nil {
+		t.Fatal(err)
+	}
+	takeClassification(t, requests)
+	results <- taskRouteResult{action: "resume"}
+	if err := s.finishRouting(routeResult(t, s)); err != nil {
+		t.Fatal(err)
+	}
+	p.read(t)
+	ackSnapshotWire(t, s, p)
+	create := p.want(t, "response.create")
+	if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: "clarify"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.encoder.Close)
+	return h, p, create
+}
+func clarificationEvent(t *testing.T, s *session, ev qwen.Event) error {
+	t.Helper()
+	if ev.ResponseID == "" && ev.Type != "response.done" {
+		ev.ResponseID = "clarify"
+	}
+	return s.onModel(context.Background(), ev)
+}
+func clarificationPCM(t *testing.T, s *session, pcm []byte) error {
+	t.Helper()
+	return clarificationEvent(t, s, qwen.Event{Type: "response.audio.delta", Delta: base64.StdEncoding.EncodeToString(pcm)})
+}
+func TestUnknownResumeUsesFixedOneResponseInstructions(t *testing.T) {
+	_, _, create := clarificationHarness(t)
+	response, _ := create["response"].(map[string]any)
+	if response == nil || !strings.HasSuffix(response["instructions"].(string), fixedClarificationTest) {
+		t.Fatalf("ordinary resume did not request fixed clarification: %v", create)
+	}
+}
+func TestUnknownResumeHoldsUnvalidatedNativeAudio(t *testing.T) {
+	h, _, _ := clarificationHarness(t)
+	if err := clarificationPCM(t, h.s, make([]byte, audio.FrameBytes)); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.play(t, time.Now()); len(got) != 0 {
+		t.Fatalf("unvalidated task speech reached device before clarification check: %v", got)
+	}
+}
+func TestUnknownResumeValidClarificationReleasesOnlyAfterCompletion(t *testing.T) {
+	h, _, _ := clarificationHarness(t)
+	s := h.s
+	original := s.paused.original
+	if err := clarificationPCM(t, s, make([]byte, 2*audio.FrameBytes)); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"response.audio_transcript.delta", "response.audio_transcript.done"} {
+		ev := qwen.Event{Type: typ, Delta: fixedClarificationTest, Transcript: fixedClarificationTest}
+		if err := clarificationEvent(t, s, ev); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.play(t, time.Now()); len(got) != 0 {
+			t.Fatalf("premature release at %s: %v", typ, got)
+		}
+	}
+	if err := clarificationEvent(t, s, qwen.Event{Type: "response.audio.done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := clarificationEvent(t, s, qwen.Event{Type: "response.done", Response: qwen.Response{ID: "clarify", Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if got := h.play(t, now); !reflect.DeepEqual(got, []string{"start", "sentence_start", "audio"}) {
+		t.Fatal(got)
+	}
+	if got := h.play(t, now.Add(59*time.Millisecond)); len(got) != 0 {
+		t.Fatalf("cadence escaped: %v", got)
+	}
+	if got := h.play(t, now.Add(60*time.Millisecond)); !reflect.DeepEqual(got, []string{"audio"}) {
+		t.Fatal(got)
+	}
+	h.play(t, now.Add(120*time.Millisecond))
+	if s.paused == nil || s.paused.original != original || s.paused.playback.id != 1 || s.pausedData()["text_position"] != "unknown" {
+		t.Fatalf("clarification lost task: %v", s.pausedData())
+	}
+}
+func TestUnknownResumeRejectsContaminatedClarificationBeforeDevice(t *testing.T) {
+	for _, kind := range []string{"wrong-transcript", "extra-words", "text", "tool", "status", "zero", "odd", "overlong", "missing-transcript", "missing-audio-done", "delta-mismatch", "duplicate-done", "late-audio"} {
+		t.Run(kind, func(t *testing.T) {
+			h, _, _ := clarificationHarness(t)
+			s := h.s
+			original := s.paused.original
+			pcm := make([]byte, audio.FrameBytes)
+			if kind == "zero" {
+				pcm = nil
+			}
+			if kind == "odd" {
+				pcm = append(pcm, 0)
+			}
+			if kind == "overlong" {
+				pcm = make([]byte, 720002)
+			}
+			err := clarificationPCM(t, s, pcm)
+			transcript := fixedClarificationTest
+			if kind == "wrong-transcript" {
+				transcript = "一二三四五"
+			}
+			if kind == "extra-words" {
+				transcript += "好的"
+			}
+			if err == nil && kind == "text" {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.text.delta", Delta: fixedClarificationTest})
+			}
+			if err == nil && kind == "tool" {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.function_call_arguments.done", CallID: "x", Name: "conversation_get_paused_task", Arguments: `{}`})
+			}
+			if err == nil && kind == "delta-mismatch" {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.delta", Delta: "一二三"})
+			}
+			if err == nil && kind != "missing-transcript" {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.done", Transcript: transcript})
+			}
+			if err == nil && kind == "duplicate-done" {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.done", Transcript: transcript})
+			}
+			if err == nil && kind != "missing-audio-done" {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.audio.done"})
+			}
+			if err == nil && kind == "late-audio" {
+				err = clarificationPCM(t, s, pcm)
+			}
+			if err == nil {
+				status := "completed"
+				if kind == "status" {
+					status = "failed"
+				}
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.done", Response: qwen.Response{ID: "clarify", Status: status}})
+			}
+			if err == nil {
+				t.Fatal("invalid native clarification accepted")
+			}
+			if got := h.play(t, time.Now()); len(got) != 0 {
+				t.Fatalf("rejected audio escaped: %v", got)
+			}
+			if s.pending.Len() != 0 || s.paused == nil || s.paused.original != original || len(s.toolCalls) > 0 {
+				t.Fatal("rejected output retained PCM, mutated goal, or executed tool")
+			}
+		})
+	}
+}
+func TestUnknownResumeNormalizationOnlyWhitespaceAndUnicodePunctuation(t *testing.T) {
+	for _, text := range []string{" 我还不能确认刚才停在哪儿!\n请告诉我从哪里继续，或从头再来? ", "我还不能确认刚才停在哪儿。请告诉我从哪里继续，或从头再来。🙂", "我还不能确认刚才停在哪里。请告诉我从哪里继续，或从头再来。"} {
+		t.Run(text, func(t *testing.T) {
+			h, _, _ := clarificationHarness(t)
+			s := h.s
+			clarificationPCM(t, s, make([]byte, audio.FrameBytes))
+			err := clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.done", Transcript: text})
+			if err == nil {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.audio.done"})
+			}
+			if err == nil {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.done", Response: qwen.Response{ID: "clarify", Status: "completed"}})
+			}
+			want := strings.HasPrefix(text, " ")
+			if (err == nil) != want {
+				t.Fatalf("normalization accepted=%v: %v", err == nil, err)
+			}
+		})
+	}
+}
+func TestUnknownResumeSupersedingInputDropsHeldOutput(t *testing.T) {
+	h, _, _ := clarificationHarness(t)
+	s := h.s
+	clarificationPCM(t, s, make([]byte, audio.FrameBytes))
+	s.commitOrigin("new-input")
+	for _, ev := range []qwen.Event{{Type: "response.audio_transcript.done", Transcript: fixedClarificationTest}, {Type: "response.audio.done"}, {Type: "response.done", Response: qwen.Response{ID: "clarify", Status: "completed"}}} {
+		if err := clarificationEvent(t, s, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := h.play(t, time.Now()); len(got) != 0 {
+		t.Fatalf("superseded question escaped: %v", got)
+	}
+	if s.pending.Len() != 0 {
+		t.Fatal("superseded PCM retained")
+	}
+}
+
+// JSON fixtures exercise native envelope content which the ordinary speech path
+// does not need to inspect, including hidden extra outputs and tools.
+func rawClarificationEvent(t *testing.T, s *session, raw string) error {
+	t.Helper()
+	var ev qwen.Event
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		t.Fatal(err)
+	}
+	return s.onModel(context.Background(), ev)
+}
+
+func TestUnknownResumeDeadlineAndBoundedPCM(t *testing.T) {
+	for _, phase := range []string{"before-created", "while-held", "at-done", "limit"} {
+		t.Run(phase, func(t *testing.T) {
+			h, _, _ := clarificationHarness(t)
+			s := h.s
+			if phase == "limit" {
+				if err := clarificationPCM(t, s, make([]byte, maxClarificationPCM)); err != nil {
+					t.Fatal(err)
+				}
+				if err := clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.done", Transcript: fixedClarificationTest}); err != nil {
+					t.Fatal(err)
+				}
+				clarificationEvent(t, s, qwen.Event{Type: "response.audio.done"})
+				if err := clarificationEvent(t, s, qwen.Event{Type: "response.done", Response: qwen.Response{ID: "clarify", Status: "completed"}}); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err := clarificationPCM(t, s, make([]byte, audio.FrameBytes)); err != nil {
+				t.Fatal(err)
+			}
+			deadline := s.clarification.deadline
+			if deadline.IsZero() || time.Until(deadline) > clarificationTimeout {
+				t.Fatal("missing response.create deadline")
+			}
+			if phase == "before-created" {
+				s.responseID = ""
+				s.clarification.responseID = ""
+			}
+			var err error
+			if phase == "at-done" {
+				s.clarification.deadline = time.Now().Add(-time.Second)
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.done", Response: qwen.Response{ID: "clarify", Status: "completed"}})
+			} else {
+				h.now = deadline
+				err = s.play()
+			}
+			if err == nil || s.pending.Len() != 0 || s.clarification.active {
+				t.Fatal("deadline retained or released held PCM")
+			}
+			if got := h.play(t, deadline.Add(time.Second)); len(got) != 0 {
+				t.Fatal(got)
+			}
+		})
+	}
+}
+func TestUnknownResumeNativeEnvelopesRejectHiddenContent(t *testing.T) {
+	for _, kind := range []string{"valid", "tool-item", "text-part", "extra-content", "extra-output", "wrong-item", "wrong-index", "unfinished-item", "unfinished-part", "wrong-final-transcript", "wrong-response", "invalid-item-status"} {
+		t.Run(kind, func(t *testing.T) {
+			h, _, _ := clarificationHarness(t)
+			s := h.s
+			outputItem := map[string]any{"id": "item", "type": "message", "role": "assistant", "content": []any{map[string]any{"type": "audio"}}}
+			part := map[string]any{"type": "audio", "text": ""}
+			finalItem := map[string]any{"id": "item", "type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "audio", "transcript": fixedClarificationTest}}}
+			if kind == "tool-item" {
+				outputItem["type"] = "function_call"
+			}
+			if kind == "text-part" {
+				part["type"] = "text"
+				part["text"] = fixedClarificationTest
+			}
+			if kind == "extra-content" {
+				outputItem["content"] = []any{part, part}
+			}
+			send := func(v map[string]any) error {
+				b, _ := json.Marshal(v)
+				return rawClarificationEvent(t, s, string(b))
+			}
+			err := send(map[string]any{"type": "response.output_item.added", "response_id": "clarify", "output_index": 0, "item": outputItem})
+			if err == nil {
+				err = send(map[string]any{"type": "response.content_part.added", "response_id": "clarify", "item_id": "item", "content_index": 0, "part": part})
+			}
+			if err == nil {
+				err = clarificationPCM(t, s, make([]byte, audio.FrameBytes))
+			}
+			if err == nil && kind == "wrong-item" {
+				err = send(map[string]any{"type": "response.audio.done", "response_id": "clarify", "item_id": "other"})
+			}
+			if err == nil && kind == "wrong-index" {
+				err = send(map[string]any{"type": "response.audio.done", "response_id": "clarify", "content_index": 1})
+			}
+			if err == nil && kind == "wrong-response" {
+				err = send(map[string]any{"type": "response.audio.done", "response_id": "wrong"})
+			}
+			if err == nil {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.done", Transcript: fixedClarificationTest})
+			}
+			if err == nil {
+				err = clarificationEvent(t, s, qwen.Event{Type: "response.audio.done"})
+			}
+			if err == nil && kind != "unfinished-part" {
+				err = send(map[string]any{"type": "response.content_part.done", "response_id": "clarify", "item_id": "item", "part": part})
+			}
+			if kind == "invalid-item-status" {
+				outputItem["status"] = "failed"
+			}
+			if err == nil && kind != "unfinished-item" {
+				err = send(map[string]any{"type": "response.output_item.done", "response_id": "clarify", "item": outputItem})
+			}
+			output := []any{finalItem}
+			if kind == "extra-output" {
+				output = append(output, finalItem)
+			}
+			if kind == "wrong-final-transcript" {
+				finalItem["content"] = []any{map[string]any{"type": "audio", "transcript": "一二三"}}
+			}
+			if err == nil {
+				err = send(map[string]any{"type": "response.done", "response": map[string]any{"id": "clarify", "status": "completed", "output": output}})
+			}
+			if (err == nil) != (kind == "valid") {
+				t.Fatalf("accepted=%v: %v", err == nil, err)
+			}
+			if err != nil {
+				if got := h.play(t, time.Now()); len(got) != 0 {
+					t.Fatal(got)
+				}
+			}
+		})
+	}
+}
+func TestUnknownResumeChoiceFactSurvivesSideAndClearsOnExplicitDecision(t *testing.T) {
+	for _, action := range []string{"restart", "resume_from", "discard", "replace"} {
+		t.Run(action, func(t *testing.T) {
+			h, p, _ := clarificationHarness(t)
+			s := h.s
+			if s.pausedData()["awaiting_resume_choice"] != true {
+				t.Fatal("question did not record gateway choice fact")
+			}
+			original := s.paused.original
+			taskID := s.paused.id
+			for i, route := range []string{"side", action} {
+				s.commitOrigin(route)
+				s.transcribeOrigin(route, "三十七")
+				requests, results := controlledClassifier(s)
+				if err := s.requestResponse(); err != nil {
+					t.Fatal(err)
+				}
+				request := takeClassification(t, requests)
+				if !request.awaiting {
+					t.Fatal("classifier lost choice fact")
+				}
+				results <- taskRouteResult{action: route}
+				if err := s.finishRouting(routeResult(t, s)); err != nil {
+					t.Fatal(err)
+				}
+				cfg := p.read(t).body["session"].(map[string]any)
+				if route == "side" {
+					if s.paused.awaitingResumeChoice != true || s.responseTaskID != "" || s.paused.original != original {
+						t.Fatal("side changed task or choice")
+					}
+					if !strings.Contains(cfg["instructions"].(string), `"awaiting_resume_choice":true`) {
+						t.Fatal("snapshot omitted choice")
+					}
+				} else {
+					if s.paused != nil && s.paused.awaitingResumeChoice {
+						t.Fatal("explicit choice retained pending question")
+					}
+					if (route == "restart" || route == "resume_from") && (s.responseTaskID != taskID || s.paused.original != original) {
+						t.Fatal("explicit start changed original goal")
+					}
+				}
+				ackSnapshotWire(t, s, p)
+				create := p.want(t, "response.create")
+				if route == "restart" || route == "resume_from" {
+					if create["response"] == nil {
+						t.Fatal("explicit choice lacks response policy")
+					}
+				}
+				if err := s.onModel(context.Background(), qwen.Event{Type: "response.created", Response: qwen.Response{ID: route}}); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(s.encoder.Close)
+				s.responseDone = true
+				h.play(t, time.Now().Add(time.Duration(i)*time.Second))
+			}
+		})
+	}
+}
+func TestUnknownResumeChoiceChangeInvalidatesClassifierSnapshot(t *testing.T) {
+	s, p := routingHarness(t)
+	requests, results := controlledClassifier(s)
+	s.requestResponse()
+	takeClassification(t, requests)
+	s.paused.awaitingResumeChoice = true
+	s.snapshotRevision++
+	results <- taskRouteResult{action: "restart"}
+	if err := s.finishRouting(routeResult(t, s)); err != nil {
+		t.Fatal(err)
+	}
+	if s.responseTaskID != "" {
+		t.Fatal("stale choice bound task")
+	}
+	next := takeClassification(t, requests)
+	if !next.awaiting {
+		t.Fatal("retry did not capture current choice")
+	}
+	p.quiet(t, time.Millisecond)
+}
+
+func TestUnknownResumeRejectsExtraOutputAfterVerifiedBeforePlayback(t *testing.T) {
+	for _, typ := range []string{"response.text.delta", "response.audio.delta", "response.audio_transcript.done", "response.done"} {
+		t.Run(typ, func(t *testing.T) {
+			h, _, _ := clarificationHarness(t)
+			s := h.s
+			clarificationPCM(t, s, make([]byte, audio.FrameBytes))
+			clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.done", Transcript: fixedClarificationTest})
+			clarificationEvent(t, s, qwen.Event{Type: "response.audio.done"})
+			if err := clarificationEvent(t, s, qwen.Event{Type: "response.done", Response: qwen.Response{ID: "clarify", Status: "completed"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := clarificationEvent(t, s, qwen.Event{Type: typ, Delta: base64.StdEncoding.EncodeToString([]byte{0, 0}), Transcript: fixedClarificationTest, Response: qwen.Response{ID: "clarify", Status: "completed"}}); err == nil {
+				t.Fatal("extra post-completion output accepted")
+			}
+			if got := h.play(t, time.Now()); len(got) != 0 {
+				t.Fatal(got)
+			}
+		})
+	}
+}
+
+func TestUnknownResumeAbortStopsHeldQuestionBeforeReconnect(t *testing.T) {
+	for _, trigger := range []string{"abort", "vad"} {
+		t.Run(trigger, func(t *testing.T) {
+			h := newToolHarnessFeatures(t, map[string]bool{"playback_progress_v1": true})
+			p, _ := h.model(t)
+			root := sealedDeviceBlock(t, h, p, "root", "原任务数到五十")
+			interruptSealedBlock(t, h, p, "abort")
+			fresh, _ := h.model(t)
+			deviceDrainReceipt(t, h, root, 1440, true, true)
+			fresh.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "continue"})
+			fresh.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "continue", "transcript": "继续"})
+			wantSTT(t, h.device)
+			completeRouteWire(t, fresh, "route", "resume")
+			fresh.send(t, map[string]any{"type": "response.created", "response": map[string]any{"id": "held"}})
+			fresh.send(t, map[string]any{"type": "response.audio.delta", "response_id": "held", "delta": base64.StdEncoding.EncodeToString(make([]byte, audio.FrameBytes))})
+			h.device.quiet(t, 20*time.Millisecond)
+			if trigger == "abort" {
+				h.device.send(t, map[string]any{"type": "abort"})
+			} else {
+				fresh.send(t, map[string]any{"type": "input_audio_buffer.speech_started"})
+			}
+			stop := readStop(t, h.device)
+			if stop["playback_id"] != nil {
+				t.Fatal("held question falsely acquired device playback identity")
+			}
+			fresh.want(t, "response.cancel")
+			_, cfg := h.model(t)
+			instructions := cfg["instructions"].(string)
+			if !strings.Contains(instructions, `"awaiting_resume_choice":true`) || !strings.Contains(instructions, `"original_request":"原任务数到五十"`) {
+				t.Fatal("reconnect lost original task or outstanding choice")
+			}
+			h.device.quiet(t, 20*time.Millisecond)
+		})
+	}
+}
+func TestUnknownResumeMatchingUserEnvelopeBeforeResponseCreated(t *testing.T) {
+	h, _, _ := clarificationHarness(t)
+	s := h.s
+	s.responseID = ""
+	s.clarification.responseID = ""
+	s.voiceRequested = true
+	raw := `{"type":"conversation.item.created","item":{"id":"continue","type":"message","role":"user","content":[{"type":"input_audio"}]}}`
+	if err := rawClarificationEvent(t, s, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := rawClarificationEvent(t, s, `{"type":"response.created","response":{"id":"clarify","status":"in_progress","modalities":["text","audio"],"output":[]}}`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnknownResumeVerifiedInterruptedQuestionKeepsInterruptedHistory(t *testing.T) {
+	h, _, _ := clarificationHarness(t)
+	s := h.s
+	clarificationPCM(t, s, make([]byte, 2*audio.FrameBytes))
+	clarificationEvent(t, s, qwen.Event{Type: "response.audio_transcript.done", Transcript: fixedClarificationTest})
+	clarificationEvent(t, s, qwen.Event{Type: "response.audio.done"})
+	if err := clarificationEvent(t, s, qwen.Event{Type: "response.done", Response: qwen.Response{ID: "clarify", Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.play(t, time.Now())
+	// The harness has no configured reconnect URL. Stop/history/held cleanup must
+	// already be complete before that deliberately failing connection attempt.
+	if err := s.interrupt(context.Background(), false, true); err == nil {
+		t.Fatal("fixture unexpectedly reconnected")
+	}
+	t.Cleanup(s.encoder.Close)
+	if len(s.hist.Turns) != 1 || s.hist.Turns[0].Delivery != "interrupted" || s.hist.Turns[0].GeneratedText != fixedClarificationTest {
+		t.Fatalf("interrupted question lost history: %+v", s.hist.Turns)
+	}
+	if s.pending.Len() != 0 || s.clarification.active || s.paused.original.text != "从一数到五十" {
+		t.Fatal("interruption retained old audio or lost goal")
+	}
+}
+
+func TestUnknownResumeChoiceSnapshotChangeRequiresFreshACK(t *testing.T) {
+	s, p := routingHarness(t)
+	requests, results := controlledClassifier(s)
+	s.requestResponse()
+	takeClassification(t, requests)
+	results <- taskRouteResult{action: "resume"}
+	if err := s.finishRouting(routeResult(t, s)); err != nil {
+		t.Fatal(err)
+	}
+	p.read(t)
+	oldToken := s.sync.token
+	s.paused.awaitingResumeChoice = false
+	s.snapshotRevision++
+	ackSnapshotWire(t, s, p)
+	if update := p.read(t).body; update["type"] != "session.update" {
+		t.Fatal(update)
+	}
+	if s.sync.token <= oldToken || s.clarification.active || s.voiceRequested {
+		t.Fatal("stale choice snapshot ACK released voice")
+	}
+	p.quiet(t, time.Millisecond)
+	ackSnapshotWire(t, s, p)
+	p.want(t, "response.create")
+	if !s.clarification.active || s.clarification.generation != s.generation || s.clarification.input != s.currentInput {
+		t.Fatal("fresh ACK did not bind guard to current input")
+	}
+}
+
+func TestReviewCommittedInputStopsAlreadyPlayingQuestion(t *testing.T) {
+    h, _, _ := clarificationHarness(t)
+    s := h.s
+    clarificationPCM(t, s, make([]byte, 3*audio.FrameBytes))
+    clarificationEvent(t, s, qwen.Event{Type:"response.audio_transcript.done", Transcript:fixedClarificationTest})
+    clarificationEvent(t, s, qwen.Event{Type:"response.audio.done"})
+    if err := clarificationEvent(t, s, qwen.Event{Type:"response.done", Response:qwen.Response{ID:"clarify",Status:"completed"}}); err != nil { t.Fatal(err) }
+    now := time.Now()
+    if got:=h.play(t,now); !reflect.DeepEqual(got,[]string{"start","sentence_start","audio"}) {t.Fatal(got)}
+    if err:=s.onModel(context.Background(),qwen.Event{Type:"input_audio_buffer.committed",ItemID:"replacement"});err!=nil{t.Fatal(err)}
+    got:=h.play(t,now.Add(time.Second))
+    if !reflect.DeepEqual(got,[]string{"stop"}) || s.started || s.activePlayback != nil {
+       t.Fatalf("replaced playing question left device TTS open: events=%v started=%v response=%q active=%+v",got,s.started,s.responseID,s.activePlayback)
+    }
+}

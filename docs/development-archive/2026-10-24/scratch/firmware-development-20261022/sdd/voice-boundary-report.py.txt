@@ -1,0 +1,18 @@
+"""Summarize already sanitized boundaries; never infer acoustic success/latency."""
+import json,sys,datetime,collections
+from pathlib import Path
+records=[json.loads(x) for x in Path(sys.argv[1]).read_text().splitlines() if x.startswith('{')]
+state={};candidates=[];durations=[]
+for e in records:
+ if e.get('msg')!='voice_event':continue
+ sid=e['session'];s=state.setdefault(sid,{});ev=e['event'];now=datetime.datetime.fromisoformat(e['time'])
+ if ev=='tts_start':s['tts_start']=now
+ if ev in ('vad_started','response_cancelled','device_abort'):s['trigger']=ev
+ if ev=='interrupt':
+  r={k:e.get(k) for k in ('time','session','mode','upstream_generation','speaking','pending_ms','input_bytes')};r['trigger']=s.get('trigger','unknown');r['source_tts_start']=s.get('tts_start').isoformat() if s.get('tts_start') else None;r['physical_result']='requires human/recording';candidates.append(r);s.pop('tts_start',None)
+ if ev=='tts_stop' and 'tts_start' in s:
+  began=s.pop('tts_start')
+  durations.append({'session':sid,'from':began.isoformat(),'to':e['time'],'transport_interval_s':(now-began).total_seconds()})
+summary={'interrupts':candidates,'normal_tts_intervals':durations,'total_events':len(records),'physical_pass':None,'note':'control events only; numbers and physical stop require human evidence'}
+if len(sys.argv)>2:Path(sys.argv[2]).write_text(json.dumps(summary,indent=2))
+print(json.dumps(summary,indent=2))

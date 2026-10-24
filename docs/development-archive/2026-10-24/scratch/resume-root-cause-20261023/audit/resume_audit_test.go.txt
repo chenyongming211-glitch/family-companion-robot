@@ -1,0 +1,121 @@
+package gateway
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"familyrobot/internal/audio"
+)
+
+// These tests characterize the unmodified production implementation through a
+// Go overlay. Upstream and device peers are loopback httptest WebSockets only.
+func TestResumeAuditReconnectSnapshotAndLateFinal(t *testing.T) {
+	h := newToolHarnessFeatures(t, map[string]bool{"playback_progress_v1": true})
+	p, _ := h.model(t)
+	p.send(t, map[string]any{"type": "input_audio_buffer.committed", "item_id": "root"})
+	p.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "root", "transcript": "从一完整数到五十，每个数字都读出来，不要省略。"})
+	wantSTT(t, h.device)
+	toolParent(t, p, "root-reply", 100)
+	start := readStart(t, h.device)
+	full := "一、二、三……四十八、四十九、五十。"
+	p.send(t, map[string]any{"type": "response.audio_transcript.done", "response_id": "root-reply", "transcript": full})
+	for {
+		v := h.device.read(t)
+		if v.body["type"] == "tts" && v.body["state"] == "sentence_start" {
+			break
+		}
+	}
+	// Finish native generation before interrupting downstream playback. An STT
+	// event on the same model socket is a deterministic event-loop barrier.
+	toolDone(t, p, "root-reply")
+	p.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "audit-barrier", "transcript": "审计次序屏障"})
+	wantSTT(t, h.device)
+	receipt(h.device, t, start, "progress", 1440, true)
+	h.device.send(t, map[string]any{"type": "abort"})
+	readStop(t, h.device)
+	fresh, cfg := h.model(t)
+	instructions := cfg["instructions"].(string)
+	if !strings.Contains(instructions, `"delivery":"interrupted"`) || !strings.Contains(instructions, `"generated_text":"`+full+`"`) {
+		t.Fatal("full generation draft was not replayed in reconnect snapshot")
+	}
+	for _, field := range []string{`"original_request":`, `"played_samples":`, `"settled":`, `"task_id":`} {
+		if strings.Contains(instructions, field) {
+			t.Fatalf("unexpected automatic paused snapshot field: %s", field)
+		}
+	}
+	if _, forced := cfg["tool_choice"]; forced {
+		t.Fatal("tool choice unexpectedly forced")
+	}
+	// A device mode update is a same-socket barrier: its preceding final has
+	// necessarily been applied before this update reaches the model peer.
+	receipt(h.device, t, start, "finished", 1440, true)
+	h.device.send(t, map[string]any{"type": "listen", "state": "start", "mode": "manual"})
+	update := fresh.read(t).body
+	if update["type"] != "session.update" {
+		t.Fatalf("unexpected push before mode-only barrier: %v", update)
+	}
+	fields := update["session"].(map[string]any)
+	if len(fields) != 1 || fields["turn_detection"] != nil {
+		t.Fatalf("unexpected context push: %v", update)
+	}
+	fresh.quiet(t, 40*time.Millisecond)
+	out := localResult(t, fresh, "explicit-query", "conversation_get_paused_task", "{}")
+	if out["settled"] != true || out["played_samples"] != float64(1440) || out["original_request_known"] != true {
+		t.Fatalf("late final not available to explicitly requested tool: %v", out)
+	}
+	if path := os.Getenv("RESUME_AUDIT_CAPTURE"); path != "" {
+		capture := map[string]any{"synthetic_input_only": true, "loopback_peers_only": true, "reconnect_session": cfg, "barrier_session_update_fields": fields, "explicit_tool_result_after_late_final": out}
+		data, err := json.MarshalIndent(capture, "", "  ")
+		if err != nil { t.Fatal(err) }
+		if err := os.WriteFile(path, data, 0600); err != nil { t.Fatal(err) }
+	}
+	t.Log("reconnect snapshot contains full generated draft; paused state absent; late final sends no context update; explicit tool sees settled=true and 1440 samples")
+}
+
+func TestResumeAuditSecondInterruptedPlaybackKeepsFirstProgress(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	s.playbackEnabled = true
+	s.responseOrigin = requestOrigin{generation: 1, itemID: "root", text: "从一数到五十", known: true}
+	h.append(t, make([]byte, audio.FrameBytes))
+	h.play(t, time.Unix(100, 0))
+	s.pausePlayback()
+	deliverReceipt(t, h, map[string]any{"type": "playback", "state": "finished", "session_id": s.id, "playback_id": 1, "sample_rate": 24000, "played_samples": 1440, "valid": true, "basis": "i2s_dma", "interrupted": true})
+	first := s.pausedData()
+	s.activePlayback, s.devicePlayback = nil, nil
+	s.started = false
+	s.responseID = "resumed-reply"
+	s.responseOrigin = requestOrigin{generation: 2, itemID: "continue", text: "继续刚才的数数", known: true}
+	h.append(t, make([]byte, audio.FrameBytes*2))
+	h.play(t, time.Unix(101, 0))
+	h.play(t, time.Unix(101, 0).Add(60*time.Millisecond))
+	s.pausePlayback()
+	deliverReceipt(t, h, map[string]any{"type": "playback", "state": "finished", "session_id": s.id, "playback_id": 2, "sample_rate": 24000, "played_samples": 2880, "valid": true, "basis": "i2s_dma", "interrupted": true})
+	after := s.pausedData()
+	if after["task_id"] != first["task_id"] || after["playback_id"] != uint32(1) || after["played_samples"] != uint64(1440) {
+		t.Fatalf("implementation unexpectedly associated resumed playback: %v", after)
+	}
+	t.Log("second reply generated for explicit continue has its own playback 2, while paused task remains playback 1 at 1440 samples")
+}
+
+func TestResumeAuditHistoryEvictionHidesSavedOriginal(t *testing.T) {
+	h := newPlaybackHarness(t)
+	s := h.s
+	root := "原始任务及终点五十"
+	s.responseOrigin = requestOrigin{generation: 1, itemID: "root", text: root, known: true}
+	s.hist.add("user", root)
+	h.append(t, make([]byte, audio.FrameBytes))
+	h.play(t, time.Unix(100, 0))
+	s.pausePlayback()
+	for i := 0; i < 12; i++ {
+		s.hist.add("user", "旁支问答")
+	}
+	if strings.Contains(s.hist.context(), root) || s.pausedData()["original_request"] != root {
+		t.Fatal("bounded-history characterization mismatch")
+	}
+	b, _ := json.Marshal(s.pausedData())
+	t.Logf("after 12 side entries reconnect history omits root, while optional paused tool still has it: %s", b)
+}

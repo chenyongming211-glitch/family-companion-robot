@@ -1,5 +1,7 @@
 # 家庭陪伴机器人：最小 Go 实时语音网关
 
+换电脑继续开发先读[开发交接说明](docs/DEVELOPMENT_HANDOFF.md)：环境恢复、服务器约定、已完成/未完成、新电脑麦克风接入的下一步，以及本机历史实验资料的归档位置。
+
 2026-10-24已确认后续采用服务器端LiveKit Agents＋ASR→LLM→TTS：[架构细化](docs/superpowers/specs/2026-10-24-server-livekit-design.md)、[第一阶段实施计划](docs/superpowers/plans/2026-10-24-livekit-stage-zero.md)。手表保留小智协议，Go接入层逐步收缩为设备适配；首版先验证Agents自定义I/O，独立SFU媒体服务不作为必需项。目前是方案阶段，正式服务仍为下述千问原生链路，未据此宣称新架构已上线。
 
 任务层的原请求、原稿、播放账本、暂停/恢复与持久化职责见[实时语音与任务接续细化](docs/superpowers/specs/2026-10-24-livekit-task-continuation-design.md)。LiveKit Agents管理实时语音，Go任务模块持有播放事实；Eino为任务编排候选，不作为首个闭环的必需依赖。本文档更新未切换正式服务。

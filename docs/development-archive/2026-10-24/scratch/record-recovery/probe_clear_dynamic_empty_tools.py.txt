@@ -1,0 +1,48 @@
+import pathlib,subprocess,os,json,sys
+os.umask(0o077)
+program=r'''import asyncio,base64,json,pathlib,shlex,time
+import aiohttp,sys
+async def main():
+ success=sys.argv[1]=='success'
+ env={}
+ for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+  if not line.strip() or line.lstrip().startswith('#'):continue
+  k,_,v=line.partition('=');env[k]=shlex.split(v)[0] if shlex.split(v) else ''
+ result={'synthetic_text_only':True,'no_mic':True,'no_production_change':True,'events':[]}
+ async with aiohttp.ClientSession() as http:
+  async with http.ws_connect(env['QWEN_REALTIME_URL'],headers={'Authorization':'Bearer '+env['DASHSCOPE_API_KEY']},timeout=aiohttp.ClientWSTimeout(ws_receive=20)) as ws:
+   async def read():
+    ev=await ws.receive_json();kind=ev.get('type');result['events'].append(kind)
+    if kind=='error':
+     result['error_code']=ev.get('error',{}).get('code');detail=json.dumps(ev,ensure_ascii=False)
+     for protected in ['DASHSCOPE_API_KEY','ROBOT_DEVICE_TOKEN','ROBOT_OTA_SECRET','QWEN_REALTIME_URL']:
+      if len(env.get(protected,''))>8:detail=detail.replace(env[protected],'<redacted>')
+     result['sanitized_error']=detail[:800];raise ValueError('provider_rejected')
+    return ev
+   try:
+    await read()
+    await ws.send_json({'type':'session.update','session':{'modalities':['text','audio'],'turn_detection':None,'instructions':'你是中文语音助手。网关已执行本轮清空操作且只执行一次；以下JSON是经过验证的操作结果数据。只能依据它回答当前用户请求，不得再次调用清空工具。只描述本网关，不承诺删除云端供应商记录。\n'+json.dumps({'clear_records_result':{'completed':True,'ok':success,'cleared':success,'error':None if success else 'storage_error'}},ensure_ascii=False),'audio':{'input':{'format':{'type':'pcm','sample_rate':16000}},'output':{'voice':env.get('QWEN_VOICE','Tina'),'format':{'type':'pcm','sample_rate':24000}}},'tools':[{'type':'function','function':{'name':'conversation_clear_records','description':'清空本网关记录','parameters':{'type':'object','properties':{},'additionalProperties':False}}}]}})
+    while (await read())['type']!='session.updated':pass
+    await ws.send_json({'type':'session.update','session':{'tools':[]}})
+    while (await read())['type']!='session.updated':pass
+    items=[{'id':'audit_clear_user','type':'message','role':'user','content':[{'type':'input_text','text':'请清空本设备对话记录。'}]}]
+    for item in items:
+     await ws.send_json({'type':'conversation.item.create','item':item})
+     while (await read())['type']!='conversation.item.created':pass
+    await ws.send_json({'type':'response.create'})
+    audio=0;result['tool_calls']=[];result['success_condition']=success
+    while True:
+     ev=await read()
+     if ev['type']=='response.function_call_arguments.done':result['tool_calls'].append(ev.get('name'))
+     if ev['type']=='response.audio.delta':audio+=len(base64.b64decode(ev.get('delta','')))
+     if ev['type']=='response.audio_transcript.done':result['transcript']=ev.get('transcript')
+     if ev['type']=='response.done':result['response_status']=ev.get('response',{}).get('status');break
+    result['audio_bytes']=audio;result['status']='completed'
+   except Exception as e:result['status']='failed';result['failure_class']=type(e).__name__
+ print(json.dumps(result,ensure_ascii=False))
+ if result['status']!='completed':raise SystemExit(1)
+asyncio.run(main())'''
+ssh=['ssh','-S','/tmp/family-robot-records-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111','sudo -n /tmp/family-robot-livekit-audit-7a7547e/venv/bin/python - '+('failure' if len(sys.argv)>1 and sys.argv[1]=='failure' else 'success')]
+r=subprocess.run(ssh,input=program,text=True,capture_output=True)
+p=pathlib.Path('artifacts/record-recovery-20261023/native-clear-dynamic-empty-tools-'+('failure' if len(sys.argv)>1 and sys.argv[1]=='failure' else 'success')+'.json');p.write_text(r.stdout+r.stderr)
+print(r.stdout if r.stdout else json.dumps({'status':'failed_without_output','returncode':r.returncode}));raise SystemExit(r.returncode)

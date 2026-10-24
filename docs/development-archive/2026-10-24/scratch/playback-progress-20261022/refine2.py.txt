@@ -1,0 +1,35 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work')
+p=w/'main/audio/audio_service.h';s=p.read_text().replace('    bool IsPlaybackIdle();','    bool IsPlaybackIdle();\n    void PollPlaybackDrained();');p.write_text(s)
+p=w/'main/audio/audio_service.cc';s=p.read_text().replace('''bool AudioService::IsPlaybackIdle() {''','''void AudioService::PollPlaybackDrained() {
+    bool notify;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        notify = MarkPlaybackDrainedLocked();
+    }
+    if (notify && callbacks_.on_playback_drained) callbacks_.on_playback_drained();
+}
+bool AudioService::IsPlaybackIdle() {''')
+s=s.replace('''const uint32_t output_generation = codec_->PlaybackGeneration();''','''const uint32_t output_generation = packet->output_generation;''')
+s=s.replace('''    const uint32_t generation = playback_generation_;
+    if (audio_decode_queue_.size()''','''    const uint32_t generation = playback_generation_;
+    if (!packet->server_audio) packet->output_generation = codec_->PlaybackGeneration();
+    if (audio_decode_queue_.size()''');p.write_text(s)
+p=w/'main/application.cc';s=p.read_text().replace('''            if (pending_listening_start_ && audio_service_.IsPlaybackIdle())
+                bits |= MAIN_EVENT_PLAYBACK_DRAINED;''','''            audio_service_.PollPlaybackDrained();''');p.write_text(s)
+p=w/'main/protocols/protocol.h';s=p.read_text().replace('    bool server_audio = false;','    bool server_audio = false;\n    uint32_t output_generation = 0;');p.write_text(s)
+p=w/'main/protocols/websocket_protocol.h';s=p.read_text().replace('    void SendPlayback(', '    void SendAbortSpeaking(AbortReason reason) override;\n    void SendPlayback(');p.write_text(s)
+p=w/'main/protocols/websocket_protocol.cc';s=p.read_text().replace('''    codec->PlaybackControl(AudioCodec::PlaybackOp::Reset);
+    codec->PlaybackControl(AudioCodec::PlaybackOp::Connect''','''    Application::GetInstance().GetAudioService().ResetDecoder();
+    codec->PlaybackControl(AudioCodec::PlaybackOp::Connect''')
+s=s.replace('''            packet->server_audio = true;''','''            packet->server_audio = true;
+            packet->output_generation = Board::GetInstance().GetAudioCodec()->PlaybackGeneration();''')
+s+='''
+void WebsocketProtocol::SendAbortSpeaking(AbortReason reason) {
+    {
+        std::lock_guard<std::mutex> lock(playback_mutex_);
+        if (playback_negotiated_) playback_receiving_ = false;
+    }
+    Protocol::SendAbortSpeaking(reason);
+}
+''';p.write_text(s)

@@ -1,0 +1,149 @@
+"""Controller-only offline verification. No device, serial or network operations."""
+import argparse, hashlib, json, os, pathlib, re, stat, struct, subprocess, zipfile
+import esptool
+from esptool.bin_image import LoadFirmwareImage
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def image_integrity(data):
+    assert esptool.__version__=='5.3.1'
+    image=LoadFirmwareImage('esp32s3',data)
+    assert image.chip_id==9
+    assert image.checksum==image.calculate_checksum()
+    assert image.append_digest and image.stored_digest==image.calc_digest
+    assert 0<len(image.segments)<=16
+    segments=[]
+    for seg in image.segments:
+        assert seg.file_offs>=24 and seg.file_offs+8+len(seg.data)<=len(data)
+        segments.append({'address':seg.addr,'bytes':len(seg.data),'file_offset':seg.file_offs})
+    assert any(seg.addr<=image.entrypoint<seg.addr+len(seg.data) for seg in image.segments)
+    return {'tool':'esptool5.3.1 offline LoadFirmwareImage','checksum_valid':True,'validation_hash_valid':True,'entrypoint':image.entrypoint,'chip_id':image.chip_id,'flash_mode':image.flash_mode,'flash_size_freq':image.flash_size_freq,'min_revision':image.min_rev_full,'max_revision':image.max_rev_full,'segments':segments}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('archive', type=pathlib.Path)
+    ap.add_argument('--digest', required=True)
+    ap.add_argument('--head', required=True)
+    ap.add_argument('--variant', choices=['m5stack-stopwatch','m5stack-stopwatch-software-aec'], required=True)
+    ap.add_argument('--destination', required=True, type=pathlib.Path)
+    args=ap.parse_args()
+    assert re.fullmatch('[0-9a-f]{40}',args.head)
+    assert args.archive.stat().st_size <= 32*1024*1024
+    assert sha(args.archive.read_bytes()) == args.digest.removeprefix('sha256:')
+    out=args.destination
+    out.mkdir(mode=0o700)
+    os.chmod(out,0o700)
+    with zipfile.ZipFile(args.archive) as z:
+        entries=z.infolist()
+        assert len(entries)<=128 and sum(x.file_size for x in entries)<=64*1024*1024
+        assert len({x.filename for x in entries})==len(entries)
+        for i in entries:
+            p=pathlib.PurePosixPath(i.filename)
+            assert not p.is_absolute() and '..' not in p.parts and '\\' not in i.filename
+            assert not stat.S_ISLNK(i.external_attr>>16)
+        assert z.testzip() is None
+        for i in entries:
+            dest=out.joinpath(*pathlib.PurePosixPath(i.filename).parts)
+            dest.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+            if i.is_dir():
+                dest.mkdir(exist_ok=True,mode=0o700)
+            else:
+                with dest.open('xb') as f:
+                    os.chmod(dest,0o600)
+                    f.write(z.read(i))
+    files=[p for p in out.rglob('*') if p.is_file()]
+    def unique(name):
+        matches=[p for p in files if p.name==name]
+        assert len(matches)==1,(name,[str(p) for p in matches])
+        return matches[0]
+    def owned(path):
+        return subprocess.check_output(['git','show',args.head+':'+path])
+    lock=json.loads(owned('firmware/upstream.lock.json'))
+    build_evidence=json.loads(unique('build-evidence.json').read_text())
+    assert build_evidence['source_sha']==args.head
+    assert build_evidence['variant']==args.variant
+    assert build_evidence['idf_commit']==lock['idf_commit']
+    assert json.loads(unique('upstream.lock.json').read_bytes())==lock
+    manifest=json.loads(unique('.family-robot-source.json').read_bytes())
+    assert manifest['upstream_commit']==lock['commit']
+    assert manifest['archive_sha256']==lock['archive_sha256']
+    for group, folder in [('patches','patches'),('overlays','overlays')]:
+        for entry in manifest[group]:
+            assert sha(owned('firmware/'+folder+'/'+entry['path']))==entry['sha256']
+    sdk=unique('sdkconfig')
+    deps=sdk.parent/'dependencies.lock'
+    assert sha(deps.read_bytes())==manifest['dependencies_sha256']==owned('firmware/dependencies.lock.sha256').decode().strip()
+    assert deps.read_bytes()==owned('firmware/dependencies.lock')
+    config={}
+    for line in sdk.read_text().splitlines():
+        if line.startswith('CONFIG_') and '=' in line:
+            k,v=line.split('=',1); config[k]=v
+    experimental=args.variant.endswith('-software-aec')
+    enabled=lambda k: config.get('CONFIG_'+k)=='y'
+    assert enabled('STOPWATCH_SOFTWARE_AEC')==experimental
+    assert enabled('USE_DEVICE_AEC')==experimental
+    assert enabled('ESP_CONSOLE_USB_SERIAL_JTAG')==experimental
+    assert enabled('ESP_CONSOLE_UART_DEFAULT')== (not experimental)
+    if experimental:
+        assert not enabled('I2S_ISR_IRAM_SAFE')
+        assert not enabled('USE_AUDIO_DEBUGGER')
+        assert not enabled('ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG')
+    checks=unique('SHA256SUMS').read_text().splitlines()
+    checked=[]
+    for line in checks:
+        digest,name=line.split(maxsplit=1);name=name.lstrip('*')
+        path=pathlib.PurePosixPath(name)
+        assert not path.is_absolute() and '..' not in path.parts
+        matches=[p for p in files if str(p.relative_to(out)).endswith('/'+name) or str(p.relative_to(out))==name]
+        assert len(matches)==1,(name,matches)
+        assert sha(matches[0].read_bytes())==digest
+        checked.append(name)
+    assert set(checked)=={str(p.relative_to(out)) for p in files if p.name!='SHA256SUMS'}
+    part=unique('partition-table.bin').read_bytes(); partitions=[]; md5=False
+    for off in range(0,len(part),32):
+        magic=int.from_bytes(part[off:off+2],'little')
+        if magic==0xffff:break
+        if magic==0xebeb:
+            assert hashlib.md5(part[:off]).digest()==part[off+16:off+32];md5=True;continue
+        assert magic==0x50aa
+        _,typ,sub,offset,size,label,flags=struct.unpack_from('<HBBII16sI',part,off)
+        partitions.append(dict(label=label.split(b'\0')[0].decode(),type=typ,subtype=sub,offset=offset,size=size,flags=flags))
+    assert md5
+    backup=json.loads(pathlib.Path('artifacts/firmware-preflight-20261022/backup-integrity.json').read_text())
+    assert partitions==backup['partitions']
+    geometry={x['label']:x for x in partitions}
+    app=unique('xiaozhi.bin').read_bytes(); assets=unique('generated_assets.bin').read_bytes()
+    assert app[0]==0xe9 and struct.unpack_from('<H',app,12)[0]==9
+    assert struct.unpack_from('<I',app,32)[0]==0xabcd5432
+    assert len(app)<=geometry['ota_0']['size'] and len(app)<=geometry['ota_1']['size']
+    assert len(assets)<=geometry['assets']['size']
+    text=lambda offset,count:app[offset:offset+count].split(b'\0')[0].decode()
+    description={'version':text(48,32),'project':text(80,32),'idf':text(144,32)}
+    assert description['version']=='2.5.2' and description['project']=='xiaozhi' and description['idf'].startswith('v6.1')
+    flasher=json.loads(unique('flasher_args.json').read_text())
+    assert flasher['extra_esptool_args']['chip']=='esp32s3'
+    assert flasher['flash_settings']=={'flash_mode':'dio','flash_size':'16MB','flash_freq':'80m'}
+    assert int(flasher['app']['offset'],0)==geometry['ota_0']['offset']
+    assert int(flasher['assets']['offset'],0)==geometry['assets']['offset']
+    boot=unique('bootloader.bin').read_bytes()
+    images={'app':image_integrity(app),'bootloader':image_integrity(boot)}
+    merged=unique('merged-binary.bin').read_bytes()
+    assert len(merged)<=16777216
+    for offset,data in [(0,boot),(0x8000,part),(geometry['ota_0']['offset'],app),(geometry['assets']['offset'],assets)]:
+        assert merged[offset:offset+len(data)]==data
+    old=pathlib.Path('artifacts/device-backup-20261021-191653/full-flash-before.bin').read_bytes()
+    assert sha(old)==backup['sha256'] and len(old)==backup['flash_size']
+    images['offline_backup_bootloader']=image_integrity(old[:0x8000])
+    images['offline_backup_app']=image_integrity(old[0x20000:0x410000])
+    old_assets=old[0x800000:0x1000000]
+    asset_comparison={'candidate_sha256':sha(assets),'backup_full_partition_sha256':sha(old_assets),'candidate_prefix_equal':old_assets[:len(assets)]==assets,'candidate_plus_erased_padding_equals_backup_partition':old_assets==assets+b'\xff'*(len(old_assets)-len(assets)),'shared_assets_compatibility':'pending unless full exact-byte equality established; current device also unverified'}
+    summary={'source_head' :args.head,'variant':args.variant,'zip_sha256':args.digest.removeprefix('sha256:'),'zip_crc':'ok','entry_count':len(entries),'file_sha256':{str(p.relative_to(out)):sha(p.read_bytes()) for p in files},'manifest':manifest,'checksum_entries':checked,'dependencies_match':True,'effective_config':{k:v for k,v in config.items() if any(t in k for t in ('STOPWATCH','USE_DEVICE_AEC','USE_AUDIO_DEBUGGER','I2S_ISR_IRAM_SAFE','ESP_CONSOLE'))},'partition_md5_valid':True,'matches_offline_backup_geometry':True,'partitions':partitions,'app_bytes':len(app),'assets_bytes':len(assets),'app_description':description,'image_integrity':images,'merged_matches_component_images':True,'asset_comparison':asset_comparison,'hardware_flashed':False,'current_device_slot_verified':False,'acoustic_pass':False}
+    report=out.parent/(out.name+'-verification.json')
+    with report.open('x') as f:os.chmod(report,0o600);json.dump(summary,f,indent=2);f.write('\n')
+    print(json.dumps({'verification':str(report),'variant':args.variant,'app_bytes':len(app),'assets_bytes':len(assets),'files':len(files),'status':'offline verification passed; no hardware claim'}))
+
+if __name__=='__main__':main()

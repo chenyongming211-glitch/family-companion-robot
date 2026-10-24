@@ -1,0 +1,20 @@
+#include "duplex_reference.h"
+#include <array>
+#include <cstdio>
+int main() {
+    family_robot::DuplexReference p;
+    p.Begin(1, 0); p.Capture(true);
+    std::array<int16_t, 240> zeros{};
+    std::array<int16_t, 480> mr{};
+    for (int64_t i = 0; i < 10000; ++i) {
+        const int64_t nominal = (i + 1) * 10000;
+        const int64_t stamp = 1000000 + nominal + nominal * 20 / 1000000;
+        if (!p.Tx(i * 240, stamp, zeros.data(), zeros.size()) ||
+            !p.Rx(i * 240, stamp, zeros.data(), zeros.size()) ||
+            p.Take(mr.data(), 240, stamp + 1) != family_robot::DuplexReference::Result::Ready) {
+            std::printf("both clocks +20ppm, contiguous identical timeline: fault=%d after nominal_ms=%lld\n", int(p.fault()), static_cast<long long>(nominal / 1000));
+            return 1;
+        }
+    }
+    return 0;
+}

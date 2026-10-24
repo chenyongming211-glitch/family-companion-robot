@@ -1,0 +1,50 @@
+import io,json,os,pathlib,shlex,subprocess,sys,tarfile
+os.umask(0o077)
+root=pathlib.Path.cwd();head,case,scenario,order,delay=sys.argv[1:]
+meta=json.loads((root/'artifacts/resume-state-alignment-20261023'/('go-'+head[:12])/'verification.json').read_text())
+assert meta['source_head']==head and meta['returncode']==0
+assert case.replace('-','').isalnum()
+remote=meta['remote_directory'];art=root/'artifacts/resume-state-alignment-20261023'
+ssh=['ssh','-S','/tmp/family-robot-resume-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111']
+buf=io.BytesIO()
+with tarfile.open(fileobj=buf,mode='w') as t:
+ for name in ['hello','count50','stop','query','continue','continue_restart']:
+  if name in ['hello','count50']:f=root/'artifacts/playback-field-20261022/synthetic-inputs'/(name+'.wav')
+  elif name=='continue_restart':f=art/'fixtures'/'continue_restart_v2.wav'
+  else:f=root/'.superpowers/overnight-20261023/go'/(name+'.wav')
+  t.add(f,arcname='fixtures/'+name+'.wav')
+subprocess.run(ssh+['cat > '+shlex.quote(remote+'/fixtures.tar')+' && tar xf '+shlex.quote(remote+'/fixtures.tar')+' -C '+shlex.quote(remote)],input=buf.getvalue(),check=True)
+program=r'''
+import hashlib,json,os,pathlib,shlex,subprocess,sys,time,urllib.request
+base,case,scenario,order,delay=sys.argv[1:]
+env=os.environ.copy()
+for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+ if not line.strip() or line.lstrip().startswith('#'):continue
+ k,_,v=line.partition('=');env[k]=shlex.split(v)[0] if shlex.split(v) else ''
+port=18003
+env['ROBOT_LISTEN_ADDR']='127.0.0.1:'+str(port);env['ROBOT_SMOKE_URL']='ws://127.0.0.1:'+str(port)+'/xiaozhi/v1/'
+with open(base+'/'+case+'-gateway.jsonl','x') as log:
+ p=subprocess.Popen([base+'/gateway'],env=env,stdout=log,stderr=log)
+ try:
+  for i in range(50):
+   if p.poll() is not None:raise RuntimeError('isolated_gateway_exited')
+   try:
+    assert json.load(urllib.request.urlopen('http://127.0.0.1:'+str(port)+'/healthz',timeout=1))['status']=='ok';break
+   except Exception:time.sleep(.1)
+  else:raise RuntimeError('isolated_gateway_unhealthy')
+  cmd=[base+'/probe','--dir',base+'/fixtures','--out',base+'/'+case+'.json','--scenario',scenario,'--order',order,'--receipts','--interrupted-final-delay',delay]
+  r=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=245)
+  print(r.stdout)
+  if r.returncode:print(r.stderr)
+  raise SystemExit(r.returncode)
+ finally:
+  p.terminate()
+  try:p.wait(timeout=5)
+  except subprocess.TimeoutExpired:p.kill();p.wait()
+'''
+cmd='sudo -n python3 - '+' '.join(shlex.quote(a) for a in [remote,case,scenario,order,delay])
+r=subprocess.run(ssh+[cmd],input=program,text=True,capture_output=True)
+(art/(case+'.json')).write_text(r.stdout+r.stderr)
+for name in [case+'-gateway.jsonl']:
+ q=subprocess.run(ssh+['sudo -n cat '+shlex.quote(remote+'/'+name)],capture_output=True,text=True);(art/name).write_text(q.stdout)
+print(r.stdout+r.stderr);raise SystemExit(r.returncode)

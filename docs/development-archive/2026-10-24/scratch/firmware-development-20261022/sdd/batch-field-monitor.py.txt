@@ -1,0 +1,44 @@
+"""Bounded metadata/state observation only: never starts PCM capture or RT."""
+import os,sys,subprocess,serial,time,json,re,datetime
+from pathlib import Path
+os.umask(0o077);root=Path(sys.argv[1]);root.mkdir(mode=0o700)
+ssh=['ssh','-S','/tmp/family-robot-field-20261022.sock','-o','BatchMode=yes','-o','ConnectTimeout=5','ubuntu@82.156.48.111']
+def remote(cmd):
+ p=subprocess.run(ssh+[cmd],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=10)
+ if p.returncode:raise RuntimeError('server observation failed')
+ return p.stdout
+server_start=remote('date -u +%Y-%m-%dT%H:%M:%SZ').strip()
+s=serial.Serial(port=None,baudrate=115200,timeout=.15);s.dtr=True;s.rts=False;s.port='/dev/cu.usbmodem21201';s.open()
+start=time.monotonic();nextstats=start;buf=b'';states=[];aggregates=[];fault=False
+try:
+ with (root/'console.log').open('wb') as raw:
+  print('METADATA_MONITOR_READY_NO_PCM',flush=True)
+  while time.monotonic()-start<600 and not (root/'finish-requested').exists() and not fault:
+   chunk=s.read(8192)
+   if chunk:
+    raw.write(chunk);raw.flush();buf+=chunk
+    while b'\n' in buf:
+     line,buf=buf.split(b'\n',1);text=re.sub(r'\x1b\[[0-9;]*m','',line.decode(errors='replace'))
+     state=re.search(r'[IWE] \((\d+)\) StateMachine: State: ([a-z_]+) -> ([a-z_]+)',text)
+     if state:
+      item={'elapsed':round(time.monotonic()-start,3),'device_ms':int(state[1]),'from':state[2],'to':state[3]};states.append(item);print('STATE',json.dumps(item),flush=True)
+     if text.startswith(('aec_stats ','aec_diag ','aec_realtime ')):
+      aggregates.append(text);print(text,flush=True)
+      if text.startswith('aec_stats ') and re.search(r'\bfault=[1-9]',text):fault=True
+   if time.monotonic()>=nextstats:s.write(b'aec_stats\r\n');s.flush();nextstats+=20
+  if fault:
+   s.write(b'aec_realtime off\r\naec_diag_stop\r\n');s.flush();print('FAULT_OFF_REQUESTED',flush=True)
+finally:
+ s.close()
+ data={'server_start_utc':server_start,'host_end_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'fault':fault,'states':states,'aggregate_lines':aggregates,'extra_pcm_recording':False,'realtime_teardown':'off only on fault; otherwise unchanged'}
+ (root/'state-timeline.json').write_text(json.dumps(data,indent=2))
+ try:
+  logs=remote('sudo -n journalctl -u family-robot --since '+server_start+' --no-pager -o cat')
+  allow={'time','level','msg','event','session','mode','upstream_generation','response_open','speaking','pending_ms','input_bytes','protocol','input_frame_ms','server_aec_requested','reason'};events=[]
+  for line in logs.splitlines():
+   try:e=json.loads(line)
+   except ValueError:continue
+   if e.get('msg') in ('voice_event','device_connected','device_session_closed'):events.append({k:e[k] for k in e.keys()&allow})
+  (root/'gateway-events.jsonl').write_text(''.join(json.dumps(e,separators=(',',':'))+'\n' for e in events));print('GATEWAY_METADATA_RECORDS',len(events),flush=True)
+ except Exception as e:print('GATEWAY_METADATA_FAILED',type(e).__name__,flush=True)
+ print('METADATA_MONITOR_FINISHED',flush=True)

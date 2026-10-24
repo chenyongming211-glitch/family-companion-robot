@@ -1,0 +1,60 @@
+// Isolated synthetic protocol audit. Receipt counters are simulated, never hardware evidence.
+package main
+import (
+ "encoding/json"; "flag"; "fmt"; "net/http"; "os"; "path/filepath"; "time"
+ "familyrobot/internal/audio"; "familyrobot/internal/protocol"; "github.com/gorilla/websocket"
+)
+type wire struct {kind int; data []byte; err error}
+type reply struct {StartMS int64 `json:"start_ms"`; StopMS int64 `json:"stop_ms"`; Reason string `json:"reason"`; Text string `json:"generated_text"`; Frames int `json:"frames"`; PlaybackID uint32 `json:"playback_id"`}
+func main(){
+ dir:=flag.String("dir","","fixtures"); out:=flag.String("out","","result file"); scenario:=flag.String("scenario","interrupt","normal or interrupt"); order:=flag.String("order","cache-first","cache-first or start-first"); receipts:=flag.Bool("receipts",false,"SIMULATED receipt counters"); flag.Parse()
+ result:=map[string]any{"scenario":*scenario,"wake_order":*order,"simulated_receipts":*receipts,"synthetic_audio_only":true}
+ started:=time.Now(); var replies []reply; var stt []string; events:=[]map[string]any{}
+ err:=func()error{
+  fixtures:=map[string][]byte{}
+  for _,name:=range []string{"hello","count50","stop","query","continue"}{f,e:=os.Open(filepath.Join(*dir,name+".wav"));if e!=nil{return e}; pcm,e:=audio.ReadWAV(f);f.Close();if e!=nil{return e};fixtures[name]=pcm}
+  c,_,e:=websocket.DefaultDialer.Dial(os.Getenv("ROBOT_SMOKE_URL"),http.Header{"Authorization":[]string{"Bearer "+os.Getenv("ROBOT_DEVICE_TOKEN")},"Device-Id":[]string{os.Getenv("ROBOT_ALLOWED_DEVICE")},"Protocol-Version":[]string{"1"}}); if e!=nil{return fmt.Errorf("dial failed")};defer c.Close();c.SetReadDeadline(time.Now().Add(230*time.Second))
+  c.WriteJSON(protocol.Hello{Type:"hello",Version:1,Transport:"websocket",Features:map[string]bool{"mcp":true,"playback_progress_v1":*receipts},AudioParams:protocol.AudioParams{Format:"opus",SampleRate:16000,Channels:1,FrameDuration:60}})
+  var hello protocol.Hello;if c.ReadJSON(&hello)!=nil||hello.Type!="hello"{return fmt.Errorf("hello failed")}
+  for _,method:=range []string{"initialize","tools/list"}{var ev struct{Type string `json:"type"`;Payload struct{ID any `json:"id"`;Method string `json:"method"`} `json:"payload"`};if c.ReadJSON(&ev)!=nil||ev.Type!="mcp"||ev.Payload.Method!=method{return fmt.Errorf("discovery failed")};result:=map[string]any{};if method=="tools/list"{result["tools"]=[]map[string]any{{"name":"self.get_device_status"},{"name":"self.audio_speaker.set_volume"},{"name":"self.screen.set_brightness"}}};if c.WriteJSON(map[string]any{"type":"mcp","session_id":hello.SessionID,"payload":map[string]any{"jsonrpc":"2.0","id":ev.Payload.ID,"result":result}})!=nil{return fmt.Errorf("discovery write failed")}}
+  enc,e:=audio.NewEncoderAtRate(16000);if e!=nil{return e};defer enc.Close();dec,e:=audio.NewDecoder();if e!=nil{return e};defer dec.Close()
+  sendPCM:=func(pcm []byte)error{frame:=make([]byte,1920);copy(frame,pcm);p,e:=enc.Encode(frame);if e!=nil{return e};return c.WriteMessage(websocket.BinaryMessage,p)}
+  startListen:=func()error{return c.WriteJSON(protocol.Control{Type:"listen",State:"start",Mode:"realtime",SessionID:hello.SessionID})}
+  if *order=="start-first"{if e:=startListen();e!=nil{return e}}
+  for pos:=0;pos<len(fixtures["hello"]);pos+=1920{if e:=sendPCM(fixtures["hello"][pos:]);e!=nil{return e}}
+  if e:=c.WriteJSON(protocol.Control{Type:"listen",State:"detect",Text:"你好小智",SessionID:hello.SessionID});e!=nil{return e}
+  if *order!="start-first"{if e:=startListen();e!=nil{return e}}
+  incoming:=make(chan wire,256);done:=make(chan struct{});defer close(done);go func(){for{k,d,e:=c.ReadMessage();select{case incoming<-wire{k,d,e}:case<-done:return};if e!=nil{return}}}()
+  tick:=time.NewTicker(60*time.Millisecond);defer tick.Stop();deadline:=time.NewTimer(225*time.Second);defer deadline.Stop()
+  phase:="greeting";var pending []byte;nextName:="";nextAt:=time.Time{};active:=-1;interjected:=false;earlyCount:=false;var inputAt time.Time
+  record:=func(event string){events=append(events,map[string]any{"event":event,"phase":phase,"ms":time.Since(started).Milliseconds()})}
+  receipt:=func(state string,r reply)error{if !*receipts||r.PlaybackID==0{return nil};return c.WriteJSON(map[string]any{"type":"playback","state":state,"session_id":hello.SessionID,"playback_id":r.PlaybackID,"sample_rate":24000,"played_samples":r.Frames*1440,"valid":true,"basis":"i2s_dma","interrupted":r.Reason=="interrupted"})}
+  for{select{
+  case <-deadline.C:return fmt.Errorf("scenario deadline phase=%s",phase)
+  case <-tick.C:
+   if nextName!=""&&time.Now().After(nextAt){pending=append([]byte(nil),fixtures[nextName]...);record("input_"+nextName);nextName="";inputAt=time.Now()}
+   frame:=make([]byte,1920);if len(pending)>0{n:=copy(frame,pending);pending=pending[n:]};if e:=sendPCM(frame);e!=nil{return fmt.Errorf("pcm write failed")}
+   if *scenario=="wake-interrupt"&&phase=="greeting"&&active>=0&&!earlyCount&&replies[active].Frames>=10{earlyCount=true;pending=append([]byte(nil),fixtures["count50"]...);record("input_count50_during_greeting")}
+   if (*scenario=="interrupt"||*scenario=="wake-interrupt")&&phase=="count"&&active>=0&&!interjected&&replies[active].Frames>=84{interjected=true;pending=append([]byte(nil),fixtures["stop"]...);inputAt=time.Now();record("input_stop")}
+  case w:=<-incoming:
+   if w.err!=nil{if phase=="idle"{elapsed:=time.Since(inputAt).Milliseconds();result["idle_close_ms_after_reply"]=elapsed;if elapsed>=115000&&elapsed<135000{return nil}};return fmt.Errorf("socket ended phase=%s",phase)}
+   if w.kind==websocket.BinaryMessage{if active<0{return fmt.Errorf("audio outside reply")};p,_,e:=protocol.Unwrap(1,w.data);if e!=nil{return e};if _,e:=dec.Decode(p);e!=nil{return e};replies[active].Frames++;if replies[active].Frames%10==0{if e:=receipt("progress",replies[active]);e!=nil{return e}};continue}
+   var ev struct{Type string `json:"type"`;State string `json:"state"`;Reason string `json:"reason"`;Text string `json:"text"`;PlaybackID uint32 `json:"playback_id"`};if json.Unmarshal(w.data,&ev)!=nil{return fmt.Errorf("bad control")}
+   if ev.Type=="alert"{return fmt.Errorf("gateway upstream alert")};if ev.Type=="mcp"{return fmt.Errorf("unexpected device actuation request")}
+   if ev.Type=="stt"{stt=append(stt,ev.Text);record("stt")}
+   if ev.Type=="tts"&&ev.State=="start"{replies=append(replies,reply{StartMS:time.Since(started).Milliseconds(),PlaybackID:ev.PlaybackID});active=len(replies)-1;record("tts_start")}
+   if ev.Type=="tts"&&ev.State=="sentence_start"&&active>=0{replies[active].Text=ev.Text}
+   if ev.Type=="tts"&&ev.State=="stop"{
+    record("tts_stop_"+ev.Reason);if active<0{continue};r:=&replies[active];r.StopMS=time.Since(started).Milliseconds();r.Reason=ev.Reason;if e:=receipt("finished",*r);e!=nil{return e};active=-1
+    switch phase{
+    case "greeting":if *scenario=="idle"{phase="idle";inputAt=time.Now();break};phase="count";if !earlyCount{nextName="count50";nextAt=time.Now().Add(1*time.Second)}
+    case "count":if *scenario=="normal"{return nil};if !interjected||ev.Reason!="interrupted"{return fmt.Errorf("count not interrupted")};result["interrupt_stop_ms_from_synthetic_speech_onset"]=time.Since(inputAt).Milliseconds();phase="math"
+    case "math":phase="query";nextName="query";nextAt=time.Now().Add(time.Second)
+    case "query":phase="continue";nextName="continue";nextAt=time.Now().Add(time.Second)
+    case "continue":return nil
+    }
+   }
+  }}
+ }()
+ result["replies"]=replies;result["input_transcripts"]=stt;result["events"]=events;result["total_ms"]=time.Since(started).Milliseconds();result["status"]="completed";if err!=nil{result["status"]="failed";result["error"]=err.Error()};b,_:=json.MarshalIndent(result,"","  ");os.WriteFile(*out,append(b,'\n'),0600);fmt.Println(string(b));if err!=nil{os.Exit(1)}
+}

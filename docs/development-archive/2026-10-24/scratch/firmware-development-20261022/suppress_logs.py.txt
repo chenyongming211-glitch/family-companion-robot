@@ -1,0 +1,26 @@
+from pathlib import Path
+root=Path('.superpowers/firmware-development-20261022/aec-work/main')
+patterns={
+'application.cc':['"<< %s"','">> %s"','"System command:','"Unknown system command:','"Received custom message:','"Unknown message type:','"Alert [%s]','"Wake word detected:','"Starting firmware upgrade from URL:'],
+'protocols/websocket_protocol.cc':['"Failed to send text:','"Missing message type, data:','"Connecting to websocket server:','"Failed to connect to websocket server:','"Session ID:'],
+'protocols/mqtt_protocol.cc':['"Failed to parse json message','"Received goodbye message, session_id:','"Failed to publish message:','"Session ID:'],
+'boards/common/wifi_board.cc':['"Connected to WiFi:','"WiFi connecting to'],
+'boards/common/blufi.cpp':['"  SSID:','"Recv STA SSID:','"Recv STA PASSWORD'],
+'ota.cc':['"Setup HTTP, User-Agent:','"Upgrading firmware from','"Activation payload:','"Failed to activate, code:'],
+'mcp_server.cc':['"User requested firmware upgrade from URL:','"Upload snapshot %u bytes to','"Snapshot screen result:','"Failed to parse MCP message:','"tools/call: %s"'],
+}
+for name,fragments in patterns.items():
+ p=root/name;lines=p.read_text().splitlines(True);out=[]; i=0
+ while i<len(lines):
+  line=lines[i]
+  if 'ESP_LOG' in line and any(f in line for f in fragments):
+   out.append('#if !CONFIG_STOPWATCH_SOFTWARE_AEC\n')
+   while True:
+    out.append(lines[i]);done=');' in lines[i];i+=1
+    if done:break
+   out.append('#endif\n')
+  else:out.append(line);i+=1
+ p.write_text(''.join(out))
+# Do not allocate the otherwise unused custom JSON just for a suppressed log.
+p=root/'application.cc';s=p.read_text();s=s.replace('            CJsonStringUniquePtr root_json(cJSON_PrintUnformatted(root));\n#if !CONFIG_STOPWATCH_SOFTWARE_AEC','''#if !CONFIG_STOPWATCH_SOFTWARE_AEC
+            CJsonStringUniquePtr root_json(cJSON_PrintUnformatted(root));''');p.write_text(s)

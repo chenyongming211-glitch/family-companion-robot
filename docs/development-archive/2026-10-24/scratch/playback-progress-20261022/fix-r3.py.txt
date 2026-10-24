@@ -1,0 +1,87 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work/main/audio/codecs')
+p=w/'es8311_audio_codec.h';s=p.read_text();s=s.replace('bool pa_inverted_ = false;', 'bool pa_inverted_ = false;\n    bool callback_refill_ = false;\n    gpio_num_t duplex_pins_[5]{};');s=s.replace('virtual void OnDeviceEpoch(bool opened)', 'void RecreateDuplexForOrdinaryWrite();\n    virtual void OnDeviceEpoch(bool opened)');s=s.replace('bool pa_inverted = false);','bool pa_inverted = false, bool callback_refill = false);');p.write_text(s)
+p=w/'es8311_audio_codec.cc';s=p.read_text();s=s.replace('bool use_mclk, bool pa_inverted) {','bool use_mclk, bool pa_inverted, bool callback_refill) {');s=s.replace('pa_inverted_ = pa_inverted;', 'pa_inverted_ = pa_inverted;\n    callback_refill_ = callback_refill;\n    duplex_pins_[0] = mclk; duplex_pins_[1] = bclk; duplex_pins_[2] = ws;\n    duplex_pins_[3] = dout; duplex_pins_[4] = din;');s=s.replace('#if CONFIG_STOPWATCH_SOFTWARE_AEC\n        .auto_clear_after_cb = false,\n#else\n        .auto_clear_after_cb = true,\n#endif', '.auto_clear_after_cb = !callback_refill_,');s+='\n#include "es8311_output_ownership.inc"\n';p.write_text(s)
+a=Path('firmware/overlays/main/audio')
+(a/'es8311_output_ownership.inc').write_text('''// Initialization only: AudioService has not started producers or opened dev_.
+// Destroying both disabled channels removes even a partially registered callback.
+// New channels restore the stock driver's automatic DMA clearing and sole writer.
+void Es8311AudioCodec::RecreateDuplexForOrdinaryWrite() {
+    assert(dev_ == nullptr);
+    for (auto handle : {tx_handle_, rx_handle_}) {
+        i2s_chan_info_t info{};
+        ESP_ERROR_CHECK(i2s_channel_get_info(handle, &info));
+        if (info.is_enabled) ESP_ERROR_CHECK(i2s_channel_disable(handle));
+    }
+    audio_codec_delete_data_if(data_if_);
+    data_if_ = nullptr;
+    ESP_ERROR_CHECK(i2s_del_channel(tx_handle_));
+    ESP_ERROR_CHECK(i2s_del_channel(rx_handle_));
+    tx_handle_ = rx_handle_ = nullptr;
+    callback_refill_ = false;
+    CreateDuplexChannels(duplex_pins_[0], duplex_pins_[1], duplex_pins_[2],
+                         duplex_pins_[3], duplex_pins_[4]);
+    audio_codec_i2s_cfg_t config{};
+    config.port = I2S_NUM_0;
+    config.rx_handle = rx_handle_;
+    config.tx_handle = tx_handle_;
+    data_if_ = audio_codec_new_i2s_data(&config);
+    assert(data_if_ != nullptr);
+}
+''')
+b=Path('firmware/overlays/main/boards/m5stack/stopwatch')
+p=b/'software_aec_codec.cc';s=p.read_text();start=s.index('    input_channels_ = 2;');end=s.index('SoftwareAecCodec::State');body=s[start:s.index('\n}\n\nvoid SoftwareAecCodec::Start()',start)];body=body.replace('        Fail(D::Fault::Setup);','        UseOrdinaryOutput();');s=s[:start]+'''    InitializePlayback(input_rate, output_rate);
+}
+#include "software_aec_initialization.inc"
+void SoftwareAecCodec::Start() {
+    Es8311AudioCodec::Start();
+    StartPlaybackInfrastructure();
+    if (!refill_mode_)
+        Application::GetInstance().Schedule([] { Application::GetInstance().SetAecMode(kAecOff); });
+    printf("aec_init callbacks=%d infrastructure=%d refill=%d\\n", callbacks_ok_, infrastructure_ok_, refill_mode_);
+    PrintStats();
+}
+'''+s[end:];s=s.replace('use_mclk, inverted) {','use_mclk, inverted, true) {');s=s.replace('void SoftwareAecCodec::OnDeviceEpoch(bool opened) {','void SoftwareAecCodec::OnDeviceEpoch(bool opened) {\n    if (!refill_mode_) return;');s=s.replace('bool SoftwareAecCodec::InputData(std::vector<int16_t>& data) {','''bool SoftwareAecCodec::InputData(std::vector<int16_t>& data) {
+    if (!refill_mode_) {
+        std::lock_guard<std::mutex> lock(lifecycle_);
+        return input_enabled_ && Es8311AudioCodec::Read(data.data(), data.size()) == static_cast<int>(data.size());
+    }''');p.write_text(s)
+(b/'software_aec_initialization.inc').write_text('''// Shared production initialization and fault-injection test implementation.
+void SoftwareAecCodec::InitializePlayback(int input_rate, int output_rate) {
+'''+body+'''
+}
+void SoftwareAecCodec::StartPlaybackInfrastructure() {
+    if (!refill_mode_) return;
+    void* storage = heap_caps_malloc(sizeof(AecDiagnostics), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (storage) diagnostics_ = new (storage) AecDiagnostics(*this);
+    infrastructure_ok_ = diagnostics_ && diagnostics_->Start();
+    if (!infrastructure_ok_) UseOrdinaryOutput();
+}
+void SoftwareAecCodec::UseOrdinaryOutput() {
+    // Only during construction/Start, before AudioService starts any producers.
+    // Stop acceptance under the ISR lock before deleting its physical channels.
+    portENTER_CRITICAL(&mux_);
+    accepting_ = false;
+    portEXIT_CRITICAL(&mux_);
+    Fail(D::Fault::Setup);
+    RecreateDuplexForOrdinaryWrite();
+    // No callback can exist on the new channels. Publish immutable output mode
+    // before audio producer tasks, AFE initialization and capability negotiation.
+    refill_mode_ = false;
+    callbacks_ok_ = false;
+    input_channels_ = 1;
+    input_reference_ = false;
+}
+''')
+p=b/'software_aec_codec.h';s=p.read_text().replace('return playback_ != nullptr && callbacks_ok_;','return refill_mode_ && playback_ != nullptr && callbacks_ok_ && infrastructure_ok_;').replace('bool SoftwareReference() const override { return true; }','bool SoftwareReference() const override { return refill_mode_; }');s=s.replace('    static bool Sent', '    void InitializePlayback(int input_rate, int output_rate);\n    void StartPlaybackInfrastructure();\n    void UseOrdinaryOutput();\n    bool refill_mode_ = true;\n    static bool Sent');p.write_text(s)
+p=b/'software_aec_playback.inc';s=p.read_text();s=s.replace('    bool result = playback_ != nullptr;\n    if (playback_) {','''    if (op == PlaybackOp::Reset && output_generation_ != UINT32_MAX) ++output_generation_;
+    bool result = refill_mode_ && playback_ != nullptr;
+    if (result) {''');s=s.replace('            if (output_generation_ != UINT32_MAX) ++output_generation_;\n            else playback_->HardwareFault();','            if (output_generation_ == UINT32_MAX) playback_->HardwareFault();');s=s.replace('const bool result = playback_ &&', 'const bool result = refill_mode_ && playback_ &&');s=s.replace('    size_t offset = 0;', '''    if (!refill_mode_) {
+        portENTER_CRITICAL(&mux_);
+        const bool current = generation == output_generation_ && generation != UINT32_MAX;
+        portEXIT_CRITICAL(&mux_);
+        if (current) Es8311AudioCodec::Write(data.data(), data.size());
+        return;
+    }
+    size_t offset = 0;''');p.write_text(s)
+p=b/'software_aec_dma.inc';s=p.read_text().replace('    if (tx && e->dma_buf) {','    if (refill_mode_ && tx && e->dma_buf) {');p.write_text(s)

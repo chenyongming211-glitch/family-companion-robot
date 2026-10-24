@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+release_version=$1
+source_dir=$2
+archive_path=$3
+archive_sha=$4
+printf '%s  %s\n' "$archive_sha" "$archive_path" | sha256sum -c -
+cd "$source_dir"
+export PATH=/opt/family-robot/toolchains/go1.27.3/bin:$PATH
+export CGO_ENABLED=1
+go version
+pkg-config --modversion opus
+go test -race -count=1 ./...
+go vet ./...
+go build -trimpath -ldflags "-X main.version=$release_version" -o gateway ./cmd/gateway
+go build -trimpath -o smoke ./cmd/smoke
+sha256sum gateway smoke
+release_path=/opt/family-robot/releases/$release_version
+sudo -n test ! -e "$release_path"
+sudo -n mkdir -m 0755 "$release_path"
+sudo -n install -m 0755 gateway smoke "$release_path/"
+sudo -n install -m 0644 "$archive_path" "$release_path/source.tar.gz"
+sudo -n chown -R root:root "$release_path"
+printf 'release_ready=%s\n' "$release_version"

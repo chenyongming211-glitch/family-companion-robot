@@ -1,0 +1,52 @@
+import pathlib,subprocess,os
+os.umask(0o077)
+program=r'''import asyncio,base64,json,pathlib,shlex,wave,time
+import aiohttp
+async def main():
+ env={}
+ for line in pathlib.Path('/etc/family-robot/server.env').read_text().splitlines():
+  if not line.strip() or line.lstrip().startswith('#'):continue
+  k,_,v=line.partition('=');env[k]=shlex.split(v)[0] if shlex.split(v) else ''
+ async with aiohttp.ClientSession() as http:
+  async with http.ws_connect(env['QWEN_REALTIME_URL'],headers={'Authorization':'Bearer '+env['DASHSCOPE_API_KEY']},timeout=aiohttp.ClientWSTimeout(ws_receive=20)) as ws:
+   async def read():
+    ev=await ws.receive_json()
+    if ev.get('type')=='error':raise RuntimeError('provider_rejected_protocol')
+    return ev
+   await read()
+   await ws.send_json({'type':'session.update','session':{'modalities':['text'],'turn_detection':None,'instructions':'当前保存了一个暂停的数数任务，目标是从一数到五十。只判断当前用户输入的意图并调用 conversation_route_turn，不要回答用户问题。side表示用户问旁支问题，resume表示用户要求继续原任务。本阶段不要生成口头回复。','input_audio_transcription':{'model':'qwen3-asr-flash-realtime'},'audio':{'input':{'format':{'type':'pcm','sample_rate':16000}},'output':{'voice':env.get('QWEN_VOICE','Tina'),'format':{'type':'pcm','sample_rate':24000}}},'tools':[{'type':'function','function':{'name':'conversation_route_turn','description':'判断用户是普通旁支问题还是继续暂停任务。','parameters':{'type':'object','properties':{'action':{'type':'string','enum':['side','resume']}},'required':['action'],'additionalProperties':False}}}],'tool_choice':'required'}})
+   while True:
+    ev=await read()
+    if ev['type']=='session.updated':effective=ev.get('session',{}).get('tool_choice');break
+   with wave.open('/tmp/family-robot-overnight-go/fixtures/stop.wav','rb') as f:pcm=f.readframes(f.getnframes())
+   for pos in range(0,len(pcm),6400):await ws.send_json({'type':'input_audio_buffer.append','audio':base64.b64encode(pcm[pos:pos+6400]).decode()})
+   await ws.send_json({'type':'input_audio_buffer.commit'})
+   while (await read())['type']!='input_audio_buffer.committed':pass
+   await ws.send_json({'type':'response.create'})
+   calls=[];audio=0;status='unknown';call_id=''
+   while True:
+    ev=await read()
+    if ev['type']=='response.audio.delta':audio+=len(base64.b64decode(ev['delta']))
+    elif ev['type']=='response.function_call_arguments.done':
+     call_id=ev.get('call_id','');args=json.loads(ev.get('arguments','{}'));calls.append({'name':ev.get('name'),'action':args.get('action')})
+    elif ev['type']=='response.done':status=ev.get('response',{}).get('status');break
+   result={'synthetic_input_only':True,'no_playback':True,'effective_tool_choice':effective,'contradictory_no_tool_instruction':False,'text_only_routing':True,'calls':calls,'routing_phase_generated_audio_bytes':audio,'status':status,'routing_function_observed':len(calls)==1 and calls[0]['name']=='conversation_route_turn'}
+   if result['routing_function_observed']:
+    await ws.send_json({'type':'conversation.item.create','item':{'type':'function_call_output','call_id':call_id,'output':'{\"ok\":true,\"action\":\"side\"}'}})
+    await ws.send_json({'type':'session.update','session':{'modalities':['text','audio'],'tools':[],'tool_choice':'auto','instructions':'请回答当前用户的一加一问题，直接说答案，不要调用工具。'}})
+    while True:
+     ev=await read()
+     if ev['type']=='session.updated':result['restored_modalities']=ev.get('session',{}).get('modalities');break
+    await ws.send_json({'type':'response.create'})
+    result['voice_audio_bytes']=0
+    while True:
+     ev=await read()
+     if ev['type']=='response.audio.delta':result['voice_audio_bytes']+=len(base64.b64decode(ev['delta']))
+     elif ev['type']=='response.audio_transcript.done':result['voice_transcript']=ev.get('transcript','')
+     elif ev['type']=='response.done':result['voice_status']=ev.get('response',{}).get('status');break
+   print(json.dumps(result))
+   if not result['routing_function_observed']:raise SystemExit(1)
+asyncio.run(main())'''
+ssh=['ssh','-S','/tmp/family-robot-resume-20261023.sock','-o','BatchMode=yes','ubuntu@82.156.48.111','sudo -n /tmp/family-robot-livekit-audit-7a7547e/venv/bin/python -']
+r=subprocess.run(ssh,input=program,text=True,capture_output=True)
+pathlib.Path('artifacts/resume-state-alignment-20261023/text-routing-restore.json').write_text(r.stdout+r.stderr);print(r.stdout+r.stderr);raise SystemExit(r.returncode)

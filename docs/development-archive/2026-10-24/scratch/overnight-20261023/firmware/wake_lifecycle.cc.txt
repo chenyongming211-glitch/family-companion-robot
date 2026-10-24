@@ -1,0 +1,73 @@
+
+#include <cassert>
+#include <cstdio>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+#define CONFIG_STOPWATCH_SOFTWARE_AEC 1
+#define CONFIG_SEND_WAKE_WORD_DATA 1
+enum DeviceState {kDeviceStateIdle,kDeviceStateConnecting,kDeviceStateListening};
+enum PowerSaveLevel {PERFORMANCE};
+enum AecMode {kAecOff};
+struct Board {static Board& GetInstance(){static Board b;return b;} void SetPowerSaveLevel(PowerSaveLevel){}};
+struct Packet {int n;};
+struct Protocol {bool opened=true,open_result=true;int open_calls=0,send_calls=0,fail_at=-1,detect=0;bool IsAudioChannelOpened(){return opened;} bool OpenAudioChannel(){++open_calls;return open_result;} bool SendAudio(std::unique_ptr<Packet>){return send_calls++!=fail_at;} void SendWakeWordDetected(const std::string&){++detect;}};
+struct AudioService {int available=3,popped=0;bool valid=true;std::unique_ptr<Packet> PopWakeWordPacket(){if(popped==available)return nullptr;return std::make_unique<Packet>(Packet{popped++});}bool WakeAudioBatchValid(){return valid;}};
+struct Application {DeviceState state=kDeviceStateConnecting;Protocol p;Protocol* protocol_=&p;AudioService audio_service_;int listening=0,aec_off=0;DeviceState GetDeviceState(){return state;}void SetDeviceState(DeviceState s){state=s;}void SetAecMode(AecMode){++aec_off;}int GetDefaultListeningMode(){return 0;}void SetListeningMode(int){++listening;state=kDeviceStateListening;}void ContinueWakeWordInvoke(const std::string&);};
+void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
+    // Check state again in case it was changed during scheduling
+    if (GetDeviceState() != kDeviceStateConnecting) {
+        return;
+    }
+
+    // Switch to performance mode before connecting to reduce latency
+    auto& board = Board::GetInstance();
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+
+    if (!protocol_->IsAudioChannelOpened()) {
+        if (!protocol_->OpenAudioChannel()) {
+            // Return to idle so the device is not stuck in the connecting
+            // state (not every failure path reports a network error), and
+            // wake word detection is re-enabled by the idle state handler.
+            SetDeviceState(kDeviceStateIdle);
+            return;
+        }
+    }
+
+#if !CONFIG_STOPWATCH_SOFTWARE_AEC
+    ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+#endif
+#if CONFIG_SEND_WAKE_WORD_DATA
+    // Encode and send the wake word data to the server
+    while (auto packet = audio_service_.PopWakeWordPacket()) {
+        if (!audio_service_.WakeAudioBatchValid())
+            break;
+        protocol_->SendAudio(std::move(packet));
+    }
+    if (!audio_service_.WakeAudioBatchValid()) {
+        SetAecMode(kAecOff);
+        return;
+    }
+    // Set the chat state to wake word detected
+    protocol_->SendWakeWordDetected(wake_word);
+    SetListeningMode(GetDefaultListeningMode());
+#else
+    // Set flag to play popup sound after state changes to listening
+    // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
+    play_popup_on_listening_ = true;
+    SetListeningMode(GetDefaultListeningMode());
+#endif
+}
+
+int main(){
+ for(int i=0;i<8;++i){Application a;const char* name="";
+ switch(i){case 0:name="healthy";break;case 1:name="wrong_state";a.state=kDeviceStateIdle;break;case 2:name="open_failure";a.p.opened=false;a.p.open_result=false;break;case 3:name="invalid_batch";a.audio_service_.valid=false;break;case 4:name="first_audio_send_failure";a.p.fail_at=0;break;case 5:name="middle_audio_send_failure";a.p.fail_at=1;break;case 6:name="last_audio_send_failure";a.p.fail_at=2;break;case 7:name="empty_valid_batch";a.audio_service_.available=0;break;}
+ a.ContinueWakeWordInvoke("synthetic-wake");
+ std::cout<<"{\"case\":\""<<name<<"\",\"send_attempts\":"<<a.p.send_calls<<",\"detect_sent\":"<<a.p.detect<<",\"listening_started\":"<<a.listening<<",\"state\":"<<a.state<<",\"aec_off\":"<<a.aec_off<<"}\n";
+ if(i==0)assert(a.listening==1&&a.p.detect==1&&a.p.send_calls==3);
+ if(i==1)assert(a.listening==0&&a.p.detect==0&&a.p.send_calls==0);
+ if(i==2)assert(a.state==kDeviceStateIdle&&a.listening==0&&a.p.detect==0);
+ if(i==3)assert(a.aec_off==1&&a.listening==0&&a.p.detect==0);
+ }
+}

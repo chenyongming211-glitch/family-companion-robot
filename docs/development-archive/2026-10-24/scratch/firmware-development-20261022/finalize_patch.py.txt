@@ -1,0 +1,21 @@
+from pathlib import Path
+import difflib, subprocess
+base=Path('.superpowers/firmware-baseline/upstream'); work=Path('.superpowers/firmware-development-20261022/aec-work')
+cmd=['uv','tool','run','--offline','--from','clang-format','clang-format','--style=file:'+str((base/'.clang-format').resolve()),'-i']
+files=[p for p in Path('firmware/overlays').rglob('*') if p.suffix in ('.h','.cc') and p.name!='playback_reference_buffer.h']
+files += [Path('firmware/tests')/p for p in ('duplex_reference_test.cc','interrupted_playback_test.cc','aec_diagnostic_wire_test.cc','capture_activation_test.cc')]
+subprocess.run(cmd+list(map(str,files)),check=True)
+patch=''
+for p in sorted(work.rglob('*')):
+ if not p.is_file():continue
+ old=base/p.relative_to(work)
+ if p.read_bytes()==old.read_bytes():continue
+ if p.suffix in ('.h','.cc'):
+  matcher=difflib.SequenceMatcher(None,old.read_text().splitlines(),p.read_text().splitlines(),autojunk=False)
+  lines=['--lines='+str(b0+1)+':'+str(max(b0+1,b1)) for tag,a0,a1,b0,b1 in matcher.get_opcodes() if tag!='equal']
+  subprocess.run(cmd+lines+[str(p)],check=True)
+ path=p.relative_to(work).as_posix()
+ patch+='diff --git a/'+path+' b/'+path+'\n'
+ patch+=''.join(difflib.unified_diff(old.read_text().splitlines(True),p.read_text().splitlines(True),fromfile='a/'+path,tofile='b/'+path))
+Path('firmware/patches').mkdir(exist_ok=True)
+Path('firmware/patches/0001-stopwatch-software-aec.patch').write_text(patch.replace('\n \n', '\n\n'))

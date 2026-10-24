@@ -1,0 +1,50 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work')
+p=w/'main/protocols/protocol.h';s=p.read_text().replace('PlaybackEventIdentity() const','PlaybackEventIdentity(const cJSON*) const');p.write_text(s)
+p=w/'main/protocols/websocket_protocol.h';s=p.read_text().replace('PlaybackEventIdentity() const','PlaybackEventIdentity(const cJSON* root) const').replace('DeliverAudio(std::unique_ptr<AudioStreamPacket> packet);','DeliverAudio(std::unique_ptr<AudioStreamPacket> packet, uint32_t connection);').replace('HandlePlaybackTts(const cJSON* root);','HandlePlaybackTts(cJSON* root, uint32_t connection);').replace('void ResetPlaybackConnection();','void ResetPlaybackConnection(uint32_t expected = 0);').replace('ParseServerHello(const cJSON* root);','ParseServerHello(const cJSON* root, uint32_t connection);');p.write_text(s)
+p=w/'main/protocols/websocket_protocol.cc';s=p.read_text().replace('''    websocket_->OnData([this](const char* data, size_t len, bool binary) {''','''    uint32_t connection;
+    {
+        std::lock_guard<std::mutex> lock(playback_mutex_);
+        connection = playback_connection_;
+    }
+    websocket_->OnData([this, connection](const char* data, size_t len, bool binary) {''')
+s=s.replace('''bp2->payload_size)}));''','''bp2->payload_size)}), connection);''').replace('''bp3->payload_size)}));''','''bp3->payload_size)}), connection);''').replace('''(uint8_t*)data + len)}));''','''(uint8_t*)data + len)}), connection);''')
+s=s.replace('ParseServerHello(root);','ParseServerHello(root, connection);').replace('!HandlePlaybackTts(root)','!HandlePlaybackTts(root, connection)')
+s=s.replace('''websocket_->OnDisconnected([this]() {
+        ResetPlaybackConnection();''','''websocket_->OnDisconnected([this, connection]() {
+        {
+            std::lock_guard<std::mutex> lock(playback_mutex_);
+            if (connection != playback_connection_) return;
+        }
+        ResetPlaybackConnection(connection);''')
+s=s.replace('ParseServerHello(const cJSON* root) {','ParseServerHello(const cJSON* root, uint32_t connection) {').replace('''    std::lock_guard<std::mutex> playback_lock(playback_mutex_);
+    auto session_id''','''    std::lock_guard<std::mutex> playback_lock(playback_mutex_);
+    if (connection != playback_connection_) return;
+    auto session_id''');p.write_text(s)
+p=w/'main/application.cc';s=p.read_text().replace('protocol_->PlaybackEventIdentity()','protocol_->PlaybackEventIdentity(root)');p.write_text(s)
+p=Path('firmware/overlays/main/audio/playback_websocket.inc');s=p.read_text().replace('ResetPlaybackConnection() {','ResetPlaybackConnection(uint32_t expected) {').replace('''    // Saturation permanently''','''    if (expected && expected != playback_connection_) return;
+    // Saturation permanently''')
+a=s.index('family_robot::PlaybackIdentity WebsocketProtocol::PlaybackEventIdentity');b=s.index('bool WebsocketProtocol::PlaybackEventCurrent',a)
+s=s[:a]+'''family_robot::PlaybackIdentity WebsocketProtocol::PlaybackEventIdentity(const cJSON* root) const {
+    // Metadata added only by the validated receive callback, not a later read of
+    // current protocol state. Disconnect/new start cannot relabel scheduled UI.
+    auto* connection = cJSON_GetObjectItem(root, "_device_playback_connection");
+    auto* id = cJSON_GetObjectItem(root, "playback_id");
+    if (!cJSON_IsNumber(connection) || !cJSON_IsNumber(id)) return {};
+    return {static_cast<uint32_t>(connection->valuedouble), static_cast<uint32_t>(id->valuedouble)};
+}
+''' +s[b:]
+s=s.replace('HandlePlaybackTts(const cJSON* root) {','HandlePlaybackTts(cJSON* root, uint32_t connection) {').replace('''    if (!playback_negotiated_) return true;''','''    if (connection != playback_connection_) return false;
+    cJSON_DeleteItemFromObject(root, "_device_playback_connection");
+    if (!playback_negotiated_) return true;''')
+s=s.replace('''    return true;
+}
+void WebsocketProtocol::DeliverAudio''','''    cJSON_AddNumberToObject(root, "_device_playback_connection", connection);
+    return true;
+}
+void WebsocketProtocol::DeliverAudio''')
+s=s.replace('DeliverAudio(std::unique_ptr<AudioStreamPacket> packet) {','DeliverAudio(std::unique_ptr<AudioStreamPacket> packet, uint32_t connection) {').replace('''        if (playback_negotiated_) {
+            if (!playback_receiving_)''','''        if (connection != playback_connection_) return;
+        if (playback_negotiated_) {
+            if (!playback_receiving_)''')
+p.write_text(s)

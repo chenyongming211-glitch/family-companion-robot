@@ -1,0 +1,7 @@
+from pathlib import Path
+w=Path('.superpowers/playback-progress-20261022/task1-work')
+def edit(file,old,new):
+ p=w/file;s=p.read_text();assert old in s,(file,old);p.write_text(s.replace(old,new))
+# Refactor unchanged close body into testable production include before regression.
+p=w/'main/protocols/websocket_protocol.cc';s=p.read_text();a=s.index('void WebsocketProtocol::CloseAudioChannel(');b=s.index('bool WebsocketProtocol::OpenAudioChannel()',a)
+q=Path('firmware/overlays/main/audio/playback_websocket.inc');q.write_text(q.read_text().rstrip()+'\n\n'+s[a:b].rstrip()+'\n');p.write_text(s[:a]+s[b:])

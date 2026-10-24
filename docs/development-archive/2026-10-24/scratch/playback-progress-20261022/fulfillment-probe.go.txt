@@ -1,0 +1,56 @@
+// Isolated synthetic text-to-native-audio probe; never captures microphone PCM.
+package main
+
+import (
+ "context"
+ "encoding/base64"
+ "encoding/json"
+ "fmt"
+ "os"
+ "time"
+
+ "familyrobot/internal/qwen"
+)
+
+const baseDefault = "你是友善、耐心的中文家庭语音助手。自然简洁地交流，每次先用一到三句话回答。用户插话时立即让出话轮，根据新的问题继续交流。不要声称完成了你没有执行的操作。"
+
+func turn(c *qwen.Client, prompt string) (map[string]any,error) {
+ if err:=c.Send(map[string]any{"type":"conversation.item.create","item":map[string]any{"type":"message","role":"user","content":[]map[string]any{{"type":"input_text","text":prompt}}}});err!=nil{return nil,err}
+ if err:=c.Send(map[string]any{"type":"response.create"});err!=nil{return nil,err}
+ text:="";audioBytes:=0;started:=time.Now()
+ for {
+  ev,err:=c.Read();if err!=nil{return nil,err}
+  switch ev.Type {
+  case "error":return nil,fmt.Errorf("provider_error")
+  case "response.audio.delta":
+   b,err:=base64.StdEncoding.DecodeString(ev.Delta);if err!=nil{return nil,err};audioBytes+=len(b)
+   if audioBytes>48000*120{return nil,fmt.Errorf("audio_limit")}
+  case "response.audio_transcript.delta":text+=ev.Delta
+  case "response.audio_transcript.done":text=ev.Transcript
+  case "response.function_call_arguments.done":return nil,fmt.Errorf("unexpected_tool_call")
+  case "response.done":return map[string]any{"prompt":prompt,"generated_transcript":text,"generated_audio_seconds":float64(audioBytes)/48000,"status":ev.Response.Status,"elapsed_ms":time.Since(started).Milliseconds()},nil
+  }
+ }
+}
+func main(){
+ base:=os.Getenv("ROBOT_INSTRUCTIONS");if base==""{base=baseDefault}
+ cfg:=qwen.Config{URL:os.Getenv("QWEN_REALTIME_URL"),APIKey:os.Getenv("DASHSCOPE_API_KEY"),Voice:os.Getenv("QWEN_VOICE"),VAD:os.Getenv("QWEN_VAD"),Instructions:base}
+ if cfg.Voice==""{cfg.Voice="Tina"};if cfg.VAD==""{cfg.VAD="semantic_vad"}
+ if os.Getenv("PROBE_EXECUTION_CONTRACT")=="1" {
+  cfg.Instructions+="\n用户要求你进行朗读、数数、列举或讲故事等口头任务时，必须在当前回复中直接输出实际内容，按要求完成范围和终点。不要只说‘好的、这就开始’或‘接下来我会……’便结束，也不要等用户再次催促才执行。"
+ }
+ prompts:=[]string{"从一完整数到五十，每个数字都读出来，不要省略。","从一数到二十。","请直接朗读这段话：小猫坐在窗前，看见一只小鸟落在树枝上。它安静地等着，直到夕阳把窗台染成金色。"}
+ for i,prompt:=range prompts {
+  ctx,cancel:=context.WithTimeout(context.Background(),60*time.Second)
+  c,err:=qwen.Open(ctx,cfg,"manual","")
+  if err!=nil{cancel();fmt.Println(`{"probe_error":"open_failed"}`);os.Exit(1)}
+  stop:=context.AfterFunc(ctx,func(){c.Close()})
+  _,err=turn(c,"你好小智")
+  var result map[string]any
+  if err==nil{result,err=turn(c,prompt)}
+  stop();c.Close();cancel()
+  if err!=nil{fmt.Println(`{"probe_error":"turn_failed"}`);os.Exit(1)}
+  result["case"]=i+1;result["synthetic_text_input"]=true;result["microphone_recording"]=false;result["tools_included"]=false;result["execution_contract"]=os.Getenv("PROBE_EXECUTION_CONTRACT")=="1"
+  b,_:=json.Marshal(result);fmt.Println(string(b))
+ }
+}

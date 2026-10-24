@@ -1,0 +1,34 @@
+import json,subprocess,shlex
+from pathlib import Path
+m=json.loads(Path('/tmp/family-robot-controls-release.json').read_text())
+program=r'''
+import os,sys,json,time,subprocess,urllib.request,hashlib
+version,old,expected=sys.argv[1:]
+root='/opt/family-robot';current=root+'/current';new=root+'/releases/'+version
+assert os.readlink(current)==root+'/releases/'+old,'live_version_changed'
+assert hashlib.sha256(open(new+'/gateway','rb').read()).hexdigest()==expected,'candidate_hash_changed'
+def point(path):
+ tmp=root+'/current.controls-next'
+ try:os.unlink(tmp)
+ except FileNotFoundError:pass
+ os.symlink(path,tmp);os.replace(tmp,current)
+point(new)
+try:
+ subprocess.run(['systemctl','restart','family-robot.service'],check=True)
+ healthy=False
+ for _ in range(16):
+  try:
+   result=json.load(urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=1));healthy=result.get('status')=='ok'
+  except Exception:pass
+  if healthy:break
+  time.sleep(.5)
+ assert healthy,'health_failed'
+ pid=subprocess.check_output(['systemctl','show','-p','MainPID','--value','family-robot.service'],text=True).strip()
+ livehash=hashlib.sha256(open('/proc/'+pid+'/exe','rb').read()).hexdigest();assert livehash==expected,'live_hash_mismatch'
+ print(json.dumps({'status':'ok','version':version,'pid':int(pid),'gateway_sha256':livehash,'health':result,'rollback_version':old}))
+except Exception:
+ point(root+'/releases/'+old);subprocess.run(['systemctl','restart','family-robot.service'],check=True);raise
+'''
+args=['sudo','-n','python3','-',m['version'],m['previous_version'],m['gateway_sha256']]
+r=subprocess.run(['ssh','-S','/tmp/family-robot-controls-%C','-o','BatchMode=yes','ubuntu@82.156.48.111',' '.join(shlex.quote(a) for a in args)],input=program,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+Path('artifacts/device-controls-20261021/deployment.log').write_text(r.stdout);print(r.stdout);raise SystemExit(r.returncode)

@@ -1,0 +1,28 @@
+# Diagnostic only; source-unit construction labels, not acoustic/device assertion.
+import json,hashlib,runpy
+from pathlib import Path
+R=Path(__file__).resolve().parent
+f=runpy.run_path(str(R/'score.py'));norm=f['norm'];M=f['M']
+rows=[];results=json.loads((R/'whisper-results.json').read_text())
+for c in M['cases']:
+ if 'truth_units' not in c:continue
+ r=next(x for x in results['cases'] if x['name']==c['name'] and x['iteration']==1)
+ recognized=norm(r.get('text',''));draft=norm(c['text']);truth=[x['index'] for x in c['truth_units']]
+ row={'name':c['name'],'truth_complete_ids':truth,'recognized_normalized':recognized}
+ if not recognized:row.update(status='unknown',reason='empty_asr')
+ elif not draft.startswith(recognized):row.update(status='unknown',reason='not_exact_draft_prefix')
+ elif draft.count(recognized)!=1:row.update(status='unknown',reason='non_unique_prefix')
+ else:
+  units=[u for u in c.get('full_source_units',[]) if u['start_frame']>=c.get('source_start_frame',0)]
+  boundary=0;intersected=[]
+  for u in units:
+   if boundary<len(recognized):intersected.append(u)
+   boundary+=len(norm(u['text']))
+  advance=intersected[:-1];ids=[u['index'] for u in advance]
+  skips=[i for i in ids if i not in truth];repeats=[i for i in truth if i not in ids]
+  row.update(status='construction_candidate_only',reason='exact_unique_normalized_prefix_with_last_intersected_source_unit_withheld',withheld_unit=intersected[-1]['text'] if intersected else None,advance_ids=ids,false_source_unit_completions=skips,repeat_complete_source_units=repeats,device_projection='unknown')
+ rows.append(row)
+accepted=[x for x in rows if x['status']=='construction_candidate_only']
+out={'policy':'Exact unique normalized draft-prefix recognition; withhold last intersected constructed source unit. No model timestamp used. All device projection unknown. Number/variant normalization same disclosed score.py; lexical error never repaired. This is an existing-fixture construction diagnostic, not a guarantee of acoustic coverage.','cases':rows,'summary':{'constructed_cases':len(rows),'construction_candidate_cases':len(accepted),'unknown_cases':len(rows)-len(accepted),'advanced_complete_units':sum(len(x['advance_ids']) for x in accepted),'false_source_unit_completions':sum(len(x['false_source_unit_completions']) for x in accepted),'repeated_complete_units_if_resuming_there':sum(len(x['repeat_complete_source_units']) for x in accepted),'positive_advance_cases':sum(bool(x['advance_ids']) for x in accepted)}}
+(R/'conservative-policy.json').write_text(json.dumps(out,ensure_ascii=False,indent=2)+'\n')
+print(json.dumps(out,ensure_ascii=False,indent=2))

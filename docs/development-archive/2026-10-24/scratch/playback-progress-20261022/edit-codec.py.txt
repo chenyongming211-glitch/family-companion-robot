@@ -1,0 +1,115 @@
+from pathlib import Path
+p=Path('firmware/overlays/main/boards/m5stack/stopwatch/software_aec_codec.h');s=p.read_text()
+s=s.replace('    void OutputData(std::vector<int16_t>& data) override;','''    void OutputData(std::vector<int16_t>& data) override;
+    bool PlaybackSupported() const override { return playback_ != nullptr && callbacks_ok_; }
+    bool PlaybackControl(PlaybackOp op, family_robot::PlaybackIdentity id = {}, uint64_t first = 0, size_t n = 0) override;
+    uint32_t PlaybackGeneration() const override;
+    bool PlaybackPoll(family_robot::PlaybackSnapshot& out) override;
+    bool PlaybackBusy() const override;
+    void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity id,
+                      uint64_t first, uint32_t generation) override;''')
+s=s.replace('    AecDiagnostics* diagnostics_ = nullptr;','''    AecDiagnostics* diagnostics_ = nullptr;
+    family_robot::PlaybackProgress* playback_ = nullptr;
+    uint32_t output_generation_ = 0;''')
+p.write_text(s)
+p=Path('firmware/overlays/main/boards/m5stack/stopwatch/software_aec_codec.cc');s=p.read_text()
+s=s.replace('    const auto tx_disabled = i2s_channel_disable(tx_handle_);','''    auto* playback_storage = heap_caps_malloc(sizeof(family_robot::PlaybackProgress), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (playback_storage) playback_ = new (playback_storage) family_robot::PlaybackProgress;
+    const auto tx_disabled = i2s_channel_disable(tx_handle_);''')
+s=s.replace('if (pair_ && tx_disabled','if (pair_ && playback_ && tx_disabled')
+s=s.replace('    accepting_ = false;\n    valid_ = false;','''    accepting_ = false;
+    if (playback_) playback_->HardwareReset();
+    valid_ = false;''')
+a=s.index('void SoftwareAecCodec::OutputData(');b=s.index('void SoftwareAecCodec::SetCaptureActive',a)
+s=s[:a]+'''bool SoftwareAecCodec::PlaybackControl(PlaybackOp op, family_robot::PlaybackIdentity id, uint64_t first, size_t n) {
+    portENTER_CRITICAL(&mux_);
+    bool result = playback_ != nullptr;
+    if (playback_) {
+        switch (op) {
+        case PlaybackOp::Connect: playback_->Connect(id.connection); break;
+        case PlaybackOp::Start: result = playback_->Start(id); break;
+        case PlaybackOp::Admit: result = playback_->Admit(id, first, n); break;
+        case PlaybackOp::Release: playback_->Release(id); break;
+        case PlaybackOp::Seal: playback_->Seal(id, false); break;
+        case PlaybackOp::Interrupt: playback_->Seal(id, true); break;
+        case PlaybackOp::Invalidate: playback_->Invalidate(id); break;
+        case PlaybackOp::Reset: playback_->InterruptAll(); ++output_generation_; break;
+        }
+    }
+    portEXIT_CRITICAL(&mux_);
+    return result;
+}
+uint32_t SoftwareAecCodec::PlaybackGeneration() const {
+    portENTER_CRITICAL(&mux_);
+    const auto value = output_generation_;
+    portEXIT_CRITICAL(&mux_);
+    return value;
+}
+bool SoftwareAecCodec::PlaybackPoll(family_robot::PlaybackSnapshot& out) {
+    portENTER_CRITICAL(&mux_);
+    const bool result = playback_ && playback_->NextReport(esp_timer_get_time(), out);
+    portEXIT_CRITICAL(&mux_);
+    return result;
+}
+bool SoftwareAecCodec::PlaybackBusy() const {
+    portENTER_CRITICAL(&mux_);
+    const bool result = playback_ && playback_->Busy();
+    portEXIT_CRITICAL(&mux_);
+    return result;
+}
+void SoftwareAecCodec::OutputData(std::vector<int16_t>& data) {
+    OutputTagged(data, {}, 0, PlaybackGeneration());
+}
+void SoftwareAecCodec::OutputTagged(std::vector<int16_t>& data, family_robot::PlaybackIdentity id,
+                                   uint64_t first, uint32_t generation) {
+    // Single task producer. lifecycle_ prevents physical close/reopen during a
+    // submission; mux_ serializes each small copy against cancellation and ISR.
+    // Never invoke esp_codec_dev_write/i2s_channel_write in callback-refill mode.
+    std::lock_guard<std::mutex> lock(lifecycle_);
+    size_t offset = 0;
+    int64_t last_progress = esp_timer_get_time();
+    while (offset < data.size()) {
+        const size_t n = std::min(data.size()-offset, family_robot::PlaybackProgress::kBlock);
+        portENTER_CRITICAL(&mux_);
+        const bool usable = playback_ && accepting_ && output_enabled_ && generation == output_generation_;
+        const auto result = usable ? playback_->Submit(id, first+offset, data.data()+offset, n)
+            : family_robot::PlaybackProgress::SubmitResult::Rejected;
+        if (!usable && playback_) playback_->Invalidate(id);
+        portEXIT_CRITICAL(&mux_);
+        if (result == family_robot::PlaybackProgress::SubmitResult::Rejected) return;
+        if (result == family_robot::PlaybackProgress::SubmitResult::Accepted) {
+            offset += n; last_progress = esp_timer_get_time(); continue;
+        }
+        if (esp_timer_get_time()-last_progress > 200000) {
+            PlaybackControl(PlaybackOp::Invalidate, id);
+            return;
+        }
+        vTaskDelay(1); // backpressure outside critical section; reset never waits
+    }
+}
+''' +s[b:]
+old='''    portEXIT_CRITICAL_ISR(&mux_);
+    return false;
+}'''
+new='''    if (tx && e->dma_buf) {
+        // pair_->Tx above observes the actual old physical bytes. Refill only
+        // afterwards; DMA address and tag remain owned until its next callback.
+        if (playback_ && accepting_ && e->size == D::kBlock * sizeof(int16_t)) {
+            playback_->Complete(static_cast<int16_t*>(e->dma_buf), D::kBlock, stamp);
+        } else {
+            if (playback_) playback_->HardwareFault();
+            memset(e->dma_buf, 0, e->size);
+        }
+    }
+    portEXIT_CRITICAL_ISR(&mux_);
+    return false;
+}'''
+assert old in s;s=s.replace(old,new)
+s=s.replace('#include <cstdio>','#include <cstdio>\n#include <cstring>')
+s=s.replace('''    if (pair_)
+        pair_->Fail(f);
+    PublishLocked();''','''    if (pair_)
+        pair_->Fail(f);
+    if (playback_ && (f == D::Fault::Setup || f == D::Fault::Format)) playback_->HardwareFault();
+    PublishLocked();''')
+p.write_text(s)

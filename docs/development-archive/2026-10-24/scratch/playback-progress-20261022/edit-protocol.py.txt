@@ -1,0 +1,153 @@
+from pathlib import Path
+work=Path('.superpowers/playback-progress-20261022/task1-work')
+def edit(path,old,new):
+ p=work/path;s=p.read_text();assert old in s,(path,old);p.write_text(s.replace(old,new))
+edit('main/protocols/websocket_protocol.h','#include "protocol.h"','#include "protocol.h"\n#include <mutex>')
+edit('main/protocols/websocket_protocol.h','    bool Start() override;','''    bool Start() override;
+    bool PlaybackNegotiated() const override;
+    family_robot::PlaybackIdentity PlaybackEventIdentity() const override;
+    bool PlaybackEventCurrent(family_robot::PlaybackIdentity id) const override;
+    void SendPlayback(const family_robot::PlaybackSnapshot& receipt) override;''')
+edit('main/protocols/websocket_protocol.h','    int version_ = 1;','''    int version_ = 1;
+    mutable std::mutex playback_mutex_;
+    uint32_t playback_connection_ = 0;
+    family_robot::PlaybackIdentity playback_id_{};
+    uint64_t playback_first_ = 0;
+    bool playback_negotiated_ = false, playback_receiving_ = false;
+    // Only the WebSocket receive task mutates ingress order. Main polls reports;
+    // this mutex protects connection/session checks, never taken in an ISR.
+    void DeliverAudio(std::unique_ptr<AudioStreamPacket> packet);
+    bool HandlePlaybackTts(const cJSON* root);
+    void ResetPlaybackConnection();''')
+edit('main/protocols/websocket_protocol.cc','#include <cstring>','#include <cstring>\n#include <cmath>')
+edit('main/protocols/websocket_protocol.cc','    websocket_.reset();','''    ResetPlaybackConnection();
+    websocket_.reset();''')
+edit('main/protocols/websocket_protocol.cc','bool WebsocketProtocol::OpenAudioChannel() {','''bool WebsocketProtocol::OpenAudioChannel() {
+    ResetPlaybackConnection();''')
+edit('main/protocols/websocket_protocol.cc','on_incoming_audio_(std::make_unique<AudioStreamPacket>','DeliverAudio(std::make_unique<AudioStreamPacket>')
+edit('main/protocols/websocket_protocol.cc','''                    if (on_incoming_json_ != nullptr) {
+                        on_incoming_json_(root);''','''                    if (strcmp(type->valuestring, "tts") == 0 && !HandlePlaybackTts(root)) {
+                        cJSON_Delete(root);
+                        return;
+                    }
+                    if (on_incoming_json_ != nullptr) {
+                        on_incoming_json_(root);''')
+edit('main/protocols/websocket_protocol.cc','''        ESP_LOGI(TAG, "Websocket disconnected");''','''        ResetPlaybackConnection();
+        ESP_LOGI(TAG, "Websocket disconnected");''')
+edit('main/protocols/websocket_protocol.cc','    cJSON_AddBoolToObject(features, "mcp", true);','''    cJSON_AddBoolToObject(features, "mcp", true);
+    if (Board::GetInstance().GetAudioCodec()->PlaybackSupported())
+        cJSON_AddBoolToObject(features, "playback_progress_v1", true);''')
+# session mutation and negotiation are protected together. Audio is only accepted
+# after Hello; capability is not inherited from previous sockets.
+edit('main/protocols/websocket_protocol.cc','''    auto session_id = cJSON_GetObjectItem(root, "session_id");''','''    std::lock_guard<std::mutex> playback_lock(playback_mutex_);
+    auto session_id = cJSON_GetObjectItem(root, "session_id");''')
+edit('main/protocols/websocket_protocol.cc','''    xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);''','''    auto* features = cJSON_GetObjectItem(root, "features");
+    playback_negotiated_ = playback_connection_ != 0 && cJSON_IsString(session_id) &&
+        !session_id_.empty() && Board::GetInstance().GetAudioCodec()->PlaybackSupported() &&
+        cJSON_IsTrue(cJSON_GetObjectItem(features, "playback_progress_v1"));
+    Application::GetInstance().GetAudioService().PreserveServerPlayback(playback_negotiated_);
+    xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);''')
+p=work/'main/protocols/websocket_protocol.cc'
+with p.open('a') as f:f.write('''
+void WebsocketProtocol::ResetPlaybackConnection() {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    // Saturation permanently disables receipts on this protocol object.
+    if (playback_connection_ != UINT32_MAX) ++playback_connection_;
+    playback_negotiated_ = playback_receiving_ = false;
+    playback_id_ = {}; playback_first_ = 0;
+    session_id_.clear();
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    codec->PlaybackControl(AudioCodec::PlaybackOp::Reset);
+    codec->PlaybackControl(AudioCodec::PlaybackOp::Connect, {playback_connection_,0});
+    Application::GetInstance().GetAudioService().PreserveServerPlayback(false);
+}
+bool WebsocketProtocol::PlaybackNegotiated() const {
+    std::lock_guard<std::mutex> lock(playback_mutex_); return playback_negotiated_;
+}
+family_robot::PlaybackIdentity WebsocketProtocol::PlaybackEventIdentity() const {
+    std::lock_guard<std::mutex> lock(playback_mutex_); return playback_id_;
+}
+bool WebsocketProtocol::PlaybackEventCurrent(family_robot::PlaybackIdentity id) const {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    return playback_negotiated_ && id == playback_id_;
+}
+bool WebsocketProtocol::HandlePlaybackTts(const cJSON* root) {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    if (!playback_negotiated_) return true;
+    auto* session = cJSON_GetObjectItem(root, "session_id");
+    auto* number = cJSON_GetObjectItem(root, "playback_id");
+    auto* state = cJSON_GetObjectItem(root, "state");
+    if (!cJSON_IsString(session) || session_id_ != session->valuestring || !cJSON_IsString(state) ||
+        !cJSON_IsNumber(number) || !std::isfinite(number->valuedouble) || number->valuedouble < 1 ||
+        number->valuedouble > UINT32_MAX || std::floor(number->valuedouble) != number->valuedouble) return false;
+    const family_robot::PlaybackIdentity id{playback_connection_, static_cast<uint32_t>(number->valuedouble)};
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (strcmp(state->valuestring, "start") == 0) {
+        if (id.playback <= playback_id_.playback) return false;
+        // Runs before the next binary frame on this ordered WebSocket. A later
+        // scheduled UI start may not reset the decoder or relabel these frames.
+        Application::GetInstance().GetAudioService().ResetDecoder();
+        playback_id_ = id; playback_first_ = 0; playback_receiving_ = true;
+        codec->PlaybackControl(AudioCodec::PlaybackOp::Start, id);
+    } else if (id != playback_id_) return false;
+    else if (strcmp(state->valuestring, "stop") == 0) {
+        playback_receiving_ = false;
+        auto* reason = cJSON_GetObjectItem(root, "reason");
+        const bool interrupted = cJSON_IsTrue(cJSON_GetObjectItem(root, "interrupted")) ||
+            (cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0);
+        if (interrupted) Application::GetInstance().GetAudioService().ResetDecoder();
+        else codec->PlaybackControl(AudioCodec::PlaybackOp::Seal, id);
+    }
+    return true;
+}
+void WebsocketProtocol::DeliverAudio(std::unique_ptr<AudioStreamPacket> packet) {
+    {
+        std::lock_guard<std::mutex> lock(playback_mutex_);
+        if (playback_negotiated_) {
+            if (!playback_receiving_) return;
+            packet->receipt_id = playback_id_;
+            packet->receipt_first = playback_first_;
+            auto* codec = Board::GetInstance().GetAudioCodec();
+            if (packet->sample_rate != 24000 || packet->frame_duration != 60)
+                codec->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, playback_id_);
+            if (!codec->PlaybackControl(AudioCodec::PlaybackOp::Admit, playback_id_, playback_first_, 1440)) {
+                codec->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, playback_id_);
+                // No tracking record/cancelled block: never relabel as a prompt.
+                return;
+            }
+            playback_first_ += 1440;
+        }
+    }
+    if (on_incoming_audio_) on_incoming_audio_(std::move(packet));
+}
+void WebsocketProtocol::SendPlayback(const family_robot::PlaybackSnapshot& r) {
+    std::string session;
+    {
+        std::lock_guard<std::mutex> lock(playback_mutex_);
+        if (!playback_negotiated_ || r.identity.connection != playback_connection_) return;
+        session = session_id_;
+    }
+    // Called only by main, which owns Open/Close and the WebSocket pointer.
+    // A network disconnect after the check can only target the dying socket,
+    // never a new connection; its session remains explicit in the message.
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "playback");
+    cJSON_AddStringToObject(root, "state", r.finished ? "finished" : "progress");
+    cJSON_AddStringToObject(root, "session_id", session.c_str());
+    cJSON_AddNumberToObject(root, "playback_id", r.identity.playback);
+    cJSON_AddNumberToObject(root, "sample_rate", 24000);
+    cJSON_AddNumberToObject(root, "played_samples", static_cast<double>(r.played_samples));
+    cJSON_AddBoolToObject(root, "valid", r.valid);
+    cJSON_AddStringToObject(root, "basis", "i2s_dma");
+    if (r.finished) cJSON_AddBoolToObject(root, "interrupted", r.interrupted);
+    char* text = cJSON_PrintUnformatted(root);
+    if (text) { SendText(text); cJSON_free(text); }
+    cJSON_Delete(root);
+}
+''')
+# Undefined Kconfig symbols evaluate false only inside #if.
+edit('main/audio/codecs/es8311_audio_codec.cc','''        .auto_clear_after_cb = !CONFIG_STOPWATCH_SOFTWARE_AEC,''','''#if CONFIG_STOPWATCH_SOFTWARE_AEC
+        .auto_clear_after_cb = false,
+#else
+        .auto_clear_after_cb = true,
+#endif''')

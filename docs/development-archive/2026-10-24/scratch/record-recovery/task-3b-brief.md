@@ -1,0 +1,9 @@
+# Additional offline recognition sanity check
+
+Use current ignored offline evidence to test a stronger Chinese ASR candidate, official Qwen3-ASR-0.6B, for prefix TEXT recognition only. All work .superpowers/record-recovery/offline/qwen-asr/**. No tracked source edits, microphone, real hardware, production dependency/config, or audio upload. Official public weights download allowed (record revision/weight hashes). Existing .superpowers/resume-state-alignment/venv qwen-asr0.0.6 environment may be reused, run only one large model at a time. Verify official docs/model source, no invented API/runtime fields.
+
+Why: tiny Whisper baseline mismatch on actual continuous counting may be weak recognizer or incorrect draft. One small baseline cannot reject all ASR. Don't turn this into an open-ended benchmark. Use the existing12 constructed +3 native conditions once initially; add repeat for key cases if viable. Run ASR WITHOUT forced aligner/timestamps; same aligner timing would not be independent validation. Compare raw recognized text and normalized unique prefix only, retain silence/earlycancel/hallucination/number/propernoun failures. Reuse conservative backoff diagnostic as source-fragment-only if appropriate. Do not declare draft as acoustic truth for native audio.
+
+Measure inference/init and peak RSS/MPS allocation, no production model added. If model download/runtime genuinely fails, capture concrete attempts/errors and finish with that limit rather than endlessly retry. If download >10min, report progress and continue useful subsets. We need a bounded real sanity check during Go integration.
+
+Write task-3b-report.md and optional public-safe addendum.md inside new ignored dir; do not rewrite existing30/30 results or reviewed public draft. Return exact runs, text recognition differences, resource observations, and limits. All physical projected endpoints remain unknown.

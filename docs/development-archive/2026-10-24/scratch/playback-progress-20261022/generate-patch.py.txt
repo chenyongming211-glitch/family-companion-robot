@@ -1,0 +1,10 @@
+from pathlib import Path
+import difflib
+root=Path('.superpowers/playback-progress-20261022');base=root/'task1-base';work=root/'task1-work'
+out=[]
+for p in sorted(work.rglob('*')):
+ if not p.is_file(): continue
+ rel=p.relative_to(work);old=base/rel
+ if old.exists() and old.read_bytes()!=p.read_bytes():
+  out.extend(difflib.unified_diff(old.read_text().splitlines(True),p.read_text().splitlines(True),fromfile='a/'+str(rel),tofile='b/'+str(rel)))
+Path('firmware/patches/0002-playback-progress.patch').write_text(''.join(out))

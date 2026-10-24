@@ -1,0 +1,67 @@
+from pathlib import Path
+p=Path('firmware/tests/playback_websocket_test.cc');s=p.read_text()
+s=s.replace('class Board {public:static Board& GetInstance(){static Board b;return b;}AudioCodec* GetAudioCodec(){return &codec;}};','''enum class PowerSaveLevel {LOW_POWER,PERFORMANCE};
+struct TestDisplay {void SetChatMessage(const char*,const char*){}};
+class Board {public:PowerSaveLevel power=PowerSaveLevel::PERFORMANCE;TestDisplay display;
+    static Board& GetInstance(){static Board b;return b;}AudioCodec* GetAudioCodec(){return &codec;}
+    void SetPowerSaveLevel(PowerSaveLevel p){power=p;}TestDisplay* GetDisplay(){return &display;}};''')
+s=s.replace('class Application {public:AudioService service;static Application& GetInstance(){static Application a;return a;}AudioService& GetAudioService(){return service;}};','''enum AbortReason {kAbortReasonNone};
+class Protocol {public:virtual ~Protocol()=default;void SendAbortSpeaking(AbortReason) {}
+    virtual uint32_t AudioChannelEpoch()const{return 0;}
+    virtual bool PlaybackEventCurrent(PlaybackEvent)const{return true;}};
+enum {kDeviceStateIdle,kDeviceStateSpeaking,kDeviceStateListening,kListeningModeManualStop,kListeningModeAutoStop};
+class Application {public:AudioService audio_service_;Protocol* protocol_=nullptr;
+    bool aborted_=false;int state=kDeviceStateListening,listening_mode_=kListeningModeAutoStop;
+    std::vector<std::function<void()>> scheduled;
+    static Application& GetInstance(){static Application a;return a;}
+    AudioService& GetAudioService(){return audio_service_;}
+    void Schedule(std::function<void()> fn){scheduled.push_back(std::move(fn));}
+    void RunScheduled(){auto work=std::move(scheduled);scheduled.clear();for(auto& fn:work)fn();}
+    int GetDeviceState(){return state;}void SetDeviceState(int s){state=s;}
+    void ScheduleAudioChannelClosed(uint32_t);
+    void SchedulePlaybackStart(PlaybackEvent);void SchedulePlaybackStop(PlaybackEvent,bool);
+};''')
+s=s.replace('enum AbortReason {kAbortReasonNone};\nclass Protocol {public:void SendAbortSpeaking(AbortReason) {}};','')
+s=s.replace('uint32_t playback_connection_=0;','uint32_t playback_connection_=0,socket_connection_=0,playback_event_lease_=0;')
+s=s.replace('bool ResetPlaybackConnection(uint32_t expected=0);','std::function<void(uint32_t)> on_audio_channel_closed_;\n    void NotifyPlaybackClosed(uint32_t);uint32_t AudioChannelEpoch()const override;\n    bool ResetPlaybackConnection(uint32_t expected=0,uint32_t* closed_epoch=nullptr);')
+s=s.replace('PlaybackIdentity PlaybackEventIdentity(const cJSON*)const;bool PlaybackEventCurrent(PlaybackIdentity)const;','PlaybackEvent PlaybackEventIdentity(const cJSON*)const;bool PlaybackEventCurrent(PlaybackEvent)const override;')
+s=s.replace('#include "playback_websocket.inc"','#include "playback_websocket.inc"\n#include "playback_application.inc"')
+s=s.replace('Application::GetInstance().service.preserve','Application::GetInstance().audio_service_.preserve')
+s=s.replace('const auto first=ws.PlaybackEventIdentity(first_start.get());','const auto first_event=ws.PlaybackEventIdentity(first_start.get());const auto first=first_event.identity;')
+s=s.replace('ws.PlaybackEventCurrent(first)','ws.PlaybackEventCurrent(first_event)').replace('ws.PlaybackEventIdentity(first_start.get())==first','ws.PlaybackEventIdentity(first_start.get()).identity==first')
+a=s.index('    std::vector<std::function<void()>> schedule;');b=s.index('    puts("production WebSocket',a)
+s=s[:a]+'''    auto& app=Application::GetInstance();app.protocol_=&ws;app.state=kDeviceStateListening;
+    app.SchedulePlaybackStart(pending_event); // actual application Schedule lambda
+    app.aborted_=true;app.audio_service_.ResetDecoder();ws.SendAbortSpeaking(kAbortReasonNone);
+    app.RunScheduled();assert(app.state==kDeviceStateListening && app.aborted_);
+    auto stop=tts("stop",18,"new");assert(handle(stop.get()));
+    app.state=kDeviceStateSpeaking;app.SchedulePlaybackStop(ws.PlaybackEventIdentity(stop.get()),false);
+    app.RunScheduled();assert(app.state==kDeviceStateListening); // stop is not receiving-gated
+    auto start19=tts("start",19,"new");assert(handle(start19.get()));
+    app.SchedulePlaybackStart(ws.PlaybackEventIdentity(start19.get()));
+    auto stop19=tts("stop",19,"new");assert(handle(stop19.get()));
+    app.SchedulePlaybackStop(ws.PlaybackEventIdentity(stop19.get()),false);
+    app.RunScheduled();assert(app.state==kDeviceStateListening); // normal sealed sequence remains valid
+    for(bool negotiated:{false,true})for(bool deferred:{false,true}) {
+        WebsocketProtocol closed;closed.ResetPlaybackConnection();closed.playback_negotiated_=negotiated;
+        app.protocol_=&closed;app.state=kDeviceStateListening;Board::GetInstance().power=PowerSaveLevel::PERFORMANCE;
+        int notifications=0;closed.on_audio_channel_closed_=[&](uint32_t epoch){++notifications;app.ScheduleAudioChannelClosed(epoch);};
+        const auto old_connection=closed.socket_connection_=closed.AudioChannelEpoch();
+        std::function<void()> callback=[&]{closed.NotifyPlaybackClosed(old_connection);};
+        closed.websocket_=std::make_unique<TestSocket>();
+        if(!deferred)closed.websocket_->disconnect=callback;
+        closed.CloseAudioChannel();if(deferred)callback();callback();closed.CloseAudioChannel();
+        app.RunScheduled();assert(notifications==1 && app.state==kDeviceStateIdle);
+        assert(Board::GetInstance().power==PowerSaveLevel::LOW_POWER);
+        // Remote callback first, then explicit close: exactly one notification.
+        closed.ResetPlaybackConnection();closed.socket_connection_=closed.AudioChannelEpoch();
+        const auto remote=closed.socket_connection_;closed.websocket_=std::make_unique<TestSocket>();
+        closed.NotifyPlaybackClosed(remote);closed.CloseAudioChannel();assert(notifications==2);
+        // Reopen before the old queued UI close: preserve new UI and power.
+        closed.ResetPlaybackConnection();app.state=kDeviceStateSpeaking;
+        Board::GetInstance().power=PowerSaveLevel::PERFORMANCE;app.RunScheduled();
+        assert(app.state==kDeviceStateSpeaking && Board::GetInstance().power==PowerSaveLevel::PERFORMANCE);
+        closed.NotifyPlaybackClosed(remote);assert(notifications==2);
+    }
+''' +s[b:]
+p.write_text(s)

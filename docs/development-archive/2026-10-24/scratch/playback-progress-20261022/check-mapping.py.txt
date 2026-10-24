@@ -1,0 +1,43 @@
+"""Controlled annotation contract oracle; no ASR/audio/production implementation.
+
+The reference requires supplied, complete annotations bound to the same playback.
+A known completed prefix is not a claim of the exact interrupted text position.
+"""
+import json
+from livekit.agents.voice.transcription.synchronizer import _SpeakingRateData
+RATE=24000
+TEXT='一、二、三。'
+IDENTITY=('device-session-a',1)
+SPANS=[('一、',0,9600),('二、',19200,28800),('三。',28800,48000)]
+r=_SpeakingRateData()
+for text,start,end in SPANS:
+ r.add_by_annotation(text=text,start_time=start/RATE,end_time=end/RATE)
+
+def completed(samples,annotations,*,identity=IDENTITY,valid=True):
+ if annotations is None or identity!=IDENTITY or not valid:return None
+ # Exact annotation coverage is an assumption of this synthetic experiment.
+ # Missing middle text must not be spliced out and called a continuous prefix.
+ if ''.join(t for t,_,_ in annotations)!=TEXT:return None
+ previous=0
+ for text,start,end in annotations:
+  if not text or start<previous or end<=start:return None
+  previous=end
+ return ''.join(text for text,start,end in annotations if end<=samples)
+
+cases=[(0,''),(4800,''),(9600,'一、'),(19199,'一、'),(24000,'一、'),(28800,'一、二、'),(47999,'一、二、'),(48000,TEXT)]
+rows=[]
+for samples,want in cases:
+ got=completed(samples,SPANS)
+ assert got==want
+ rows.append({'played_samples':samples,'whole_annotated_prefix':got,'livekit_interpolated_units':r.accumulate_to(samples/RATE)})
+unknown_cases={
+ 'missing_all':completed(48000,None),
+ 'missing_middle':completed(48000,[SPANS[0],SPANS[2]]),
+ 'overlapping_times':completed(48000,[SPANS[0],('二、',9000,28800),SPANS[2]]),
+ 'out_of_order':completed(48000,[SPANS[1],SPANS[0],SPANS[2]]),
+ 'old_device_session':completed(48000,SPANS,identity=('device-session-old',1)),
+ 'different_playback':completed(48000,SPANS,identity=('device-session-a',2)),
+ 'invalid_device_position':completed(48000,SPANS,valid=False),
+}
+assert all(x is None for x in unknown_cases.values())
+print(json.dumps({'synthetic_annotations_only':True,'model_annotations_available':False,'no_asr':True,'production_changed':False,'results':rows,'negative_cases':{k:'unknown' for k in unknown_cases},'negative_test_count':len(unknown_cases),'temporal_gap_between_annotated_phrases':'does_not_advance_completed_prefix','conclusion':'fractional_text_pacing_is_not_a_proof_of_completed_words','limit':'oracle assumptions and identity guard are experimental; production receipt routing is tested separately'},ensure_ascii=False))

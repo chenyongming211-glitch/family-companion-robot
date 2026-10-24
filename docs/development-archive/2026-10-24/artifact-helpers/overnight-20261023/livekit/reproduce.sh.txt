@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/tmp/family-robot-livekit-audit-7a7547e/agents-7a7547e442aaf9cf6f6cab54dd5db6f7cfb5a964
+PYTEST=/tmp/family-robot-livekit-audit-7a7547e/venv/bin/pytest
+cd "$ROOT"
+"$PYTEST" -q tests/test_playback_progress.py tests/test_playback_started_attribution.py tests/test_transcript_sync_cancellation.py tests/test_transcript_sync_timed.py tests/test_transcript_sync_markup.py tests/test_realtime/test_openai_realtime_model.py tests/test_session_close_user_turn.py tests/test_agent_session.py
+"$PYTEST" -q tests/test_realtime_reply_chat_ctx.py tests/test_realtime_input_speech_interrupt.py tests/test_realtime_chat_ctx_concurrency.py tests/test_openai_realtime_chat_ctx.py tests/test_realtime_overlapping_speech.py tests/test_realtime_cancel_tool_reply.py tests/test_realtime_say_chat_ctx.py tests/test_realtime_interrupt_cancels_generation.py tests/test_wait_for_idle_cancellation.py tests/test_interrupt_protected_speech.py
+# Native probes require protected root-readable server.env and existing synthetic fixtures.
+sudo -n timeout 50 /tmp/family-robot-livekit-audit-7a7547e/venv/bin/python /tmp/family-robot-overnight-livekit/native_probe.py stock
+sudo -n timeout 100 /tmp/family-robot-livekit-audit-7a7547e/venv/bin/python /tmp/family-robot-overnight-livekit/native_probe.py custom

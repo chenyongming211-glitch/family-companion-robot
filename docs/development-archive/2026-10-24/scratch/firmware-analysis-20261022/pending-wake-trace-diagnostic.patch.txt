@@ -1,0 +1,55 @@
+diff --git a/internal/gateway/voice_trace.go b/internal/gateway/voice_trace.go
+index d921478..7f08387 100644
+--- a/internal/gateway/voice_trace.go
++++ b/internal/gateway/voice_trace.go
+@@ -47,7 +47,10 @@ func (s *session) tracePlayback(event string, r *playbackRecord) {
+ 	}
+ 	args := []any{"event", event, "session", s.id, "playback_id", r.id,
+ 		"sent_samples", r.sent, "played_samples", played, "position_known", known,
+-		"settled", r.settled, "interrupted", r.interrupted, "text_position", "unknown"}
++		"settled", r.settled, "interrupted", r.interrupted, "text_position", "unknown",
++		"wake_phrase_known", s.wakePhrase != "", "wake_phrase_runes", len([]rune(s.wakePhrase)),
++		"origin_wake_equal", s.wakeOnly(r.origin),
++		"origin_normalized_runes", len([]rune(normalizeWakePhrase(r.origin.text)))}
+ 	if s.paused != nil {
+ 		args = append(args, "paused_task_id", s.paused.id,
+ 			"paused_playback_id", s.paused.playback.id,
+diff --git a/internal/gateway/voice_trace_test.go b/internal/gateway/voice_trace_test.go
+index 7547e0e..e9f76d3 100644
+--- a/internal/gateway/voice_trace_test.go
++++ b/internal/gateway/voice_trace_test.go
+@@ -19,6 +19,34 @@ type lockedTraceBuffer struct {
+ 	bytes.Buffer
+ }
+ 
++func TestPlaybackTraceExplainsWakeComparisonWithoutLoggingEitherText(t *testing.T) {
++	h := newPlaybackHarness(t)
++	var output lockedTraceBuffer
++	previous := slog.Default()
++	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
++	t.Cleanup(func() { slog.SetDefault(previous) })
++	h.s.rememberWakePhrase("嗨小伴")
++	h.s.responseOrigin = requestOrigin{text: "嗨，小伴！", known: true}
++	if err := h.s.beginPlayback(); err != nil {
++		t.Fatal(err)
++	}
++	h.s.started = true
++	h.s.pausePlayback()
++	text := output.snapshot()
++	if strings.Contains(text, "嗨") || strings.Contains(text, "小伴") {
++		t.Fatal("wake diagnostic exposed phrase or input text")
++	}
++	var record map[string]any
++	if err := json.Unmarshal([]byte(text), &record); err != nil {
++		t.Fatal(err)
++	}
++	if record["event"] != "wake_greeting_skipped" || record["wake_phrase_known"] != true ||
++		record["origin_wake_equal"] != true || record["wake_phrase_runes"] != float64(3) ||
++		record["origin_normalized_runes"] != float64(3) {
++		t.Fatalf("missing wake identity comparison metadata: %v", record)
++	}
++}
++
+ func (b *lockedTraceBuffer) Write(p []byte) (int, error) {
+ 	b.Lock()
+ 	defer b.Unlock()
