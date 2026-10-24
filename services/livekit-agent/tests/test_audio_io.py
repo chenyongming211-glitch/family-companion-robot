@@ -90,7 +90,7 @@ class AudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.sink.last_observation['valid'])
 
     async def test_real_session_early_cancel_and_fixed_text_excluded_from_history(self):
-        session = AgentSession()
+        session = AgentSession(turn_handling={'interruption': {'resume_false_interruption': False}})
         session.output.audio = self.sink
         await session.start(Agent(instructions='SDK lifecycle verification'), record=False)
         try:

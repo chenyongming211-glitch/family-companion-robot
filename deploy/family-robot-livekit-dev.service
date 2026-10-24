@@ -1,0 +1,31 @@
+[Unit]
+Description=Family robot isolated LiveKit voice-chain test service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=family-robot-livekit
+Group=family-robot-livekit
+WorkingDirectory=/opt/family-robot-livekit-dev/services/livekit-agent
+EnvironmentFile=/etc/family-robot/server.env
+EnvironmentFile=/etc/family-robot/livekit-dev.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=VOICE_AUDIT_DIR=/var/lib/family-robot-livekit-dev/audit
+ExecStart=/opt/family-robot-livekit-runtime/venv/bin/python -m family_voice.server
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+StateDirectory=family-robot-livekit-dev
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/family-robot-livekit-dev
+MemoryMax=768M
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target

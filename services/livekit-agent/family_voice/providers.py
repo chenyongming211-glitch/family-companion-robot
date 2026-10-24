@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 import weakref
 
@@ -17,15 +18,33 @@ class DashScopeSTT(stt.STT):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
         self.cfg = cfg
         self.streams = weakref.WeakSet()
+        self.turn_epoch = 0
+        self.has_final = False
+        self.turn_finished = asyncio.Event()
+        self.input_started = asyncio.Event()
 
     def stream(self, *, language=NOT_GIVEN, conn_options=NO_RETRY):
         stream = Recognition(stt=self, conn_options=NO_RETRY, sample_rate=16000)
         self.streams.add(stream)
         return stream
 
-    def finish_input(self):
+    def finish_input(self, *, required=True):
+        flushed = 0
         for stream in tuple(self.streams):
-            stream.flush()
+            try:
+                stream.flush()
+                flushed += 1
+            except RuntimeError:
+                self.streams.discard(stream)
+        if required and not flushed:
+            raise RuntimeError('no active recognition stream')
+
+    def begin_turn(self):
+        self.turn_epoch += 1
+        self.has_final = False
+        self.turn_finished.clear()
+        self.input_started.clear()
+        self.finish_input(required=False)
 
     async def _recognize_impl(self, buffer, *, language=NOT_GIVEN, conn_options=NO_RETRY):
         frame = rtc.combine_audio_frames(buffer)
@@ -37,11 +56,19 @@ class DashScopeSTT(stt.STT):
 
 
 class Recognition(stt.SpeechStream):
+    async def aclose(self):
+        try:
+            await super().aclose()
+        finally:
+            self._stt.streams.discard(self)
+
     async def _run(self):
         try:
             async for first in self._input_ch:
                 if not isinstance(first, rtc.AudioFrame):
                     continue
+                epoch = self._stt.turn_epoch
+                self._stt.input_started.set()
                 async def frames():
                     yield bytes(first.data)
                     async for frame in self._input_ch:
@@ -50,6 +77,8 @@ class Recognition(stt.SpeechStream):
                         yield bytes(frame.data)
                 speaking = False
                 async for result in Cloud(self._stt.cfg).asr(frames()):
+                    if epoch != self._stt.turn_epoch:
+                        continue
                     if not speaking:
                         speaking = True
                         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
@@ -58,8 +87,11 @@ class Recognition(stt.SpeechStream):
                         alternatives=[stt.SpeechData(language='zh', text=result['text'])],
                     ))
                     if result['final']:
+                        self._stt.has_final = True
                         speaking = False
                         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                if epoch == self._stt.turn_epoch:
+                    self._stt.turn_finished.set()
         except CloudError as error:
             raise APIError(str(error), retryable=False) from None
 

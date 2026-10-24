@@ -13,6 +13,7 @@ class Settings:
     llm_model: str = 'qwen-plus'
     tts_model: str = 'qwen3-tts-flash-realtime'
     voice: str = 'Cherry'
+    client_token: str = field(default='', repr=False)
     audit_dir: Path = Path('/var/lib/family-robot-livekit-dev/audit')
 
     @classmethod
@@ -34,6 +35,7 @@ class Settings:
             llm_model=env.get('VOICE_LLM_MODEL', 'qwen-plus'),
             tts_model=model,
             voice=env.get('VOICE_TTS_VOICE', 'Cherry'),
+            client_token=env.get('VOICE_CLIENT_TOKEN', ''),
             audit_dir=Path(env.get('VOICE_AUDIT_DIR', '/var/lib/family-robot-livekit-dev/audit')),
         )
         for url, secure, local in ((cfg.asr_url, 'wss', 'ws'), (cfg.tts_url, 'wss', 'ws'), (cfg.llm_url, 'https', 'http')):

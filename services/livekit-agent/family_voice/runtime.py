@@ -50,6 +50,7 @@ class VoiceSession:
         self.session.output.audio = self.output
         self.jobs = set()
         self.closed = False
+        self.commit_job = None
 
     def _emit(self, event):
         if self.closed:
@@ -87,12 +88,45 @@ class VoiceSession:
         self.input.push(pcm)
 
     async def commit(self):
-        await self.input.drain()
-        committed = self.session.commit_user_turn(transcript_timeout=5, stt_flush_duration=0)
-        self.providers[0].finish_input()
-        return await committed
+        audit = Intent(self.cfg, 'input_commit')
+        committed = None
+        self.commit_job = asyncio.current_task()
+        try:
+            await self.input.drain()
+            # An explicit PCM end must also terminate the audio front end.
+            # Otherwise VAD remains speaking and small clips can remain in the
+            # SDK's frame assembler instead of reaching the STT adapter.
+            for _ in range(35):
+                self.input.push(b'\0' * 640)
+            await self.input.drain()
+            await asyncio.wait_for(self.providers[0].input_started.wait(), 1)
+            audit.update(state='input_drained', recognizers=len(self.providers[0].streams), user_state=self.session.user_state, agent_state=self.session.agent_state)
+            self.providers[0].finish_input()
+            audit.update(state='provider_flushed')
+            await asyncio.wait_for(self.providers[0].turn_finished.wait(), 10)
+            if not self.providers[0].has_final:
+                raise RuntimeError('no provider final transcript')
+            committed = self.session.commit_user_turn(transcript_timeout=5, stt_flush_duration=0)
+            text = await committed
+            audit.update(state='committed', transcript_characters=len(text), user_state=self.session.user_state, agent_state=self.session.agent_state)
+            return text
+        except BaseException as error:
+            if committed and not committed.done():
+                committed.cancel()
+                self.session.clear_user_turn()
+            audit.update(state='failed', error_type=type(error).__name__, user_state=self.session.user_state, agent_state=self.session.agent_state)
+            raise
+        finally:
+            if self.commit_job is asyncio.current_task():
+                self.commit_job = None
 
     async def interrupt(self):
+        pending = self.commit_job
+        if pending and pending is not asyncio.current_task() and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        self.providers[0].begin_turn()
+        self.session.clear_user_turn()
         await asyncio.wait_for(self.session.interrupt(), 1)
 
     def receipt(self, event):

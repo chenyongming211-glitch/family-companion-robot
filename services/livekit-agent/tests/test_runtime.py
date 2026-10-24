@@ -14,6 +14,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.events = []
+        self.hold_final = False
+        self.final_requested = asyncio.Event()
+        self.release_final = asyncio.Event()
         app = web.Application()
         app.router.add_get('/asr', self.asr)
         app.router.add_get('/tts', self.tts)
@@ -43,6 +46,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({'header': {'event': 'task-started', 'task_id': task}})
         async for message in ws:
             if message.type == web.WSMsgType.TEXT:
+                self.final_requested.set()
+                if self.hold_final:
+                    await self.release_final.wait()
                 await ws.send_json({'header': {'event': 'result-generated', 'task_id': task}, 'payload': {'output': {'sentence': {'text': '一加一等于几？', 'sentence_end': True}}}})
                 await ws.send_json({'header': {'event': 'task-finished', 'task_id': task}})
                 break
@@ -84,6 +90,26 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(e['type'] == 'audio' for e in self.events))
         self.assertTrue(any(e['type'] == 'reply' and '2' in e['text'] for e in self.events))
         await asyncio.wait_for(self.voice.interrupt(), .5)
+
+    async def test_cancel_while_asr_final_is_pending_cannot_generate_old_answer(self):
+        self.hold_final = True
+        await self.voice.begin_input()
+        self.voice.feed(b'\0' * 640)
+        commit = asyncio.create_task(self.voice.commit())
+        try:
+            try:
+                await asyncio.wait_for(self.final_requested.wait(), 2)
+            except TimeoutError:
+                from pathlib import Path
+                details = [json.loads(p.read_text()) for p in Path(self.temp.name).glob('*.json')]
+                self.fail(f'ASR finish not reached; audit={details}; commit_done={commit.done()}')
+            await self.voice.interrupt()
+            self.assertTrue(commit.cancelled(), 'cancel must retire the pending input commit')
+        finally:
+            self.release_final.set()
+            if not commit.done():
+                commit.cancel()
+            await asyncio.gather(commit, return_exceptions=True)
 
 
 if __name__ == '__main__':
