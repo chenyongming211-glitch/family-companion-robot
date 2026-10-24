@@ -4,10 +4,34 @@ from dataclasses import asdict, is_dataclass
 from livekit.agents import Agent, AgentSession, StopResponse
 from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import silero
+from livekit import rtc
 
 from .audio_io import PCMInput, PCMOutput
-from .cloud import Intent, numeric_usage
+from .cloud import Cloud, Intent, numeric_usage
+from .counting import CountController, is_count_resume, parse_count_request
 from .providers import DashScopeSTT, DashScopeTTS, NO_RETRY, TurnSTT, text_model
+
+
+async def play_count_unit(session, output, number, pcm):
+    """A generated number becomes progress only after its own full receipt."""
+    first, epoch = output.sequence, output.epoch
+    async def audio():
+        for i in range(0, len(pcm), 960):
+            chunk = pcm[i:i + 960]
+            yield rtc.AudioFrame(chunk, 24000, 1, len(chunk) // 2)
+    handle = session.say(f'{number}。', audio=audio(), add_to_chat_ctx=False)
+    try:
+        await handle.wait_for_playout()
+    except asyncio.CancelledError:
+        handle.interrupt(force=True)
+        # The controller joins this worker before starting a replacement.
+        # Retire SDK audio/receipt bookkeeping before releasing that barrier.
+        await handle.wait_for_playout()
+        raise
+    observed = output.last_observation
+    return bool(not handle.interrupted and observed and observed['valid']
+                and observed['block_id'] == first + 1 and observed['epoch'] == epoch
+                and observed['played_samples'] == observed['sent_samples'] == len(pcm) // 2)
 
 
 class AuditedAgent(Agent):
@@ -28,6 +52,8 @@ class AuditedAgent(Agent):
                 raise StopResponse()
             self.owner.turns += 1
             self.owner._emit({'type': 'turn', 'count': self.owner.turns, 'max_turns': self.owner.automatic_max_turns})
+            if self.owner.handle_count_turn(new_message.text_content):
+                raise StopResponse()
 
     async def llm_node(self, chat_ctx, tools, model_settings):
         intent = Intent(self.cfg, 'llm')
@@ -73,6 +99,43 @@ class VoiceSession:
         self.jobs = set()
         self.closed = False
         self.commit_job = None
+        self.counting = CountController(self.prepare_count, self.play_count, self._emit) if automatic else None
+
+    async def prepare_count(self, number):
+        pcm = bytearray()
+        stream = Cloud(self.cfg).tts(f'{number}。')
+        try:
+            async for chunk in stream:
+                if len(pcm) + len(chunk) > 24000 * 2 * 5:
+                    raise ValueError('count unit audio limit')
+                pcm.extend(chunk)
+        finally:
+            await stream.aclose()
+        return bytes(pcm)
+
+    async def play_count(self, number, pcm):
+        if self.closed or self.sleeping:
+            return False
+        return await play_count_unit(self.session, self.output, number, pcm)
+
+    def handle_count_turn(self, text):
+        request = parse_count_request(text)
+        if request:
+            try:
+                self.counting.start(*request)
+            except ValueError:
+                self.session.say('请指定零到一千以内的递增范围，一次最多数一百个数字。')
+            return True
+        plan = self.counting.snapshot
+        if plan and is_count_resume(text):
+            if plan['state'] == 'completed':
+                self.session.say(f'已经数到{plan["end"]}，这次数数已完成。')
+            elif plan['state'] == 'failed':
+                self.session.say('上次数数的语音准备失败，请重新指定计数范围。')
+            else:
+                self.counting.resume()
+            return True
+        return False
 
     def _emit(self, event):
         if self.closed:
@@ -101,6 +164,7 @@ class VoiceSession:
                 if event.new_state == 'away':
                     self.sleep('idle')
                 elif event.new_state == 'speaking':
+                    self.counting.pause()
                     async def limit():
                         await asyncio.sleep(self.automatic_utterance_seconds)
                         self.sleep('utterance_limit')
@@ -123,6 +187,8 @@ class VoiceSession:
     def sleep(self, code):
         if not self.closed and not self.sleeping:
             self.sleeping = True
+            if self.counting:
+                self.counting.pause()
             self._emit({'type': 'sleep', 'code': code})
 
     async def begin_input(self):
@@ -167,6 +233,8 @@ class VoiceSession:
                 self.commit_job = None
 
     async def interrupt(self):
+        if self.counting:
+            self.counting.pause()
         self.input.discard()
         pending = self.commit_job
         if pending and pending is not asyncio.current_task() and not pending.done():
@@ -183,6 +251,8 @@ class VoiceSession:
         if self.closed:
             return
         self.closed = True
+        if self.counting:
+            await self.counting.close()
         if self.speech_timer:
             self.speech_timer.cancel()
             await asyncio.gather(self.speech_timer, return_exceptions=True)

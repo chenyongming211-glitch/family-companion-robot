@@ -23,7 +23,9 @@ systemd模板见[`deploy/family-robot-livekit-dev.service`](../../deploy/family-
 
 Mac只点一次“开始说话”模拟唤醒，随后持续发送PCM，说完自动回复、开口自动打断，后续问题直接说。同一按钮可结束对话；空闲60秒、连续讲话25秒或达到上限后回待机。操作见[Mac客户端](../../tools/mac-voice/README.md)，结果见[连续语音验证](../../docs/verification/2026-10-24-continuous-mac-voice.md)。
 
-浏览器连接`/v1/browser/audio?mode=continuous`，cookie/Origin/单会话鉴权不变；输入仅`listen.audio`，输出与playback回报沿用既有PCM协议。`user.state`/`agent.state`/`turn`显示状态与预算，`sleep`结束唤醒。SDK用Silero自动端点/打断，TurnSTT仅将有限语段送ASR，语段在检测时绑定代次；新开口退休旧识别。LLM前检查8轮上限，不将迟到旧ASR计为新问题。自动模式LLM最多512 tokens，指定数数需完整逐项输出。
+浏览器连接`/v1/browser/audio?mode=continuous`，cookie/Origin/单会话鉴权不变；输入仅`listen.audio`，输出与playback回报沿用既有PCM协议。`user.state`/`agent.state`/`turn`显示状态与预算，`sleep`结束唤醒。SDK用Silero自动端点/打断，TurnSTT仅将有限语段送ASR，语段在检测时绑定代次；新开口退休旧识别。生成前检查8轮上限，不将迟到旧ASR计为新问题。自动模式LLM最多512 tokens。
+
+明确计数范围和“继续数”在LLM前进入独立CountController：保存原终点与首个未确认完整播放的数字，每个数字用固定PCM和`add_to_chat_ctx=False`播放；同块完整有效回报且SDK未中断才推进。插话暂停，普通问题仍走LLM，继续时复用内存音频并保守重读当前数字。`count.state`显示进度，completed的next=end+1仅为终态哨兵，不合成/播放它。最多预取3个数字、每个5秒，范围0..1000、一次最多100个；没有跨唤醒/进程持久化。见[计数验证](../../docs/verification/2026-10-24-counting-resume.md)。
 
 ## 在服务器复现验收
 
@@ -73,7 +75,7 @@ PYTHONPATH=services/livekit-agent .superpowers/livekit-chain/venv/bin/python \
 
 ## 本阶段边界
 
-- 当前默认页面是连续语音，旧`input.start/end/cancel`只供手动探针兼容。Go小智桥、MCP设备工具和原稿任务检查点尚未在新路径交付。
+- 当前默认页面是连续语音，旧`input.start/end/cancel`只供手动探针兼容。会话内计数检查点已接线；Go小智桥、MCP设备工具、持久化和故事原稿检查点尚未在新路径交付。
 - ASR只接受真实终态；自动语段由Silero封口，检测不等待旧ASR，最多4个在途/收尾识别任务，云连接关闭等待最多0.1秒。旧段结果不得启动新LLM。历史手动探针仍补700ms终止静音再显式提交。
 - 输入队列最多100帧；自动单次讲话25秒触发回待机，有限ASR最多29秒；会话最多8个生成轮次、15分钟，页面显示剩余预算。到期返回`session_expired`，单次操作超时返回`operation_timeout`；不自动重发问题。输出账本最多32段、总待播前缀最多120秒；写出超时250ms即失败。
 - 中断最多等待250ms回报结算；无效/缺失回报用unknown保守解锁SDK，独立观测仍为`valid=false`。不计算未验证的字词断点。正常等待期限为本段时长加2秒余量。

@@ -162,6 +162,34 @@ class ContinuousTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(e['type'] == 'audio.cancel' for e in self.events[start:]))
         self.assertTrue(any(e['type'] == 'audio' and e['epoch'] > old for e in self.events[start:]))
 
+    async def test_count_checkpoint_survives_vad_barge_in_question_and_resume(self):
+        self.transcripts = ['请从一数到三', '二加三等于几？', '那继续数吧']
+        await self.start()
+        self.hold_playout = True
+        await self.feed('long.wav')
+        await self.until(lambda: any(e['type'] == 'audio.end' for e in self.events))
+        self.assertEqual(self.voice.counting.snapshot['next'], 1)
+        first = self.voice.output.pending[0]
+        self.voice.receipt({'block_id': first.id, 'epoch': first.epoch, 'played_samples': first.sent, 'valid': True, 'finished': True})
+        await self.until(lambda: len([e for e in self.events if e['type'] == 'audio.end']) == 2)
+        self.assertEqual(self.voice.counting.snapshot['next'], 2)
+        self.hold_playout = False
+        await self.feed('second.wav')
+        await self.until(lambda: any(e['type'] == 'reply' and e.get('text') == '5' for e in self.events))
+        self.assertEqual(self.voice.counting.snapshot['state'], 'paused')
+        self.assertEqual(self.voice.counting.snapshot['next'], 2)
+        before = len(self.events)
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.counting.snapshot['state'] == 'completed')
+        resumed = [e['next'] for e in self.events[before:] if e['type'] == 'count.state']
+        self.assertEqual(resumed[0], 2)
+        self.assertEqual(self.voice.counting.snapshot['end'], 3)
+        self.assertEqual(len(self.llm_calls), 1, 'count and resume must bypass LLM')
+        self.assertEqual([i.text_content for i in self.voice.session.history.items if getattr(i, 'role', None) == 'assistant'], ['5'])
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'reply' and '已经数到3' in e.get('text', '') for e in self.events))
+        self.assertEqual(len(self.llm_calls), 1, 'completed resume cannot generate 4')
+
     async def test_limit_stops_before_next_llm_and_idle_returns_standby(self):
         await self.start(automatic_max_turns=1)
         await self.feed('first.wav')

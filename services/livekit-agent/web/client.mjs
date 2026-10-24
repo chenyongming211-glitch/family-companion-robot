@@ -146,6 +146,7 @@ function disconnect(message = '已待机，麦克风已释放') {
   releaseMicrophone(); ctx?.close(); ctx = null;
   userState = 'away'; agentState = 'idle'; voiceState();
   $('budget').textContent = '开始下一次对话后重新计时';
+  $('count').textContent = '当前无计数任务';
   status(message); controls();
 }
 function fail(error) { $('error').textContent = error.message || '操作失败'; log(`失败：${error.code || error.name || 'Error'}`); disconnect(); status(error.message || '操作失败'); }
@@ -177,6 +178,15 @@ $('connect').onclick = action(async () => {
         }
         if (e.type === 'transcript') $('transcript').textContent = e.text + (e.final ? '' : ' …');
         if (e.type === 'reply') $('reply').textContent = e.text || '（回复已中断）';
+        if (e.type === 'count.state') {
+          const text = {
+            playing: `正在数到 ${e.end} · 下一个待确认播完的数字：${e.next}`,
+            paused: `数数已暂停 · 说“继续数”将从 ${e.next} 数到 ${e.end}（可能重读被打断的数字）`,
+            completed: `已完成 · 已数到 ${e.end}`,
+            failed: '数数的语音准备或播放失败，请重新指定范围。',
+          };
+          $('count').textContent = text[e.state] || '计数进度未知';
+        }
         if (e.type === 'user.state') { userState = e.state; voiceState(); }
         if (e.type === 'agent.state') { agentState = e.state; voiceState(); }
         if (e.type === 'turn') { usedTurns = e.count; turnLimit = e.max_turns || turnLimit; sessionBudget(); }

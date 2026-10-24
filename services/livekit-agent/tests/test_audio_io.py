@@ -5,6 +5,7 @@ from livekit import rtc
 from livekit.agents import Agent, AgentSession
 
 from family_voice.audio_io import PCMInput, PCMOutput
+from family_voice import runtime
 
 
 def frame():
@@ -31,6 +32,7 @@ class AudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.sink.receipt(first['block_id'], first['epoch'] + 1, 480))
         self.assertTrue(self.sink.receipt(first['block_id'], first['epoch'], 480))
         self.assertFalse((await waiter).interrupted)
+        self.assertEqual(self.sink.last_observation['sent_samples'], 480)
         await self.sink.capture_frame(frame())
         second = self.sink.active_identity
         self.sink.flush()
@@ -107,6 +109,51 @@ class AudioTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(speech.wait_for_playout(), 1)
             self.assertNotIn('固定原稿', [getattr(item, 'text_content', '') for item in session.history.items])
             await asyncio.wait_for(session.interrupt(), 1)
+        finally:
+            await session.aclose()
+
+    async def test_count_unit_requires_complete_receipt_and_stays_out_of_history(self):
+        play = getattr(runtime, 'play_count_unit', None)
+        self.assertTrue(callable(play), 'counting needs SDK playback evidence, not LLM history')
+        session = AgentSession(turn_handling={'interruption': {'resume_false_interruption': False}})
+        session.output.audio = self.sink
+        await session.start(Agent(instructions='count playback verification'), record=False)
+        try:
+            for receipt in ('full', 'partial', 'unknown'):
+                first = self.sink.sequence
+                job = asyncio.create_task(play(session, self.sink, 7, b'\1\0' * 960))
+                async with asyncio.timeout(1):
+                    while not any(e['type'] == 'audio.end' and e['block_id'] > first for e in self.events):
+                        await asyncio.sleep(.001)
+                block = self.sink.pending[-1]
+                if receipt == 'full':
+                    self.sink.receipt(block.id, block.epoch, block.sent)
+                elif receipt == 'partial':
+                    session.interrupt()
+                    self.sink.receipt(block.id, block.epoch, 480)
+                self.assertEqual(await asyncio.wait_for(job, 1), receipt == 'full')
+            self.assertFalse(any('7' in getattr(item, 'text_content', '') for item in session.history.items))
+        finally:
+            await session.aclose()
+
+    async def test_cancelled_count_unit_interrupts_sdk_playback(self):
+        play = getattr(runtime, 'play_count_unit', None)
+        self.assertTrue(callable(play))
+        session = AgentSession(turn_handling={'interruption': {'resume_false_interruption': False}})
+        session.output.audio = self.sink
+        await session.start(Agent(instructions='count cancellation verification'), record=False)
+        try:
+            job = asyncio.create_task(play(session, self.sink, 7, b'\1\0' * 960))
+            async with asyncio.timeout(1):
+                while not any(e['type'] == 'audio.end' for e in self.events):
+                    await asyncio.sleep(.001)
+            job.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await job
+            self.assertFalse(self.sink.pending, 'retired SDK playback must settle before the callback releases a replacement worker')
+            async with asyncio.timeout(1):
+                while not any(e['type'] == 'audio.cancel' for e in self.events):
+                    await asyncio.sleep(.001)
         finally:
             await session.aclose()
 

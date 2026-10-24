@@ -181,3 +181,16 @@ test('the page exposes one action with automatic speech end and voice barge-in g
   assert.match(html, /插话/);
   assert.doesNotMatch(html, /结束发送|立即停播|试听提示音|点击分轮/);
 });
+
+test('count progress shows confirmed checkpoint and clears when the conversation ends', async () => {
+  const ui = await browser(); await start(ui);
+  await ui.message({type: 'count.state', start: 1, end: 50, next: 16, state: 'paused'});
+  assert.match(ui.elements.get('count').textContent, /暂停/);
+  assert.match(ui.elements.get('count').textContent, /16/);
+  assert.match(ui.elements.get('count').textContent, /50/);
+  await ui.message({type: 'count.state', start: 1, end: 50, next: 51, state: 'completed'});
+  assert.match(ui.elements.get('count').textContent, /完成.*50/);
+  assert.doesNotMatch(ui.elements.get('count').textContent, /51/);
+  await ui.click('connect');
+  assert.match(ui.elements.get('count').textContent, /无计数任务/);
+});

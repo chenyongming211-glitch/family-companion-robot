@@ -3,7 +3,7 @@
 <body><main>
 <header><span class="eyebrow">家庭陪伴 / MacBook 测试终端</span><h1>开口，就有人回应</h1><p>点一次唤醒，接下来直接说。说完会自动回复，助手说话时也能随时插话。</p></header>
 <section class="panel session"><h2>连续语音对话</h2><p id="pair" role="status">正在检查配对链接…</p><div class="actions"><button id="connect" class="primary" aria-pressed="false" disabled>开始说话</button></div><p id="status" role="status">待机</p><p id="voice" role="status">麦克风已关闭 · 助手待机</p><label for="level">麦克风电平</label><meter id="level" min="0" max="1" value="0"></meter><p id="device">开始对话后请求麦克风权限，建议先调低扬声器音量。</p><p id="budget">开始对话后显示剩余时间与轮数</p><p class="hint">无需手动发送下一句话。结束对话、切换到后台或空闲超时后，会释放麦克风并回到待机。</p></section>
-<section class="panel"><h2>正在聊什么</h2><div class="conversation"><article><h3>你说的</h3><p id="transcript">等待你开口</p></article><article><h3>助手回答</h3><p id="reply">等待回答</p></article></div><p id="stats">输入 0 帧 · 输出 0 帧</p><p id="playback">播放位置来自浏览器输出时钟估算，不代表扬声器实际停声测量。</p></section>
+<section class="panel"><h2>正在聊什么</h2><div class="conversation"><article><h3>你说的</h3><p id="transcript">等待你开口</p></article><article><h3>助手回答</h3><p id="reply">等待回答</p></article></div><p id="count" role="status">当前无计数任务</p><p id="stats">输入 0 帧 · 输出 0 帧</p><p id="playback">播放位置来自浏览器输出时钟估算，不代表扬声器实际停声测量。</p></section>
 <section class="panel"><h2>试着连续聊几句</h2><ol><li>点击“开始说话”，允许使用麦克风，问“一加一等于几”。</li><li>听到回答后直接问“二加三等于几”，不用再点按钮。</li><li>说“从一数到五十”，播放中直接开口问新问题，检查插话后的回答。</li></ol><p>对话开始后，麦克风会持续发送音频到服务器，包括助手播放回复时。服务器只将检测到的发言交给已配置的云端语音模型处理，静音不会触发云端识别。此测试页不保存录音或对话正文。自动断句、插话与 MacBook 扬声器的实际回声效果需要实测。</p></section>
 <p id="error" role="alert"></p><details><summary>事件记录（仅当前页面）</summary><pre id="log"></pre></details>
 </main><script type="module" src="/client/client.mjs"></script></body></html>

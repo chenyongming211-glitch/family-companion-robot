@@ -30,6 +30,8 @@ class CloudTests(unittest.IsolatedAsyncioTestCase):
         })
         self.bad_audio = False
         self.reject = False
+        self.hold_tts = False
+        self.tts_waiting, self.release_tts = asyncio.Event(), asyncio.Event()
 
     async def asyncTearDown(self):
         await self.runner.cleanup()
@@ -53,6 +55,10 @@ class CloudTests(unittest.IsolatedAsyncioTestCase):
             if self.bad_audio:
                 audio += b'\x01'
             await ws.send_json({'type': 'response.audio.delta', 'response_id': 'r1', 'delta': base64.b64encode(audio).decode()})
+            if self.hold_tts:
+                self.tts_waiting.set()
+                await self.release_tts.wait()
+                return ws
             await ws.send_json({'type': 'response.done', 'response': {'id': 'r1', 'status': 'completed', 'usage': {'characters': 2}}})
         await ws.close()
         return ws
@@ -102,6 +108,21 @@ class CloudTests(unittest.IsolatedAsyncioTestCase):
             yield b'\0' * 640
         result = [ev async for ev in Cloud(self.cfg).asr(frames())]
         self.assertEqual([(ev['text'], ev['final']) for ev in result], [('一加', False), ('一加一等于几？', True)])
+
+    async def test_cancelled_tts_closes_without_waiting_for_provider_terminal(self):
+        self.hold_tts = True
+        async def consume():
+            return [chunk async for chunk in Cloud(self.cfg).tts('一')]
+        job = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(self.tts_waiting.wait(), 1)
+            job.cancel()
+            done, _ = await asyncio.wait((job,), timeout=.5)
+            self.assertIn(job, done, 'cancelled prefetch must not wait ten seconds on WebSocket close')
+            self.assertTrue(job.cancelled())
+        finally:
+            self.release_tts.set()
+            await asyncio.gather(job, return_exceptions=True)
 
     async def test_real_sdk_adapters_preserve_pcm_and_final_transcript(self):
         from livekit import rtc

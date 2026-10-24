@@ -175,7 +175,7 @@ class PCMOutput(io.AudioOutput):
             block = self.pending.popleft()
             if block.timer and block.timer is not asyncio.current_task():
                 block.timer.cancel()
-            self.last_observation = {'block_id': block.id, 'epoch': block.epoch, 'played_samples': block.played if block.valid else None, 'valid': block.valid}
+            self.last_observation = {'block_id': block.id, 'epoch': block.epoch, 'sent_samples': block.sent, 'played_samples': block.played if block.valid else None, 'valid': block.valid}
             # An unknown lower-bound completion releases SDK lifecycle only.
             # It never becomes measured playback or synchronized transcript.
             self.on_playback_finished(playback_position=block.played / 24000 if block.valid else 0, interrupted=block.interrupted or not block.valid, synchronized_transcript=None)
