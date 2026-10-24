@@ -243,6 +243,8 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('assistant', roles[1:first_second_user], 'first answer must precede second user')
 
     async def test_late_full_receipt_keeps_unit_dispatch_turn_anchor(self):
+        from pathlib import Path
+        self.cfg = replace(self.cfg, text_record_dir=Path(self.temp.name) / 'conversations')
         await self.start()
         self.hold_playout = True
         async def short(text):
@@ -258,6 +260,11 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.voice.agent.on_user_turn_completed(None, second)
         self.voice.receipt({'block_id':old.id,'epoch':old.epoch,'played_samples':old.sent,'finished':True})
         self.assertEqual(self.voice.spoken_anchors[self.voice.spoken_history[-1].id], first.id)
+        await self.voice.conversation.flush()
+        from family_voice.conversation_log import read_conversation
+        rows = read_conversation(self.cfg.text_record_dir, self.voice.conversation.id)['events']
+        played = [e for e in rows if e['kind'] == 'assistant.played']
+        self.assertEqual([(e['turn_id'], e['text']) for e in played], [(first.id, '原故事一句。')])
 
     async def test_pause_before_output_lock_acquired_settles_unbound_unit(self):
         await self.start()
@@ -323,6 +330,90 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
         self.assertEqual(self.tts_texts, ['谢谢夸奖！'])
         self.assertEqual(self.voice.main.snapshot['units'], ['谢谢夸奖！'])
+
+    async def test_text_archive_keeps_transcript_and_separates_partial_from_played(self):
+        from pathlib import Path
+        self.assertTrue(hasattr(self.cfg, 'text_record_dir'), 'text recording configuration is missing')
+        folder = Path(self.temp.name) / 'conversations'
+        self.cfg = replace(self.cfg, text_record_dir=folder)
+        await self.start()
+        self.assertIsNotNone(getattr(self.voice, 'conversation', None), 'text archive is not attached')
+        from family_voice.conversation_log import read_conversation
+        self.hold_playout = True
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.output.outstanding_samples == 7200)
+        journal = self.voice.conversation
+        await journal.flush()
+        rows = read_conversation(folder, journal.id)['events']
+        self.assertEqual([e['text'] for e in rows if e['kind'] == 'user.transcript'], ['一加一等于几？'])
+        self.assertTrue(any(e['kind'] == 'assistant.generated' and '小狐狸' in e['text'] for e in rows))
+        content = next(e for e in rows if e['kind'] == 'assistant.content')
+        self.assertEqual(content['content_id'], self.voice.main.snapshot['task_id'])
+        self.assertEqual(content['text'], ''.join(self.voice.main.snapshot['units']))
+        self.assertFalse(any(e['kind'] == 'assistant.played' for e in rows))
+        old = next(iter(self.voice.output.blocks.values()))
+        await self.voice.interrupt()
+        self.voice.receipt({'block_id': old.id, 'epoch': old.epoch, 'played_samples': old.sent, 'finished': True})
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'paused')
+        await journal.flush()
+        rows = read_conversation(folder, journal.id)['events']
+        self.assertTrue(any(e['kind'] == 'assistant.delivery_unknown' for e in rows))
+        self.assertFalse(any(e['kind'] == 'assistant.played' for e in rows))
+        self.hold_playout = False
+        self.voice.content_action('resume', 'main')
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+        await self.voice.close()
+        rows = read_conversation(folder, journal.id)['events']
+        played = [e['text'] for e in rows if e['kind'] == 'assistant.played']
+        self.assertEqual(played, self.voice.main.snapshot['units'])
+        self.assertEqual(rows[-1]['kind'], 'session.end')
+        self.assertFalse(any('data' in e or 'api_key' in e for e in rows))
+
+    async def test_text_archive_includes_played_notice_without_overwriting_originals(self):
+        from pathlib import Path
+        from family_voice.conversation_log import read_conversation
+        self.cfg = replace(self.cfg, text_record_dir=Path(self.temp.name) / 'conversations')
+        await self.start()
+        self.hold_playout = True
+        async def short(text):
+            return b'\1\0' * 480
+        self.voice.prepare_content = short
+        self.voice._notice('当前没有保留这段原稿。')
+        await self.until(lambda: any(e['type'] == 'audio.end' for e in self.events))
+        journal = self.voice.conversation
+        await journal.flush()
+        rows = read_conversation(self.cfg.text_record_dir, journal.id)['events']
+        notice = next(e for e in rows if e['kind'] == 'assistant.notice')
+        self.assertFalse(any(e['kind'] == 'assistant.played' for e in rows))
+        old = next(iter(self.voice.output.blocks.values()))
+        self.voice.receipt({'block_id': old.id, 'epoch': old.epoch, 'played_samples': old.sent, 'finished': True})
+        await self.until(lambda: self.voice.notice_job.done())
+        await journal.flush()
+        rows = read_conversation(self.cfg.text_record_dir, journal.id)['events']
+        played = next(e for e in rows if e['kind'] == 'assistant.played')
+        self.assertEqual((played['text'], played['unit_id']), (notice['text'], notice['unit_id']))
+        self.assertIsNone(self.voice.main.snapshot)
+        self.assertIsNone(self.voice.side.snapshot)
+
+    async def test_text_archive_records_final_transcript_only(self):
+        from pathlib import Path
+        from livekit.agents.voice.events import UserInputTranscribedEvent
+        from family_voice.conversation_log import read_conversation
+        self.cfg = replace(self.cfg, text_record_dir=Path(self.temp.name) / 'conversations')
+        await self.start()
+        self.voice.session.emit('user_input_transcribed', UserInputTranscribedEvent(transcript='未定稿', is_final=False))
+        self.voice.session.emit('user_input_transcribed', UserInputTranscribedEvent(transcript='最终转写。', is_final=True))
+        await self.voice.conversation.flush()
+        rows = read_conversation(self.cfg.text_record_dir, self.voice.conversation.id)['events']
+        self.assertEqual([e['text'] for e in rows if e['kind'] == 'user.transcript'], ['最终转写。'])
+
+    async def test_text_archive_is_disabled_by_default(self):
+        from pathlib import Path
+        await self.start()
+        self.assertIsNone(self.voice.conversation)
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertEqual(list(Path(self.temp.name).rglob('*.jsonl')), [])
 
     async def test_emoji_only_reply_is_rejected_before_tts(self):
         await self.start()

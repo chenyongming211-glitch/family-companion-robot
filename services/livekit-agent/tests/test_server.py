@@ -5,6 +5,7 @@ import tempfile
 import json
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from aiohttp import WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
@@ -66,6 +67,98 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             await self.client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
         self.assertEqual(busy.exception.status, 409)
         await ws.close()
+
+    async def test_text_record_failure_closes_manual_and_continuous_connections(self):
+        class FailedRecordVoice(TestVoice):
+            def __init__(self, cfg, send, **options):
+                super().__init__(cfg, send)
+            async def start(self):
+                await self.send({'type': 'error', 'code': 'text_recording_failed'})
+        for mode in ('manual', 'continuous'):
+            client = TestClient(TestServer(create_app(self.cfg, session_factory=FailedRecordVoice)))
+            await client.start_server()
+            try:
+                ws = await client.ws_connect('/v1/audio?mode=' + mode, headers={'Authorization': 'Bearer synthetic-token'})
+                self.assertEqual((await ws.receive_json())['type'], 'ready')
+                self.assertEqual((await ws.receive_json())['code'], 'text_recording_failed')
+                await asyncio.wait_for(ws.receive(), .2)
+                self.assertTrue(ws.closed, 'recording failure must not leave an unrecorded voice connection running')
+            finally:
+                await client.close()
+
+    async def test_text_record_close_failure_is_not_reported_as_normal_disconnect(self):
+        from family_voice.conversation_log import ConversationLogError
+        class FailedCloseVoice(TestVoice):
+            async def close(self):
+                raise ConversationLogError('PRIVATE_FIXTURE_ERROR')
+        client = TestClient(TestServer(create_app(self.cfg, session_factory=FailedCloseVoice)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
+            await ws.receive_json()
+            await ws.close()
+            async with asyncio.timeout(1):
+                while (await (await client.get('/healthz')).json())['active_sessions']:
+                    await asyncio.sleep(.01)
+            records = [json.loads(p.read_text()) for p in Path(self.temp.name).glob('*.json')]
+            session = next(e for e in records if e['stage'] == 'client_session')
+            self.assertEqual(session['state'], 'text_recording_failed')
+            self.assertNotIn('PRIVATE_FIXTURE_ERROR', json.dumps(session))
+        finally:
+            await client.close()
+
+    async def test_text_record_failure_closes_even_with_saturated_runtime_send_jobs(self):
+        from family_voice.content_runtime import DrainVoiceSession
+        voices = []
+        def factory(cfg, send):
+            voice = DrainVoiceSession(cfg, send)
+            voices.append(voice)
+            return voice
+        client = TestClient(TestServer(create_app(self.cfg, drain_factory=factory)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio?mode=drain', headers={'Authorization': 'Bearer synthetic-token'})
+            self.assertEqual((await ws.receive_json())['type'], 'ready')
+            voice = voices[0]
+            for _ in range(32):
+                voice.jobs.add(asyncio.create_task(asyncio.sleep(60)))
+            voice._recording_failed()
+            async with asyncio.timeout(.5):
+                while True:
+                    event = await ws.receive_json()
+                    if event.get('code') == 'text_recording_failed':
+                        break
+                await ws.receive()
+            self.assertTrue(ws.closed)
+        finally:
+            await client.close()
+
+    async def test_text_record_failure_closes_even_if_error_message_write_blocks(self):
+        from family_voice.content_runtime import DrainVoiceSession
+        from aiohttp import web
+        original = web.WebSocketResponse.send_json
+        async def blocked(socket, data, *args, **kwargs):
+            if data.get('code') == 'text_recording_failed':
+                await asyncio.Event().wait()
+            return await original(socket, data, *args, **kwargs)
+        voices = []
+        def factory(cfg, send):
+            voice = DrainVoiceSession(cfg, send)
+            voices.append(voice)
+            return voice
+        client = TestClient(TestServer(create_app(self.cfg, drain_factory=factory)))
+        await client.start_server()
+        try:
+            with patch.object(web.WebSocketResponse, 'send_json', new=blocked):
+                ws = await client.ws_connect('/v1/audio?mode=drain', headers={'Authorization': 'Bearer synthetic-token'})
+                self.assertEqual((await ws.receive_json())['type'], 'ready')
+                voices[0]._recording_failed()
+                async with asyncio.timeout(1):
+                    while not ws.closed:
+                        await ws.receive()
+                self.assertTrue(ws.closed)
+        finally:
+            await client.close()
 
     async def test_input_identity_and_malformed_audio_close_connection(self):
         ws = await self.client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})

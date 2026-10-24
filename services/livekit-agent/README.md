@@ -27,6 +27,22 @@ systemd模板见[`deploy/family-robot-livekit-dev.service`](../../deploy/family-
 
 模型配置由systemd读取既有`/etc/family-robot/server.env`；测试客户端令牌独立保存在`/etc/family-robot/livekit-dev.env`，文件root管理且0600。不要把两份文件内容输出到聊天、命令参数或Git。进程显式`record=False`，SDK/provider日志只保留logger名和级别，阶段/usage记录进入`/var/lib/family-robot-livekit-dev/audit/`，不含正文、PCM或Key。
 
+## 语音文字存档
+
+用户明确要求保存文字后，独立服务模板通过`VOICE_TEXT_RECORD_DIR=/var/lib/family-robot-livekit-dev/conversations`启用私有JSONL存档。代码默认关闭；目录0700、文件0600，按会话和UTC时间记录，CLI显示上海时间。最终ASR转写、生成稿、固定语音稿/提示、完整播放单位与未确认完成单位分别标注。当前native/drain有完整播放语义；旧manual/continuous仅保存最终转写及SDK生成稿，不标成drain式实播。
+
+这些正文不进入普通日志、Git或音频文件。单写者线程使用有界队列并逐条fsync；关闭时排空。写盘或队列失败会报`text_recording_failed`并结束连接，不能默默转成无记录对话；损坏档案在列表中单独标明，其他会话仍可读取。档案不自动过期，也不自动注入LLM；文字保存与跨会话任务恢复是独立能力。首次启用前没有保存的LiveKit正文无法补回，原8000快照保持独立来源。
+
+在服务器源码目录经已有SSH读取，不新增公开HTTP或网页入口：
+
+```sh
+cd /opt/family-robot-livekit-dev/services/livekit-agent
+sudo /opt/family-robot-livekit-runtime/venv/bin/python -m family_voice.conversation_log \
+  --directory /var/lib/family-robot-livekit-dev/conversations list
+```
+
+从列表取得会话ID后，用同一入口将`list`换成`show 会话ID --limit 100`；后续页使用输出的`--after`，`--json`可读完整事件，`--include-generated`明确标注未确认播放的生成稿。默认视图只展示最终转写、已确认完整播完及本句未确认播完的文字。
+
 固定依赖见`requirements.txt`。默认请求模型为`fun-asr-realtime`、`qwen-plus`、`qwen3-tts-flash-realtime`、音色`Cherry`。它们是请求别名，不声称云端模型版本不可变。ASR/LLM/TTS使用三个独立URL；可通过`VOICE_ASR_URL`、`VOICE_LLM_URL`、`VOICE_TTS_URL`覆盖。默认从既有业务空间域名按官方协议分别构造，不把原生Realtime客户端复用为链式接口。
 
 ## 历史浏览器入口：连续语音兼容
@@ -79,7 +95,7 @@ PYTHONPATH=services/livekit-agent .superpowers/livekit-chain/venv/bin/python \
 | 服务→客户端 | `input.ready` | 本轮服务分配的`input_id` |
 | 客户端→服务 | `input.audio` | 带`input_id`与`data`，每帧最多20ms/640字节 |
 | 客户端→服务 | `input.end` | 同身份结束输入，服务补700ms终止静音并等实际ASR终态后提交会话 |
-| 服务→客户端 | `transcript` / `reply` | 本轮转写（interim/final分开）与助手文字；仅传输，不落正文日志 |
+| 服务→客户端 | `transcript` / `reply` | 本轮转写（interim/final分开）与助手文字；启用文字档案后final/SDK生成文字独立存档，普通日志仍无正文 |
 | 服务→客户端 | `audio` / `audio.end` | 带`epoch`、`block_id`的24k PCM与封口；封口不等于播放完成 |
 | 客户端→服务 | `playback` | 同身份`played_samples`、`valid`、`finished`；不能把接收入队量冒充实播量 |
 | 客户端→服务 | `cancel` | 退休当前输入并停止旧回复；继续处理播放回报，返回`cancelled`；旧`input_id`的后续音频/结束消息返回`invalid_input`，新输入须重新`input.start` |

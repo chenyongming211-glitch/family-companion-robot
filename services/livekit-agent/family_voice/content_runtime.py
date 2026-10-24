@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import unicodedata
+import uuid
 from dataclasses import asdict, is_dataclass
 from typing import Literal
 from weakref import WeakKeyDictionary
@@ -149,6 +150,7 @@ class ContentAgent(Agent):
     async def llm_node(self, chat_ctx, tools, model_settings):
         owner = self.owner
         handle, epoch = owner.session.current_speech, owner.user_epoch
+        turn_id = owner.current_turn_id
         if handle:
             self.response_epochs.setdefault(handle, epoch)
         chat_ctx = chat_ctx.copy()
@@ -172,6 +174,14 @@ class ContentAgent(Agent):
         intent = Intent(owner.cfg, 'llm')
         intent.update(state='submitted_unknown')
         usage, text, called, finish_reason = None, [], False, None
+        generation_recorded = False
+        def record_generation(delivery):
+            nonlocal generation_recorded
+            if text and not generation_recorded:
+                owner.record_text('assistant.generated', role='assistant', text=''.join(text),
+                    turn_id=turn_id, input_epoch=epoch, finish_reason=finish_reason,
+                    delivery=delivery, content_kind='tool_preamble' if called else 'reply_candidate')
+                generation_recorded = True
         try:
             async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
                 value = getattr(chunk, 'usage', None)
@@ -190,6 +200,7 @@ class ContentAgent(Agent):
                         yield chunk.model_copy(update={'delta': delta.model_copy(update={'content': None})})
                 if sum(map(len, text)) > 1200:
                     raise DraftValidationError('text_limit')
+            record_generation('generated_unplayed')
             intent.update(state='completed', usage=usage)
             if not called and not (handle and handle.interrupted):
                 draft = ''.join(text).strip()
@@ -210,11 +221,13 @@ class ContentAgent(Agent):
                     raise DraftValidationError('token_limit')
                 owner.accept_draft(draft, owner.last_input, epoch)
         except asyncio.CancelledError:
+            record_generation('cancelled_unplayed')
             intent.update(state='cancelled_unknown', usage=usage)
             raise
         except StopResponse:
             raise
         except Exception as error:
+            record_generation('failed_unplayed')
             intent.update(state='outcome_unknown', error_type=type(error).__name__,
                           failure_code=error.reason if isinstance(error, DraftValidationError) else None)
             owner._emit({'type': 'turn.error', 'code': 'draft_failed', 'error_type': type(error).__name__})
@@ -234,6 +247,7 @@ class DrainVoiceSession(VoiceSession):
         if cfg.test_keep_open:
             options.update(automatic_idle_seconds=None, automatic_max_turns=None)
         super().__init__(cfg, send, **options)
+        self.recording_source = 'livekit-drain'
         # Two content caches plus one transient status prompt: at most three
         # 12-second units across the session, rather than three per original.
         async def play_main(*args):
@@ -248,6 +262,7 @@ class DrainVoiceSession(VoiceSession):
         self.notice_lock = asyncio.Lock()
         self.spoken_history, self.spoken_prefixes = [], {}
         self.spoken_anchors, self.unit_anchors, self.current_turn_id = {}, {}, None
+        self._recorded_content_ids = set()
 
     def main_available(self):
         plan = self.main.snapshot
@@ -271,6 +286,12 @@ class DrainVoiceSession(VoiceSession):
         if event['type'] == 'content.state' and hasattr(self, 'spoken_history'):
             name = event['task_id'].split(':', 1)[0]
             plan = getattr(self, name).snapshot
+            if plan and event['task_id'] not in self._recorded_content_ids:
+                self.record_text('assistant.content', role='assistant', text=''.join(plan['units']),
+                    content_id=plan['task_id'], revision=plan['revision'], source=name,
+                    content_kind=plan['kind'], delivery='prepared', turn_id=self.current_turn_id,
+                    input_epoch=self.user_epoch)
+                self._recorded_content_ids.add(event['task_id'])
             prefix = self.spoken_prefixes.get(event['task_id'], 0)
             if plan and plan['next'] > prefix:
                 for index in range(prefix, plan['next']):
@@ -282,6 +303,7 @@ class DrainVoiceSession(VoiceSession):
             retained = {item.id for item in self.spoken_history}
             self.spoken_anchors = {key: value for key, value in self.spoken_anchors.items() if key in retained}
             active = {p['task_id'] for c in (self.main, self.side) if (p := c.snapshot)}
+            self._recorded_content_ids.intersection_update(active)
             self.unit_anchors = {key: value for key, value in self.unit_anchors.items() if key[0] in active}
             self.spoken_prefixes = {key: value for key, value in self.spoken_prefixes.items() if key in active}
             if event['state'] == 'failed':
@@ -334,17 +356,34 @@ class DrainVoiceSession(VoiceSession):
             await stream.aclose()
         return bytes(pcm)
 
-    async def play_content(self, revision, index, text, pcm, settle, *, task_name=None):
+    async def play_content(self, revision, index, text, pcm, settle, *, task_name=None, unit_id=None):
         if self.closed or self.sleeping:
             settle(False)
             return
         if task_name:
             self.unit_anchors[(f'{task_name}:{revision}', index)] = self.current_turn_id
+        unit_id = unit_id or uuid.uuid4().hex
+        turn_id, input_epoch = self.current_turn_id, self.user_epoch
+        played_recorded, unknown_recorded = False, False
+        def observed(complete):
+            nonlocal played_recorded, unknown_recorded
+            complete = complete is True
+            if (complete and not played_recorded) or (not complete and not played_recorded and not unknown_recorded):
+                self.record_text('assistant.played' if complete else 'assistant.delivery_unknown',
+                    role='assistant', text=text, unit_id=unit_id, turn_id=turn_id, input_epoch=input_epoch,
+                    content_id=f'{task_name}:{revision}' if task_name else None, revision=revision,
+                    unit_index=index, source=task_name or 'notice',
+                    delivery='confirmed' if complete else 'not_fully_confirmed')
+                if complete:
+                    played_recorded = True
+                else:
+                    unknown_recorded = True
+            settle(complete)
         dispatched = False
         try:
             async with self.play_lock:
                 dispatched = True
-                await play_content_unit(self.session, self.output, revision, index, text, pcm, settle,
+                await play_content_unit(self.session, self.output, revision, index, text, pcm, observed,
                                         task_id=f'{task_name}:{revision}' if task_name else None)
         finally:
             if not dispatched:
@@ -384,10 +423,13 @@ class DrainVoiceSession(VoiceSession):
     def _notice(self, text):
         # A status prompt must not overwrite either resumable original.
         epoch = self.user_epoch
+        unit_id = uuid.uuid4().hex
+        self.record_text('assistant.notice', role='assistant', text=text, unit_id=unit_id,
+            input_epoch=epoch, turn_id=self.current_turn_id, source='notice', delivery='prepared')
         async def speak():
             pcm = await self.prepare_content(text)
             if epoch == self.user_epoch and not self.closed and not self.sleeping:
-                await self.play_content(0, 0, text, pcm, lambda complete: None)
+                await self.play_content(0, 0, text, pcm, lambda complete: None, unit_id=unit_id)
         async def current():
             async with self.notice_lock:
                 if epoch == self.user_epoch:

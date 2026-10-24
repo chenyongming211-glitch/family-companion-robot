@@ -16,6 +16,7 @@ class Settings:
     client_token: str = field(default='', repr=False)
     audit_dir: Path = Path('/var/lib/family-robot-livekit-dev/audit')
     test_keep_open: bool = False
+    text_record_dir: Path | None = None
 
     @classmethod
     def from_env(cls, env):
@@ -39,7 +40,10 @@ class Settings:
             client_token=env.get('VOICE_CLIENT_TOKEN', ''),
             audit_dir=Path(env.get('VOICE_AUDIT_DIR', '/var/lib/family-robot-livekit-dev/audit')),
             test_keep_open=env.get('VOICE_TEST_KEEP_OPEN', '0') == '1',
+            text_record_dir=Path(env['VOICE_TEXT_RECORD_DIR']) if env.get('VOICE_TEXT_RECORD_DIR') else None,
         )
+        if cfg.text_record_dir is not None and not cfg.text_record_dir.is_absolute():
+            raise ValueError('VOICE_TEXT_RECORD_DIR must be absolute')
         for url, secure, local in ((cfg.asr_url, 'wss', 'ws'), (cfg.tts_url, 'wss', 'ws'), (cfg.llm_url, 'https', 'http')):
             u = urlsplit(url)
             if u.username or u.password or not u.hostname or not (u.scheme == secure or (u.scheme == local and u.hostname in ('127.0.0.1', '::1', 'localhost'))):

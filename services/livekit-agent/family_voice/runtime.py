@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from weakref import WeakKeyDictionary
 from dataclasses import asdict, is_dataclass
 
@@ -132,6 +133,10 @@ class VoiceSession:
         self.closed = False
         self.commit_job = None
         self.counting = self.make_counting() if automatic else None
+        self.conversation = None
+        self._recording_failure_reported = False
+        self._recording_failure_job = None
+        self.recording_source = 'livekit-continuous' if automatic else 'livekit-manual'
 
     def make_session(self, **options):
         return AgentSession(**options)
@@ -210,7 +215,35 @@ class VoiceSession:
                 future.exception()
         job.add_done_callback(done)
 
+    def record_text(self, kind, **fields):
+        if self.conversation:
+            return self.conversation.append(kind, **fields)
+        return False
+
+    def _recording_failed(self):
+        if self._recording_failure_reported:
+            return
+        self._recording_failure_reported = True
+        logging.getLogger('family_voice.text_recording_failed').error('text_recording_failed')
+        self.sleeping = True
+        self.input.close()
+        if self.counting:
+            self.counting.pause()
+        if not self.closed:
+            # The termination signal must bypass the ordinary event quota:
+            # a recording failure cannot leave an unrecorded session running.
+            self._recording_failure_job = asyncio.create_task(asyncio.wait_for(
+                self.send({'type': 'error', 'code': 'text_recording_failed'}), .25))
+            def reported(job):
+                if not job.cancelled():
+                    job.exception()
+            self._recording_failure_job.add_done_callback(reported)
+
     async def start(self):
+        if self.cfg.text_record_dir is not None:
+            from .conversation_log import ConversationLog
+            self.conversation = await ConversationLog.open(self.cfg.text_record_dir,
+                source=self.recording_source, on_failure=self._recording_failed)
         if self.automatic:
             @self.session.on('user_state_changed')
             def user_state(event):
@@ -233,10 +266,14 @@ class VoiceSession:
                 self._emit({'type': 'agent.state', 'state': event.new_state})
         @self.session.on('user_input_transcribed')
         def transcribed(event):
+            if event.is_final and event.transcript:
+                self.record_text('user.transcript', role='user', text=event.transcript, input_epoch=self.user_epoch)
             self._emit({'type': 'transcript', 'text': event.transcript, 'final': event.is_final})
         @self.session.on('conversation_item_added')
         def item_added(event):
             if getattr(event.item, 'role', None) == 'assistant':
+                self.record_text('assistant.generated', role='assistant', text=event.item.text_content,
+                    turn_id=event.item.id, input_epoch=self.user_epoch, delivery='sdk_generated')
                 self._emit({'type': 'reply', 'text': event.item.text_content, 'interrupted': getattr(event.item, 'interrupted', False)})
         @self.session.on('error')
         def error(event):
@@ -313,20 +350,28 @@ class VoiceSession:
         if self.closed:
             return
         self.closed = True
-        if self.counting:
-            await self.counting.close()
-        if self.speech_timer:
-            self.speech_timer.cancel()
-            await asyncio.gather(self.speech_timer, return_exceptions=True)
-        self.input.close()
-        await self.output.aclose()
         try:
-            await asyncio.wait_for(self.session.aclose(), 3)
+            if self.counting:
+                await self.counting.close()
+            if self.speech_timer:
+                self.speech_timer.cancel()
+                await asyncio.gather(self.speech_timer, return_exceptions=True)
+            self.input.close()
+            await self.output.aclose()
+            try:
+                await asyncio.wait_for(self.session.aclose(), 3)
+            finally:
+                for job in tuple(self.jobs):
+                    job.cancel()
+                await asyncio.gather(*self.jobs, return_exceptions=True)
+                if self.automatic:
+                    await self.recognizer.aclose()
+                for provider in self.providers[:3]:
+                    await provider.aclose()
         finally:
-            for job in tuple(self.jobs):
-                job.cancel()
-            await asyncio.gather(*self.jobs, return_exceptions=True)
-            if self.automatic:
-                await self.recognizer.aclose()
-            for provider in self.providers[:3]:
-                await provider.aclose()
+            try:
+                if self.conversation:
+                    await self.conversation.close()
+            finally:
+                if self._recording_failure_job:
+                    await asyncio.gather(self._recording_failure_job, return_exceptions=True)

@@ -22,6 +22,7 @@ final class VoiceClient: @unchecked Sendable {
     private var fixture: FixtureInput?
     private var inputFrames = 0, inputSamples = 0, inputWindowSamples = 0, inputPeak = 0
     private var inputEnergy = 0.0, inputLoggedAt = ProcessInfo.processInfo.systemUptime
+    private var textRecording = false
 
     init(url: URL, ticket: String, fixturePaths: [String] = [], pairOnStart: Bool = false, keepOpen: Bool = false) {
         self.url = url; self.ticket = ticket; self.fixturePaths = fixturePaths
@@ -129,9 +130,10 @@ final class VoiceClient: @unchecked Sendable {
                 if keepOpen && e["manual_close"] as? Bool != true { throw ClientFailure("keep_open_unavailable") }
                 try audio.start(microphone: microphone)
                 ready = true
+                textRecording = e["text_recording"] as? Bool == true
                 audio.onPCM = { [weak self] in self?.input($0) }
                 if microphone {
-                    status?(keepOpen ? "对话中 · 可持续测试，结束时关闭窗口" : "对话中 · 连续收音")
+                    status?(textRecording ? "对话中 · 已开启文字记录" : (keepOpen ? "对话中 · 可持续测试，结束时关闭窗口" : "对话中 · 连续收音"))
                 } else {
                     let fixture = try FixtureInput(paths: fixturePaths, queue: queue, player: player)
                     self.fixture = fixture
@@ -140,8 +142,12 @@ final class VoiceClient: @unchecked Sendable {
                     fixture.start()
                 }
                 metadata("session.ready", ["microphone": microphone])
+                if textRecording, let id = e["conversation_id"] as? String,
+                   id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
+                    metadata("session.text_recording", ["enabled": true, "conversation_id": id])
+                }
             } else {
-                if type == "error" { throw ClientFailure("server_error") }
+                if type == "error" { throw ClientFailure(e["code"] as? String == "text_recording_failed" ? "text_recording_failed" : "server_error") }
                 guard ready, let player else { throw ClientFailure("event_before_ready") }
                 try player.event(e)
                 try fixture?.event(e)
@@ -151,7 +157,7 @@ final class VoiceClient: @unchecked Sendable {
                     return
                 }
                 if type == "content.state" {
-                    if e["state"] as? String == "playing", microphone { status?("对话中 · 可以继续说话或插话") }
+                    if e["state"] as? String == "playing", microphone { status?(textRecording ? "对话中 · 正在记录文字，可直接插话" : "对话中 · 可以继续说话或插话") }
                     let safe = ["task_id", "revision", "kind", "total", "confirmed_count", "next", "state"]
                     metadata("content.state", Dictionary(uniqueKeysWithValues: safe.compactMap { key in e[key].map { (key, $0) } }))
                 } else if type == "content.action" {
@@ -224,7 +230,8 @@ final class VoiceClient: @unchecked Sendable {
     func stop() { queue.async { self.stopInternal(success: true) } }
     private func fail(_ code: String) {
         guard !closed else { return }
-        metadata("session.failure", ["code": code]); status?("连接结束：" + code)
+        metadata("session.failure", ["code": code])
+        status?(code == "text_recording_failed" ? "文字记录保存失败，本次对话已停止" : "连接结束：" + code)
         stopInternal(success: false)
     }
     private func stopInternal(success: Bool) {

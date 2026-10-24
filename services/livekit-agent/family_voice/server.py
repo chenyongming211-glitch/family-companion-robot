@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hmac
+import logging
 import os
 
 from aiohttp import web, WSMsgType
@@ -10,6 +11,7 @@ from .runtime import VoiceSession
 from .logging_safe import configure_logging
 from .browser import SESSION_SECONDS, install_browser
 from .cloud import Intent
+from .conversation_log import ConversationLogError
 
 
 STATE = web.AppKey('voice_state', dict)
@@ -23,7 +25,7 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
     browser_authorize = install_browser(app, cfg)
 
     async def health(request):
-        return web.json_response({'status': 'ok', 'active_sessions': int(app[STATE]['active']), 'engine': 'livekit-chain', 'input_rate': 16000, 'output_rate': 24000, 'recording': False})
+        return web.json_response({'status': 'ok', 'active_sessions': int(app[STATE]['active']), 'engine': 'livekit-chain', 'input_rate': 16000, 'output_rate': 24000, 'recording': False, 'text_recording': cfg.text_record_dir is not None})
 
     async def audio(request):
         if request.path == '/v1/browser/audio':
@@ -46,12 +48,32 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
         try:
             await ws.prepare(request)
             opening, startup_events = True, []
+            async def terminate_recording(event):
+                nonlocal reason
+                reason = 'text_recording_failed'
+                try:
+                    await asyncio.wait_for(ws.send_json(event), .2)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        await asyncio.wait_for(ws.close(code=1011), .25)
+                    except Exception:
+                        pass
+                    finally:
+                        # Even cancellation of a blocked error write must end
+                        # this failed recording connection and its audio input.
+                        if request.transport:
+                            request.transport.close()
             async def send(event):
                 nonlocal input_id, reason
                 if opening and event['type'] != 'ready':
                     if len(startup_events) >= 32:
                         raise BufferError('startup event limit')
                     startup_events.append(event)
+                    return
+                if event['type'] == 'error' and event.get('code') == 'text_recording_failed':
+                    await terminate_recording(event)
                     return
                 try:
                     await asyncio.wait_for(ws.send_json(event), .25)
@@ -69,9 +91,12 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
             else:
                 voice = session_factory(cfg, send, automatic=True) if automatic else session_factory(cfg, send)
             await voice.start()
+            conversation = getattr(voice, 'conversation', None)
             audit = Intent(cfg, 'client_session')
             await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': lifetime, 'max_turns': None if keep_open else 8, 'mode': mode,
                         'manual_close': keep_open,
+                        'text_recording': conversation is not None,
+                        'conversation_id': conversation.id if conversation else None,
                         **({'capabilities': ['drain', 'staging', 'content_checkpoint']} if mode == 'drain' else {})})
             opening = False
             for event in startup_events:
@@ -146,6 +171,10 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
                         voice.receipt(event)
                     else:
                         raise ValueError('invalid command')
+        except ConversationLogError as error:
+            reason, error_type = 'text_recording_failed', type(error).__name__
+            if not ws.closed:
+                await terminate_recording({'type': 'error', 'code': reason, 'stage': phase, 'error_type': error_type})
         except (ValueError, KeyError, TypeError, BufferError) as error:
             reason, error_type = 'invalid_input', type(error).__name__
             if not ws.closed:
@@ -172,12 +201,26 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
                 await asyncio.gather(*(job for job in (commit_job, cancel_job) if job), return_exceptions=True)
                 if voice:
                     await voice.close()
+            except ConversationLogError:
+                reason, error_type = 'text_recording_failed', 'ConversationLogError'
+                reporter = getattr(voice, '_recording_failed', None)
+                if reporter:
+                    reporter()
+                else:
+                    logging.getLogger('family_voice.text_recording_failed').error('text_recording_failed')
+                if audit:
+                    try:
+                        audit.update(state=reason, error_type=error_type)
+                    except OSError:
+                        pass
+                if not ws.closed:
+                    await terminate_recording({'type': 'error', 'code': reason, 'stage': 'closing'})
             except Exception:
                 pass
             finally:
                 app[STATE]['active'] = False
                 if ws.prepared:
-                    await ws.close()
+                    await ws.close(code=1011 if reason == 'text_recording_failed' else 1000)
         return ws
 
     app.router.add_get('/healthz', health)
