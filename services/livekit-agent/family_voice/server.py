@@ -62,7 +62,8 @@ def create_app(cfg, *, session_factory=VoiceSession):
                         await send({'type': 'input.ready', 'input_id': input_id})
                     elif kind in ('input.audio', 'input.end'):
                         if not accepting or type(event.get('input_id')) is not int or event['input_id'] != input_id:
-                            raise ValueError('invalid input identity')
+                            await send({'type': 'error', 'code': 'invalid_input'})
+                            continue
                         if kind == 'input.audio':
                             pcm = base64.b64decode(event['data'], validate=True)
                             input_samples += len(pcm) // 2
@@ -77,6 +78,7 @@ def create_app(cfg, *, session_factory=VoiceSession):
                                     asyncio.create_task(send({'type': 'error', 'code': 'commit_failed', 'error_type': type(job.exception()).__name__}))
                             commit_job.add_done_callback(committed)
                     elif kind == 'cancel':
+                        accepting = False
                         if cancel_job and not cancel_job.done():
                             continue
                         async def cancel():

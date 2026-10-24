@@ -13,6 +13,7 @@ class TestVoice:
     def __init__(self, cfg, send):
         self.send = send
         self.frames = 0
+        self.commits = 0
     async def start(self):
         pass
     async def begin_input(self):
@@ -20,9 +21,10 @@ class TestVoice:
     def feed(self, pcm):
         self.frames += len(pcm) // 2
     async def commit(self):
+        self.commits += 1
         await self.send({'type': 'committed'})
     async def interrupt(self):
-        await self.send({'type': 'cancelled'})
+        pass
     def receipt(self, event):
         return False
     async def close(self):
@@ -32,7 +34,12 @@ class TestVoice:
 class ServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         cfg = Settings.from_env({'DASHSCOPE_API_KEY': 'synthetic-key', 'VOICE_CLIENT_TOKEN': 'synthetic-token'})
-        self.client = TestClient(TestServer(create_app(cfg, session_factory=TestVoice)))
+        self.voices = []
+        def factory(cfg, send):
+            voice = TestVoice(cfg, send)
+            self.voices.append(voice)
+            return voice
+        self.client = TestClient(TestServer(create_app(cfg, session_factory=factory)))
         await self.client.start_server()
 
     async def asyncTearDown(self):
@@ -95,6 +102,28 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             await ws.close()
         finally:
             TestVoice.commit = original
+
+    async def test_cancel_retires_old_input_and_next_start_still_works(self):
+        ws = await self.client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
+        await ws.receive_json()
+        await ws.send_json({'type': 'input.start'})
+        first = (await ws.receive_json())['input_id']
+        packet = {'type': 'input.audio', 'input_id': first, 'data': base64.b64encode(b'\0' * 640).decode()}
+        await ws.send_json(packet)
+        await ws.send_json({'type': 'cancel'})
+        self.assertEqual((await ws.receive_json())['type'], 'cancelled')
+        await ws.send_json(packet)
+        self.assertEqual((await asyncio.wait_for(ws.receive_json(), .5))['code'], 'invalid_input')
+        await ws.send_json({'type': 'input.end', 'input_id': first})
+        self.assertEqual((await asyncio.wait_for(ws.receive_json(), .5))['code'], 'invalid_input')
+        self.assertEqual(self.voices[0].commits, 0)
+        await ws.send_json({'type': 'input.start'})
+        second = (await ws.receive_json())['input_id']
+        self.assertGreater(second, first)
+        await ws.send_json({**packet, 'input_id': second})
+        await ws.send_json({'type': 'input.end', 'input_id': second})
+        self.assertEqual((await asyncio.wait_for(ws.receive_json(), .5))['type'], 'committed')
+        await ws.close()
 
 
 if __name__ == '__main__':

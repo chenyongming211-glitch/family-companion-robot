@@ -17,6 +17,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.hold_final = False
         self.final_requested = asyncio.Event()
         self.release_final = asyncio.Event()
+        self.old_asr_closed = asyncio.Event()
+        self.asr_count = 0
         app = web.Application()
         app.router.add_get('/asr', self.asr)
         app.router.add_get('/tts', self.tts)
@@ -40,6 +42,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def asr(self, request):
+        self.asr_count += 1
+        number = self.asr_count
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         task = (await ws.receive_json())['header']['task_id']
@@ -47,8 +51,17 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         async for message in ws:
             if message.type == web.WSMsgType.TEXT:
                 self.final_requested.set()
-                if self.hold_final:
-                    await self.release_final.wait()
+                if self.hold_final and number == 1:
+                    closed = asyncio.create_task(ws.receive())
+                    released = asyncio.create_task(self.release_final.wait())
+                    done, pending = await asyncio.wait((closed, released), return_when=asyncio.FIRST_COMPLETED)
+                    for job in pending:
+                        job.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    if closed in done:
+                        self.old_asr_closed.set()
+                        await ws.close()
+                        return ws
                 await ws.send_json({'header': {'event': 'result-generated', 'task_id': task}, 'payload': {'output': {'sentence': {'text': '一加一等于几？', 'sentence_end': True}}}})
                 await ws.send_json({'header': {'event': 'task-finished', 'task_id': task}})
                 break
@@ -105,6 +118,16 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.fail(f'ASR finish not reached; audit={details}; commit_done={commit.done()}')
             await self.voice.interrupt()
             self.assertTrue(commit.cancelled(), 'cancel must retire the pending input commit')
+            await asyncio.wait_for(self.old_asr_closed.wait(), .5)
+            # The first provider terminal is never released. A fresh turn must
+            # still reach ASR/LLM/TTS on the same AgentSession.
+            await self.voice.begin_input()
+            self.voice.feed(b'\0' * 640)
+            await asyncio.wait_for(self.voice.commit(), 3)
+            async with asyncio.timeout(3):
+                while not any(e['type'] == 'reply' for e in self.events):
+                    await asyncio.sleep(.01)
+            self.assertTrue(any(e['type'] == 'reply' and '2' in e['text'] for e in self.events))
         finally:
             self.release_final.set()
             if not commit.done():

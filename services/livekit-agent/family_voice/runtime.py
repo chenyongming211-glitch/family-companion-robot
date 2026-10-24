@@ -121,12 +121,13 @@ class VoiceSession:
                 self.commit_job = None
 
     async def interrupt(self):
+        self.input.discard()
         pending = self.commit_job
         if pending and pending is not asyncio.current_task() and not pending.done():
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
-        self.providers[0].begin_turn()
         self.session.clear_user_turn()
+        self.providers[0].begin_turn()
         await asyncio.wait_for(self.session.interrupt(), 1)
 
     def receipt(self, event):
