@@ -4,9 +4,51 @@ import re
 import unittest
 
 from family_voice.content import ContentController, split_sentences
+try:
+    from family_voice.content import split_playback_units
+except ImportError:
+    split_playback_units = None
 
 
 class SplitTests(unittest.TestCase):
+    def test_spoken_clauses_preserve_full_original_and_bound_first_audio_unit(self):
+        self.assertIsNotNone(split_playback_units, 'spoken-unit splitter is missing')
+        text = '这个海洋观测站建于2026年，位于北纬32度和东经120度，平时记录温度盐度和洋流变化，遇到台风时会把最新数据发回岸上的研究中心。'
+        units = split_playback_units(text)
+        self.assertEqual(''.join(units), text)
+        self.assertGreater(len(units), 1)
+        self.assertLessEqual(len(units[0]), 24)
+        self.assertTrue(units[0].endswith('，'))
+        self.assertTrue(all(len(unit) <= 24 for unit in units))
+        for value in ('2026', '32', '120'):
+            self.assertTrue(any(value in unit for unit in units))
+
+    def test_playback_split_keeps_decimal_version_and_url_tokens(self):
+        self.assertIsNotNone(split_playback_units)
+        text = '圆周率约3.1415926，这是合成测试。See v1.2.3 at https://example.com/a then stop.'
+        units = split_playback_units(text)
+        self.assertEqual(''.join(units), text)
+        for token in ('3.1415926', 'v1.2.3', 'https://example.com/a'):
+            self.assertTrue(any(token in unit for unit in units), token)
+
+    def test_playback_split_preserves_maximum_size_original(self):
+        self.assertIsNotNone(split_playback_units)
+        text = '前' * 1198 + '尾。'
+        units = split_playback_units(text)
+        self.assertEqual(''.join(units), text)
+        self.assertLessEqual(len(units), 128)
+        self.assertTrue(all(len(unit) <= 24 for unit in units))
+
+    def test_playback_boundary_never_leaves_punctuation_only_unit(self):
+        self.assertIsNotNone(split_playback_units)
+        for length in (24, 48, 72):
+            for ending in ('。', '。”', '！』'):
+                text = '甲' * length + ending
+                with self.subTest(length=length, ending=ending):
+                    units = split_playback_units(text)
+                    self.assertEqual(''.join(units), text)
+                    self.assertTrue(all(any(c.isalnum() for c in unit) for unit in units))
+
     def test_chinese_and_english_sentences_preserve_normalized_original(self):
         text = '  第一段。\n第二段！ “Hello, world.”  Is this safe? Yes; end  '
         units = split_sentences(text)
@@ -111,6 +153,7 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: controller.snapshot['state'] == 'paused')
         self.assertEqual(controller.snapshot['confirmed_count'], 1)
         self.assertEqual(controller.snapshot['next'], 1)
+
         controller.resume()
         await self.until(lambda: len(gates.plays) == 3)
         self.assertEqual([p[1] for p in gates.played], [0, 1, 1])
@@ -122,6 +165,40 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         initial['next'] = 100
         self.assertEqual(controller.snapshot['units'][0], '零。')
         self.assertEqual(controller.snapshot['next'], 1)
+
+    async def test_lookahead_failure_preserves_current_playback_and_its_confirmation(self):
+        gates = Gates()
+        controller = self.controller(gates.prepare, gates.play, prefetch=2)
+        await self.ready(gates, controller, '第一句。第二句。')
+        await self.until(lambda: '第二句。' in gates.prepares)
+        gates.prepares['第二句。'].set_exception(ValueError('synthetic future TTS failure'))
+        await self.ticks()
+        self.assertEqual(controller.snapshot['state'], 'playing')
+        self.assertEqual(gates.cancelled_plays, [])
+        gates.finish(0, True)
+        await self.until(lambda: controller.snapshot['state'] == 'failed')
+        self.assertEqual(controller.snapshot['confirmed_count'], 1)
+
+    async def test_late_full_drain_exposes_failed_next_unit_for_one_explicit_retry(self):
+        gates = Gates()
+        controller = self.controller(gates.prepare, gates.play, prefetch=2)
+        await self.ready(gates, controller, '第一句。第二句。')
+        await self.until(lambda: '第二句。' in gates.prepares)
+        gates.prepares['第二句。'].set_exception(ValueError('synthetic future TTS failure'))
+        await self.ticks()
+        controller.pause()
+        await self.until(lambda: gates.cancelled_plays == [0])
+        gates.settlers[0](True)
+        self.assertEqual(controller.snapshot['confirmed_count'], 1)
+        self.assertEqual(controller.snapshot['state'], 'failed')
+        controller.retry()
+        await self.until(lambda: gates.prepared.count('第二句。') == 2)
+        gates.prepares['第二句。'].set_result(b'\2\0')
+        await self.until(lambda: len(gates.plays) == 2)
+        gates.finish(1, True)
+        await self.until(lambda: controller.snapshot['state'] == 'completed')
+        self.assertEqual(gates.prepared.count('第一句。'), 1)
+        self.assertEqual([p[1] for p in gates.played], [0, 1])
 
     async def test_late_full_drain_after_sdk_cancel_advances_and_resume_uses_next(self):
         gates = Gates()

@@ -11,7 +11,7 @@ from livekit import rtc
 from livekit.agents import Agent, ModelSettings, RunContext, StopResponse, function_tool, llm
 
 from .cloud import Cloud, Intent, numeric_usage
-from .content import ContentController, split_sentences
+from .content import ContentController, split_sentences, split_playback_units
 from .conversation_memory import ConversationMemory
 from .dialogue_turn import DialogueTurn
 from .drain_output import DrainOutput
@@ -256,6 +256,10 @@ class ContentAgent(Agent):
             chat_ctx.items.insert(last_user, historical)
         owner.turn_policy.rounds += 1
         allowed = owner.turn_policy.allowed({tool.info.name for tool in tools}, owner.playback_key())
+        # A fresh snapshot is attached below on every model round. Asking for
+        # that same state again adds a full LLM round without new information.
+        # Keep the callable for compatibility, but do not offer it to models.
+        allowed.discard('query_content')
         tools = [tool for tool in tools if tool.info.name in allowed]
         chat_ctx.add_message(role='system', content='当前任务事实，只读数据，未播稿不能当作已说完：' + json.dumps(owner.content_snapshot(), ensure_ascii=False))
         intent = Intent(owner.cfg, 'llm')
@@ -341,17 +345,18 @@ class DrainVoiceSession(VoiceSession):
             options.update(automatic_idle_seconds=None, automatic_max_turns=None)
         super().__init__(cfg, send, **options)
         self.recording_source = 'livekit-drain'
-        # Three 12-second content/dialogue units and one 6-second optional
-        # lookup notice bound the session's prepared PCM.
+        # Each content/dialogue slot prepares two short units, so the next
+        # clause can synthesize during playback. Six 12-second units plus one
+        # 6-second optional notice remain a fixed session PCM bound.
         async def play_main(*args):
             await self.play_content(*args, task_name='main')
         async def play_side(*args):
             await self.play_content(*args, task_name='side')
-        self.main = ContentController(self.prepare_content, play_main, self._emit, 'main', prefetch=1)
-        self.side = ContentController(self.prepare_content, play_side, self._emit, 'side', prefetch=1)
+        self.main = ContentController(self.prepare_content, play_main, self._emit, 'main', prefetch=2, splitter=split_playback_units)
+        self.side = ContentController(self.prepare_content, play_side, self._emit, 'side', prefetch=2, splitter=split_playback_units)
         async def play_dialogue(*args):
             await self.play_content(*args, task_name='dialogue')
-        self.dialogue = ContentController(self.prepare_content, play_dialogue, self._emit, 'dialogue', prefetch=1)
+        self.dialogue = ContentController(self.prepare_content, play_dialogue, self._emit, 'dialogue', prefetch=2, splitter=split_playback_units)
         async def play_progress(*args):
             await self.play_content(*args, task_name='progress')
         self.progress = ContentController(self.prepare_progress, play_progress, self._emit, 'progress', prefetch=1)
@@ -504,7 +509,7 @@ class DrainVoiceSession(VoiceSession):
         try:
             async for chunk in stream:
                 if len(pcm) + len(chunk) > 24000 * 2 * max_seconds:
-                    raise ValueError('content audio exceeds 12 seconds')
+                    raise ValueError(f'content audio exceeds {max_seconds} seconds')
                 pcm.extend(chunk)
         finally:
             await stream.aclose()

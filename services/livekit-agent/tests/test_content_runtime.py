@@ -202,7 +202,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tts_texts, [])
         self.assertFalse(any(e['type'] == 'audio' for e in self.events))
 
-    async def test_repeated_position_query_is_removed_and_model_completes_answer(self):
+    async def test_current_snapshot_avoids_redundant_position_query_round(self):
         await self.start()
         self.query_until_hidden = True
         self.answers = ['刚才讲到小狐狸走进森林。']
@@ -212,9 +212,52 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events)
                          or self.answers[0] in self.tts_texts)
         self.assertIn(self.answers[0], self.tts_texts)
-        self.assertEqual(len(self.llm_calls), 2)
-        self.assertEqual(sum(e['type'] == 'content.action' and e['action'] == 'query' for e in self.events), 1)
+        self.assertEqual(len(self.llm_calls), 1)
+        self.assertEqual(sum(e['type'] == 'content.action' and e['action'] == 'query' for e in self.events), 0)
         self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+
+    async def test_long_numerical_reply_is_split_before_tts_duration_guard(self):
+        await self.start()
+        text = '这个海洋观测站建于2026年，位于北纬32度和东经120度，平时记录温度盐度和洋流变化，遇到台风时会把最新数据发回岸上的研究中心。'
+        self.answers = [text]
+        async def bounded(text):
+            # Controlled speech duration reproduces the 12-second rejection
+            # without retaining the user's private failed reply as a fixture.
+            if len(text) > 60:
+                raise ValueError('content audio exceeds 12 seconds')
+            return b'\1\0' * 480
+        self.voice.main._prepare = bounded
+        self.voice.side._prepare = bounded
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events)
+                         or self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+        plan = self.voice.main.snapshot
+        self.assertEqual(''.join(plan['units']), text)
+        self.assertEqual(plan['next'], len(plan['units']))
+
+    async def test_next_clause_prepares_while_first_clause_playback_is_pending(self):
+        await self.start()
+        entered = []
+        async def prepare(text):
+            entered.append(text)
+            return b'\1\0' * 480
+        self.voice.main._prepare = prepare
+        self.hold_playout = True
+        self.voice.main.start('第一句还在播放。下一句应该准备好。')
+        await self.until(lambda: any(e['type'] == 'audio' for e in self.events))
+        await asyncio.sleep(.05)
+        self.assertEqual(entered, ['第一句还在播放。', '下一句应该准备好。'])
+
+    async def test_prefetch_cannot_fail_reply_on_a_punctuation_only_tail(self):
+        await self.start()
+        text = '甲' * 24 + '。'
+        self.answers = [text]
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events)
+                         or self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+        self.assertEqual(''.join(self.voice.main.snapshot['units']), text)
 
     async def test_model_replaces_topic_and_body_in_one_call(self):
         await self.start()

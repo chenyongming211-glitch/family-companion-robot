@@ -76,6 +76,52 @@ def split_sentences(text: str) -> list[str]:
     return units
 
 
+def split_playback_units(text: str) -> list[str]:
+    """Freeze shorter speech units without dropping text or splitting tokens.
+
+    Sentence admission keeps its existing limits. Commas and other natural
+    clause boundaries are preferred; a long unpunctuated phrase is bounded as
+    before. Numbers, English words and URLs stay together when possible.
+    """
+    units = []
+    for sentence in split_sentences(text):
+        while len(sentence) > 24:
+            tokens = list(re.finditer(r'https?://\S+|[A-Za-z0-9]+(?:[./:@?&=%+#_-][A-Za-z0-9]+)*', sentence))
+            def inside_token(position):
+                return next((t for t in tokens if t.start() < position < t.end()), None)
+            boundaries = [i + 1 for i, c in enumerate(sentence[:24])
+                          if i >= 7 and c in '，,：:、' and inside_token(i + 1) is None]
+            cut = boundaries[-1] if boundaries else sentence.rfind(' ', 0, 25) + 1
+            if cut <= 0:
+                cut = 24
+                token = inside_token(cut)
+                if token:
+                    cut = token.start() or token.end()
+            units.append(sentence[:cut])
+            sentence = sentence[cut:]
+        if sentence:
+            units.append(sentence)
+    # A boundary can leave punctuation or closing quotes on their own. Such
+    # text cannot be synthesized, and eager preparation must never turn it
+    # into a failure that cancels the preceding spoken clause.
+    spoken, prefix = [], ''
+    for unit in units:
+        if any(c.isalnum() for c in unit):
+            spoken.append(prefix + unit)
+            prefix = ''
+        elif spoken:
+            spoken[-1] += unit
+        else:
+            prefix += unit
+    if prefix:
+        raise ValueError('content has no speakable words')
+    # Up to 40 admitted sentences/80-char pieces can have short tails after
+    # clause splitting. This count bounds metadata, independently of PCM.
+    if len(spoken) > 192:
+        raise ValueError('content must contain at most 192 playback units')
+    return spoken
+
+
 @dataclass
 class _Receipt:
     revision: int
@@ -96,12 +142,14 @@ class ContentController:
         emit: Callable[[dict], None],
         name: str = 'main',
         prefetch: int = 3,
+        splitter: Callable[[str], list[str]] = split_sentences,
     ):
         if type(prefetch) is not int or not 1 <= prefetch <= 3:
             raise ValueError('prefetch must be between 1 and 3')
         if not isinstance(name, str) or not name:
             raise ValueError('content name must be nonempty text')
         self._prepare, self._play, self._emit = prepare, play, emit
+        self._splitter = splitter
         self._name, self._prefetch = name, prefetch
         self._plan: dict | None = None
         self._revision = self._generation = 0
@@ -123,7 +171,7 @@ class ContentController:
     def start(self, text: str, original_input: str = '', kind: str = 'reply') -> None:
         if self._closed:
             raise RuntimeError('content controller is closed')
-        units = split_sentences(text)
+        units = self._splitter(text)
         if not units:
             raise ValueError('content must not be empty')
         self._invalidate()
@@ -279,7 +327,11 @@ class ContentController:
     def _preparation_done(self, task: asyncio.Task, revision: int, index: int) -> None:
         if task.cancelled() or not self._valid(revision) or self._prepared.get(index) is not task:
             return
-        if task.exception() is not None:
+        # Lookahead failure must not cancel the current unit's independent
+        # playback. The worker observes the saved exception when it reaches
+        # that unit, after the preceding real receipt has advanced the prefix.
+        if task.exception() is not None and (self._plan['next'] == index or
+                self._pending is None and self._plan['state'] == 'paused'):
             self._fail()
 
     def _fail(self) -> None:
@@ -303,7 +355,14 @@ class ContentController:
             self._plan['next'] += 1
             self._plan['confirmed_count'] = self._plan['next']
         if self._plan['state'] != 'failed':
-            if self._plan['next'] == len(self._plan['units']):
+            next_prepare = self._prepared.get(self._plan['next'])
+            if (next_prepare and next_prepare.done() and not next_prepare.cancelled()
+                    and next_prepare.exception() is not None):
+                # A full drain can advance a paused task onto a lookahead
+                # error. Expose it now so the next resume retries that unit,
+                # without an extra empty resume that only discovers failure.
+                self._fail()
+            elif self._plan['next'] == len(self._plan['units']):
                 self._desired_playing = False
                 self._playing.clear()
                 self._plan['state'] = 'completed'
