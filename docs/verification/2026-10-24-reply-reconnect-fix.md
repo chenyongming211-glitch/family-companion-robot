@@ -22,3 +22,7 @@
 云端日志：`.superpowers/reply-fix/`内的`reconnect-red.log`、`reconnect-green.log`、`draft-red.log`、`draft-green.log`、`python-full.log`、`go-full.log`、`live-reconnect.jsonl`。Mac日志：`.superpowers/native-voice/reply-fix-real-client.jsonl`与`reply-fix-build-final.log`。只保留元数据，不保存用户语音或正文，均不进入Git。
 
 原生窗口按常开入口重新打开，运行状态仍以当时界面和日志为准。真实用户听感与AEC压力测试继续由该窗口进行，不能用上述合成测试代替。
+
+## 现场麦克风会话补充
+
+修复后的GUI实际打开并启用麦克风，闲置上行已持续超过两分钟。随后同一会话的元数据已观察到7条内容完整播放（包含故事）、16个最终播放ACK、1262次CoreAudio完成回调，`session.failure=0`。这些数据来自`.superpowers/native-voice/reply-fix-live.jsonl`，不是fixture注入；未保存或输出用户说话正文。它证明当前麦克风输入到实际播放回调已经产生多轮回复，不能替代用户听感确认或完整AEC压力验收。窗口继续保留，后续Git同步不重启服务或关闭会话。
