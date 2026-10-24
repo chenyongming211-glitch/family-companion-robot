@@ -1,4 +1,5 @@
 import uuid
+import weakref
 
 from livekit import rtc
 from livekit.agents import APIError, stt, tts
@@ -15,9 +16,16 @@ class DashScopeSTT(stt.STT):
     def __init__(self, cfg):
         super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=True))
         self.cfg = cfg
+        self.streams = weakref.WeakSet()
 
     def stream(self, *, language=NOT_GIVEN, conn_options=NO_RETRY):
-        return Recognition(stt=self, conn_options=NO_RETRY, sample_rate=16000)
+        stream = Recognition(stt=self, conn_options=NO_RETRY, sample_rate=16000)
+        self.streams.add(stream)
+        return stream
+
+    def finish_input(self):
+        for stream in tuple(self.streams):
+            stream.flush()
 
     async def _recognize_impl(self, buffer, *, language=NOT_GIVEN, conn_options=NO_RETRY):
         frame = rtc.combine_audio_frames(buffer)
