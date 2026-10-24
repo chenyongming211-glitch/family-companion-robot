@@ -20,4 +20,6 @@
 
 现场继续测试时，快速重连曾一次返回`event_before_ready`，再次连接成功；一轮真实发言触发`DraftValidationError / failure_code=ending`，客户端显示`server_error`并保留窗口。已重新连接继续测试。本次没有修复这两个独立失败，也未保存该轮发言；常开窗口不代表每次模型生成都成功。
 
+后续已复现并修复以上问题，补充真实云端问答、6次快速重连与原生实际播放验证，见[后续修复](2026-10-24-reply-reconnect-fix.md)。前述段落保留为本次验证当时的事实。
+
 服务器日志位于`.superpowers/drain/keep-open-final-114.log`、`keep-open-events-red.log`、`keep-open-events-green.log`；Mac元数据位于`.superpowers/native-voice/keep-open-live.jsonl`、`keep-open-build-final.log`和`keep-open-selftest-final.jsonl`，均不进入Git。不保存用户录音、识别正文或模型回复。此轮没有重复真人问答验收，前轮真人正常回复结论见[麦克风修复记录](2026-10-24-native-microphone-fix.md)。

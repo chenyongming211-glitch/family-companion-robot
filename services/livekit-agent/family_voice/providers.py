@@ -4,7 +4,7 @@ import weakref
 import time
 
 from livekit import rtc
-from livekit.agents import APIError, stt, tts
+from livekit.agents import APIError, llm, stt, tts
 from livekit.agents.types import APIConnectOptions, NOT_GIVEN
 from livekit.agents.vad import VADEventType
 from livekit.plugins import openai
@@ -220,6 +220,26 @@ class Synthesis(tts.ChunkedStream):
             raise APIError(str(error), retryable=False) from None
 
 
+class TerminalTextModel(openai.LLM):
+    def chat(self, **options):
+        stream = super().chat(**options)
+        parse = stream._parse_choice
+        def parse_with_terminal(identity, choice, thinking_filter):
+            chunk = parse(identity, choice, thinking_filter)
+            if choice.finish_reason is not None:
+                extra = dict(chunk.delta.extra or {}) if chunk and chunk.delta else {}
+                extra['provider_finish_reason'] = choice.finish_reason
+                if chunk and chunk.delta:
+                    chunk = chunk.model_copy(update={'delta': chunk.delta.model_copy(update={'extra': extra})})
+                else:
+                    chunk = llm.ChatChunk(id=identity, delta=llm.ChoiceDelta(role='assistant', extra=extra))
+            return chunk
+        # The pinned 1.8.8 OpenAI adapter otherwise drops finish_reason. Keep
+        # this per-stream marker so completion is not guessed from punctuation.
+        stream._parse_choice = parse_with_terminal
+        return stream
+
+
 def text_model(cfg, *, max_tokens=128):
-    return openai.LLM(model=cfg.llm_model, api_key=cfg.api_key, base_url=cfg.llm_url, max_retries=0,
+    return TerminalTextModel(model=cfg.llm_model, api_key=cfg.api_key, base_url=cfg.llm_url, max_retries=0,
                       prompt_cache_breakpoints=False, extra_body={'enable_thinking': False, 'max_tokens': max_tokens})

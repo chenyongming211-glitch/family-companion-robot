@@ -211,7 +211,7 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 		sendJSON(c, map[string]any{"type": "error", "code": "capability_required", "required": []string{"drain", "staging", "coreaudio_playback"}})
 		return
 	}
-	up, _, err := (&websocket.Dialer{HandshakeTimeout: 5 * time.Second}).DialContext(ctx, s.cfg.BackendURL, http.Header{"Authorization": {"Bearer " + s.cfg.BackendToken}})
+	up, err := s.connectBackend(ctx)
 	if err != nil {
 		sendJSON(c, map[string]any{"type": "error", "code": "backend_unavailable"})
 		return
@@ -250,6 +250,32 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 	defer sess.close()
 	if err = sess.run(); err != nil && ctx.Err() == nil {
 		sendJSON(c, map[string]any{"type": "error", "code": "device_session_closed"})
+	}
+}
+
+func (s *Server) connectBackend(ctx context.Context) (*websocket.Conn, error) {
+	// A disconnected client releases the Go lease before AgentSession has
+	// finished its bounded cleanup. A 409 has not created a new voice session
+	// or sent any user audio, so wait only for that explicit busy response.
+	wait, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for {
+		up, response, err := (&websocket.Dialer{HandshakeTimeout: 3 * time.Second}).DialContext(wait, s.cfg.BackendURL, http.Header{"Authorization": {"Bearer " + s.cfg.BackendToken}})
+		if err == nil {
+			return up, nil
+		}
+		busy := response != nil && response.StatusCode == http.StatusConflict
+		if response != nil && response.Body != nil {
+			response.Body.Close()
+		}
+		if !busy {
+			return nil, err
+		}
+		select {
+		case <-wait.Done():
+			return nil, wait.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }
 

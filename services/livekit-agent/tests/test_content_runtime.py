@@ -32,6 +32,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.tts_texts = []
         self.answers = ['小狐狸来到森林。它找到一条红围巾。最后它高兴地回家。', '二加三等于五。']
         self.tool_name = None
+        self.finish_reason = 'stop'
         async def send(event):
             self.events.append(event)
             if self.hold_playout:
@@ -54,7 +55,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             delta = {'role': 'assistant', 'content': '我会继续。', 'tool_calls': [{'index': 0, 'id': 'resume-content', 'type': 'function', 'function': {'name': self.tool_name, 'arguments': '{"target":"main"}'}}]}
         else:
             delta = {'role': 'assistant', 'content': answer}
-        for value, finish in ((delta, None), ({}, 'tool_calls' if self.tool_name else 'stop')):
+        for value, finish in ((delta, None), ({}, 'tool_calls' if self.tool_name else self.finish_reason)):
             data = {'id': 'content-test', 'created': 1, 'model': 'qwen-plus', 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': value, 'finish_reason': finish}]}
             await response.write(('data: ' + json.dumps(data) + '\n\n').encode())
         await response.write(b'data: [DONE]\n\n')
@@ -292,12 +293,41 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         await self.start()
         self.answers = ['unfinished synthetic reply']
+        self.finish_reason = 'length'
         await self.feed('first.wav')
-        await self.until(lambda: any(e['type'] == 'error' and e.get('code') == 'draft_failed' for e in self.events))
+        await self.until(lambda: any(e['type'] == 'turn.error' and e.get('code') == 'draft_failed' for e in self.events))
         records = [json.loads(p.read_text()) for p in Path(self.temp.name).glob('*.json')]
         failed = next(r for r in records if r['stage'] == 'llm' and r['state'] == 'outcome_unknown')
-        self.assertEqual(failed['failure_code'], 'ending')
+        self.assertEqual(failed['failure_code'], 'finish_length')
         self.assertNotIn(self.answers[0], json.dumps(records))
+        self.finish_reason = 'stop'
+        self.answers = ['五']
+        await self.feed('second.wav')
+        await self.until(lambda: self.voice.side.snapshot and self.voice.side.snapshot['state'] == 'completed')
+        self.assertEqual(self.tts_texts, ['五'])
+        self.assertIsNotNone(self.voice.unprepared_main, 'failed original request stays available for an explicit resume')
+        self.assertFalse(any(e['type'] == 'error' for e in self.events))
+
+    async def test_normal_provider_stop_accepts_complete_reply_without_final_punctuation(self):
+        await self.start()
+        self.answers = ['二加三等于五（5）']
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertEqual(self.tts_texts, self.answers)
+        self.assertFalse(any(e['type'] in ('error', 'turn.error') for e in self.events))
+
+    async def test_punctuation_does_not_admit_length_or_missing_provider_terminal(self):
+        for finish in ('length', None):
+            if self.voice:
+                await self.voice.close()
+            self.events.clear()
+            await self.start()
+            self.answers = ['看起来有句号的未完成稿。']
+            self.finish_reason = finish
+            await self.feed('first.wav')
+            await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events))
+            self.assertEqual(self.tts_texts, [])
+            self.assertIsNone(self.voice.main.snapshot)
 
     async def test_keep_open_survives_idle_and_ninth_real_sdk_turn(self):
         self.cfg = replace(self.cfg, test_keep_open=True)

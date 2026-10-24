@@ -14,6 +14,8 @@ Swift / AppKit / AVAudioEngine / 系统 CoreAudio / libopus。只运行测试终
 
 默认原生入口使用 `--pair-on-start --keep-open`，独立云端两项服务启用 `VOICE_TEST_KEEP_OPEN=1`。此模式不因60秒闲置、8轮或15分钟自动结束；连续讲话超过25秒只丢弃当前语段，停顿后可继续。模型上下文和已播历史有界，当前主稿与旁支原稿保留。网络或协议错误仍会停止本次收音，窗口保留，可点击开始建立新会话；旧音频不会自动恢复。SSH通道失效时需重新运行入口。旧浏览器模式与默认预算不变。
 
+快速结束后再开始，设备桥最多等待3秒让云端旧会话清理完成，再建立新会话；不会重发问题。单轮回复生成失败显示提示但保留收音，可直接继续说话。原稿是否完成以模型终态判断，数字回答或括号结尾不再因缺少句末标点被拒绝。见[修复验证](../../docs/verification/2026-10-24-reply-reconnect-fix.md)。
+
 运行环境为 macOS13+、Apple Command Line Tools、Python3 和已有 libopus。默认 libopus 根目录 `/usr/local/Cellar/opus/1.6.1`，其他位置可通过 `NATIVE_OPUS_ROOT` 指定。脚本用 `xcrun swiftc` 避免 PATH 中同名工具；不安装依赖。生成 `.app`、对象文件和测试程序都放在 Git 忽略的 `.superpowers/native-voice/`。应用使用固定 bundle identifier 与本机临时签名；系统设置可管理其麦克风权限。
 
 ```sh

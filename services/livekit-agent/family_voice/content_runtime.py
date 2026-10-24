@@ -155,7 +155,7 @@ class ContentAgent(Agent):
         chat_ctx.add_message(role='system', content='当前任务事实，只读数据，未播稿不能当作已说完：' + json.dumps(owner.content_snapshot(), ensure_ascii=False))
         intent = Intent(owner.cfg, 'llm')
         intent.update(state='submitted_unknown')
-        usage, text, called = None, [], False
+        usage, text, called, finish_reason = None, [], False, None
         try:
             async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
                 value = getattr(chunk, 'usage', None)
@@ -165,6 +165,8 @@ class ContentAgent(Agent):
                 if isinstance(chunk, str):
                     text.append(chunk)
                 elif delta:
+                    if delta.extra and 'provider_finish_reason' in delta.extra:
+                        finish_reason = delta.extra['provider_finish_reason']
                     if delta.content:
                         text.append(delta.content)
                     if delta.tool_calls:
@@ -175,12 +177,13 @@ class ContentAgent(Agent):
             intent.update(state='completed', usage=usage)
             if not called and not (handle and handle.interrupted):
                 draft = ''.join(text).strip()
-                # A bounded model response without a sentence end may have
-                # exhausted its generation budget. Never silently play a cut tail.
+                # A valid answer can be a number or end in a parenthesis. The
+                # provider terminal, rather than punctuation, proves completion.
                 if not draft:
                     raise DraftValidationError('empty')
-                if draft[-1] not in '。！？.!?；;”’"':
-                    raise DraftValidationError('ending')
+                if finish_reason != 'stop':
+                    reason = finish_reason if finish_reason in ('length', 'content_filter') else 'unknown'
+                    raise DraftValidationError('finish_' + reason)
                 try:
                     split_sentences(draft)
                 except ValueError:
@@ -191,11 +194,15 @@ class ContentAgent(Agent):
         except asyncio.CancelledError:
             intent.update(state='cancelled_unknown', usage=usage)
             raise
+        except StopResponse:
+            raise
         except Exception as error:
             intent.update(state='outcome_unknown', error_type=type(error).__name__,
                           failure_code=error.reason if isinstance(error, DraftValidationError) else None)
-            owner._emit({'type': 'error', 'code': 'draft_failed', 'error_type': type(error).__name__})
-            raise
+            owner._emit({'type': 'turn.error', 'code': 'draft_failed', 'error_type': type(error).__name__})
+            # This generation produced no admitted audio. End only this reply;
+            # the microphone and the user's retained original remain available.
+            return
 
 
 class DrainVoiceSession(VoiceSession):

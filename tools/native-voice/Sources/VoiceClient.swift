@@ -141,8 +141,8 @@ final class VoiceClient: @unchecked Sendable {
                 }
                 metadata("session.ready", ["microphone": microphone])
             } else {
-                guard ready, let player else { throw ClientFailure("event_before_ready") }
                 if type == "error" { throw ClientFailure("server_error") }
+                guard ready, let player else { throw ClientFailure("event_before_ready") }
                 try player.event(e)
                 try fixture?.event(e)
                 if type == "output.stop" || type == "sleep" {
@@ -151,12 +151,16 @@ final class VoiceClient: @unchecked Sendable {
                     return
                 }
                 if type == "content.state" {
+                    if e["state"] as? String == "playing", microphone { status?("对话中 · 可以继续说话或插话") }
                     let safe = ["task_id", "revision", "kind", "total", "confirmed_count", "next", "state"]
                     metadata("content.state", Dictionary(uniqueKeysWithValues: safe.compactMap { key in e[key].map { (key, $0) } }))
                 } else if type == "content.action" {
                     metadata("content.action", ["action": e["action"] as? String ?? "", "target": e["target"] as? String ?? ""])
                 } else if type == "input.limit" {
                     status?("这句话较长，请稍停一下再继续；连接仍保持。")
+                } else if type == "turn.error" {
+                    if !microphone { throw ClientFailure("fixture_turn_failed") }
+                    status?("这次回答生成失败，可直接继续说话重试。")
                 }
                 // ASR, replies and content.snapshot payloads are deliberately never logged.
             }

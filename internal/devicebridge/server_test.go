@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +39,10 @@ func newRigAtFrame(t *testing.T, features map[string]bool, frameMS int) *testRig
 }
 
 func newUnnegotiatedRig(t *testing.T, features map[string]bool, frameMS int, cfg Config, ready map[string]any) *testRig {
+	return newUnnegotiatedRigWithBusy(t, features, frameMS, cfg, ready, 0)
+}
+
+func newUnnegotiatedRigWithBusy(t *testing.T, features map[string]bool, frameMS int, cfg Config, ready map[string]any, busy int32) *testRig {
 	t.Helper()
 	if ready == nil {
 		ready = map[string]any{"type": "ready", "mode": "drain", "input_rate": 16000, "output_rate": 24000}
@@ -48,6 +53,10 @@ func newUnnegotiatedRig(t *testing.T, features map[string]bool, frameMS int, cfg
 		if r.Header.Get("Authorization") != "Bearer server-only-test-token" || r.URL.Query().Get("mode") != "drain" {
 			t.Error("missing protected drain authorization")
 			http.Error(w, "bad backend", 401)
+			return
+		}
+		if atomic.AddInt32(&busy, -1) >= 0 {
+			http.Error(w, "previous session closing", http.StatusConflict)
 			return
 		}
 		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -102,6 +111,14 @@ func newUnnegotiatedRig(t *testing.T, features map[string]bool, frameMS int, cfg
 		t.Fatal("backend not opened")
 	}
 	return rig
+}
+
+func TestReconnectWaitsForClosingBackendSession(t *testing.T) {
+	rig := newUnnegotiatedRigWithBusy(t, nil, 20, Config{}, nil, 2)
+	rig.negotiate()
+	if rig.server.Active() != 1 {
+		t.Fatal("reconnect did not acquire a ready session")
+	}
 }
 
 func (r *testRig) negotiate() map[string]any {
