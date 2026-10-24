@@ -36,6 +36,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.finish_reason = 'stop'
         self.raw_text = False
         self.extra_tool = None
+        self.query_until_hidden = False
         async def send(event):
             self.events.append(event)
             if self.hold_playout:
@@ -57,6 +58,9 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         planned = self.tool_plan.pop(0) if self.tool_plan else None
         name, arguments = planned if planned else (self.tool_name or 'respond',
                                                    {'target': 'main'} if self.tool_name else {'text': answer})
+        if self.query_until_hidden:
+            names = {t['function']['name'] for t in body.get('tools', [])}
+            name, arguments = ('query_content', {'target': 'main'}) if 'query_content' in names else ('respond', {'text': answer})
         if self.raw_text:
             name = None
         if name:
@@ -197,6 +201,191 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.llm_calls), 1)
         self.assertEqual(self.tts_texts, [])
         self.assertFalse(any(e['type'] == 'audio' for e in self.events))
+
+    async def test_repeated_position_query_is_removed_and_model_completes_answer(self):
+        await self.start()
+        self.query_until_hidden = True
+        self.answers = ['刚才讲到小狐狸走进森林。']
+        self.voice.main.start('小狐狸走进森林。')
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events)
+                         or self.answers[0] in self.tts_texts)
+        self.assertIn(self.answers[0], self.tts_texts)
+        self.assertEqual(len(self.llm_calls), 2)
+        self.assertEqual(sum(e['type'] == 'content.action' and e['action'] == 'query' for e in self.events), 1)
+        self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+
+    async def test_model_replaces_topic_and_body_in_one_call(self):
+        await self.start()
+        self.voice.main.start('原来的故事。')
+        self.voice.main.pause()
+        answer = '地球有七大洲。亚洲面积最大。'
+        self.answers = [answer]
+        self.tool_plan = [('respond', {'text': answer, 'action': 'replace'})]
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'content.state' and e['state'] == 'completed' for e in self.events))
+        self.assertEqual(''.join(self.voice.main.snapshot['units']), answer)
+        self.assertEqual(len(self.llm_calls), 1)
+
+    async def test_three_distinct_history_reads_leave_sdk_round_for_answer(self):
+        await self.start()
+        async def read(*args, **kwargs):
+            return {'status': 'ok', 'records': []}
+        self.voice.recall = read
+        self.answers = ['前面的记录里没有找到这个细节。']
+        self.tool_plan = [('conversation_history', {'after': index}) for index in range(3)]
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events)
+                         or self.answers[0] in self.tts_texts)
+        self.assertIn(self.answers[0], self.tts_texts)
+        self.assertEqual(len(self.llm_calls), 4)
+        names = {t['function']['name'] for t in self.llm_calls[-1]['tools']}
+        self.assertEqual(names, {'respond', 'ask_clarification'})
+        self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+
+    async def test_model_lookup_ack_starts_while_history_read_is_still_pending(self):
+        await self.start()
+        self.voice.main.start('暂停的故事。')
+        self.voice.main.pause()
+        self.voice.side.start('暂停的旁支。')
+        self.voice.side.pause()
+        before = [self.voice.main.snapshot, self.voice.side.snapshot]
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def delayed(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return {'status': 'ok', 'records': [{'role': 'assistant', 'delivery': 'confirmed', 'text': '合成地理事实'}]}
+        self.voice.recall = delayed
+        acknowledgement = '我翻一下刚才的记录。'
+        self.tool_plan = [('conversation_history', {'mode': 'read', 'acknowledgement': acknowledgement})]
+        try:
+            await self.feed('first.wav')
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+            except TimeoutError:
+                self.fail('model-authored lookup acknowledgement was not accepted')
+            await self.until(lambda: any(e['type'] == 'audio' for e in self.events), timeout=3)
+            self.assertIn(acknowledgement, self.tts_texts)
+            self.assertEqual([self.voice.main.snapshot, self.voice.side.snapshot], before)
+            self.assertFalse(release.is_set())
+        finally:
+            release.set()
+
+    async def test_final_answer_cancels_lookup_ack_that_has_not_started(self):
+        await self.start()
+        self.assertIsNotNone(getattr(self.voice, 'progress', None), 'progress speech slot is missing')
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def slow_prepare(text):
+            entered.set()
+            await release.wait()
+            return b'\1\0' * 480
+        self.voice.progress._prepare = slow_prepare
+        async def read(*args, **kwargs):
+            await entered.wait()
+            return {'status': 'ok', 'records': []}
+        self.voice.recall = read
+        self.answers = ['之前讲的是森林。']
+        self.tool_plan = [('conversation_history', {'acknowledgement': '我看看前面的记录。'})]
+        try:
+            await self.feed('first.wav')
+            await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+            release.set()
+            await asyncio.sleep(.05)
+            self.assertEqual(self.tts_texts, self.answers)
+            self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+        finally:
+            release.set()
+
+    async def test_optional_lookup_ack_failure_does_not_fail_the_actual_answer(self):
+        await self.start()
+        self.assertIsNotNone(getattr(self.voice, 'progress', None))
+        async def failed(text):
+            raise TimeoutError('synthetic optional progress failure')
+        self.voice.progress._prepare = failed
+        async def read(*args, **kwargs):
+            await asyncio.sleep(.05)
+            return {'status': 'ok', 'records': []}
+        self.voice.recall = read
+        self.answers = ['之前说的是森林。']
+        self.tool_plan = [('conversation_history', {'acknowledgement': '我翻一下之前的记录。'})]
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertEqual(self.tts_texts, self.answers)
+        self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+
+    async def test_resume_retires_lookup_ack_still_being_prepared(self):
+        await self.start()
+        self.voice.main.start('需要继续的故事。')
+        self.voice.main.pause()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def slow_prepare(text):
+            entered.set()
+            await release.wait()
+            return b'\1\0' * 480
+        self.voice.progress._prepare = slow_prepare
+        async def read(*args, **kwargs):
+            await entered.wait()
+            return {'status': 'ok', 'records': []}
+        self.voice.recall = read
+        self.tool_plan = [('conversation_history', {'acknowledgement': '我看看前面的记录。'}),
+                          ('resume_content', {'target': 'main'})]
+        try:
+            await self.feed('first.wav')
+            await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+            release.set()
+            await asyncio.sleep(.15)
+            self.assertFalse(any(b.binding and b.binding.task_id.startswith('progress:')
+                                 for b in (*self.voice.output.blocks.values(), *self.voice.output.history.values())))
+        finally:
+            release.set()
+
+    async def test_ready_answer_retires_ack_blocked_before_pcm_admission(self):
+        await self.start()
+        gate = asyncio.get_running_loop().create_future()
+        self.voice.output._barrier = gate
+        self.voice.start_progress('我看看前面的记录。')
+        await self.until(lambda: self.voice.output._binding is not None)
+        # The SDK may request audio before capture_frame clears its barrier.
+        await asyncio.sleep(.05)
+        self.voice.retire_unstarted_progress()
+        gate.set_result(None)
+        await asyncio.sleep(.15)
+        self.assertFalse(any(e['type'] == 'audio' for e in self.events))
+
+    async def test_interrupted_lookup_ack_cannot_resume_old_read_after_user_speaks(self):
+        await self.start()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def delayed(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return {'status': 'ok', 'records': []}
+        self.voice.recall = delayed
+        self.tool_plan = [('conversation_history', {'acknowledgement': '我看看前面的记录。'})]
+        try:
+            await self.feed('first.wav')
+            await entered.wait()
+            await self.until(lambda: any(e['type'] == 'audio' for e in self.events))
+            self.voice.on_speech_started()
+            release.set()
+            await asyncio.sleep(.1)
+            self.assertEqual(len(self.llm_calls), 1)
+            self.assertIsNone(self.voice.main.snapshot)
+            self.assertIsNone(self.voice.side.snapshot)
+        finally:
+            release.set()
+
+    async def test_invalid_single_call_replacement_preserves_both_originals(self):
+        await self.start()
+        self.voice.main.start('不能丢失的原故事。')
+        self.voice.main.pause()
+        self.voice.side.start('不能丢失的旁支。')
+        self.voice.side.pause()
+        before = [self.voice.main.snapshot, self.voice.side.snapshot]
+        self.tool_plan = [('respond', {'text': '😊', 'action': 'replace'})]
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events))
+        self.assertEqual([self.voice.main.snapshot, self.voice.side.snapshot], before)
 
     async def test_ambiguous_tool_returns_candidates_without_fixed_speech(self):
         await self.start()

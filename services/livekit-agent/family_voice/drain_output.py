@@ -22,6 +22,7 @@ class Binding:
     task_id: str | None = None
     block_id: int | None = None
     done: bool = False
+    allow_start: object = None
 
 
 @dataclass
@@ -72,12 +73,12 @@ class DrainOutput(io.AudioOutput):
     def outstanding_samples(self):
         return sum(b.sent - b.played for b in self.blocks.values() if not b.finished)
 
-    def bind_unit(self, revision, index, expected_samples, settle, *, task_id=None):
+    def bind_unit(self, revision, index, expected_samples, settle, *, task_id=None, allow_start=None):
         if self._binding is not None:
             raise RuntimeError('unclaimed content binding')
         if type(expected_samples) is not int or not 0 < expected_samples <= 24000 * 12:
             raise ValueError('invalid content sample limit')
-        binding = Binding(revision, index, expected_samples, settle, task_id=task_id)
+        binding = Binding(revision, index, expected_samples, settle, task_id=task_id, allow_start=allow_start)
         self._binding = binding
         return binding
 
@@ -133,6 +134,11 @@ class DrainOutput(io.AudioOutput):
                     raise asyncio.CancelledError
                 if self._can_send(epoch, frame.samples_per_channel):
                     if self.active is None:
+                        # Optional notices can retire while the SDK frame is
+                        # waiting at a barrier. Check again at PCM admission,
+                        # before any independent device lifetime is created.
+                        if self._binding and self._binding.allow_start and not self._binding.allow_start():
+                            raise asyncio.CancelledError
                         if len(self.blocks) >= 16:
                             raise BufferError('device playback ledger full')
                         self.sequence += 1
@@ -150,6 +156,8 @@ class DrainOutput(io.AudioOutput):
                         block = self.active
                         await super().capture_frame(frame)
                     if epoch != self.epoch:
+                        raise asyncio.CancelledError
+                    if not block.sent and block.binding and block.binding.allow_start and not block.binding.allow_start():
                         raise asyncio.CancelledError
                     block.sent += frame.samples_per_channel
                     block.touched = time.monotonic()

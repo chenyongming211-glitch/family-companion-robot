@@ -167,3 +167,24 @@ class DrainOutputTests(unittest.IsolatedAsyncioTestCase):
         await self.sink.wait_for_playout()
         self.assertFalse(any(e['type'] == 'audio' for e in self.events))
         self.assertEqual(next(e for e in self.events if e['type'] == 'audio.end')['sent_samples'], 0)
+
+    async def test_optional_notice_retired_during_handoff_cannot_admit_first_pcm(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        allowed = True
+        async def send(event):
+            self.events.append(event)
+            if event['type'] == 'output.handoff':
+                entered.set()
+                await release.wait()
+        self.sink.send = send
+        self.sink.bind_unit(1, 0, 480, self.settled.append, task_id='progress:1', allow_start=lambda: allowed)
+        capture = asyncio.create_task(self.sink.capture_frame(frame()))
+        await entered.wait()
+        allowed = False
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await capture
+        self.assertFalse(any(e['type'] == 'audio' for e in self.events))
+        self.sink.clear_buffer()
+        await self.sink.wait_for_playout()
+        self.assertEqual(next(e for e in self.events if e['type'] == 'audio.end')['sent_samples'], 0)
