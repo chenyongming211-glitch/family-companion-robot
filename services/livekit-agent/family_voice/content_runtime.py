@@ -13,6 +13,8 @@ from livekit.agents import Agent, ModelSettings, RunContext, StopResponse, funct
 from .cloud import Cloud, Intent, numeric_usage
 from .content import ContentController, split_sentences, split_playback_units
 from .conversation_memory import ConversationMemory
+from .confirmation import QuickConfirmation
+from .preparation_audio import play_preparation
 from .dialogue_turn import DialogueTurn
 from .drain_output import DrainOutput
 from .runtime import BoundedAgentSession, VoiceSession
@@ -137,6 +139,7 @@ class ContentAgent(Agent):
                 owner.side.discard()
             owner.accept_draft(text, owner.last_input, owner.user_epoch)
         except ValueError:
+            owner.finish_preparation()
             owner._emit({'type': 'turn.error', 'code': 'draft_failed', 'error_type': 'DraftValidationError'})
         raise StopResponse()
 
@@ -219,6 +222,8 @@ class ContentAgent(Agent):
             owner.unprepared_epoch = owner.user_epoch
             owner.force_main = True
         owner.pending_input = (owner.last_input, owner.user_epoch)
+        owner.preparation_closed = None
+        owner.confirmation.start(owner.last_input, owner.preparation_context(), owner.user_epoch, owner.current_turn_id)
 
     async def llm_node(self, chat_ctx, tools, model_settings):
         owner = self.owner
@@ -327,6 +332,7 @@ class ContentAgent(Agent):
             record_generation('failed_unplayed')
             intent.update(state='outcome_unknown', error_type=type(error).__name__,
                           failure_code=error.reason if isinstance(error, DraftValidationError) else None)
+            owner.finish_preparation(epoch, turn_id)
             owner._emit({'type': 'turn.error', 'code': 'draft_failed', 'error_type': type(error).__name__})
             # This generation produced no admitted audio. End only this reply;
             # the microphone and the user's retained original remain available.
@@ -361,6 +367,7 @@ class DrainVoiceSession(VoiceSession):
             await self.play_content(*args, task_name='progress')
         self.progress = ContentController(self.prepare_progress, play_progress, self._emit, 'progress', prefetch=1)
         self.progress_epoch = None
+        self.progress_purpose, self.progress_deadline = 'history', None
         self.last_input, self.pending_input, self.force_main = '', None, False
         self.unprepared_main = None
         self.unprepared_epoch = None
@@ -370,6 +377,40 @@ class DrainVoiceSession(VoiceSession):
         self.spoken_history, self.spoken_prefixes = [], {}
         self.spoken_anchors, self.unit_anchors, self.current_turn_id = {}, {}, None
         self._recorded_content_ids = set()
+        self.preparation_closed = None
+        self.confirmation = QuickConfirmation(cfg, self.deliver_preparation,
+            self.preparation_is_current, self.expire_preparation)
+
+    def preparation_context(self):
+        recent = [{'role': 'assistant', 'text': item.text_content[:200]} for item in self.spoken_history[-4:]]
+        users = [item for item in self.agent.chat_ctx.items if getattr(item, 'role', None) == 'user']
+        recent_users = [item.text_content[:200] for item in users[-2:]]
+        tasks = {name: {'kind': p['kind'], 'state': p['state'], 'request': p['original_input'][:120]}
+                 for name in ('main', 'side') if (p := getattr(self, name).snapshot)}
+        return {'recent_confirmed': recent, 'recent_users': recent_users, 'retained_tasks': tasks}
+
+    def preparation_is_current(self, epoch, turn_id):
+        return bool(not self.closed and not self.sleeping and self.user_epoch == epoch
+                    and self.current_turn_id == turn_id and self.session.user_state != 'speaking'
+                    and self.preparation_closed != (epoch, turn_id))
+
+    def deliver_preparation(self, text, epoch, turn_id, deadline):
+        if not self.preparation_is_current(epoch, turn_id):
+            return False
+        return self.start_progress(text, purpose='preparation', deadline=deadline)
+
+    def expire_preparation(self, epoch, turn_id):
+        if self.preparation_is_current(epoch, turn_id) and self.progress_purpose == 'preparation':
+            self.retire_unstarted_progress()
+
+    def finish_preparation(self, epoch=None, turn_id=None):
+        epoch = self.user_epoch if epoch is None else epoch
+        turn_id = self.current_turn_id if turn_id is None else turn_id
+        if (epoch, turn_id) != (self.user_epoch, self.current_turn_id):
+            return
+        self.preparation_closed = (epoch, turn_id)
+        self.confirmation.cancel()
+        self.retire_unstarted_progress()
 
     async def memory_context(self):
         if not self.conversation:
@@ -393,21 +434,24 @@ class DrainVoiceSession(VoiceSession):
         return tuple((name, p['task_id'], p['next'], p['state'])
                      for name in ('main', 'side') if (p := getattr(self, name).snapshot))
 
-    def start_progress(self, text):
+    def start_progress(self, text, *, purpose='history', deadline=None):
         if self.turn_policy.progress_requested or self.closed or self.sleeping:
-            return
+            return False
         try:
             text = spoken_draft(text)
         except ValueError:
-            return
+            return False
         if not text or len(text) > 24 or len(split_sentences(text)) != 1:
-            return
+            return False
         self.turn_policy.progress_requested = True
         self.progress_epoch = self.user_epoch
+        self.progress_purpose, self.progress_deadline = purpose, deadline
         self.record_text('assistant.generated', role='assistant', text=text, source='progress',
                          input_epoch=self.user_epoch, turn_id=self.current_turn_id,
-                         delivery='generated_unplayed', content_kind='lookup_acknowledgement')
+                         delivery='generated_unplayed', content_kind='preparation_acknowledgement'
+                         if purpose == 'preparation' else 'lookup_acknowledgement')
         self.progress.start(text, original_input=self.last_input, kind='reply')
+        return True
 
     def retire_unstarted_progress(self):
         plan = self.progress.snapshot
@@ -421,8 +465,10 @@ class DrainVoiceSession(VoiceSession):
             self.progress.pause()
 
     async def prepare_progress(self, text):
-        async with asyncio.timeout(3):
-            return await self.prepare_content(text, max_seconds=6)
+        duration = min(3, self.progress_deadline - asyncio.get_running_loop().time()) if self.progress_deadline else 3
+        seconds = 3 if self.progress_purpose == 'preparation' else 6
+        async with asyncio.timeout(max(0, duration)):
+            return await self.prepare_content(text, max_seconds=seconds)
 
     def resolve_target(self, target):
         if target != 'side':
@@ -488,6 +534,7 @@ class DrainVoiceSession(VoiceSession):
 
     def on_speech_started(self):
         super().on_speech_started()
+        self.confirmation.cancel()
         self.dialogue.pause()
         self.progress.pause()
         self.progress_epoch = None
@@ -545,11 +592,22 @@ class DrainVoiceSession(VoiceSession):
         try:
             async with self.play_lock:
                 dispatched = True
+                deadline = self.progress_deadline if task_name == 'progress' else None
+                def allowed():
+                    return self.progress_epoch == input_epoch == self.user_epoch and (
+                        deadline is None or asyncio.get_running_loop().time() < deadline)
+                if task_name == 'progress' and self.progress_purpose == 'preparation':
+                    # session.say waits for the current model generation even
+                    # without our previous-handle barrier. The short optional
+                    # notice instead uses the same bounded, receipt-driven
+                    # output directly while main generation stays untouched.
+                    await play_preparation(self.output, revision, index, pcm, observed,
+                                           task_id=f'progress:{revision}', allow_start=allowed)
+                    return
                 await play_content_unit(self.session, self.output, revision, index, text, pcm, observed,
                                         task_id=f'{task_name}:{revision}' if task_name else None,
                                         wait_previous=task_name != 'progress',
-                                        allow_start=(lambda: self.progress_epoch == input_epoch == self.user_epoch)
-                                                    if task_name == 'progress' else None)
+                                        allow_start=allowed if task_name == 'progress' else None)
         finally:
             if not dispatched:
                 settle(False)
@@ -557,7 +615,7 @@ class DrainVoiceSession(VoiceSession):
     def accept_draft(self, text, original_input, epoch):
         if self.closed or self.sleeping or epoch != self.user_epoch or self.session.user_state == 'speaking':
             return False
-        self.retire_unstarted_progress()
+        self.finish_preparation()
         if self.dialogue_epoch == epoch:
             if self.main_available() and self.unprepared_main == original_input:
                 self.unprepared_main = None
@@ -595,7 +653,7 @@ class DrainVoiceSession(VoiceSession):
     def speak_dialogue(self, text):
         # Natural model questions/answers have a third transient slot. They
         # enter spoken history on receipt, without replacing either original.
-        self.retire_unstarted_progress()
+        self.finish_preparation()
         self.dialogue.start(text, original_input=self.last_input, kind='reply')
 
     def content_action(self, action, target='auto'):
@@ -642,16 +700,16 @@ class DrainVoiceSession(VoiceSession):
             if plan['state'] == 'completed':
                 return {'status': 'completed', 'target': target, 'content': self.content_snapshot().get(target)}
             elif plan['state'] == 'failed':
-                self.retire_unstarted_progress()
+                self.finish_preparation()
                 (self.side if target == 'main' else self.main).pause()
                 controller.retry()
             else:
-                self.retire_unstarted_progress()
+                self.finish_preparation()
                 (self.side if target == 'main' else self.main).pause()
                 controller.resume()
             return {'status': 'playing', 'target': target}
         elif action == 'restart':
-            self.retire_unstarted_progress()
+            self.finish_preparation()
             (self.side if target == 'main' else self.main).pause()
             controller.start(''.join(plan['units']), original_input=plan['original_input'], kind=plan['kind'])
             return {'status': 'playing', 'target': target}
@@ -663,6 +721,7 @@ class DrainVoiceSession(VoiceSession):
         return {'status': 'unsupported_action'}
 
     async def interrupt(self):
+        self.confirmation.cancel()
         self.user_epoch += 1
         self.output.input_epoch = self.user_epoch
         self.force_main = False
@@ -683,6 +742,7 @@ class DrainVoiceSession(VoiceSession):
             valid=event.get('valid', True), finished=event.get('finished', True), discarded=event.get('discarded', False))
 
     def sleep(self, code):
+        self.confirmation.cancel()
         self.dialogue.pause()
         self.progress.pause()
         self.main.pause()
@@ -692,6 +752,7 @@ class DrainVoiceSession(VoiceSession):
     async def close(self):
         if self.closed:
             return
+        await self.confirmation.aclose()
         await self.main.close()
         await self.side.close()
         await self.dialogue.close()

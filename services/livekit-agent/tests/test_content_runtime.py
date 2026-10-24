@@ -37,6 +37,10 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.raw_text = False
         self.extra_tool = None
         self.query_until_hidden = False
+        self.quick_calls = []
+        self.quick_reply, self.quick_finish, self.quick_gate = {'text': ''}, 'stop', None
+        self.quick_entered = asyncio.Event()
+        self.main_gate, self.main_gate_after = None, 0
         async def send(event):
             self.events.append(event)
             if self.hold_playout:
@@ -51,7 +55,26 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def llm(self, request):
         body = await request.json()
+        if body.get('response_format', {}).get('type') == 'json_object':
+            self.quick_calls.append(body)
+            self.quick_entered.set()
+            response = web.StreamResponse(headers={'Content-Type': 'text/event-stream'})
+            await response.prepare(request)
+            if self.quick_gate:
+                await self.quick_gate.wait()
+            try:
+                for delta, finish in (({'role': 'assistant', 'content': json.dumps(self.quick_reply)}, None),
+                                      ({}, self.quick_finish)):
+                    data = {'id': 'quick-test', 'created': 1, 'model': 'qwen-plus', 'object': 'chat.completion.chunk',
+                            'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
+                    await response.write(('data: ' + json.dumps(data) + '\n\n').encode())
+                await response.write(b'data: [DONE]\n\n')
+            except ConnectionResetError:
+                pass
+            return response
         self.llm_calls.append(body)
+        if self.main_gate and len(self.llm_calls) > self.main_gate_after:
+            await self.main_gate.wait()
         response = web.StreamResponse(headers={'Content-Type': 'text/event-stream'})
         await response.prepare(request)
         answer = self.answers[min(len(self.llm_calls) - 1, len(self.answers) - 1)]
@@ -92,6 +115,227 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({'type': 'response.done', 'response': {'id': 'r', 'status': 'completed'}})
         await ws.close()
         return ws
+
+    async def test_quick_preparation_plays_while_main_memory_and_generation_are_blocked(self):
+        from pathlib import Path
+        from family_voice.conversation_log import read_conversation
+        self.cfg = replace(self.cfg, text_record_dir=Path(self.temp.name) / 'quick-conversations')
+        await self.start()
+        self.voice.main.start('保留的主故事。')
+        self.voice.main.pause()
+        self.voice.side.start('保留的旁支。')
+        self.voice.side.pause()
+        before = [self.voice.main.snapshot, self.voice.side.snapshot]
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def memory():
+            entered.set()
+            await release.wait()
+            return None
+        self.voice.memory_context = memory
+        self.quick_reply = {'text': '我来讲个小故事。'}
+        try:
+            await self.feed('first.wav')
+            await asyncio.wait_for(entered.wait(), 3)
+            await asyncio.wait_for(self.quick_entered.wait(), 3)
+            await self.until(lambda: any(e['type'] == 'audio' for e in self.events), timeout=3)
+            self.assertEqual([self.voice.main.snapshot, self.voice.side.snapshot], before)
+            self.assertEqual(len(self.quick_calls), 1)
+            self.assertEqual(self.quick_calls[0]['max_tokens'], 48)
+            self.assertFalse(self.quick_calls[0].get('tools'))
+            self.assertIn(self.quick_calls[0].get('tool_choice'), (None, 'none'))
+            self.assertEqual(self.llm_calls, [], 'main model remains behind memory read')
+            self.assertIn(self.quick_reply['text'], self.tts_texts)
+            self.assertFalse(release.is_set())
+            release.set()
+            await self.until(lambda: self.voice.side.snapshot['state'] == 'completed')
+            self.assertEqual(self.voice.main.snapshot, before[0])
+            await self.voice.conversation.flush()
+            rows = read_conversation(self.cfg.text_record_dir, self.voice.conversation.id)['events']
+            self.assertTrue(any(e['kind'] == 'assistant.played' and e.get('source') == 'progress'
+                                and e['text'] == self.quick_reply['text'] for e in rows))
+        finally:
+            release.set()
+
+    async def test_ready_answer_cancels_pending_quick_model_without_late_notice(self):
+        await self.start()
+        self.quick_reply = {'text': '这就开始讲。'}
+        self.quick_gate = asyncio.Event()
+        self.answers = ['二加三等于五。']
+        try:
+            await self.feed('first.wav')
+            await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+            self.quick_gate.set()
+            await asyncio.sleep(.05)
+            self.assertEqual(self.tts_texts, self.answers)
+            self.assertFalse(any(e['type'] == 'content.state' and e['task_id'].startswith('progress:') for e in self.events))
+        finally:
+            self.quick_gate.set()
+
+    async def test_new_speech_retires_pending_quick_response_and_old_main_read(self):
+        await self.start()
+        entered, release = asyncio.Event(), asyncio.Event()
+        self.quick_reply = {'text': '我来讲个小故事。'}
+        self.quick_gate = asyncio.Event()
+        async def memory():
+            entered.set()
+            await release.wait()
+            return None
+        self.voice.memory_context = memory
+        try:
+            await self.feed('first.wav')
+            await asyncio.wait_for(self.quick_entered.wait(), 3)
+            self.voice.on_speech_started()
+            release.set()
+            self.quick_gate.set()
+            await asyncio.sleep(.1)
+            self.assertEqual(self.tts_texts, [])
+            self.assertEqual(self.llm_calls, [])
+        finally:
+            release.set()
+            self.quick_gate.set()
+
+    async def test_truncated_quick_response_does_not_fail_substantive_answer(self):
+        await self.start()
+        self.quick_reply, self.quick_finish = {'text': '我来讲个小故事。'}, 'length'
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertNotIn(self.quick_reply['text'], self.tts_texts)
+        self.assertFalse(any(e['type'] == 'turn.error' for e in self.events))
+
+    async def test_quick_preparation_and_history_notice_share_one_per_turn_limit(self):
+        await self.start()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def memory():
+            entered.set()
+            await release.wait()
+            return None
+        self.voice.memory_context = memory
+        self.quick_reply = {'text': '我来看看前面的内容。'}
+        self.tool_plan = [('conversation_history', {'acknowledgement': '我再翻一下旧记录。'})]
+        self.answers = ['之前讲的是森林。']
+        try:
+            await self.feed('first.wav')
+            await asyncio.wait_for(entered.wait(), 3)
+            await self.until(lambda: self.quick_reply['text'] in self.tts_texts)
+            release.set()
+            await self.until(lambda: self.answers[0] in self.tts_texts)
+            self.assertNotIn('我再翻一下旧记录。', self.tts_texts)
+            progress = {e['task_id'] for e in self.events if e['type'] == 'content.state' and e['task_id'].startswith('progress:')}
+            self.assertEqual(len(progress), 1)
+        finally:
+            release.set()
+
+    async def test_invalid_substantive_body_retires_late_quick_model(self):
+        await self.start()
+        self.answers = ['😊']
+        self.quick_reply = {'text': '这就开始讲。'}
+        self.quick_gate = asyncio.Event()
+        try:
+            await self.feed('first.wav')
+            await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events))
+            self.quick_gate.set()
+            await asyncio.sleep(.15)
+            self.assertEqual(self.tts_texts, [])
+        finally:
+            self.quick_gate.set()
+
+    async def test_intermediate_discard_keeps_preparation_for_new_content(self):
+        await self.start()
+        self.voice.main.start('原来的故事。')
+        self.voice.main.pause()
+        self.quick_reply = {'text': '这就开始数。'}
+        self.quick_gate = asyncio.Event()
+        self.main_gate, self.main_gate_after = asyncio.Event(), 1
+        self.tool_plan = [('discard_content', {'target': 'main'}),
+                          ('respond', {'text': '1、2、3。', 'action': 'replace'})]
+        try:
+            await self.feed('first.wav')
+            await self.until(lambda: len(self.llm_calls) == 2)
+            self.quick_gate.set()
+            await self.until(lambda: any(e['type'] == 'audio' for e in self.events), timeout=3)
+            self.assertFalse(self.main_gate.is_set())
+            self.main_gate.set()
+            await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+            self.assertIn(self.quick_reply['text'], self.tts_texts)
+            self.assertEqual(''.join(self.voice.main.snapshot['units']), '1、2、3。')
+        finally:
+            self.quick_gate.set()
+            self.main_gate.set()
+
+    async def test_resume_does_not_admit_a_late_quick_preparation(self):
+        await self.start()
+        self.voice.main.start('需要继续的故事。')
+        self.voice.main.pause()
+        self.quick_reply = {'text': '这就继续讲。'}
+        self.quick_gate = asyncio.Event()
+        self.tool_name = 'resume_content'
+        try:
+            await self.feed('first.wav')
+            await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+            self.quick_gate.set()
+            await asyncio.sleep(.05)
+            self.assertNotIn(self.quick_reply['text'], self.tts_texts)
+        finally:
+            self.quick_gate.set()
+
+    async def test_quick_deadline_retires_notice_waiting_at_output_barrier(self):
+        await self.start()
+        entered, release = asyncio.Event(), asyncio.Event()
+        gate = asyncio.get_running_loop().create_future()
+        deliver = self.voice.confirmation.deliver
+        def held_delivery(*args):
+            # VAD onset replaces the output barrier, so install this after
+            # onset at the exact preparation admission boundary.
+            self.voice.output._barrier = gate
+            return deliver(*args)
+        self.voice.confirmation.deliver = held_delivery
+        self.voice.confirmation.budget = .5
+        self.quick_reply = {'text': '我来讲个小故事。'}
+        async def memory():
+            entered.set()
+            await release.wait()
+            return None
+        self.voice.memory_context = memory
+        try:
+            await self.feed('first.wav')
+            await asyncio.wait_for(entered.wait(), 3)
+            await self.until(lambda: self.voice.progress.snapshot is not None)
+            await asyncio.sleep(.55)
+            gate.set_result(None)
+            release.set()
+            await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+            self.assertFalse(any(b.binding and b.binding.task_id.startswith('progress:') and b.sent
+                                 for b in (*self.voice.output.blocks.values(), *self.voice.output.history.values())))
+        finally:
+            if not gate.done():
+                gate.set_result(None)
+            release.set()
+
+    async def test_speech_during_preparation_drains_admitted_pcm_without_claiming_full_notice(self):
+        await self.start()
+        self.hold_playout = True
+        self.quick_reply = {'text': '我来讲个小故事。'}
+        release = asyncio.Event()
+        async def memory():
+            await release.wait()
+            return None
+        self.voice.memory_context = memory
+        try:
+            await self.feed('first.wav')
+            await self.until(lambda: self.voice.output.outstanding_samples == 7200)
+            old = next(iter(self.voice.output.blocks.values()))
+            self.assertTrue(old.binding.task_id.startswith('progress:'))
+            self.voice.on_speech_started()
+            await self.until(lambda: old.sealed)
+            self.assertTrue(self.voice.receipt({'block_id': old.id, 'epoch': old.epoch,
+                                              'played_samples': old.sent, 'finished': True}))
+            release.set()
+            await asyncio.sleep(.05)
+            self.assertEqual(self.voice.progress.snapshot['next'], 0)
+            self.assertFalse(any(e['type'] == 'audio.cancel' for e in self.events))
+            self.assertFalse(any(item.text_content == self.quick_reply['text'] for item in self.voice.spoken_history))
+        finally:
+            release.set()
 
     async def test_story_freezes_partial_drain_side_answer_then_resumes_same_sentence(self):
         self.transcripts = ['讲一个短故事', '二加三等于几', '那继续刚才的故事吧']
