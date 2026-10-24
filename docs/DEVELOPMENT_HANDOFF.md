@@ -1,5 +1,7 @@
 # 换电脑开发交接
 
+**当前产品范围决定（2026-10-24）：多人对话识别与声纹方案仅保留记录，用户已明确暂停开发，等待产品稳定后再恢复。当前无论实际几个人发言，都按同一个逻辑用户/user角色处理，沿用共享对话、文字存档、模型回读和任务状态；不开发声纹识别/登记、个人归属或按人查询，也不因别的开发会话结束自动启用。统一单用户不表示已经确认真实身份，不为现有记录伪造实名归属。未来设计见[暂停的多人方案](superpowers/specs/2026-10-24-speaker-identity-multiparty-design.md)，用户明确恢复后再重新评审排期。该暂停不影响其他语音稳定性工作继续推进。**
+
 更新：2026-10-24。仓库：[chenyongming211-glitch/family-companion-robot](https://github.com/chenyongming211-glitch/family-companion-robot)，默认分支`main`。历史资料迁移后，已在服务器建立独立LiveKit最小语音服务并完成三模型联调；原8000正式服务和手表未切换。
 
 **原生收音补充：** 已修复本机Voice Processing六声道转单声道产生静音的问题；真人复验已确认数学及三句话故事正常回复。见[麦克风修复](verification/2026-10-24-native-microphone-fix.md)。外设声道和完整AEC压力验收仍单独验证。
