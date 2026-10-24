@@ -1,6 +1,14 @@
 # 服务器 LiveKit 最小语音链路
 
-独立测试服务：真实 `AgentSession`＋Fun-ASR→官方OpenAI兼容LLM插件→Qwen实时TTS。仅监听服务器 `127.0.0.1:18010`，没有替换8000上的原Go网关。运行环境、模型Key与自动化测试均在服务器；Mac收音/播放入口见[客户端说明](../../tools/mac-voice/README.md)。
+独立测试服务：真实 `AgentSession`＋Fun-ASR→官方OpenAI兼容LLM插件→Qwen实时TTS。仅监听服务器 `127.0.0.1:18010`，没有替换8000上的原Go网关。运行环境、模型Key与自动化测试均在服务器；新的主测试入口为[Mac原生终端](../../tools/native-voice/README.md)，经独立Go设备桥18020接入。
+
+## 新主测试入口：原生排空交接
+
+`/v1/audio?mode=drain`仅供Bearer设备连接，浏览器路由不能选择此模式。普通插话保留终端已接收旧音频，停止旧下发，独立准备新答案；终端本地栅栏等旧块实际排空后放行，不等待服务器ACK往返。完整有界原稿由ContentController保存，只有匹配的实际完整单位回报推进句级前缀；“继续”播放同一原稿首个未完整单位，部分句允许重读。主稿与最近旁支分别保留。
+
+运行`family-robot-livekit-dev`与`family-robot-livekit-device`两项独立服务；后者监听loopback18020，原生终端通过SSH和120秒一次性配对票据接入小智v1/Opus。下行24k/60ms、上行16k/20ms，Mac以CoreAudio真实回调结算，Go扣除实际Opus lookahead并检查完整编码尾部。正常窗口300ms、待播120ms、原PCM全局420ms；Go累计设备逻辑额度600ms，不能当成物理声学上限。缓存合计最多三个12秒单位。
+
+验证：服务器109项Python、25项历史客户端、3项SDK及Go全库race/vet/build通过；原生CoreAudio和真实云端三句故事→插话→同一原稿恢复完成。真人麦克风/AEC、压力与网络分位数、M5实机和跨唤醒持久化尚待验收，见[本轮报告](../../docs/verification/2026-10-24-native-drain-handoff.md)。旧manual/continuous模式继续保留兼容，其清空策略不代表新的drain行为。
 
 ## 服务器启动
 
@@ -19,7 +27,7 @@ systemd模板见[`deploy/family-robot-livekit-dev.service`](../../deploy/family-
 
 固定依赖见`requirements.txt`。默认请求模型为`fun-asr-realtime`、`qwen-plus`、`qwen3-tts-flash-realtime`、音色`Cherry`。它们是请求别名，不声称云端模型版本不可变。ASR/LLM/TTS使用三个独立URL；可通过`VOICE_ASR_URL`、`VOICE_LLM_URL`、`VOICE_TTS_URL`覆盖。默认从既有业务空间域名按官方协议分别构造，不把原生Realtime客户端复用为链式接口。
 
-## 当前浏览器入口：连续语音
+## 历史浏览器入口：连续语音兼容
 
 Mac只点一次“开始说话”模拟唤醒，随后持续发送PCM，说完自动回复、开口自动打断，后续问题直接说。同一按钮可结束对话；空闲60秒、连续讲话25秒或达到上限后回待机。操作见[Mac客户端](../../tools/mac-voice/README.md)，结果见[连续语音验证](../../docs/verification/2026-10-24-continuous-mac-voice.md)。
 
@@ -77,7 +85,7 @@ PYTHONPATH=services/livekit-agent .superpowers/livekit-chain/venv/bin/python \
 
 ## 本阶段边界
 
-- 当前默认页面是连续语音，旧`input.start/end/cancel`只供手动探针兼容。会话内计数检查点已接线；Go小智桥、MCP设备工具、持久化和故事原稿检查点尚未在新路径交付。
+- 新的drain主路径已接Go小智/Opus桥、原生Mac终端和会话内故事原稿检查点。下列清空/长输出额度针对旧manual/continuous兼容模式。MCP设备工具、Go持久化和新手表固件尚未在drain路径交付。
 - ASR只接受真实终态；自动语段由Silero封口，检测不等待旧ASR，最多4个在途/收尾识别任务，云连接关闭等待最多0.1秒。旧段结果不得启动新LLM。历史手动探针仍补700ms终止静音再显式提交。
 - 输入队列最多100帧；自动单次讲话25秒触发回待机，有限ASR最多29秒；会话最多8个生成轮次、15分钟，页面显示剩余预算。到期返回`session_expired`，单次操作超时返回`operation_timeout`；不自动重发问题。输出账本最多32段、总待播前缀最多120秒；写出超时250ms即失败。
 - 中断最多等待250ms回报结算；无效/缺失回报用unknown保守解锁SDK，独立观测仍为`valid=false`。不计算未验证的字词断点。正常等待期限为本段时长加2秒余量。

@@ -2,11 +2,11 @@
 
 更新：2026-10-24。仓库：[chenyongming211-glitch/family-companion-robot](https://github.com/chenyongming211-glitch/family-companion-robot)，默认分支`main`。历史资料迁移后，已在服务器建立独立LiveKit最小语音服务并完成三模型联调；原8000正式服务和手表未切换。
 
-**最新测试约定：** 用户要求后续停止浏览器主测试，采用[实际设备测试方案](superpowers/specs/2026-10-24-device-voice-test-design.md)：小智WebSocket/Opus→云端Go设备适配→LiveKit，终端为原生Mac或M5StopWatch，最终实机分别验收。现有浏览器结果保留历史证据；原生终端、Go→LiveKit设备桥及故事句级检查点目前仍待实现，不能把更换客户端当作已修复故事断点。
+**最新实现：** 已新增小智WebSocket/Opus→云端Go设备桥18020→LiveKit drain模式18010，以及Mac原生CoreAudio终端、固定原稿和句级检查点。真实云端三句故事→插话问答→同一原稿/版本恢复完成，见[本轮验证](verification/2026-10-24-native-drain-handoff.md)。不再使用浏览器作主验收；真人麦克风/AEC与M5/I2S仍须分别验收。
 
-**最新插话行为：** 用户明确允许回复有延迟，要求服务端停止旧内容继续下发，本地把已接收的旧音频播完，再播放新问题的答案。以[排空交接方案](superpowers/specs/2026-10-24-drain-handoff-design.md)为准；当前立即清空播放缓冲的实现尚未改为此策略，旧停声延迟测试不能作为新策略已通过的证据。
+**最新插话行为：** 新drain路径停止旧下发、保留已收音频排空，终端在独立待播区和本地依赖栅栏之间交接；旧manual/continuous仍保留立即清空兼容策略。旧停声延迟不能作为新策略证据。
 
-**低延迟细化：** 在保留已收旧音频的前提下尽快回答，采用[低延迟交接方案](superpowers/specs/2026-10-24-low-latency-handoff-design.md)：短发送额度、并行准备新回答、终端隔离待播及本地排空栅栏；权威播放回报异步结算。窗口和端到端时延数值均待实现/实测，不用等待整个故事或无限增大缓冲来掩盖问题。
+**低延迟细化：** 已实现[低延迟交接方案](superpowers/specs/2026-10-24-low-latency-handoff-design.md)的短额度与并行准备：原PCM正常300ms、预置120ms、全局420ms，含Opus尾部的设备逻辑累计最多600ms。完整真实短流程一次通过；该次合成问题话尾→新块放行估算约2.02秒。只有2个响应样本，不声明P50/P95或声学上限。
 
 干净克隆、Go与固件主机测试、资料核对结果见[本次迁移检查](verification/2026-10-24-development-handoff.md)。
 
@@ -37,9 +37,9 @@ git status --short --branch
 | 已有现场结果 | 已唤醒状态可以直接开口插话；音量、亮度控制通过过现场测试，见对应验证文档 |
 | 旧后端的准确自动接续 | 未解决：实际采样位置仍未可靠映射到完整字词；起点未知时询问用户 |
 | 新架构 | 服务器端LiveKit Agents＋输入ASR→文本LLM→TTS已有最小可运行链路；独立loopback测试服务，未切换正式入口 |
-| 新LiveKit代码 | `services/livekit-agent/`已实现真实AgentSession、连续VAD分轮/自动插话、有限语段ASR/LLM/TTS、自定义PCM回报、会话内计数检查点与口语/工具恢复；65项Python、25项客户端与3项SDK探针在服务器通过，见[计数验证](verification/2026-10-24-counting-resume.md) |
+| 新LiveKit代码 | `services/livekit-agent/`已实现drain输出、通用固定原稿/主旁支/句级恢复、已播历史、工具与代次保护；服务器109项Python、25项历史客户端、3项SDK及全库Go检查通过，见[最新验证](verification/2026-10-24-native-drain-handoff.md) |
 | Eino | 原始需求提过优先验证；当前仅为任务编排候选，未引入依赖。首个闭环复用Go任务/存储 |
-| 麦克风客户端 | `services/livekit-agent/web/`单按钮唤醒后连续说话，自动回复/打断；同一按钮可结束对话，空闲60秒回待机。Mac通过`tools/mac-voice/open.command`建立SSH转发/配对；现场边界见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md) |
+| 麦克风客户端 | 新入口`tools/native-voice/open.command`，AppKit单按钮、持续收音、AVAudioEngine/Opus/CoreAudio；合成输入与实际播放完整链路已过，真人收音/AEC待验收。旧网页仅保留兼容与历史证据 |
 
 开发推进目标：唤醒一次→连续对话、随时插话→空闲超时待机。故事中断后先答新问题，用户说继续后从首个未完整播放的句子恢复原稿；数数恢复到原终点。句中打断允许重读当前句，正常流程不要求用户报告起点。
 
@@ -109,11 +109,13 @@ curl --max-time 10 http://82.156.48.111:8000/healthz
 
 ## 5. 新电脑有麦克风后如何继续
 
+优先运行`./tools/native-voice/open.command`，先看[原生终端说明](../tools/native-voice/README.md)与[本轮验证](verification/2026-10-24-native-drain-handoff.md)。新服务源代码和非root部署模板已在Git，凭据只留服务器；票据由SSH短期配对走stdin。以下段落是原浏览器阶段记录，不能据此恢复浏览器主验收，也不能把旧清空时延当作drain结果。
+
 服务器最小链路已完成：合成WAV经真实ASR→LLM→TTS连续问答，数数回复取消后还能回答新问题；播放证据来自按PCM时长计时的模拟客户端。固定文字播报不提前入历史、取消前后、旧回报和unknown降级有真实SDK测试；工具后抑制重复生成、Go任务/记录接线与准确自动接续仍未验收。
 
 Mac客户端已按用户最新要求改为单按钮：运行`./tools/mac-voice/open.command`后，点一次“开始说话”即连续收音，服务自动判断话尾并回复，开口时自动停旧回复、回答新问题。浏览器16k输入/24k播放/回报，服务器LiveKit与Silero管理轮次；不在Mac另建服务或复制模型Key。用户选择MacBook扬声器，浏览器请求回声消除/降噪，实际误打断/漏识别需现场确认。操作见[客户端说明](../tools/mac-voice/README.md)。
 
-实际听感与物理停声要有人确认；浏览器输出时钟只提供估算，不能证明手表AEC、I2S坐标或字词断点。用户已确认Mac单按钮连续问答/语音打断/旁支回答正常，见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md)，旧点击分轮失败与修正记录仍保存在[前阶段记录](verification/2026-10-24-mac-voice-client.md)。会话内计数按完整播放推进，云端曾验证恢复至原终点50；用户复验仍报告起点错，现场“啊那继续数吧”路由遗漏已复现并修正。助手已自行验证真实云端口语从2恢复、模型工具从4恢复并到原终点8，以及Mac实际浏览器第3段部分播放→重播3→完成5的回报链路；保留一次云TTS连接失败，未把模拟/浏览器时钟测试当作用户声学验收，见[计数验证](verification/2026-10-24-counting-resume.md)。故事原稿接续、Go工具/存储和手表接入尚未在新链路验收。
+实际听感与物理停声要有人确认；浏览器输出时钟只提供估算，不能证明手表AEC、I2S坐标或字词断点。用户已确认Mac单按钮连续问答/语音打断/旁支回答正常，见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md)，旧点击分轮失败与修正记录仍保存在[前阶段记录](verification/2026-10-24-mac-voice-client.md)。会话内计数按完整播放推进，云端曾验证恢复至原终点50；用户复验仍报告起点错，现场“啊那继续数吧”路由遗漏已复现并修正。助手已自行验证真实云端口语从2恢复、模型工具从4恢复并到原终点8，以及Mac实际浏览器第3段部分播放→重播3→完成5的回报链路；保留一次云TTS连接失败，未把模拟/浏览器时钟测试当作用户声学验收，见[计数验证](verification/2026-10-24-counting-resume.md)。该历史阶段未验收故事原稿；最新原稿接续结果见本页顶部链接。Go工具/存储和手表接入仍待后续阶段。
 
 ## 6. 资料清单与本机独有内容
 
