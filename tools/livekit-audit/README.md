@@ -30,4 +30,6 @@ PYTHONPATH=tools/livekit-audit .superpowers/livekit-stage-zero/venv/bin/python -
 
 只支持一个在途播放段，不保存 PCM。`receipt()` 是进程内测试入口，不是可直接暴露的网络协议。没有生产必需的 250ms 有界结算、unknown 降级、旧回调 FIFO、多段并发、重采样、音频队列和停止指令；无效/缺失回报会继续等待，测试主动取消等待，不能直接承接用户语音。
 
-P0 尚需验证真实 AgentSession 自定义 I/O、指定原稿播报、不提前写入历史、抑制工具后重复生成、取消后允许新输出，以及 ASR/LLM/TTS 端点权限、事件与时间信息。之后接同一新链路的 Mac 客户端，最后做手表声学与播放坐标验收。
+后续已在[`services/livekit-agent/`](../../services/livekit-agent/README.md)完成真实AgentSession自定义I/O、指定文字不提前入历史、取消后新输出，以及ASR/LLM/TTS实际权限和完整链路验证，见[后续验证报告](../../docs/verification/2026-10-24-livekit-voice-chain.md)。此处单段探针保留为SDK契约回归测试。
+
+接下来接同一新链路的Mac真实收音/播放客户端。工具后抑制重复生成、Go任务/存储接线、自动接续和手表声学与播放坐标仍需分别验收。

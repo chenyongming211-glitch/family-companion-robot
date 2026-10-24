@@ -62,7 +62,7 @@ PYTHONPATH=services/livekit-agent .superpowers/livekit-chain/venv/bin/python \
 | 服务→客户端 | `transcript` / `reply` | 本轮转写（interim/final分开）与助手文字；仅传输，不落正文日志 |
 | 服务→客户端 | `audio` / `audio.end` | 带`epoch`、`block_id`的24k PCM与封口；封口不等于播放完成 |
 | 客户端→服务 | `playback` | 同身份`played_samples`、`valid`、`finished`；不能把接收入队量冒充实播量 |
-| 客户端→服务 | `cancel` | 停止旧回复；继续处理回报，返回`cancelled` |
+| 客户端→服务 | `cancel` | 退休当前输入并停止旧回复；继续处理播放回报，返回`cancelled`；旧`input_id`的后续音频/结束消息返回`invalid_input`，新输入须重新`input.start` |
 | 服务→客户端 | `audio.cancel` | 退休旧epoch；客户端丢弃旧代次缓冲，回报已完成前缀 |
 
 ## 本阶段边界

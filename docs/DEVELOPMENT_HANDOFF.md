@@ -1,6 +1,6 @@
 # 换电脑开发交接
 
-更新：2026-10-24。仓库：[chenyongming211-glitch/family-companion-robot](https://github.com/chenyongming211-glitch/family-companion-robot)，默认分支`main`。本轮迁移基于此前已推送的`6ff74ba`，补齐历史实验资料与原始需求文档；不切换服务器、不刷手表。
+更新：2026-10-24。仓库：[chenyongming211-glitch/family-companion-robot](https://github.com/chenyongming211-glitch/family-companion-robot)，默认分支`main`。历史资料迁移后，已在服务器建立独立LiveKit最小语音服务并完成三模型联调；原8000正式服务和手表未切换。
 
 干净克隆、Go与固件主机测试、资料核对结果见[本次迁移检查](verification/2026-10-24-development-handoff.md)。
 
@@ -20,7 +20,7 @@ git status --short --branch
 
 1. [服务器端LiveKit架构](superpowers/specs/2026-10-24-server-livekit-design.md)。
 2. [实时语音与任务接续职责、数据、接口](superpowers/specs/2026-10-24-livekit-task-continuation-design.md)。
-3. [首个SDK接入验证计划](superpowers/plans/2026-10-24-livekit-stage-zero.md)。
+3. [最小语音链路实施计划](superpowers/plans/2026-10-24-livekit-voice-chain.md)和[本轮验证报告](verification/2026-10-24-livekit-voice-chain.md)。首个SDK播放回报探针结果见[前次验证](verification/2026-10-24-livekit-stage-zero.md)。
 
 ## 2. 已完成、尚未完成
 
@@ -30,8 +30,8 @@ git status --short --branch
 | 手表固件 | 基于小智v2.5.2的定制软件AEC、播放回报、唤醒发送恢复；补丁、overlay、依赖/上游锁与CI均在Git |
 | 已有现场结果 | 已唤醒状态可以直接开口插话；音量、亮度控制通过过现场测试，见对应验证文档 |
 | 旧后端的准确自动接续 | 未解决：实际采样位置仍未可靠映射到完整字词；起点未知时询问用户 |
-| 新架构 | 已确认服务器端LiveKit Agents＋输入ASR→文本LLM→TTS；目前是设计阶段 |
-| 新LiveKit代码 | `tools/livekit-audit/`单段SDK探针已在服务器通过3项测试，见[验证报告](verification/2026-10-24-livekit-stage-zero.md)；生产`services/livekit-agent/`尚未创建，P0其余项未完成 |
+| 新架构 | 服务器端LiveKit Agents＋输入ASR→文本LLM→TTS已有最小可运行链路；独立loopback测试服务，未切换正式入口 |
+| 新LiveKit代码 | `services/livekit-agent/`已实现真实AgentSession、自定义PCM I/O、三模型适配、取消和服务器smoke；21项新增测试与原3项SDK探针在服务器通过，见[验证报告](verification/2026-10-24-livekit-voice-chain.md) |
 | Eino | 原始需求提过优先验证；当前仅为任务编排候选，未引入依赖。首个闭环复用Go任务/存储 |
 | 麦克风客户端 | 目前仓库没有浏览器通话页或实时麦克风客户端；`cmd/smoke`读取WAV模拟设备，不能直接录麦克风 |
 
@@ -39,7 +39,7 @@ git status --short --branch
 
 ## 3. 服务器开发环境与代码检查
 
-2026-10-24最新约定：依赖安装、运行时测试和服务搭建统一放在云服务器；Mac仅编辑代码、同步Git和充当后续测试终端，不在Mac启动语音服务、不复制服务器Key。新SDK隔离checkout为`/opt/family-robot/dev/livekit-stage-zero-20261024`；下述运行时命令在服务器独立开发目录执行。
+2026-10-24最新约定：依赖安装、运行时测试和服务搭建统一放在云服务器；Mac仅编辑代码、同步Git和充当后续测试终端，不在Mac启动语音服务、不复制服务器Key。当前链路checkout为`/opt/family-robot-livekit-dev`，运行venv为`/opt/family-robot-livekit-runtime/venv`；启动、停止与复现命令见[服务README](../services/livekit-agent/README.md)。前次SDK探针checkout为`/opt/family-robot/dev/livekit-stage-zero-20261024`。下述运行时命令在服务器独立开发目录执行。
 
 Go模块声明Go1.25.0；当前Mac曾使用Go1.25.6。需要C编译器、系统libopus及pkg-config。固件主机测试使用Python3.12+与C++编译器；新LiveKit验证计划单独固定Python3.12及相应SDK版本，不复用整份旧虚拟环境。
 
@@ -103,7 +103,9 @@ curl --max-time 10 http://82.156.48.111:8000/healthz
 
 ## 5. 新电脑有麦克风后如何继续
 
-先按P0验证真实LiveKit SDK的自定义音频输入/输出、指定原稿播报、取消与设备回报契约，再接云端ASR/LLM/TTS。麦克风客户端作为后续独立输入端接同一条新链路，不另写一套语音编排。
+服务器最小链路已完成：合成WAV经真实ASR→LLM→TTS连续问答，数数回复取消后还能回答新问题；播放证据来自按PCM时长计时的模拟客户端。固定文字播报不提前入历史、取消前后、旧回报和unknown降级有真实SDK测试；工具后抑制重复生成、Go任务/记录接线与准确自动接续仍未验收。
+
+下一步实现Mac实时收音/播放客户端，经SSH转发接服务器127.0.0.1:18010。客户端只负责音频格式、显式输入轮次、播放与取消回报，继续使用同一套AgentSession。先用耳机逐层验证实际录音、转写、回答、播放和停播，再加入自动端点/声学插话验证；不在Mac另建服务或复制模型Key。
 
 耳机/麦克风可以先验证模型轮次、插话取消、上下文和固定稿恢复，减少手表硬件因素。它不能证明手表AEC、I2S坐标或扬声器实际停声；新电脑测试和手表验收分别记录。当前没有可直接打开即通话的页面，接续开发时需要实现并验证该客户端。
 
