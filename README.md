@@ -2,7 +2,7 @@
 
 换电脑继续开发先读[开发交接说明](docs/DEVELOPMENT_HANDOFF.md)：环境恢复、服务器约定、已完成/未完成、新电脑麦克风接入的下一步，以及本机历史实验资料的归档位置。
 
-2026-10-24：服务器已接通真实AgentSession＋Fun-ASR→文本LLM→Qwen TTS，[测试服务](services/livekit-agent/README.md)只监听127.0.0.1:18010。当前[Mac客户端](tools/mac-voice/README.md)只需点一次“开始说话”，随后连续收音、自动断句回复、开口打断旧回复，再处理新问题；采用服务器Silero与语段身份控制，静音不调用云ASR。用户已确认Mac扬声器下连续问答/自动插话正常，见[连续语音验证](docs/verification/2026-10-24-continuous-mac-voice.md)；后续“继续从51开始”的计数问题已改为独立完整播放检查点，[计数验证](docs/verification/2026-10-24-counting-resume.md)记录87项自动化检查及真实云端从4恢复至原终点50的结果，Mac计数现场复验仍待反馈。依赖、测试和模型服务均在服务器；故事原稿、持久化与手表验收分别推进。
+2026-10-24：服务器已接通真实AgentSession＋Fun-ASR→文本LLM→Qwen TTS，[测试服务](services/livekit-agent/README.md)只监听127.0.0.1:18010。当前[Mac客户端](tools/mac-voice/README.md)只需点一次“开始说话”，随后连续收音、自动断句回复、开口打断旧回复，再处理新问题；采用服务器Silero与语段身份控制，静音不调用云ASR。用户已确认Mac扬声器下连续问答/自动插话正常，见[连续语音验证](docs/verification/2026-10-24-continuous-mac-voice.md)。计数使用独立完整播放检查点，后续现场起点仍错的反馈已复现口语路由漏接并修正；[计数验证](docs/verification/2026-10-24-counting-resume.md)记录93项检查、真实云端口语/工具恢复及Mac实际浏览器播放时钟探针，保留失败记录，不替代物理声学验收。依赖、测试和模型服务均在服务器；故事原稿、持久化与手表验收分别推进。
 
 当前方向为服务器端LiveKit Agents＋ASR→LLM→TTS：[架构细化](docs/superpowers/specs/2026-10-24-server-livekit-design.md)、[SDK探针结果](docs/verification/2026-10-24-livekit-stage-zero.md)、[最小链路实施计划](docs/superpowers/plans/2026-10-24-livekit-voice-chain.md)。手表保留小智协议，Go接入层逐步收缩为设备适配；独立SFU媒体服务不作为本阶段必需项。8000上的正式服务仍为下述千问原生链路。
 

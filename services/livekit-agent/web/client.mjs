@@ -6,6 +6,7 @@ let ctx, stream, capture, ws, player, ready = false, recording = false, paired =
 let inFrames = 0, outFrames = 0;
 let sessionTimer, sessionUntil = 0, turnLimit = 8, usedTurns = 0;
 let userState = 'away', agentState = 'idle';
+let lastCount = null;
 const microphoneResource = new AsyncResource(), connection = new AttemptGate();
 function log(value) { $('log').textContent = `${new Date().toLocaleTimeString()} ${value}\n${$('log').textContent}`.slice(0, 6000); }
 function status(value) { $('status').textContent = value; }
@@ -28,6 +29,22 @@ function voiceState() {
 function sessionBudget() {
   const seconds = Math.max(0, Math.ceil((sessionUntil - performance.now()) / 1000));
   $('budget').textContent = `本次会话剩余 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} · 已用 ${usedTurns}/${turnLimit} 轮`;
+}
+function countState(ended = false) {
+  if (!lastCount) { $('count').textContent = '当前无计数任务'; return; }
+  const e = lastCount;
+  if (ended) {
+    const checkpoint = e.state === 'completed' ? `已完成到 ${e.end}` : `最后检查点 ${e.next}，原终点 ${e.end}`;
+    $('count').textContent = `本次对话已结束 · ${checkpoint}；下次唤醒需重新指定范围。`;
+    return;
+  }
+  const text = {
+    playing: `正在数到 ${e.end} · 下一个待确认播完的数字：${e.next}`,
+    paused: `数数已暂停 · 说“继续数”将从 ${e.next} 数到 ${e.end}（可能重读被打断的数字）`,
+    completed: `已完成 · 已数到 ${e.end}`,
+    failed: '数数的语音准备或播放失败，请重新指定范围。',
+  };
+  $('count').textContent = text[e.state] || '计数进度未知';
 }
 function clock() {
   const timestamp = ctx?.getOutputTimestamp?.();
@@ -66,6 +83,7 @@ class Speaker {
         if (receipt.finished || (block.sealed && ctx.currentTime > end + 1)) {
           if (!receipt.finished) { receipt.valid = false; receipt.finished = true; }
           send(receipt); this.book.blocks.delete(id);
+          log(`playback block=${id} epoch=${block.epoch} played=${receipt.played_samples}/${block.samples} valid=${receipt.valid}`);
           $('playback').textContent = receipt.valid ? `浏览器输出时钟估算：${receipt.played_samples} 个采样已输出；物理听感待确认。` : '输出时钟不可用，本段播放位置 unknown。';
         }
       }
@@ -77,6 +95,7 @@ class Speaker {
     for (const [id, block] of this.book.blocks) if (nextEpoch === null || block.epoch < nextEpoch) {
       const receipt = this.book.receipt(id, outputTime);
       receipt.finished = true;
+      log(`playback.cancel block=${id} epoch=${block.epoch} played=${receipt.played_samples}/${block.samples} valid=${receipt.valid}`);
       // Report interruption positions only after the server retires the epoch.
       this.retired ??= new Map(); this.retired.set(id, receipt);
       this.book.blocks.delete(id);
@@ -146,7 +165,7 @@ function disconnect(message = '已待机，麦克风已释放') {
   releaseMicrophone(); ctx?.close(); ctx = null;
   userState = 'away'; agentState = 'idle'; voiceState();
   $('budget').textContent = '开始下一次对话后重新计时';
-  $('count').textContent = '当前无计数任务';
+  countState(true);
   status(message); controls();
 }
 function fail(error) { $('error').textContent = error.message || '操作失败'; log(`失败：${error.code || error.name || 'Error'}`); disconnect(); status(error.message || '操作失败'); }
@@ -170,6 +189,7 @@ $('connect').onclick = action(async () => {
           if (ready) return;
           if (e.mode !== 'continuous' || e.input_rate !== 16000 || e.output_rate !== 24000) throw new Error('服务器连续语音协议不匹配，请更新服务后重试');
           ready = true; usedTurns = 0; turnLimit = e.max_turns || 8;
+          lastCount = null; countState(); log('会话开始');
           sessionUntil = performance.now() + (e.session_seconds || 900) * 1000;
           clearInterval(sessionTimer); sessionBudget(); sessionTimer = setInterval(sessionBudget, 1000);
           recording = true; capture.port.postMessage({type: 'start'});
@@ -179,14 +199,10 @@ $('connect').onclick = action(async () => {
         if (e.type === 'transcript') $('transcript').textContent = e.text + (e.final ? '' : ' …');
         if (e.type === 'reply') $('reply').textContent = e.text || '（回复已中断）';
         if (e.type === 'count.state') {
-          const text = {
-            playing: `正在数到 ${e.end} · 下一个待确认播完的数字：${e.next}`,
-            paused: `数数已暂停 · 说“继续数”将从 ${e.next} 数到 ${e.end}（可能重读被打断的数字）`,
-            completed: `已完成 · 已数到 ${e.end}`,
-            failed: '数数的语音准备或播放失败，请重新指定范围。',
-          };
-          $('count').textContent = text[e.state] || '计数进度未知';
+          lastCount = e; countState();
+          log(`count.state next=${e.next} end=${e.end} state=${e.state}`);
         }
+        if (e.type === 'turn.route') log(`route ${e.route} ${e.source || ''} next=${e.count?.next ?? 'none'} end=${e.count?.end ?? 'none'} state=${e.count?.state ?? 'none'}`);
         if (e.type === 'user.state') { userState = e.state; voiceState(); }
         if (e.type === 'agent.state') { agentState = e.state; voiceState(); }
         if (e.type === 'turn') { usedTurns = e.count; turnLimit = e.max_turns || turnLimit; sessionBudget(); }

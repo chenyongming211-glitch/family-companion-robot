@@ -34,6 +34,18 @@ class ParsingTests(unittest.TestCase):
         for text in ('继续讲故事', '不要继续数', '继续说说为什么', '停止数数'):
             self.assertFalse(is_count_resume(text), text)
 
+    def test_spoken_fillers_and_checkpoint_reference_still_resume_same_task(self):
+        for text in ('啊那继续数吧。', '嗯，你接着数吧', '请你继续吧', '从刚才停的地方继续数', '继续刚才的数数', '啊，继续。'):
+            with self.subTest(text=text):
+                self.assertTrue(is_count_resume(text))
+        for text in ('啊，不要继续数', '你别继续数', '继续讲故事', '从头重新数', '你继续说为什么'):
+            with self.subTest(text=text):
+                self.assertFalse(is_count_resume(text))
+
+    def test_spoken_fillers_do_not_bypass_explicit_count_task(self):
+        self.assertEqual(parse_count_request('啊，麻烦你从一数到五十吧。'), (1, 50))
+        self.assertIsNone(parse_count_request('啊，你不要从一数到五十'))
+
 
 class Gates:
     def __init__(self):

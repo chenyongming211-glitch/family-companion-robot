@@ -31,7 +31,7 @@ git status --short --branch
 | 已有现场结果 | 已唤醒状态可以直接开口插话；音量、亮度控制通过过现场测试，见对应验证文档 |
 | 旧后端的准确自动接续 | 未解决：实际采样位置仍未可靠映射到完整字词；起点未知时询问用户 |
 | 新架构 | 服务器端LiveKit Agents＋输入ASR→文本LLM→TTS已有最小可运行链路；独立loopback测试服务，未切换正式入口 |
-| 新LiveKit代码 | `services/livekit-agent/`已实现真实AgentSession、连续VAD分轮/自动插话、有限语段ASR/LLM/TTS、自定义PCM回报和会话内计数检查点；60项Python、24项客户端与3项SDK探针在服务器通过，见[计数验证](verification/2026-10-24-counting-resume.md) |
+| 新LiveKit代码 | `services/livekit-agent/`已实现真实AgentSession、连续VAD分轮/自动插话、有限语段ASR/LLM/TTS、自定义PCM回报、会话内计数检查点与口语/工具恢复；65项Python、25项客户端与3项SDK探针在服务器通过，见[计数验证](verification/2026-10-24-counting-resume.md) |
 | Eino | 原始需求提过优先验证；当前仅为任务编排候选，未引入依赖。首个闭环复用Go任务/存储 |
 | 麦克风客户端 | `services/livekit-agent/web/`单按钮唤醒后连续说话，自动回复/打断；同一按钮可结束对话，空闲60秒回待机。Mac通过`tools/mac-voice/open.command`建立SSH转发/配对；现场边界见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md) |
 
@@ -107,7 +107,7 @@ curl --max-time 10 http://82.156.48.111:8000/healthz
 
 Mac客户端已按用户最新要求改为单按钮：运行`./tools/mac-voice/open.command`后，点一次“开始说话”即连续收音，服务自动判断话尾并回复，开口时自动停旧回复、回答新问题。浏览器16k输入/24k播放/回报，服务器LiveKit与Silero管理轮次；不在Mac另建服务或复制模型Key。用户选择MacBook扬声器，浏览器请求回声消除/降噪，实际误打断/漏识别需现场确认。操作见[客户端说明](../tools/mac-voice/README.md)。
 
-实际听感与物理停声要有人确认；浏览器输出时钟只提供估算，不能证明手表AEC、I2S坐标或字词断点。用户已确认Mac单按钮连续问答/语音打断/旁支回答正常，见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md)，旧点击分轮失败与修正记录仍保存在[前阶段记录](verification/2026-10-24-mac-voice-client.md)。针对继续数从51开始，新增会话内独立计数任务：每数字完整播放才推进，插话保留检查点，真实云端已验证暂停4→回答5→从4恢复至原终点50；Mac计数复验待反馈，见[计数验证](verification/2026-10-24-counting-resume.md)。故事原稿接续、Go工具/存储和手表接入尚未在新链路验收。
+实际听感与物理停声要有人确认；浏览器输出时钟只提供估算，不能证明手表AEC、I2S坐标或字词断点。用户已确认Mac单按钮连续问答/语音打断/旁支回答正常，见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md)，旧点击分轮失败与修正记录仍保存在[前阶段记录](verification/2026-10-24-mac-voice-client.md)。会话内计数按完整播放推进，云端曾验证恢复至原终点50；用户复验仍报告起点错，现场“啊那继续数吧”路由遗漏已复现并修正。助手已自行验证真实云端口语从2恢复、模型工具从4恢复并到原终点8，以及Mac实际浏览器第3段部分播放→重播3→完成5的回报链路；保留一次云TTS连接失败，未把模拟/浏览器时钟测试当作用户声学验收，见[计数验证](verification/2026-10-24-counting-resume.md)。故事原稿接续、Go工具/存储和手表接入尚未在新链路验收。
 
 ## 6. 资料清单与本机独有内容
 

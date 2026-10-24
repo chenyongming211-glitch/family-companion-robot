@@ -22,6 +22,7 @@ class ContinuousTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.events, self.asr_calls, self.llm_calls = [], [], []
+        self.resume_tool = False
         self.hold_playout, self.long_output = False, False
         self.transcripts = ['一加一等于几？', '二加三等于几？', '一加一等于几？']
         self.hold_first_asr = False
@@ -110,11 +111,14 @@ class ContinuousTests(unittest.IsolatedAsyncioTestCase):
     async def llm(self, request):
         body = await request.json()
         self.llm_calls.append(body)
-        question = body['messages'][-1]['content']
+        question = next(m['content'] for m in reversed(body['messages']) if m['role'] == 'user')
         answer = '5' if '二加三' in question else '2'
         response = web.StreamResponse(headers={'Content-Type': 'text/event-stream'})
         await response.prepare(request)
-        for delta, finish in (({'role': 'assistant', 'content': answer}, None), ({}, 'stop')):
+        chunks = (({'role': 'assistant', 'content': answer}, None), ({}, 'stop'))
+        if self.resume_tool:
+            chunks = (({'role': 'assistant', 'tool_calls': [{'index': 0, 'id': 'resume-call', 'type': 'function', 'function': {'name': 'resume_counting', 'arguments': '{}'}}]}, None), ({}, 'tool_calls'))
+        for delta, finish in chunks:
             data = {'id': 'continuous-test', 'created': 1, 'model': 'qwen-plus', 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
             await response.write(('data: ' + json.dumps(data) + '\n\n').encode())
         await response.write(b'data: [DONE]\n\n')
@@ -163,7 +167,7 @@ class ContinuousTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(e['type'] == 'audio' and e['epoch'] > old for e in self.events[start:]))
 
     async def test_count_checkpoint_survives_vad_barge_in_question_and_resume(self):
-        self.transcripts = ['请从一数到三', '二加三等于几？', '那继续数吧']
+        self.transcripts = ['请从一数到三', '二加三等于几？', '啊那继续数吧。']
         await self.start()
         self.hold_playout = True
         await self.feed('long.wav')
@@ -189,6 +193,29 @@ class ContinuousTests(unittest.IsolatedAsyncioTestCase):
         await self.feed('first.wav')
         await self.until(lambda: any(e['type'] == 'reply' and '已经数到3' in e.get('text', '') for e in self.events))
         self.assertEqual(len(self.llm_calls), 1, 'completed resume cannot generate 4')
+
+    async def test_natural_resume_tool_uses_checkpoint_and_stops_post_tool_generation(self):
+        self.transcripts = ['请从一数到三', '二加三等于几？', '把没数完的那一段接上']
+        await self.start()
+        self.hold_playout = True
+        await self.feed('long.wav')
+        await self.until(lambda: any(e['type'] == 'audio.end' for e in self.events))
+        first = self.voice.output.pending[0]
+        self.voice.receipt({'block_id': first.id, 'epoch': first.epoch, 'played_samples': first.sent})
+        await self.until(lambda: self.voice.counting.snapshot['next'] == 2)
+        self.hold_playout = False
+        await self.feed('second.wav')
+        await self.until(lambda: any(e['type'] == 'reply' and e.get('text') == '5' for e in self.events))
+        self.assertEqual(self.voice.counting.snapshot['next'], 2)
+        self.resume_tool = True
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.counting.snapshot['state'] == 'completed')
+        self.assertEqual(len(self.llm_calls), 2, 'tool completion cannot ask the LLM to regenerate counting')
+        tool_names = [t['function']['name'] for t in self.llm_calls[-1].get('tools', [])]
+        self.assertIn('resume_counting', tool_names)
+        context = ' '.join(m['content'] or '' for m in self.llm_calls[-1]['messages'] if m['role'] == 'system')
+        self.assertIn('next=2', context)
+        self.assertIn('end=3', context)
 
     async def test_limit_stops_before_next_llm_and_idle_returns_standby(self):
         await self.start(automatic_max_turns=1)

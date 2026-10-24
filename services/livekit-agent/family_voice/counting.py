@@ -18,7 +18,19 @@ _COUNT_REQUEST = re.compile(
     r'|(?:一直|连续)?数(?:数)?(?:从)?(?P<start>' + _NUMBER + r')(?:到|至)(?P<end>' + _NUMBER + r'))'
     r'(?:吧|好吗|可以吗)?(?:[,，](?:中间)?(?:不要停|别停|不停|一直数))?[。.!！?？]*$'
 )
-_RESUME = re.compile(r'(?:(?:好|好的|那|嗯|请)[,，]?)*(?:继续(?:数(?:数)?|计数)?|接着数(?:数)?)(?:吧|啊|呀)?[。.!！?？]*$')
+_RESUME = re.compile(
+    r'(?:继续(?:数(?:数)?|计数)?|接着数(?:数)?'
+    r'|继续(?:刚才|刚刚|上次|之前)的?(?:数数|计数)'
+    r'|从(?:刚才|刚刚|上次)(?:停|停下|暂停|中断)的?(?:地方|位置|那儿|那里)(?:继续|接着)数(?:数)?)'
+    r'(?:吧|啊|呀|好吗|可以吗)?[。.!！?？]*$'
+)
+_SPOKEN_PREFIX = re.compile(r'^(?:(?:啊|呃|额|嗯|哦|噢|好(?:的)?|那(?:么)?|请(?:你)?|麻烦(?:你)?|帮我|给我|你)[,，。]*)+')
+
+
+def _spoken_command(text: str) -> str:
+    # Normalize only leading discourse/politeness markers. Negation and the
+    # rest of the utterance stay intact, and command matching remains anchored.
+    return _SPOKEN_PREFIX.sub('', re.sub(r'\s+', '', text))
 
 
 def _number(text: str) -> int:
@@ -44,7 +56,7 @@ def _number(text: str) -> int:
 
 def parse_count_request(text: str) -> tuple[int, int] | None:
     """Recognize explicit ranges; the controller validates size and direction."""
-    match = _COUNT_REQUEST.fullmatch(re.sub(r'\s+', '', text))
+    match = _COUNT_REQUEST.fullmatch(_spoken_command(text))
     if not match:
         return None
     try:
@@ -55,7 +67,7 @@ def parse_count_request(text: str) -> tuple[int, int] | None:
 
 def is_count_resume(text: str) -> bool:
     """Bare 'continue' needs an existing count plan, checked by the caller."""
-    return _RESUME.fullmatch(re.sub(r'\s+', '', text)) is not None
+    return _RESUME.fullmatch(_spoken_command(text)) is not None
 
 
 class CountController:

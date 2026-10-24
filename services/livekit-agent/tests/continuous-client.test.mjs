@@ -192,5 +192,16 @@ test('count progress shows confirmed checkpoint and clears when the conversation
   assert.match(ui.elements.get('count').textContent, /完成.*50/);
   assert.doesNotMatch(ui.elements.get('count').textContent, /51/);
   await ui.click('connect');
-  assert.match(ui.elements.get('count').textContent, /无计数任务/);
+  assert.match(ui.elements.get('count').textContent, /本次对话已结束/);
+  assert.match(ui.elements.get('count').textContent, /50/);
+  assert.doesNotMatch(ui.elements.get('count').textContent, /继续.*51/);
+});
+
+test('bounded event log keeps numeric route and playback evidence without conversation text', async () => {
+  const ui = await browser(); await start(ui);
+  await ui.message({type: 'turn.route', route: 'count.resume', source: 'direct', count: {start: 1, end: 50, next: 16, state: 'paused'}});
+  assert.match(ui.elements.get('log').textContent, /count.resume.*16.*50/);
+  await ui.message({type: 'transcript', text: 'synthetic-private-transcript', final: true});
+  await ui.message({type: 'reply', text: 'synthetic-private-reply'});
+  assert.doesNotMatch(ui.elements.get('log').textContent, /synthetic-private/);
 });

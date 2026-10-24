@@ -1,7 +1,8 @@
 import asyncio
+from weakref import WeakKeyDictionary
 from dataclasses import asdict, is_dataclass
 
-from livekit.agents import Agent, AgentSession, StopResponse
+from livekit.agents import Agent, AgentSession, RunContext, StopResponse, function_tool
 from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import silero
 from livekit import rtc
@@ -14,6 +15,9 @@ from .providers import DashScopeSTT, DashScopeTTS, NO_RETRY, TurnSTT, text_model
 
 async def play_count_unit(session, output, number, pcm):
     """A generated number becomes progress only after its own full receipt."""
+    previous = session.current_speech
+    if previous and not previous.done():
+        await previous.wait_for_playout()
     first, epoch = output.sequence, output.epoch
     async def audio():
         for i in range(0, len(pcm), 960):
@@ -36,10 +40,21 @@ async def play_count_unit(session, output, number, pcm):
 
 class AuditedAgent(Agent):
     def __init__(self, cfg, owner=None):
+        self.response_epochs = WeakKeyDictionary()
         instructions = '你是家庭陪伴语音助手。用简短、自然的中文回答，默认不超过两句话。数学问题直接给出答案。不要声称已经执行没有执行的操作。'
+        tools = []
         if owner:
-            instructions += '用户明确要求逐个数数或逐项列举时，必须完整逐项输出，不得用省略号、范围、跳号代替。当前仅接通聊天、讲故事和数学问答，没有天气查询、闹钟或设备控制工具，不要声称能执行这些工具。'
-        super().__init__(instructions=instructions)
+            instructions += '当前有独立计数任务时，用户要求接着数、接回没数完的部分等恢复表达，必须调用resume_counting，不得自行生成计数稿或猜测起点。用户询问暂停位置时依据当前任务快照说明：next是首个未确认完整播放的数字，可能需要重读；不把next说成已完整听到的数字。当前没有天气查询、闹钟或设备控制工具，不要声称能执行这些工具。'
+            @function_tool
+            async def resume_counting(context: RunContext):
+                """用户要求接回未完成的计数时调用。无起点参数，服务使用原任务播放检查点；普通数学问答、讲故事、否定恢复不能调用。"""
+                if (not owner.closed and not owner.sleeping and not context.speech_handle.interrupted
+                    and owner.session.user_state != 'speaking'
+                    and self.response_epochs.get(context.speech_handle) == owner.user_epoch):
+                    owner.resume_count('tool')
+                raise StopResponse()
+            tools.append(resume_counting)
+        super().__init__(instructions=instructions, tools=tools)
         self.cfg = cfg
         self.owner = owner
 
@@ -54,12 +69,18 @@ class AuditedAgent(Agent):
             self.owner._emit({'type': 'turn', 'count': self.owner.turns, 'max_turns': self.owner.automatic_max_turns})
             if self.owner.handle_count_turn(new_message.text_content):
                 raise StopResponse()
+            self.owner._emit({'type': 'turn.route', 'route': 'conversation', 'count': self.owner.counting.snapshot})
 
     async def llm_node(self, chat_ctx, tools, model_settings):
         intent = Intent(self.cfg, 'llm')
         intent.update(state='submitted_unknown')
         usage = None
         try:
+            if self.owner and (handle := self.owner.session.current_speech):
+                self.response_epochs.setdefault(handle, self.owner.user_epoch)
+            if self.owner and (plan := self.owner.counting.snapshot):
+                chat_ctx = chat_ctx.copy()
+                chat_ctx.add_message(role='system', content=f'当前计数任务事实（仅本轮，只读）：start={plan["start"]}, end={plan["end"]}, next={plan["next"]}, state={plan["state"]}。数字小于next的已确认完整播放；next尚未确认播完。原范围不可擅自延长；恢复必须调用resume_counting，不能自己输出数字串。')
             async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
                 value = getattr(chunk, 'usage', None)
                 if value is not None:
@@ -80,6 +101,7 @@ class VoiceSession:
         self.automatic, self.automatic_max_turns = automatic, automatic_max_turns
         self.automatic_utterance_seconds = automatic_utterance_seconds
         self.turns, self.sleeping, self.speech_timer = 0, False, None
+        self.user_epoch = 0
         self.input = PCMInput()
         self.output = PCMOutput(send)
         vad = silero.VAD.load(max_buffered_speech=30, force_cpu=True, **({'min_speech_duration': .12, 'min_silence_duration': .65, 'prefix_padding_duration': .3, 'activation_threshold': .6} if automatic else {}))
@@ -125,17 +147,27 @@ class VoiceSession:
                 self.counting.start(*request)
             except ValueError:
                 self.session.say('请指定零到一千以内的递增范围，一次最多数一百个数字。')
+            self._emit({'type': 'turn.route', 'route': 'count.start', 'count': self.counting.snapshot})
             return True
         plan = self.counting.snapshot
         if plan and is_count_resume(text):
-            if plan['state'] == 'completed':
-                self.session.say(f'已经数到{plan["end"]}，这次数数已完成。')
-            elif plan['state'] == 'failed':
-                self.session.say('上次数数的语音准备失败，请重新指定计数范围。')
-            else:
-                self.counting.resume()
+            self.resume_count('direct')
             return True
         return False
+
+    def resume_count(self, source):
+        plan = self.counting.snapshot
+        if self.closed or self.sleeping:
+            return
+        self._emit({'type': 'turn.route', 'route': 'count.resume', 'source': source, 'count': plan})
+        if not plan:
+            self.session.say('当前没有保留的计数任务，请指定计数范围。')
+        elif plan['state'] == 'completed':
+            self.session.say(f'已经数到{plan["end"]}，这次数数已完成。')
+        elif plan['state'] == 'failed':
+            self.session.say('上次数数的语音准备失败，请重新指定计数范围。')
+        else:
+            self.counting.resume()
 
     def _emit(self, event):
         if self.closed:
@@ -164,6 +196,7 @@ class VoiceSession:
                 if event.new_state == 'away':
                     self.sleep('idle')
                 elif event.new_state == 'speaking':
+                    self.user_epoch += 1
                     self.counting.pause()
                     async def limit():
                         await asyncio.sleep(self.automatic_utterance_seconds)

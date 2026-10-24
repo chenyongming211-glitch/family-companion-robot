@@ -1,8 +1,11 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession
+from livekit.agents import StopResponse
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 from family_voice.audio_io import PCMInput, PCMOutput
 from family_voice import runtime
@@ -155,6 +158,66 @@ class AudioTests(unittest.IsolatedAsyncioTestCase):
                 while not any(e['type'] == 'audio.cancel' for e in self.events):
                     await asyncio.sleep(.001)
         finally:
+            await session.aclose()
+
+    async def test_retired_resume_tool_cannot_reopen_counting_after_new_speech(self):
+        calls = []
+        owner = SimpleNamespace(closed=False, sleeping=False, user_epoch=0, session=SimpleNamespace(user_state='listening'), resume_count=calls.append)
+        agent = runtime.AuditedAgent(None, owner)
+        if not hasattr(agent, 'response_epochs'):
+            agent.response_epochs = {}
+        self.assertEqual(len(agent.tools), 1)
+        tool = agent.tools[0]
+        for closed, sleeping, interrupted, speaking in ((True, False, False, False), (False, True, False, False), (False, False, True, False), (False, False, False, True)):
+            owner.closed, owner.sleeping = closed, sleeping
+            owner.session.user_state = 'speaking' if speaking else 'listening'
+            handle = SpeechHandle.create()
+            agent.response_epochs[handle] = 0
+            if interrupted:
+                handle.interrupt(force=True)
+            with self.assertRaises(StopResponse):
+                await tool(SimpleNamespace(speech_handle=handle))
+        self.assertEqual(calls, [])
+        owner.closed = owner.sleeping = False
+        owner.session.user_state = 'listening'
+        owner.user_epoch = 1  # A short new onset has already returned to listening.
+        old = SpeechHandle.create()
+        agent.response_epochs[old] = 0
+        with self.assertRaises(StopResponse):
+            await tool(SimpleNamespace(speech_handle=old))
+        self.assertEqual(calls, [], 'old tools cannot resume after a new user onset, even without SDK interruption')
+        current = SpeechHandle.create()
+        agent.response_epochs[current] = owner.user_epoch
+        with self.assertRaises(StopResponse):
+            await tool(SimpleNamespace(speech_handle=current))
+        self.assertEqual(calls, ['tool'])
+
+    async def test_count_unit_waits_for_preceding_sdk_speech_before_recording_identity(self):
+        session = AgentSession(turn_handling={'interruption': {'resume_false_interruption': False}})
+        session.output.audio = self.sink
+        await session.start(Agent(instructions='前序语音检查'), record=False)
+        gate = asyncio.Event()
+        try:
+            async def prefix():
+                await gate.wait()
+                yield frame()
+            previous = session.say('前序说明', audio=prefix(), add_to_chat_ctx=False)
+            async with asyncio.timeout(1):
+                while session.current_speech is not previous:
+                    await asyncio.sleep(.001)
+            counting = asyncio.create_task(runtime.play_count_unit(session, self.sink, 7, b'\1\0' * 960))
+            await asyncio.sleep(.01)
+            self.assertEqual(self.sink.sequence, 0)
+            gate.set()
+            for ident in (1, 2):
+                async with asyncio.timeout(1):
+                    while not any(e['type'] == 'audio.end' and e['block_id'] == ident for e in self.events):
+                        await asyncio.sleep(.001)
+                block = self.sink.pending[-1]
+                self.sink.receipt(block.id, block.epoch, block.sent)
+            self.assertTrue(await asyncio.wait_for(counting, 1))
+        finally:
+            gate.set()
             await session.aclose()
 
 
