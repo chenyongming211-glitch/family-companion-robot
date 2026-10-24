@@ -79,10 +79,13 @@ func TestPairingAuthenticatesExistingXiaozhiGateway(t *testing.T) {
 		t.Fatal("gateway not owning session")
 	}
 	_, r, e := dial(h.URL, token)
-	if e == nil || r.StatusCode != 401 {
+	if e == nil || r == nil || r.StatusCode != 401 {
 		t.Fatal("ticket reused")
 	}
-	r2, _ := http.Get(h.URL + "/xiaozhi/ota/anything/")
+	r2, err := http.Get(h.URL + "/xiaozhi/ota/anything/")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer r2.Body.Close()
 	if r2.StatusCode != 404 {
 		t.Fatal("OTA exposed")
@@ -115,7 +118,7 @@ func TestOriginDeviceAndExpiredTicketRejected(t *testing.T) {
 	s.tickets[token] = time.Now().Add(-time.Second)
 	s.mu.Unlock()
 	_, r, e = dial(h.URL, token)
-	if e == nil || r.StatusCode != 401 {
+	if e == nil || r == nil || r.StatusCode != 401 {
 		t.Fatal("expired ticket accepted")
 	}
 	if s.g.Active() != 0 {
@@ -141,7 +144,10 @@ func TestHealthAndCapacityDoNotExposeCredentials(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		pair(t, h.URL)
 	}
-	busy, _ := http.Post(h.URL+"/v1/pair", "application/json", strings.NewReader(`{"device_id":"native-realtime"}`))
+	busy, err := http.Post(h.URL+"/v1/pair", "application/json", strings.NewReader(`{"device_id":"native-realtime"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	busy.Body.Close()
 	if busy.StatusCode != 429 {
 		t.Fatal("unbounded tickets")
