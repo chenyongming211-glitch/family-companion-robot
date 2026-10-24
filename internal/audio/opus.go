@@ -4,6 +4,9 @@ package audio
 /*
 #cgo pkg-config: opus
 #include <opus.h>
+static int encoder_lookahead(OpusEncoder *encoder, int *samples) {
+    return opus_encoder_ctl(encoder, OPUS_GET_LOOKAHEAD(samples));
+}
 */
 import "C"
 
@@ -20,7 +23,10 @@ type Encoder struct {
 	state      *C.OpusEncoder
 	frameBytes int
 }
-type Decoder struct{ state *C.OpusDecoder }
+type Decoder struct {
+	state *C.OpusDecoder
+	rate  int
+}
 
 func NewEncoder() (*Encoder, error) {
 	return NewEncoderAtRate(24000)
@@ -37,12 +43,31 @@ func NewEncoderAtRate(rate int) (*Encoder, error) {
 	return &Encoder{state: p, frameBytes: rate * 60 / 1000 * 2}, nil
 }
 func NewDecoder() (*Decoder, error) {
+	return NewDecoderAtRate(16000)
+}
+func NewDecoderAtRate(rate int) (*Decoder, error) {
+	if rate != 16000 && rate != 24000 {
+		return nil, errors.New("unsupported decoder sample rate")
+	}
 	var code C.int
-	p := C.opus_decoder_create(16000, 1, &code)
+	p := C.opus_decoder_create(C.opus_int32(rate), 1, &code)
 	if code != 0 {
 		return nil, fmt.Errorf("Opus decoder: %d", code)
 	}
-	return &Decoder{p}, nil
+	return &Decoder{state: p, rate: rate}, nil
+}
+
+// LookaheadSamples reports the codec delay in the encoder's sample-rate domain.
+// A sealed stream needs this many zero input samples to retain its final signal.
+func (e *Encoder) LookaheadSamples() (int, error) {
+	if e.state == nil {
+		return 0, errors.New("closed Opus encoder")
+	}
+	var samples C.int
+	if code := C.encoder_lookahead(e.state, &samples); code != 0 {
+		return 0, fmt.Errorf("Opus lookahead: %d", code)
+	}
+	return int(samples), nil
 }
 func (e *Encoder) Close() {
 	if e.state != nil {
@@ -75,7 +100,7 @@ func (d *Decoder) Decode(packet []byte) ([]byte, error) {
 	if d.state == nil || len(packet) == 0 || len(packet) > 4096 {
 		return nil, errors.New("invalid Opus input")
 	}
-	samples := make([]int16, 1920)
+	samples := make([]int16, d.rate*120/1000)
 	n := C.opus_decode(d.state, (*C.uchar)(unsafe.Pointer(&packet[0])), C.opus_int32(len(packet)), (*C.opus_int16)(unsafe.Pointer(&samples[0])), C.int(len(samples)), 0)
 	if n < 0 {
 		return nil, fmt.Errorf("Opus decode: %d", n)

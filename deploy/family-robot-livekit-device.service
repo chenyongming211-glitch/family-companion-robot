@@ -1,0 +1,28 @@
+[Unit]
+Description=Family robot isolated Opus device bridge to LiveKit
+After=network-online.target family-robot-livekit-dev.service
+Wants=network-online.target
+Requires=family-robot-livekit-dev.service
+
+[Service]
+Type=simple
+User=family-robot-livekit
+Group=family-robot-livekit
+WorkingDirectory=/opt/family-robot-livekit-dev
+EnvironmentFile=/etc/family-robot/livekit-dev.env
+Environment=VOICE_DEVICE_LISTEN=127.0.0.1:18020
+Environment=VOICE_DEVICE_BACKEND=ws://127.0.0.1:18010/v1/audio?mode=drain
+ExecStart=/opt/family-robot-livekit-runtime/bin/livekit-device-gateway
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=128M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target
