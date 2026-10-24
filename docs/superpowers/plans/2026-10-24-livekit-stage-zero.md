@@ -30,7 +30,7 @@
 **Consumes:** `livekit.agents.voice.io.AudioOutput`、`AudioOutputCapabilities`、`livekit.rtc.AudioFrame`。
 **Produces:** 受测`ReceiptProbe`及三项行为测试；不是网络协议或正式播放状态机。
 
-- [ ] **Step 1：建立Linux隔离环境。** 在独立scratch checkout执行，不动正式venv。创建requirements文件内容：
+- [x] **Step 1：建立Linux隔离环境。** 在独立scratch checkout执行，不动正式venv。创建requirements文件内容：
 
 ```text
 livekit-agents==1.8.8
@@ -45,7 +45,7 @@ python3.12 -m venv .superpowers/livekit-stage-zero/venv
 
 记录Python/系统版本与resolved依赖清单；安装失败保留错误并定位，不升级全局依赖或默默更换SDK。
 
-- [ ] **Step 2：先写测试文件，完整内容如下。**
+- [x] **Step 2：先写测试文件，完整内容如下。**
 
 ```python
 import asyncio
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 3：运行红灯。**
+- [x] **Step 3：运行红灯。**
 
 ```sh
 PYTHONPATH=tools/livekit-audit .superpowers/livekit-stage-zero/venv/bin/python -m unittest discover -s tools/livekit-audit -p test_device_sink_probe.py -v
@@ -135,7 +135,7 @@ PYTHONPATH=tools/livekit-audit .superpowers/livekit-stage-zero/venv/bin/python -
 
 预期缺少`device_sink_probe`而失败。若没有实际执行测试，不能记录红灯。
 
-- [ ] **Step 4：创建单段探针文件，完整内容如下。**
+- [x] **Step 4：创建单段探针文件，完整内容如下。**
 
 ```python
 from livekit import rtc
@@ -204,8 +204,12 @@ class ReceiptProbe(io.AudioOutput):
 
 此处故意没有网络、超时推进、音频队列、重采样或生产unknown终态降级。生产适配器不能因本探针拒绝第二个待结算段而阻塞新用户收音/回答；之后必须单独覆盖250ms结算超时、旧回调FIFO、并发取消及无效位置解锁SDK的策略。
 
-- [ ] **Step 5：重跑同一命令得到实际绿灯。** 预期3 tests、OK；若SDK行为与源码核对不符，按实际失败修正接入契约，不修改SDK内部私有字段让测试通过。
-- [ ] **Step 6：自查、记录与提交。** README写明上述准确命令、固定版本、无模型/设备调用及探针限制；verification文档填实际红绿输出与失败边界。执行`git diff --check`，只提交探针/依赖/说明文件，报告源码SHA与Linux环境；不要求运行无关固件构建。
+- [x] **Step 5：重跑同一命令得到实际绿灯。** 预期3 tests、OK；若SDK行为与源码核对不符，按实际失败修正接入契约，不修改SDK内部私有字段让测试通过。
+- [x] **Step 6：自查、记录与提交。** README写明上述准确命令、固定版本、无模型/设备调用及探针限制；verification文档填实际红绿输出与失败边界。执行`git diff --check`，只提交探针/依赖/说明文件，报告源码SHA与Linux环境；不要求运行无关固件构建。
+
+## 本次执行结果
+
+2026-10-24在云服务器独立checkout完成Task 1：真实红灯退出1、绿灯3项通过、依赖检查通过；具体发行包、参考源码差异和限制见[验证报告](../../verification/2026-10-24-livekit-stage-zero.md)。后续运行环境与服务均在服务器，Mac仅为代码/Git与后续测试终端。Task 1完成不代表P0其余SDK接线/模型能力或麦克风客户端完成。
 
 ## 阶段出口与下一份计划的输入
 

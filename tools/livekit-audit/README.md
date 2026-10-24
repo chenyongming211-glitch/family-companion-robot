@@ -22,7 +22,7 @@ PYTHONPATH=tools/livekit-audit .superpowers/livekit-stage-zero/venv/bin/python -
 
 - `flush()` 只封口；同一块、范围合法且完整的模拟设备回报才结束正常播放等待。
 - `clear_buffer()` 后可用同块的部分前缀结算中断；旧块回报不能完成新块。
-- 匹配块一旦收到无效位置，后续有效回报不能升级为实测完成。
+- 匹配块收到显式 `valid=False` 回报后，后续有效回报不能升级为实测完成。越界采样数单独拒绝，不使该块永久失效。
 
 测试直接使用真实 SDK 的 `AudioOutput`、`wait_for_playout()` 和 `rtc.AudioFrame`，不 mock SDK。输入是内存中的静音 PCM，回报由测试提交；没有模型调用、网络监听、麦克风、扬声器或手表操作。
 
