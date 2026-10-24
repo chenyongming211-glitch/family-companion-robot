@@ -109,7 +109,7 @@ class Cloud:
         sender = reader = None
         try:
             async with asyncio.timeout(self.timeout), aiohttp.ClientSession() as client:
-                async with client.ws_connect(self.cfg.asr_url, headers={'Authorization': 'Bearer ' + self.cfg.api_key}, max_msg_size=2**20) as ws:
+                async with client.ws_connect(self.cfg.asr_url, headers={'Authorization': 'Bearer ' + self.cfg.api_key}, max_msg_size=2**20, timeout=aiohttp.ClientWSTimeout(ws_close=.1)) as ws:
                     intent.update(state='submitted_unknown')
                     await ws.send_json({'header': {'action': 'run-task', 'task_id': task_id, 'streaming': 'duplex'}, 'payload': {'task_group': 'audio', 'task': 'asr', 'function': 'recognition', 'model': self.cfg.asr_model, 'parameters': {'format': 'pcm', 'sample_rate': 16000}, 'input': {}}})
                     started = await self._expect(ws, 'task-started', 'asr')

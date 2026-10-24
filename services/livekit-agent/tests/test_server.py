@@ -169,6 +169,74 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
 
+    async def test_continuous_audio_needs_no_manual_input_identity(self):
+        voices = []
+        class ListeningVoice(TestVoice):
+            def __init__(self, cfg, send, *, automatic=False):
+                super().__init__(cfg, send)
+                self.automatic = automatic
+                voices.append(self)
+        client = TestClient(TestServer(create_app(self.cfg, session_factory=ListeningVoice)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio?mode=continuous', headers={'Authorization': 'Bearer synthetic-token'})
+            ready = await ws.receive_json()
+            self.assertEqual(ready['mode'], 'continuous')
+            self.assertTrue(voices[0].automatic)
+            for _ in range(3):
+                await ws.send_json({'type': 'listen.audio', 'data': base64.b64encode(b'\0' * 640).decode()})
+            await self.client_until(lambda: voices[0].frames == 960)
+            self.assertEqual(voices[0].commits, 0)
+            await ws.send_json({'type': 'input.end', 'input_id': 1})
+            self.assertEqual((await ws.receive_json())['code'], 'invalid_input')
+            await ws.close()
+        finally:
+            await client.close()
+
+    async def client_until(self, predicate):
+        async with asyncio.timeout(1):
+            while not predicate():
+                await asyncio.sleep(.01)
+
+    async def test_continuous_sleep_closes_socket_and_releases_single_session(self):
+        class SleepVoice(TestVoice):
+            def __init__(self, cfg, send, *, automatic=False):
+                super().__init__(cfg, send)
+            def feed(self, pcm):
+                asyncio.create_task(self.send({'type': 'sleep', 'code': 'idle'}))
+        client = TestClient(TestServer(create_app(self.cfg, session_factory=SleepVoice)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio?mode=continuous', headers={'Authorization': 'Bearer synthetic-token'})
+            await ws.receive_json()
+            await ws.send_json({'type': 'listen.audio', 'data': base64.b64encode(b'\0' * 640).decode()})
+            self.assertEqual((await asyncio.wait_for(ws.receive_json(), .5))['type'], 'sleep')
+            await asyncio.wait_for(ws.receive(), .5)
+            await ws.close()
+            async with asyncio.timeout(1):
+                while (await (await client.get('/healthz')).json())['active_sessions']:
+                    await asyncio.sleep(.01)
+        finally:
+            await client.close()
+
+    async def test_continuous_rejects_empty_odd_and_oversize_pcm(self):
+        def factory(cfg, send, *, automatic=False):
+            return TestVoice(cfg, send)
+        client = TestClient(TestServer(create_app(self.cfg, session_factory=factory)))
+        await client.start_server()
+        try:
+            for pcm in (b'', b'\0', b'\0' * 642):
+                ws = await client.ws_connect('/v1/audio?mode=continuous', headers={'Authorization': 'Bearer synthetic-token'})
+                await ws.receive_json()
+                await ws.send_json({'type': 'listen.audio', 'data': base64.b64encode(pcm).decode()})
+                self.assertEqual((await asyncio.wait_for(ws.receive_json(), .5))['code'], 'invalid_input')
+                await ws.close()
+                async with asyncio.timeout(1):
+                    while (await (await client.get('/healthz')).json())['active_sessions']:
+                        await asyncio.sleep(.01)
+        finally:
+            await client.close()
+
 
 if __name__ == '__main__':
     unittest.main()

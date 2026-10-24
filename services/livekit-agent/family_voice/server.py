@@ -30,6 +30,10 @@ def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SEC
             browser_authorize(request)
         elif not hmac.compare_digest(request.headers.get('Authorization', ''), 'Bearer ' + cfg.client_token):
             raise web.HTTPUnauthorized()
+        mode = request.query.get('mode', 'manual')
+        if mode not in ('manual', 'continuous'):
+            raise web.HTTPBadRequest()
+        automatic = mode == 'continuous'
         if app[STATE]['active']:
             raise web.HTTPConflict()
         app[STATE]['active'] = True
@@ -40,15 +44,21 @@ def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SEC
         try:
             await ws.prepare(request)
             async def send(event):
+                nonlocal input_id, reason
                 try:
                     await asyncio.wait_for(ws.send_json(event), .25)
+                    if automatic and event['type'] == 'turn':
+                        input_id = event['count']
+                    if automatic and event['type'] == 'sleep':
+                        reason = event['code']
+                        await ws.close()
                 except Exception:
                     await ws.close(code=1011)
                     raise
-            voice = session_factory(cfg, send)
+            voice = session_factory(cfg, send, automatic=True) if automatic else session_factory(cfg, send)
             await voice.start()
             audit = Intent(cfg, 'client_session')
-            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': session_seconds, 'max_turns': 8})
+            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': session_seconds, 'max_turns': 8, 'mode': mode})
             accepting = False
             input_samples = 0
             budget = asyncio.timeout(session_seconds)
@@ -58,7 +68,15 @@ def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SEC
                         break
                     event = message.json()
                     kind = event.get('type')
-                    phase = kind if kind in ('input.start', 'input.audio', 'input.end', 'cancel', 'playback') else 'invalid_command'
+                    phase = kind if kind in ('input.start', 'input.audio', 'input.end', 'cancel', 'playback', 'listen.audio') else 'invalid_command'
+                    if automatic and kind != 'playback':
+                        if kind != 'listen.audio':
+                            raise ValueError('continuous mode requires continuous audio')
+                        pcm = base64.b64decode(event['data'], validate=True)
+                        if not pcm or len(pcm) % 2 or len(pcm) > 640:
+                            raise ValueError('invalid continuous PCM frame')
+                        voice.feed(pcm)
+                        continue
                     if kind == 'input.start':
                         if input_id >= 8:
                             reason = 'turn_limit'

@@ -31,9 +31,9 @@ git status --short --branch
 | 已有现场结果 | 已唤醒状态可以直接开口插话；音量、亮度控制通过过现场测试，见对应验证文档 |
 | 旧后端的准确自动接续 | 未解决：实际采样位置仍未可靠映射到完整字词；起点未知时询问用户 |
 | 新架构 | 服务器端LiveKit Agents＋输入ASR→文本LLM→TTS已有最小可运行链路；独立loopback测试服务，未切换正式入口 |
-| 新LiveKit代码 | `services/livekit-agent/`已实现真实AgentSession、自定义PCM I/O、三模型适配、取消和服务器smoke；21项新增测试与原3项SDK探针在服务器通过，见[验证报告](verification/2026-10-24-livekit-voice-chain.md) |
+| 新LiveKit代码 | `services/livekit-agent/`已实现真实AgentSession、连续VAD分轮/自动插话、有限语段ASR/LLM/TTS、自定义PCM回报；38项Python、23项客户端与3项SDK探针在服务器通过，见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md) |
 | Eino | 原始需求提过优先验证；当前仅为任务编排候选，未引入依赖。首个闭环复用Go任务/存储 |
-| 麦克风客户端 | `services/livekit-agent/web/`已提供浏览器实时收音/播放、显式分轮与停播；Mac通过`tools/mac-voice/open.command`建立SSH转发和一次性配对；真实测试边界见[客户端验证](verification/2026-10-24-mac-voice-client.md) |
+| 麦克风客户端 | `services/livekit-agent/web/`单按钮唤醒后连续说话，自动回复/打断；同一按钮可结束对话，空闲60秒回待机。Mac通过`tools/mac-voice/open.command`建立SSH转发/配对；现场边界见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md) |
 
 开发推进目标：唤醒一次→连续对话、随时插话→空闲超时待机。故事中断后先答新问题，用户说继续后从首个未完整播放的句子恢复原稿；数数恢复到原终点。句中打断允许重读当前句，正常流程不要求用户报告起点。
 
@@ -105,9 +105,9 @@ curl --max-time 10 http://82.156.48.111:8000/healthz
 
 服务器最小链路已完成：合成WAV经真实ASR→LLM→TTS连续问答，数数回复取消后还能回答新问题；播放证据来自按PCM时长计时的模拟客户端。固定文字播报不提前入历史、取消前后、旧回报和unknown降级有真实SDK测试；工具后抑制重复生成、Go任务/记录接线与准确自动接续仍未验收。
 
-Mac实时收音/播放客户端现已实现，经SSH转发接服务器127.0.0.1:18010；运行`./tools/mac-voice/open.command`，操作见[客户端说明](../tools/mac-voice/README.md)。页面只负责16k输入、24k播放、显式轮次与取消回报，继续使用同一个AgentSession；不在Mac另建服务或复制模型Key。用户本轮选择MacBook扬声器，浏览器请求回声消除/降噪；自由声学插话仍需后续单独验证。
+Mac客户端已按用户最新要求改为单按钮：运行`./tools/mac-voice/open.command`后，点一次“开始说话”即连续收音，服务自动判断话尾并回复，开口时自动停旧回复、回答新问题。浏览器16k输入/24k播放/回报，服务器LiveKit与Silero管理轮次；不在Mac另建服务或复制模型Key。用户选择MacBook扬声器，浏览器请求回声消除/降噪，实际误打断/漏识别需现场确认。操作见[客户端说明](../tools/mac-voice/README.md)。
 
-实际听感与物理停声要有人确认；浏览器输出时钟只提供估算，不能证明手表AEC、I2S坐标或字词断点。用户麦克风权限/电平、问答、取消与复验结果分别记录于[客户端验证](verification/2026-10-24-mac-voice-client.md)。后续增加自动端点/声学插话时继续复用本页，不另写语音编排。
+实际听感与物理停声要有人确认；浏览器输出时钟只提供估算，不能证明手表AEC、I2S坐标或字词断点。当前自动轮次与插话验证见[连续语音验证](verification/2026-10-24-continuous-mac-voice.md)，旧点击分轮失败与修正记录仍保存在[前阶段记录](verification/2026-10-24-mac-voice-client.md)。任务原稿接续、Go工具/存储和手表接入尚未在新链路验收。
 
 ## 6. 资料清单与本机独有内容
 

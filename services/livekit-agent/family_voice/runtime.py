@@ -1,19 +1,33 @@
 import asyncio
 from dataclasses import asdict, is_dataclass
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, StopResponse
 from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import silero
 
 from .audio_io import PCMInput, PCMOutput
 from .cloud import Intent, numeric_usage
-from .providers import DashScopeSTT, DashScopeTTS, NO_RETRY, text_model
+from .providers import DashScopeSTT, DashScopeTTS, NO_RETRY, TurnSTT, text_model
 
 
 class AuditedAgent(Agent):
-    def __init__(self, cfg):
-        super().__init__(instructions='你是家庭陪伴语音助手。用简短、自然的中文回答，默认不超过两句话。数学问题直接给出答案。不要声称已经执行没有执行的操作。')
+    def __init__(self, cfg, owner=None):
+        instructions = '你是家庭陪伴语音助手。用简短、自然的中文回答，默认不超过两句话。数学问题直接给出答案。不要声称已经执行没有执行的操作。'
+        if owner:
+            instructions += '用户明确要求逐个数数或逐项列举时，必须完整逐项输出，不得用省略号、范围、跳号代替。当前仅接通聊天、讲故事和数学问答，没有天气查询、闹钟或设备控制工具，不要声称能执行这些工具。'
+        super().__init__(instructions=instructions)
         self.cfg = cfg
+        self.owner = owner
+
+    async def on_user_turn_completed(self, turn_ctx, new_message):
+        if self.owner:
+            if self.owner.sleeping or self.owner.closed:
+                raise StopResponse()
+            if self.owner.turns >= self.owner.automatic_max_turns:
+                self.owner.sleep('turn_limit')
+                raise StopResponse()
+            self.owner.turns += 1
+            self.owner._emit({'type': 'turn', 'count': self.owner.turns, 'max_turns': self.owner.automatic_max_turns})
 
     async def llm_node(self, chat_ctx, tools, model_settings):
         intent = Intent(self.cfg, 'llm')
@@ -35,15 +49,23 @@ class AuditedAgent(Agent):
 
 
 class VoiceSession:
-    def __init__(self, cfg, send):
+    def __init__(self, cfg, send, *, automatic=False, automatic_idle_seconds=60, automatic_max_turns=8, automatic_utterance_seconds=25):
         self.cfg, self.send = cfg, send
+        self.automatic, self.automatic_max_turns = automatic, automatic_max_turns
+        self.automatic_utterance_seconds = automatic_utterance_seconds
+        self.turns, self.sleeping, self.speech_timer = 0, False, None
         self.input = PCMInput()
         self.output = PCMOutput(send)
-        self.providers = [DashScopeSTT(cfg), text_model(cfg), DashScopeTTS(cfg), silero.VAD.load(max_buffered_speech=30, force_cpu=True)]
+        vad = silero.VAD.load(max_buffered_speech=30, force_cpu=True, **({'min_speech_duration': .12, 'min_silence_duration': .65, 'prefix_padding_duration': .3, 'activation_threshold': .6} if automatic else {}))
+        self.providers = [DashScopeSTT(cfg), text_model(cfg, max_tokens=512 if automatic else 128), DashScopeTTS(cfg), vad]
+        self.recognizer = TurnSTT(self.providers[0], vad) if automatic else self.providers[0]
+        turn_handling = {'turn_detection': 'manual', 'interruption': {'resume_false_interruption': False}, 'preemptive_generation': {'enabled': False}}
+        if automatic:
+            turn_handling.update(turn_detection='vad', endpointing={'min_delay': .35, 'max_delay': 1}, interruption={'mode': 'vad', 'enabled': True, 'min_duration': .2, 'min_words': 0, 'resume_false_interruption': False})
         self.session = AgentSession(
-            stt=self.providers[0], llm=self.providers[1], tts=self.providers[2], vad=self.providers[3],
-            turn_handling={'turn_detection': 'manual', 'interruption': {'resume_false_interruption': False}, 'preemptive_generation': {'enabled': False}},
-            use_tts_aligned_transcript=False, user_away_timeout=None,
+            stt=self.recognizer, llm=self.providers[1], tts=self.providers[2], vad=vad,
+            turn_handling=turn_handling,
+            use_tts_aligned_transcript=False, user_away_timeout=automatic_idle_seconds if automatic else None,
             conn_options=SessionConnectOptions(stt_conn_options=NO_RETRY, llm_conn_options=NO_RETRY, tts_conn_options=NO_RETRY),
         )
         self.session.input.audio = self.input
@@ -67,6 +89,25 @@ class VoiceSession:
         job.add_done_callback(done)
 
     async def start(self):
+        if self.automatic:
+            @self.session.on('user_state_changed')
+            def user_state(event):
+                if self.closed:
+                    return
+                self._emit({'type': 'user.state', 'state': event.new_state})
+                if self.speech_timer:
+                    self.speech_timer.cancel()
+                    self.speech_timer = None
+                if event.new_state == 'away':
+                    self.sleep('idle')
+                elif event.new_state == 'speaking':
+                    async def limit():
+                        await asyncio.sleep(self.automatic_utterance_seconds)
+                        self.sleep('utterance_limit')
+                    self.speech_timer = asyncio.create_task(limit())
+            @self.session.on('agent_state_changed')
+            def agent_state(event):
+                self._emit({'type': 'agent.state', 'state': event.new_state})
         @self.session.on('user_input_transcribed')
         def transcribed(event):
             self._emit({'type': 'transcript', 'text': event.transcript, 'final': event.is_final})
@@ -77,7 +118,12 @@ class VoiceSession:
         @self.session.on('error')
         def error(event):
             self._emit({'type': 'error', 'stage': 'runtime', 'code': type(event.error).__name__})
-        await self.session.start(AuditedAgent(self.cfg), record=False)
+        await self.session.start(AuditedAgent(self.cfg, self if self.automatic else None), record=False)
+
+    def sleep(self, code):
+        if not self.closed and not self.sleeping:
+            self.sleeping = True
+            self._emit({'type': 'sleep', 'code': code})
 
     async def begin_input(self):
         await self.interrupt()
@@ -137,6 +183,9 @@ class VoiceSession:
         if self.closed:
             return
         self.closed = True
+        if self.speech_timer:
+            self.speech_timer.cancel()
+            await asyncio.gather(self.speech_timer, return_exceptions=True)
         self.input.close()
         await self.output.aclose()
         try:
@@ -145,5 +194,7 @@ class VoiceSession:
             for job in tuple(self.jobs):
                 job.cancel()
             await asyncio.gather(*self.jobs, return_exceptions=True)
+            if self.automatic:
+                await self.recognizer.aclose()
             for provider in self.providers[:3]:
                 await provider.aclose()

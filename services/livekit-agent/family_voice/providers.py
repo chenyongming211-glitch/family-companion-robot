@@ -1,10 +1,12 @@
 import asyncio
 import uuid
 import weakref
+import time
 
 from livekit import rtc
 from livekit.agents import APIError, stt, tts
 from livekit.agents.types import APIConnectOptions, NOT_GIVEN
+from livekit.agents.vad import VADEventType
 from livekit.plugins import openai
 
 from .cloud import Cloud, CloudError
@@ -48,8 +50,12 @@ class DashScopeSTT(stt.STT):
 
     async def _recognize_impl(self, buffer, *, language=NOT_GIVEN, conn_options=NO_RETRY):
         frame = rtc.combine_audio_frames(buffer)
+        if frame.sample_rate != 16000 or frame.num_channels != 1 or frame.samples_per_channel > 16000 * 29:
+            raise APIError('recognition requires at most 29 seconds of mono16 16k audio', retryable=False)
         async def frames():
-            yield bytes(frame.data)
+            data = bytes(frame.data)
+            for offset in range(0, len(data), 3200):
+                yield data[offset:offset + 3200]
         events = [ev async for ev in Cloud(self.cfg).asr(frames())]
         text = ''.join(ev['text'] for ev in events if ev['final'])
         return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[stt.SpeechData(language='zh', text=text)])
@@ -96,6 +102,92 @@ class Recognition(stt.SpeechStream):
             raise APIError(str(error), retryable=False) from None
 
 
+class TurnSTT(stt.STT):
+    """VAD-separated recognition with explicit ownership of in-flight segments.
+
+    A new speech onset retires the previous pending recognition. Unlike a
+    serial adapter, VAD consumption never waits for the cloud terminal event.
+    """
+    def __init__(self, wrapped, vad):
+        super().__init__(capabilities=stt.STTCapabilities(streaming=True, interim_results=False))
+        self.wrapped, self.vad = wrapped, vad
+        self.streams = weakref.WeakSet()
+
+    def stream(self, *, language=NOT_GIVEN, conn_options=NO_RETRY):
+        stream = TurnRecognition(stt=self, conn_options=NO_RETRY, sample_rate=16000)
+        self.streams.add(stream)
+        return stream
+
+    async def _recognize_impl(self, buffer, *, language=NOT_GIVEN, conn_options=NO_RETRY):
+        return await self.wrapped.recognize(buffer, language=language, conn_options=NO_RETRY)
+
+    async def aclose(self):
+        for stream in tuple(self.streams):
+            await stream.aclose()
+
+
+class TurnRecognition(stt.SpeechStream):
+    async def aclose(self):
+        try:
+            await super().aclose()
+        finally:
+            self._stt.streams.discard(self)
+
+    async def _run(self):
+        detector = self._stt.vad.stream()
+        generation, active = 0, None
+        jobs = set()
+
+        async def forward():
+            async for value in self._input_ch:
+                if isinstance(value, rtc.AudioFrame):
+                    detector.push_frame(value)
+                else:
+                    detector.flush()
+            detector.end_input()
+
+        async def recognize(frames, epoch, ended):
+            if epoch != generation:
+                return
+            try:
+                result = await self._stt.wrapped.recognize(rtc.combine_audio_frames(frames), conn_options=NO_RETRY)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if epoch != generation:
+                    return
+                raise
+            if epoch == generation and result.alternatives and result.alternatives[0].text:
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=result.alternatives, speech_end_time=ended))
+
+        async def detect(group):
+            nonlocal generation, active
+            async for event in detector:
+                if event.type == VADEventType.START_OF_SPEECH:
+                    generation += 1
+                    if active and not active.done():
+                        active.cancel()
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+                elif event.type == VADEventType.END_OF_SPEECH:
+                    self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                    if len(jobs) >= 4:
+                        raise APIError('recognition backlog limit', retryable=False)
+                    ended = time.time() - event.silence_duration - event.inference_duration
+                    active = group.create_task(recognize(event.frames, generation, ended))
+                    jobs.add(active)
+                    active.add_done_callback(jobs.discard)
+
+        try:
+            try:
+                async with asyncio.TaskGroup() as group:
+                    group.create_task(forward())
+                    group.create_task(detect(group))
+            except ExceptionGroup:
+                raise APIError('continuous recognition failed', retryable=False) from None
+        finally:
+            await detector.aclose()
+
+
 class DashScopeTTS(tts.TTS):
     def __init__(self, cfg):
         super().__init__(capabilities=tts.TTSCapabilities(streaming=False), sample_rate=24000, num_channels=1)
@@ -115,6 +207,6 @@ class Synthesis(tts.ChunkedStream):
             raise APIError(str(error), retryable=False) from None
 
 
-def text_model(cfg):
+def text_model(cfg, *, max_tokens=128):
     return openai.LLM(model=cfg.llm_model, api_key=cfg.api_key, base_url=cfg.llm_url, max_retries=0,
-                      prompt_cache_breakpoints=False, extra_body={'enable_thinking': False, 'max_tokens': 128})
+                      prompt_cache_breakpoints=False, extra_body={'enable_thinking': False, 'max_tokens': max_tokens})
