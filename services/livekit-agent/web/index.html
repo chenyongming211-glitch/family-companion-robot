@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>家庭陪伴 · Mac 语音测试</title><link rel="stylesheet" href="/client/client.css"></head>
+<body><main>
+<header><span class="eyebrow">家庭陪伴 / MacBook 测试终端</span><h1>先把声音接起来</h1><p>服务器处理语音，Mac 负责收音和播放。先点击分轮，逐层确认。</p></header>
+<section class="panel"><h2>1 · 检查本机声音</h2><div class="actions"><button id="mic">检查麦克风</button><button id="tone">试听提示音</button><button id="release">释放麦克风</button></div><label for="level">麦克风电平</label><meter id="level" min="0" max="1" value="0"></meter><p id="device">尚未请求麦克风权限。建议先调低扬声器音量。</p></section>
+<section class="panel"><h2>2 · 连接服务器</h2><p id="pair" role="status">正在检查配对链接…</p><div class="actions"><button id="connect" disabled>连接语音服务</button><button id="disconnect" disabled>断开连接</button></div><p id="status" role="status">未连接</p></section>
+<section class="panel"><h2>3 · 开口试一下</h2><div class="actions"><button id="start" class="primary" disabled>开始说话</button><button id="end" disabled>结束发送</button><button id="cancel" class="stop" disabled>立即停播</button></div><p>说完点击“结束发送”。每轮最多 25 秒；再次“开始说话”会先停旧回复。收音期间请勿切换页面。</p><div class="conversation"><article><h3>你说的</h3><p id="transcript">等待输入</p></article><article><h3>助手回答</h3><p id="reply">等待回答</p></article></div><p id="stats">输入 0 帧 · 输出 0 帧</p><p id="playback">播放位置来自浏览器输出时钟估算，不代表扬声器实际停声测量。</p></section>
+<section class="panel"><h2>建议测试顺序</h2><ol><li>检查电平、试听提示音，确认设备正常。</li><li>连接后说“一加一等于几”，结束发送，听到回答。</li><li>说“从一数到五十”，播放中点击“立即停播”。</li><li>再次提问“二加三等于几”，确认新回答正常。</li></ol><p>只在点击“开始说话”后发送麦克风音频到已配置的云端语音模型。不保存录音或对话正文；断开会释放麦克风。浏览器回声消除不等于 ESP-SR 或手表 AEC 已验证。</p></section>
+<p id="error" role="alert"></p><details><summary>事件记录（仅当前页面）</summary><pre id="log"></pre></details>
+</main><script type="module" src="/client/client.mjs"></script></body></html>

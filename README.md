@@ -2,7 +2,7 @@
 
 换电脑继续开发先读[开发交接说明](docs/DEVELOPMENT_HANDOFF.md)：环境恢复、服务器约定、已完成/未完成、新电脑麦克风接入的下一步，以及本机历史实验资料的归档位置。
 
-2026-10-24：服务器已实现独立LiveKit最小语音链路，真实AgentSession接入Fun-ASR→文本LLM→Qwen TTS，完成连续问答、取消和取消后新问题实测，见[本轮验证报告](docs/verification/2026-10-24-livekit-voice-chain.md)。[测试服务与复现入口](services/livekit-agent/README.md)只监听服务器127.0.0.1:18010；依赖、测试和服务均在服务器，Mac仅作代码/Git与后续测试终端。下一步接Mac实时收音/播放客户端；自动接续与手表验收仍待实现。
+2026-10-24：服务器已实现独立LiveKit最小语音链路，真实AgentSession接入Fun-ASR→文本LLM→Qwen TTS，完成连续问答、取消和取消后新问题实测，见[链路验证报告](docs/verification/2026-10-24-livekit-voice-chain.md)。[测试服务](services/livekit-agent/README.md)只监听服务器127.0.0.1:18010；依赖、自动化测试和服务均在服务器。现已提供[Mac实时收音/播放客户端](tools/mac-voice/README.md)：浏览器经SSH转发连接服务器，点击分轮和本地立即停播；真实验收与限制见[客户端验证](docs/verification/2026-10-24-mac-voice-client.md)。自动端点、声学插话、自动接续与手表验收分别推进。
 
 当前方向为服务器端LiveKit Agents＋ASR→LLM→TTS：[架构细化](docs/superpowers/specs/2026-10-24-server-livekit-design.md)、[SDK探针结果](docs/verification/2026-10-24-livekit-stage-zero.md)、[最小链路实施计划](docs/superpowers/plans/2026-10-24-livekit-voice-chain.md)。手表保留小智协议，Go接入层逐步收缩为设备适配；独立SFU媒体服务不作为本阶段必需项。8000上的正式服务仍为下述千问原生链路。
 

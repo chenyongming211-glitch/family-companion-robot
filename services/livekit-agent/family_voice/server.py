@@ -8,6 +8,7 @@ from aiohttp import web, WSMsgType
 from .config import Settings
 from .runtime import VoiceSession
 from .logging_safe import configure_logging
+from .browser import install_browser
 
 
 STATE = web.AppKey('voice_state', dict)
@@ -18,12 +19,15 @@ def create_app(cfg, *, session_factory=VoiceSession):
         raise ValueError('VOICE_CLIENT_TOKEN is required for the test service')
     app = web.Application(client_max_size=16384)
     app[STATE] = {'active': False}
+    browser_authorize = install_browser(app, cfg)
 
     async def health(request):
         return web.json_response({'status': 'ok', 'active_sessions': int(app[STATE]['active']), 'engine': 'livekit-chain', 'input_rate': 16000, 'output_rate': 24000, 'recording': False})
 
     async def audio(request):
-        if not hmac.compare_digest(request.headers.get('Authorization', ''), 'Bearer ' + cfg.client_token):
+        if request.path == '/v1/browser/audio':
+            browser_authorize(request)
+        elif not hmac.compare_digest(request.headers.get('Authorization', ''), 'Bearer ' + cfg.client_token):
             raise web.HTTPUnauthorized()
         if app[STATE]['active']:
             raise web.HTTPConflict()
@@ -114,6 +118,7 @@ def create_app(cfg, *, session_factory=VoiceSession):
 
     app.router.add_get('/healthz', health)
     app.router.add_get('/v1/audio', audio)
+    app.router.add_get('/v1/browser/audio', audio)
     return app
 
 

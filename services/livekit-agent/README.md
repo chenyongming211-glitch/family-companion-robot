@@ -1,6 +1,6 @@
 # 服务器 LiveKit 最小语音链路
 
-独立测试服务：真实 `AgentSession`＋Fun-ASR→官方OpenAI兼容LLM插件→Qwen实时TTS。仅监听服务器 `127.0.0.1:18010`，没有替换8000上的原Go网关。运行环境、模型Key与测试均在服务器，Mac尚无麦克风客户端。
+独立测试服务：真实 `AgentSession`＋Fun-ASR→官方OpenAI兼容LLM插件→Qwen实时TTS。仅监听服务器 `127.0.0.1:18010`，没有替换8000上的原Go网关。运行环境、模型Key与自动化测试均在服务器；Mac收音/播放入口见[客户端说明](../../tools/mac-voice/README.md)。
 
 ## 服务器启动
 
@@ -67,7 +67,7 @@ PYTHONPATH=services/livekit-agent .superpowers/livekit-chain/venv/bin/python \
 
 ## 本阶段边界
 
-- 当前是显式分轮提交/控制取消的PCM测试端，不是已经验证的Mac自由说话或设备声学插话。没有浏览器通话页、Go小智桥、MCP设备工具或原稿任务检查点。
+- 当前提供服务器托管的浏览器客户端，显式分轮提交/控制取消；Mac真实收音、听感和停播结果见[客户端验证](../../docs/verification/2026-10-24-mac-voice-client.md)。自动端点、自由声学插话、Go小智桥、MCP设备工具和原稿任务检查点尚未交付。
 - ASR输入显式结束时，要排空SDK音频前端并封口实际provider；不能将SDK超时提升的interim当真实ASR final。取消也退休尚未完成的输入提交，旧final不能启动新回答。
 - 输入队列最多100帧；每段原始输入最多29秒，外加700ms终止静音；会话最多8轮、5分钟。输出账本最多32段、总待播前缀最多120秒；写出超时250ms即失败。
 - 中断最多等待250ms回报结算；无效/缺失回报用unknown保守解锁SDK，独立观测仍为`valid=false`。不计算未验证的字词断点。正常等待期限为本段时长加2秒余量。
