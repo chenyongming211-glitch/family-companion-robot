@@ -28,7 +28,7 @@
 - [x] 先写并在服务器运行Node失败测试：44.1k/48k分块重采样无丢/重复，结束/取消屏障，播放间隙不计为样本，旧代次与非法PCM拒绝。
 - [x] 实现纯音频核心/Worklet与页面；服务器Node测试通过。队列有界，断线/后台释放mic，取消先停本地再发控制，输出无时钟时unknown。
 - [ ] 部署独立开发服务，Mac建立SSH隧道，在Chrome实际检查页面、麦克风权限/输入电平、播放与停止操作。只对用户真实参与的部分给出通过结论。
-- [ ] 更新README/交接/验证报告并提交推送main；服务器同步同一源码，旧8000健康；保留用户未参与/浏览器权限未授予等未验收项。
+- [x] 更新README/交接/验证报告并提交推送main；服务器同步同一源码，旧8000健康；保留用户未参与/浏览器权限未授予等未验收项。
 
 服务器命令：`PYTHONPATH=services/livekit-agent .superpowers/livekit-chain/venv/bin/python -m unittest discover -s services/livekit-agent/tests -v`；`node --test services/livekit-agent/tests/*.test.mjs`；原探针单独运行。源码编写和Git在Mac，浏览器实测属于已授权的Mac终端阶段。
 
