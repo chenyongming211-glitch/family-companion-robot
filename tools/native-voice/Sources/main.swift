@@ -75,6 +75,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 
 var args = Array(CommandLine.arguments.dropFirst())
+if args == ["--mic-probe"] || args == ["--mic-probe", "--no-voice-processing"] {
+    let test = MicrophoneProbe(voiceProcessing: args.count == 1)
+    test.start()
+    withExtendedLifetime(test) { dispatchMain() }
+}
 if args == ["--self-test"] {
     let test = PlaybackSelfTest()
     test.start()

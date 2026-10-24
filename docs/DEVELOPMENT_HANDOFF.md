@@ -2,6 +2,8 @@
 
 更新：2026-10-24。仓库：[chenyongming211-glitch/family-companion-robot](https://github.com/chenyongming211-glitch/family-companion-robot)，默认分支`main`。历史资料迁移后，已在服务器建立独立LiveKit最小语音服务并完成三模型联调；原8000正式服务和手表未切换。
 
+**原生收音补充：** 已修复本机Voice Processing六声道转单声道产生静音的问题；真人复验已确认数学及三句话故事正常回复。见[麦克风修复](verification/2026-10-24-native-microphone-fix.md)。外设声道和完整AEC压力验收仍单独验证。
+
 **最新实现：** 已新增小智WebSocket/Opus→云端Go设备桥18020→LiveKit drain模式18010，以及Mac原生CoreAudio终端、固定原稿和句级检查点。真实云端三句故事→插话问答→同一原稿/版本恢复完成，见[本轮验证](verification/2026-10-24-native-drain-handoff.md)。不再使用浏览器作主验收；真人麦克风/AEC与M5/I2S仍须分别验收。
 
 **最新插话行为：** 新drain路径停止旧下发、保留已收音频排空，终端在独立待播区和本地依赖栅栏之间交接；旧manual/continuous仍保留立即清空兼容策略。旧停声延迟不能作为新策略证据。
@@ -39,7 +41,7 @@ git status --short --branch
 | 新架构 | 服务器端LiveKit Agents＋输入ASR→文本LLM→TTS已有最小可运行链路；独立loopback测试服务，未切换正式入口 |
 | 新LiveKit代码 | `services/livekit-agent/`已实现drain输出、通用固定原稿/主旁支/句级恢复、已播历史、工具与代次保护；服务器109项Python、25项历史客户端、3项SDK及全库Go检查通过，见[最新验证](verification/2026-10-24-native-drain-handoff.md) |
 | Eino | 原始需求提过优先验证；当前仅为任务编排候选，未引入依赖。首个闭环复用Go任务/存储 |
-| 麦克风客户端 | 新入口`tools/native-voice/open.command`，AppKit单按钮、持续收音、AVAudioEngine/Opus/CoreAudio；合成输入与实际播放完整链路已过，真人收音/AEC待验收。旧网页仅保留兼容与历史证据 |
+| 麦克风客户端 | 新入口`tools/native-voice/open.command`，AppKit单按钮、持续收音、AVAudioEngine/Opus/CoreAudio；合成输入与实际播放完整链路已过，真人收音已复验、AEC压力待验收。旧网页仅保留兼容与历史证据 |
 
 开发推进目标：唤醒一次→连续对话、随时插话→空闲超时待机。故事中断后先答新问题，用户说继续后从首个未完整播放的句子恢复原稿；数数恢复到原终点。句中打断允许重读当前句，正常流程不要求用户报告起点。
 

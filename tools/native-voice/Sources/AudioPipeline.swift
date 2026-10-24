@@ -29,10 +29,17 @@ final class AudioPipeline {
     private var tapping = false
     private let captureLock = NSLock()
     private var capturePending = 0
+    private var captureCallbacks = 0, captureSamples = 0
+    private var capturePeak = 0.0
     private var converter: AVAudioConverter?
     private(set) var aecEnabled = false
     private var inputVoiceProcessing = false, outputVoiceProcessing = false
     private(set) var presentationLatency = 0.0
+
+    var captureStatistics: (callbacks: Int, samples: Int, peak: Double) {
+        captureLock.lock(); defer { captureLock.unlock() }
+        return (captureCallbacks, captureSamples, capturePeak)
+    }
 
     init(queue: DispatchQueue) {
         self.queue = queue
@@ -43,23 +50,34 @@ final class AudioPipeline {
             self.queue.async { if self.engine.isRunning { self.onFailure?("audio_device_configuration_changed") } }
         }
     }
-    func start(microphone: Bool) throws {
+    func start(microphone: Bool, voiceProcessing: Bool = true) throws {
         if microphone {
             do {
-                try engine.inputNode.setVoiceProcessingEnabled(true)
+                try engine.inputNode.setVoiceProcessingEnabled(voiceProcessing)
             } catch { metadata("audio.voice_processing_request", ["accepted": false]) }
             inputVoiceProcessing = engine.inputNode.isVoiceProcessingEnabled
             outputVoiceProcessing = engine.outputNode.isVoiceProcessingEnabled
             aecEnabled = inputVoiceProcessing && outputVoiceProcessing
             let input = engine.inputNode
             let source = input.outputFormat(forBus: 0)
-            guard source.sampleRate > 0, source.channelCount > 0,
-                  let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true),
-                  let converter = AVAudioConverter(from: source, to: target) else { throw ClientFailure("microphone_format") }
+            metadata("microphone.format", ["sample_rate": source.sampleRate, "channels": source.channelCount,
+                                           "interleaved": source.isInterleaved, "voice_processing_muted": input.isVoiceProcessingInputMuted])
+            let converter = try microphoneConverter(from: source)
+            let target = converter.outputFormat
             self.converter = converter
             input.installTap(onBus: 0, bufferSize: 1024, format: source) { [weak self] buffer, _ in
                 guard let self else { return }
                 self.captureLock.lock()
+                self.captureCallbacks += 1
+                self.captureSamples += Int(buffer.frameLength)
+                if let channels = buffer.floatChannelData {
+                    let count = Int(buffer.frameLength)
+                    let channelCount = Int(buffer.format.channelCount)
+                    let stride = buffer.format.isInterleaved ? channelCount : 1
+                    for i in 0..<count {
+                        self.capturePeak = max(self.capturePeak, Double(abs(channels[0][i * stride])))
+                    }
+                }
                 if self.capturePending >= 4 {
                     self.captureLock.unlock()
                     self.queue.async { self.onFailure?("microphone_queue_overflow") }
@@ -96,7 +114,7 @@ final class AudioPipeline {
             throw ClientFailure("unknown_output_presentation_latency")
         }
         metadata("audio.capability", ["microphone": microphone, "voice_processing": aecEnabled,
-                                      "aec_requested": microphone, "input_voice_processing": inputVoiceProcessing,
+                                      "aec_requested": microphone && voiceProcessing, "input_voice_processing": inputVoiceProcessing,
                                       "output_voice_processing": outputVoiceProcessing,
                                       "presentation_latency_ms": presentationLatency * 1000,
                                       "output_sample_rate": engine.outputNode.outputFormat(forBus: 0).sampleRate])

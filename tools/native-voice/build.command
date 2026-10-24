@@ -18,9 +18,12 @@ cp "$source_dir/Info.plist" "$out_dir/NativeVoice.app/Contents/Info.plist"
 codesign --force --sign - --identifier com.familycompanion.nativevoice "$out_dir/NativeVoice.app" >/dev/null
 xcrun swiftc "$source_dir/Sources/PlaybackLedger.swift" "$source_dir/Sources/NativeEndpoint.swift" "$source_dir/Tests/LedgerSpec.swift" -o "$out_dir/ledger-spec"
 "$out_dir/ledger-spec"
+xcrun swiftc -framework AVFoundation "$source_dir/Sources/PlaybackLedger.swift" \
+  "$source_dir/Sources/MicrophonePCM.swift" "$source_dir/Tests/MicrophoneSpec.swift" -o "$out_dir/microphone-spec"
+"$out_dir/microphone-spec"
 xcrun swiftc -swift-version 5 -framework AppKit -framework AVFoundation \
   -import-objc-header "$source_dir/OpusBridge.h" \
-  "$source_dir/Sources/AudioPipeline.swift" "$source_dir/Sources/DrainPlayer.swift" \
+  "$source_dir/Sources/AudioPipeline.swift" "$source_dir/Sources/MicrophonePCM.swift" "$source_dir/Sources/DrainPlayer.swift" \
   "$source_dir/Sources/Opus.swift" "$source_dir/Sources/PlaybackLedger.swift" \
   "$source_dir/Sources/VoiceClient.swift" "$source_dir/Tests/FixtureSpec.swift" "$out_dir/OpusBridge.o" \
   -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" -o "$out_dir/fixture-spec"

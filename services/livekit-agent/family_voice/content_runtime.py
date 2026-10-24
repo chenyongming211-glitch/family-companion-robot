@@ -15,6 +15,12 @@ from .drain_output import DrainOutput
 from .runtime import VoiceSession
 
 
+class DraftValidationError(ValueError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__('draft rejected: ' + reason)
+
+
 def direct_action(text):
     text = re.sub(r'[\s，。！？,.!?]', '', text)
     if re.search(r'不要|不想|不用|别|不继续', text):
@@ -160,23 +166,29 @@ class ContentAgent(Agent):
                         called = True
                         yield chunk.model_copy(update={'delta': delta.model_copy(update={'content': None})})
                 if sum(map(len, text)) > 1200:
-                    raise ValueError('generated draft exceeds content limit')
+                    raise DraftValidationError('text_limit')
             intent.update(state='completed', usage=usage)
             if not called and not (handle and handle.interrupted):
                 draft = ''.join(text).strip()
                 # A bounded model response without a sentence end may have
                 # exhausted its generation budget. Never silently play a cut tail.
-                if not draft or draft[-1] not in '。！？.!?；;”’"':
-                    raise ValueError('draft has no complete ending')
-                split_sentences(draft)
+                if not draft:
+                    raise DraftValidationError('empty')
+                if draft[-1] not in '。！？.!?；;”’"':
+                    raise DraftValidationError('ending')
+                try:
+                    split_sentences(draft)
+                except ValueError:
+                    raise DraftValidationError('content_shape') from None
                 if usage and max(usage.get('completion_tokens', 0), usage.get('output_tokens', 0)) >= 512:
-                    raise ValueError('draft may have exhausted generation budget')
+                    raise DraftValidationError('token_limit')
                 owner.accept_draft(draft, owner.last_input, epoch)
         except asyncio.CancelledError:
             intent.update(state='cancelled_unknown', usage=usage)
             raise
         except Exception as error:
-            intent.update(state='outcome_unknown', error_type=type(error).__name__)
+            intent.update(state='outcome_unknown', error_type=type(error).__name__,
+                          failure_code=error.reason if isinstance(error, DraftValidationError) else None)
             owner._emit({'type': 'error', 'code': 'draft_failed', 'error_type': type(error).__name__})
             raise
 

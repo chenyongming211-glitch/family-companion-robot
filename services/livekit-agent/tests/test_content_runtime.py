@@ -286,3 +286,14 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         job.cancel()
         with self.assertRaises(asyncio.CancelledError): await job
         self.assertEqual(settled, [False])
+
+    async def test_draft_rejection_records_reason_without_draft_body(self):
+        from pathlib import Path
+        await self.start()
+        self.answers = ['unfinished synthetic reply']
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'error' and e.get('code') == 'draft_failed' for e in self.events))
+        records = [json.loads(p.read_text()) for p in Path(self.temp.name).glob('*.json')]
+        failed = next(r for r in records if r['stage'] == 'llm' and r['state'] == 'outcome_unknown')
+        self.assertEqual(failed['failure_code'], 'ending')
+        self.assertNotIn(self.answers[0], json.dumps(records))

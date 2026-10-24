@@ -19,6 +19,8 @@ final class VoiceClient: @unchecked Sendable {
     private var outbound: [URLSessionWebSocketTask.Message] = []
     private var writing = false, writeSequence = 0, closed = false, ready = false
     private var fixture: FixtureInput?
+    private var inputFrames = 0, inputSamples = 0, inputWindowSamples = 0, inputPeak = 0
+    private var inputEnergy = 0.0, inputLoggedAt = ProcessInfo.processInfo.systemUptime
 
     init(url: URL, ticket: String, fixturePaths: [String] = []) {
         self.url = url; self.ticket = ticket; self.fixturePaths = fixturePaths
@@ -133,14 +135,29 @@ final class VoiceClient: @unchecked Sendable {
     }
     private func input(_ samples: [Int16]) {
         guard ready, !closed, let inputEncoder else { return }
+        if microphone {
+            inputSamples += samples.count; inputWindowSamples += samples.count
+            for sample in samples {
+                inputPeak = max(inputPeak, abs(Int(sample)))
+                inputEnergy += Double(sample) * Double(sample)
+            }
+        }
         inputPCM.append(contentsOf: samples)
         guard inputPCM.count <= 6400 else { fail("input_pcm_overflow"); return }
         do {
             while inputPCM.count >= 320 {
                 let frame = Array(inputPCM.prefix(320)); inputPCM.removeFirst(320)
                 enqueue(.data(try inputEncoder.encode(frame)))
+                inputFrames += 1
             }
         } catch { fail("input_opus_encode") }
+        let now = ProcessInfo.processInfo.systemUptime
+        if microphone && now - inputLoggedAt >= 1 {
+            metadata("microphone.input", ["pcm_samples": inputSamples, "opus_frames": inputFrames,
+                                           "peak": inputPeak, "rms": inputWindowSamples > 0 ? sqrt(inputEnergy / Double(inputWindowSamples)) : 0,
+                                           "pending_writes": outbound.count])
+            inputLoggedAt = now; inputPeak = 0; inputEnergy = 0; inputWindowSamples = 0
+        }
     }
     private func send(_ event: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: event), data.count <= 16_384,
