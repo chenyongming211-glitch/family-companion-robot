@@ -18,4 +18,6 @@
 - 部署两项独立服务后health正常；8000原`family-robot.service`保持active、PID仍为2261506。
 - 原生GUI实际点击开始后显示“对话中 · 可持续测试，结束时关闭窗口”，日志有`session.ready`与持续麦克风帧。实际停止后窗口保留，再点开始重新配对成功；验证完成保留新会话运行，不再关闭窗口。
 
+现场继续测试时，快速重连曾一次返回`event_before_ready`，再次连接成功；一轮真实发言触发`DraftValidationError / failure_code=ending`，客户端显示`server_error`并保留窗口。已重新连接继续测试。本次没有修复这两个独立失败，也未保存该轮发言；常开窗口不代表每次模型生成都成功。
+
 服务器日志位于`.superpowers/drain/keep-open-final-114.log`、`keep-open-events-red.log`、`keep-open-events-green.log`；Mac元数据位于`.superpowers/native-voice/keep-open-live.jsonl`、`keep-open-build-final.log`和`keep-open-selftest-final.jsonl`，均不进入Git。不保存用户录音、识别正文或模型回复。此轮没有重复真人问答验收，前轮真人正常回复结论见[麦克风修复记录](2026-10-24-native-microphone-fix.md)。
