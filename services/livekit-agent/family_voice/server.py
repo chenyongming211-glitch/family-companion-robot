@@ -15,7 +15,7 @@ from .cloud import Intent
 STATE = web.AppKey('voice_state', dict)
 
 
-def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SECONDS):
+def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session_seconds=SESSION_SECONDS):
     if not cfg.client_token:
         raise ValueError('VOICE_CLIENT_TOKEN is required for the test service')
     app = web.Application(client_max_size=16384)
@@ -31,9 +31,9 @@ def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SEC
         elif not hmac.compare_digest(request.headers.get('Authorization', ''), 'Bearer ' + cfg.client_token):
             raise web.HTTPUnauthorized()
         mode = request.query.get('mode', 'manual')
-        if mode not in ('manual', 'continuous'):
+        if mode not in ('manual', 'continuous', 'drain') or (mode == 'drain' and request.path != '/v1/audio'):
             raise web.HTTPBadRequest()
-        automatic = mode == 'continuous'
+        automatic = mode in ('continuous', 'drain')
         if app[STATE]['active']:
             raise web.HTTPConflict()
         app[STATE]['active'] = True
@@ -43,8 +43,14 @@ def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SEC
         input_id, phase, reason, error_type = 0, 'opening', 'disconnected', None
         try:
             await ws.prepare(request)
+            opening, startup_events = True, []
             async def send(event):
                 nonlocal input_id, reason
+                if opening and event['type'] != 'ready':
+                    if len(startup_events) >= 32:
+                        raise BufferError('startup event limit')
+                    startup_events.append(event)
+                    return
                 try:
                     await asyncio.wait_for(ws.send_json(event), .25)
                     if automatic and event['type'] == 'turn':
@@ -55,10 +61,19 @@ def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SEC
                 except Exception:
                     await ws.close(code=1011)
                     raise
-            voice = session_factory(cfg, send, automatic=True) if automatic else session_factory(cfg, send)
+            if mode == 'drain':
+                from .content_runtime import DrainVoiceSession
+                voice = (drain_factory or DrainVoiceSession)(cfg, send)
+            else:
+                voice = session_factory(cfg, send, automatic=True) if automatic else session_factory(cfg, send)
             await voice.start()
             audit = Intent(cfg, 'client_session')
-            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': session_seconds, 'max_turns': 8, 'mode': mode})
+            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': session_seconds, 'max_turns': 8, 'mode': mode,
+                        **({'capabilities': ['drain', 'staging', 'content_checkpoint']} if mode == 'drain' else {})})
+            opening = False
+            for event in startup_events:
+                await send(event)
+            startup_events.clear()
             accepting = False
             input_samples = 0
             budget = asyncio.timeout(session_seconds)
@@ -69,6 +84,15 @@ def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SEC
                     event = message.json()
                     kind = event.get('type')
                     phase = kind if kind in ('input.start', 'input.audio', 'input.end', 'cancel', 'playback', 'listen.audio') else 'invalid_command'
+                    if mode == 'drain' and kind in ('playback.started', 'content.snapshot', 'hard.stop'):
+                        if kind == 'playback.started':
+                            voice.output.mark_started(event.get('block_id'), event.get('epoch'))
+                        elif kind == 'content.snapshot':
+                            await send({'type': 'content.snapshot', 'contents': voice.content_snapshot()})
+                        else:
+                            await voice.hard_stop()
+                            await send({'type': 'hard.stopped'})
+                        continue
                     if automatic and kind != 'playback':
                         if kind != 'listen.audio':
                             raise ValueError('continuous mode requires continuous audio')

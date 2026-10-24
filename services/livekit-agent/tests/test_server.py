@@ -193,6 +193,58 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
 
+    async def test_drain_is_device_only_and_routes_playback_and_snapshot(self):
+        voices = []
+        class DrainVoice(TestVoice):
+            def __init__(self, cfg, send):
+                super().__init__(cfg, send)
+                self.started, self.hard_stopped = [], False
+                self.output = self
+                voices.append(self)
+            def mark_started(self, block_id, epoch):
+                self.started.append((block_id, epoch))
+            def content_snapshot(self):
+                return {'main': {'next': 1, 'state': 'paused'}}
+            async def hard_stop(self):
+                self.hard_stopped = True
+        client = TestClient(TestServer(create_app(self.cfg, drain_factory=DrainVoice)))
+        await client.start_server()
+        try:
+            with self.assertRaises(WSServerHandshakeError) as denied:
+                await client.ws_connect('/v1/browser/audio?mode=drain', headers={'Authorization': 'Bearer synthetic-token'})
+            self.assertIn(denied.exception.status, (400, 401, 403))
+            ws = await client.ws_connect('/v1/audio?mode=drain', headers={'Authorization': 'Bearer synthetic-token'})
+            ready = await ws.receive_json()
+            self.assertEqual(ready['mode'], 'drain')
+            self.assertIn('staging', ready['capabilities'])
+            await ws.send_json({'type': 'listen.audio', 'data': base64.b64encode(b'\0' * 640).decode()})
+            await ws.send_json({'type': 'playback.started', 'block_id': 2, 'epoch': 1})
+            await ws.send_json({'type': 'content.snapshot'})
+            snapshot = await ws.receive_json()
+            self.assertEqual(snapshot['type'], 'content.snapshot')
+            self.assertEqual(voices[0].started, [(2, 1)])
+            self.assertEqual(voices[0].frames, 320)
+            await ws.send_json({'type': 'hard.stop'})
+            self.assertEqual((await ws.receive_json())['type'], 'hard.stopped')
+            self.assertTrue(voices[0].hard_stopped)
+            await ws.close()
+        finally:
+            await client.close()
+
+    async def test_ready_precedes_startup_events_for_device_handshake(self):
+        class StartingVoice(TestVoice):
+            async def start(self):
+                await self.send({'type': 'agent.state', 'state': 'listening'})
+        client = TestClient(TestServer(create_app(self.cfg, session_factory=StartingVoice)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
+            self.assertEqual((await ws.receive_json())['type'], 'ready')
+            self.assertEqual((await ws.receive_json())['type'], 'agent.state')
+            await ws.close()
+        finally:
+            await client.close()
+
     async def client_until(self, predicate):
         async with asyncio.timeout(1):
             while not predicate():

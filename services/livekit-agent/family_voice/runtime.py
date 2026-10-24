@@ -103,7 +103,7 @@ class VoiceSession:
         self.turns, self.sleeping, self.speech_timer = 0, False, None
         self.user_epoch = 0
         self.input = PCMInput()
-        self.output = PCMOutput(send)
+        self.output = self.make_output(send)
         vad = silero.VAD.load(max_buffered_speech=30, force_cpu=True, **({'min_speech_duration': .12, 'min_silence_duration': .65, 'prefix_padding_duration': .3, 'activation_threshold': .6} if automatic else {}))
         self.providers = [DashScopeSTT(cfg), text_model(cfg, max_tokens=512 if automatic else 128), DashScopeTTS(cfg), vad]
         self.recognizer = TurnSTT(self.providers[0], vad) if automatic else self.providers[0]
@@ -121,7 +121,21 @@ class VoiceSession:
         self.jobs = set()
         self.closed = False
         self.commit_job = None
-        self.counting = CountController(self.prepare_count, self.play_count, self._emit) if automatic else None
+        self.counting = self.make_counting() if automatic else None
+
+    def make_output(self, send):
+        return PCMOutput(send)
+
+    def make_counting(self):
+        return CountController(self.prepare_count, self.play_count, self._emit)
+
+    def make_agent(self):
+        return AuditedAgent(self.cfg, self if self.automatic else None)
+
+    def on_speech_started(self):
+        self.user_epoch += 1
+        if self.counting:
+            self.counting.pause()
 
     async def prepare_count(self, number):
         pcm = bytearray()
@@ -196,8 +210,7 @@ class VoiceSession:
                 if event.new_state == 'away':
                     self.sleep('idle')
                 elif event.new_state == 'speaking':
-                    self.user_epoch += 1
-                    self.counting.pause()
+                    self.on_speech_started()
                     async def limit():
                         await asyncio.sleep(self.automatic_utterance_seconds)
                         self.sleep('utterance_limit')
@@ -215,7 +228,7 @@ class VoiceSession:
         @self.session.on('error')
         def error(event):
             self._emit({'type': 'error', 'stage': 'runtime', 'code': type(event.error).__name__})
-        await self.session.start(AuditedAgent(self.cfg, self if self.automatic else None), record=False)
+        await self.session.start(self.make_agent(), record=False)
 
     def sleep(self, code):
         if not self.closed and not self.sleeping:
