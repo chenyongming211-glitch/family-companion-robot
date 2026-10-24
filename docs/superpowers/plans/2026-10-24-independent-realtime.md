@@ -34,24 +34,24 @@
 **Interfaces:** `New(qwen.Config)`→`Handler()/Close()`，`/v1/pair`短期ticket，`/xiaozhi/v1/`标准小智v1；入口内部映射固定测试MAC和随机网关token。`/healthz`公开模型别名/音色/活动数，不含凭据或正文。
 
 - [x] 写测试并在云端确认缺失New/Server失败。
-- [ ] 实现票据、认证和网关复用，不引入新的语音处理。
-- [ ] 云端`go test -race ./internal/realtimeentry ./internal/gateway ./internal/qwen`通过，提交。
+- [x] 实现票据、认证和网关复用，不引入新的语音处理。
+- [x] 云端`go test -race ./internal/realtimeentry ./internal/gateway ./internal/qwen`通过，提交。
 
 ## Task 2: 独立小智协议Mac终端
 
 **Files:** `tools/realtime-voice/{build.command,open.command,Info.plist,README.md,Sources/*.swift,Tests/*}`。
 **Interfaces:** 复用`tools/native-voice/Sources/{AudioPipeline,MicrophonePCM,Opus,PlaybackLedger}.swift`（最后一个只为已有ClientFailure）；客户端只处理hello/listen/tts/stt/alert及Opus。开始时配对，单按钮持续对话，关闭才退出。
 
-- [ ] 先写纯Swift播放状态/endpoint规范测试并验证失败。
-- [ ] 实现旧协议客户端，正常结束等CoreAudio回报；中断立即结束旧播放器；输入/写队列有界。
-- [ ] 构建、状态测试、机器合成fixture真实CoreAudio播放通过，提交。
+- [x] 先写纯Swift播放状态/endpoint规范测试并验证失败。
+- [x] 实现旧协议客户端，正常结束等CoreAudio回报；中断立即结束旧播放器；输入/写队列有界。
+- [x] 构建、状态测试、机器合成fixture真实CoreAudio播放通过，提交。
 
 ## Task 3: 部署、验证与体验入口
 
 **Files:** 原生合成fixture入口、两份README、`docs/verification/2026-10-24-independent-realtime.md`与方案/交接状态。
 **Interfaces:** 使用Task1入口与Task2客户端；合成输入和生成文字断言在内存完成，凭据/真人记录不进Git。
 
-- [ ] 独立配置仅保留上游模型/Key/音色/VAD，启动18030新服务；旧服务PID/活动不变。
-- [ ] 真实模型连续问答、上下文指代与插问新问题通过；保留失败/耗时，准确说明旧网关本身有重连/任务机制。
-- [ ] 云端全库Go检查和原Python214项回归；Mac原生收播合成fixture。
-- [ ] 独立审查、提交推送并核对远端main；打开新窗口保留停止收音供用户体验。
+- [x] 独立配置仅保留上游模型/Key/音色/VAD，启动18030新服务；旧服务PID/活动不变。
+- [x] 真实模型连续问答、上下文指代与插问新问题通过；保留失败/耗时，准确说明旧网关本身有重连/任务机制。
+- [x] 云端全库Go检查和原Python214项回归；Mac原生收播合成fixture。
+- [x] 独立审查、提交推送并核对远端main；打开新窗口保留停止收音供用户体验。
