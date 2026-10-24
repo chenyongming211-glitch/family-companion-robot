@@ -181,6 +181,13 @@ class ContentController:
         self._plan['state'] = 'discarded'
         self._publish()
 
+    def retry(self) -> None:
+        """An explicit user retry keeps the original and confirmed prefix."""
+        if self._closed or self._plan is None or self._plan['state'] != 'failed':
+            return
+        self._plan['state'] = 'draining' if self._pending is not None else 'paused'
+        self.resume()
+
     async def close(self) -> None:
         if not self._closed:
             self._closed = True

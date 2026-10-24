@@ -316,6 +316,42 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.tts_texts, self.answers)
         self.assertFalse(any(e['type'] in ('error', 'turn.error') for e in self.events))
 
+    async def test_decorative_emoji_never_becomes_a_separate_tts_request(self):
+        await self.start()
+        self.answers = ['谢谢夸奖！😊']
+        await self.feed('first.wav')
+        await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertEqual(self.tts_texts, ['谢谢夸奖！'])
+        self.assertEqual(self.voice.main.snapshot['units'], ['谢谢夸奖！'])
+
+    async def test_emoji_only_reply_is_rejected_before_tts(self):
+        await self.start()
+        self.answers = ['😊']
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events))
+        self.assertEqual(self.tts_texts, [])
+        self.assertIsNone(self.voice.main.snapshot)
+
+    async def test_failed_second_unit_resume_retries_only_unplayed_unit(self):
+        await self.start()
+        prepared = []
+        async def prepare(text):
+            prepared.append(text)
+            if text == '接着回答问题。' and prepared.count(text) == 1:
+                raise TimeoutError('synthetic TTS failure')
+            return b'\1\0' * 480
+        self.voice.main._prepare = prepare
+        self.voice.main.start('谢谢夸奖！接着回答问题。')
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'failed')
+        self.assertEqual(self.voice.main.snapshot['confirmed_count'], 1)
+        revision = self.voice.main.snapshot['revision']
+        self.voice.content_action('resume', 'main')
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+        self.assertEqual(prepared, ['谢谢夸奖！', '接着回答问题。', '接着回答问题。'])
+        self.assertEqual(self.voice.main.snapshot['revision'], revision)
+        self.assertEqual(self.voice.main.snapshot['confirmed_count'], 2)
+        self.assertFalse(any('从头' in text for text in self.tts_texts))
+
     async def test_punctuation_does_not_admit_length_or_missing_provider_terminal(self):
         for finish in ('length', None):
             if self.voice:

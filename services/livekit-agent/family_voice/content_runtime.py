@@ -2,6 +2,7 @@
 import asyncio
 import json
 import re
+import unicodedata
 from dataclasses import asdict, is_dataclass
 from typing import Literal
 from weakref import WeakKeyDictionary
@@ -19,6 +20,21 @@ class DraftValidationError(ValueError):
     def __init__(self, reason):
         self.reason = reason
         super().__init__('draft rejected: ' + reason)
+
+
+def spoken_draft(text):
+    """Freeze spoken words, without stand-alone decorative TTS requests."""
+    normalized = []
+    for char in text:
+        if char == '\u200d' or '\ufe00' <= char <= '\ufe0f' or unicodedata.category(char) == 'Me':
+            continue
+        if unicodedata.category(char) in ('So', 'Sk') and char not in '℃℉°':
+            normalized.append(' ')
+        else:
+            normalized.append(char)
+    # Emoji/formatting-only tails have no spoken words. Drop those before
+    # accepting the immutable voice original, not during playback/checkpointing.
+    return ''.join(unit for unit in split_sentences(''.join(normalized)) if any(c.isalnum() for c in unit)).strip()
 
 
 def direct_action(text):
@@ -80,7 +96,7 @@ class ContentAgent(Agent):
                 return function_tool(operation)
             tools.append(create(action))
         super().__init__(instructions=(
-            '你是家庭陪伴语音助手，用简短自然的中文。普通答案最多两句话；故事最多十句、五百字，写完整结尾，不用Markdown。'
+            '你是家庭陪伴语音助手，用简短自然的中文。普通答案最多两句话；故事最多十句、五百字，写完整结尾，不用Markdown、表情或装饰字符。'
             '恢复、从头、放弃、查询位置必须调用对应content工具，不能自行续编原稿或猜播放位置。'
             'main是主内容，side是最近旁支；用户明确换故事时调用replace_content，再按新要求生成。'
             '只读快照里的未播原稿不代表用户听过；只有confirmed_prefix已确认完整播完。'
@@ -185,9 +201,11 @@ class ContentAgent(Agent):
                     reason = finish_reason if finish_reason in ('length', 'content_filter') else 'unknown'
                     raise DraftValidationError('finish_' + reason)
                 try:
-                    split_sentences(draft)
+                    draft = spoken_draft(draft)
                 except ValueError:
                     raise DraftValidationError('content_shape') from None
+                if not draft:
+                    raise DraftValidationError('non_speech')
                 if usage and max(usage.get('completion_tokens', 0), usage.get('output_tokens', 0)) >= 512:
                     raise DraftValidationError('token_limit')
                 owner.accept_draft(draft, owner.last_input, epoch)
@@ -266,6 +284,8 @@ class DrainVoiceSession(VoiceSession):
             active = {p['task_id'] for c in (self.main, self.side) if (p := c.snapshot)}
             self.unit_anchors = {key: value for key, value in self.unit_anchors.items() if key[0] in active}
             self.spoken_prefixes = {key: value for key, value in self.spoken_prefixes.items() if key in active}
+            if event['state'] == 'failed':
+                super()._emit({'type': 'turn.error', 'code': 'tts_prepare_failed', 'task_id': event['task_id'], 'next': event['next']})
         super()._emit(event)
 
     def on_utterance_limit(self):
@@ -300,6 +320,9 @@ class DrainVoiceSession(VoiceSession):
         self.output.clear_buffer()
 
     async def prepare_content(self, text):
+        text = spoken_draft(text)
+        if not text:
+            raise ValueError('content has no speakable words')
         pcm = bytearray()
         stream = Cloud(self.cfg).tts(text)
         try:
@@ -412,7 +435,8 @@ class DrainVoiceSession(VoiceSession):
             if plan['state'] == 'completed':
                 self._notice('这段内容已经讲完了。')
             elif plan['state'] == 'failed':
-                self._notice('这段语音准备失败，原稿仍保留，可以明确要求从头重讲。')
+                (self.side if target == 'main' else self.main).pause()
+                controller.retry()
             else:
                 (self.side if target == 'main' else self.main).pause()
                 controller.resume()

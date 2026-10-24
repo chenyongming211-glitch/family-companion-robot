@@ -229,8 +229,9 @@ final class VoiceClient: @unchecked Sendable {
     }
     private func stopInternal(success: Bool) {
         guard !closed else { return }
-        // Explicit user stop may end playback; ordinary speech never calls this path.
-        if ready { send(["type": "listen", "state": "stop"]) }
+        // Claim the terminal state before cleanup can trigger another failure.
+        // WebSocket closure ends the server session; a queued stop message can
+        // re-enter fail() when the write queue is already saturated.
         closed = true; ready = false
         fixture?.stop(); fixture = nil
         player?.stop(); audio?.stop()

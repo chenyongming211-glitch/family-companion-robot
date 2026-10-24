@@ -16,6 +16,8 @@ Swift / AppKit / AVAudioEngine / 系统 CoreAudio / libopus。只运行测试终
 
 快速结束后再开始，设备桥最多等待3秒让云端旧会话清理完成，再建立新会话；不会重发问题。单轮回复生成失败显示提示但保留收音，可直接继续说话。原稿是否完成以模型终态判断，数字回答或括号结尾不再因缺少句末标点被拒绝。见[修复验证](../../docs/verification/2026-10-24-reply-reconnect-fix.md)。
 
+TTS准备失败时保留已播进度，明确说“继续”只重试未完成段，不再提示从头重播。语音稿接纳前过滤独立表情/装饰段，避免这类内容作为单字符TTS请求卡住。见[失败恢复验证](../../docs/verification/2026-10-24-tts-failure-recovery.md)。
+
 运行环境为 macOS13+、Apple Command Line Tools、Python3 和已有 libopus。默认 libopus 根目录 `/usr/local/Cellar/opus/1.6.1`，其他位置可通过 `NATIVE_OPUS_ROOT` 指定。脚本用 `xcrun swiftc` 避免 PATH 中同名工具；不安装依赖。生成 `.app`、对象文件和测试程序都放在 Git 忽略的 `.superpowers/native-voice/`。应用使用固定 bundle identifier 与本机临时签名；系统设置可管理其麦克风权限。
 
 ```sh
@@ -51,6 +53,8 @@ Swift / AppKit / AVAudioEngine / 系统 CoreAudio / libopus。只运行测试终
 状态测试与原稿接续证明测试在每次构建时运行，覆盖本地排空栅栏、部分播放、无需 ACK 的本地交接、撤销、旧代次、采样倒退和总缓冲额度。在线端点的协议定义见 `cmd/livekit-device-gateway/README.md`。
 
 服务器受控待机回归：`Tests/standby-probe.py`只在云端loopback18121运行一次性WS对端，无模型或录音；通过SSH转发让原生fixture连接，验证正常sleep结束不会被误报为网络错误。未完成fixture仍须退出失败。
+
+服务器受控退出压力回归：`Tests/teardown-probe.py`只在云端loopback18122运行，通过批量撤销制造原生写队列饱和。原生fixture应退出1，只记录1次`session.failure`与1次`session.closed`；不能递归报错或崩溃。没有麦克风、模型或录音，勿在Mac运行对端服务。
 
 ## 实际麦克风回归
 
