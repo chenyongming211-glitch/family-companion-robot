@@ -6,7 +6,7 @@
 
 **Architecture:** 第一阶段仅增加无监听、无模型调用的独立SDK契约探针，不修改正式Go网关。探针直接继承实际AudioOutput，以模拟设备回报验证等待、取消与无效回报行为；它是单段验证器，不是可部署的设备音频适配器。
 
-**Tech Stack:** Linux Python3.12、livekit-agents1.8.8、livekit1.1.21、标准库unittest；固定参考源码7a7547e。
+**Tech Stack:** Linux Python3.12、livekit-agents1.8.8、livekit1.1.20、标准库unittest；固定参考源码7a7547e。2026-10-24实际安装发现Agents1.8.8精确要求livekit==1.1.20，原计划的1.1.21无法解析；按包依赖修正，不使用--no-deps绕过。
 
 ## Global Constraints
 
@@ -34,7 +34,7 @@
 
 ```text
 livekit-agents==1.8.8
-livekit==1.1.21
+livekit==1.1.20
 ```
 
 ```sh

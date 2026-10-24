@@ -31,23 +31,19 @@ git status --short --branch
 | 已有现场结果 | 已唤醒状态可以直接开口插话；音量、亮度控制通过过现场测试，见对应验证文档 |
 | 旧后端的准确自动接续 | 未解决：实际采样位置仍未可靠映射到完整字词；起点未知时询问用户 |
 | 新架构 | 已确认服务器端LiveKit Agents＋输入ASR→文本LLM→TTS；目前是设计阶段 |
-| 新LiveKit代码 | 尚未创建生产`services/livekit-agent/`，P0探针仍在计划文档里，不能声称已执行或集成 |
+| 新LiveKit代码 | `tools/livekit-audit/`单段SDK探针已在服务器通过3项测试，见[验证报告](verification/2026-10-24-livekit-stage-zero.md)；生产`services/livekit-agent/`尚未创建，P0其余项未完成 |
 | Eino | 原始需求提过优先验证；当前仅为任务编排候选，未引入依赖。首个闭环复用Go任务/存储 |
 | 麦克风客户端 | 目前仓库没有浏览器通话页或实时麦克风客户端；`cmd/smoke`读取WAV模拟设备，不能直接录麦克风 |
 
 开发推进目标：唤醒一次→连续对话、随时插话→空闲超时待机。故事中断后先答新问题，用户说继续后从首个未完整播放的句子恢复原稿；数数恢复到原终点。句中打断允许重读当前句，正常流程不要求用户报告起点。
 
-## 3. 环境恢复与本地代码检查
+## 3. 服务器开发环境与代码检查
+
+2026-10-24最新约定：依赖安装、运行时测试和服务搭建统一放在云服务器；Mac仅编辑代码、同步Git和充当后续测试终端，不在Mac启动语音服务、不复制服务器Key。新SDK隔离checkout为`/opt/family-robot/dev/livekit-stage-zero-20261024`；下述运行时命令在服务器独立开发目录执行。
 
 Go模块声明Go1.25.0；当前Mac曾使用Go1.25.6。需要C编译器、系统libopus及pkg-config。固件主机测试使用Python3.12+与C++编译器；新LiveKit验证计划单独固定Python3.12及相应SDK版本，不复用整份旧虚拟环境。
 
-macOS先安装Xcode Command Line Tools（尚未安装时执行`xcode-select --install`），再安装依赖：
-
-```sh
-brew install go python@3.12 opus pkgconf
-```
-
-Ubuntu可安装系统音频/编译依赖，Go另按其官方发布安装1.25或以上版本：
+Ubuntu可安装系统音频/编译依赖，Go另按其官方发布安装1.25或以上版本；已满足的依赖不重复修改：
 
 ```sh
 sudo apt-get update

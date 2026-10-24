@@ -2,7 +2,9 @@
 
 换电脑继续开发先读[开发交接说明](docs/DEVELOPMENT_HANDOFF.md)：环境恢复、服务器约定、已完成/未完成、新电脑麦克风接入的下一步，以及本机历史实验资料的归档位置。
 
-2026-10-24已确认后续采用服务器端LiveKit Agents＋ASR→LLM→TTS：[架构细化](docs/superpowers/specs/2026-10-24-server-livekit-design.md)、[第一阶段实施计划](docs/superpowers/plans/2026-10-24-livekit-stage-zero.md)。手表保留小智协议，Go接入层逐步收缩为设备适配；首版先验证Agents自定义I/O，独立SFU媒体服务不作为必需项。目前是方案阶段，正式服务仍为下述千问原生链路，未据此宣称新架构已上线。
+2026-10-24开始实施：首个LiveKit SDK播放回报探针已在云服务器独立环境完成3项真实SDK测试，见[验证报告](docs/verification/2026-10-24-livekit-stage-zero.md)。后续依赖安装与服务均在服务器，Mac仅作代码/Git与后续测试终端；完整链路、实时麦克风客户端和自动接续仍待实现。
+
+2026-10-24已确认后续采用服务器端LiveKit Agents＋ASR→LLM→TTS：[架构细化](docs/superpowers/specs/2026-10-24-server-livekit-design.md)、[第一阶段实施计划](docs/superpowers/plans/2026-10-24-livekit-stage-zero.md)。手表保留小智协议，Go接入层逐步收缩为设备适配；首版先验证Agents自定义I/O，独立SFU媒体服务不作为必需项。目前是接入验证阶段，正式服务仍为下述千问原生链路，未据此宣称新架构已上线。
 
 任务层的原请求、原稿、播放账本、暂停/恢复与持久化职责见[实时语音与任务接续细化](docs/superpowers/specs/2026-10-24-livekit-task-continuation-design.md)。LiveKit Agents管理实时语音，Go任务模块持有播放事实；Eino为任务编排候选，不作为首个闭环的必需依赖。本文档更新未切换正式服务。
 
