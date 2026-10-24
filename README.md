@@ -1,5 +1,7 @@
 # 家庭陪伴机器人：最小 Go 实时语音网关
 
+2026-10-24已确认后续采用服务器端LiveKit Agents＋ASR→LLM→TTS：[架构细化](docs/superpowers/specs/2026-10-24-server-livekit-design.md)、[第一阶段实施计划](docs/superpowers/plans/2026-10-24-livekit-stage-zero.md)。手表保留小智协议，Go接入层逐步收缩为设备适配；首版先验证Agents自定义I/O，独立SFU媒体服务不作为必需项。目前是方案阶段，正式服务仍为下述千问原生链路，未据此宣称新架构已上线。
+
 最新文字记录、跨连接/进程恢复、清空隔离及发布状态见[记录与恢复验证](docs/verification/2026-10-23-record-recovery-results.md)。网关不保存原始录音，准确文字断点仍为unknown；[三种离线定位/识别对照](docs/verification/2026-10-23-record-recovery-alignment.md)与生产启用分别验收。
 
 2026-10-23本轮实施：原请求/最新播放段分离，独立文字归属判断、输入身份与快照ACK门控已实现；未知文字断点时先澄清起点，再接受明确重读或用户指定起点；复用原生语音已有转写，未增加辅助ASR，未刷手表固件。最终构建、真实接口复验和发布状态见[本轮实施结果](docs/verification/2026-10-23-resume-state-and-alignment.md)。准确已播文字仍保持unknown，官方强制对齐目前完成离线评估。
