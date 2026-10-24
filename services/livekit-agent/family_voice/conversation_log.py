@@ -448,12 +448,16 @@ def _session_summary(directory_fd, identity):
                 'unreadable': True, 'error_code': error_code}
 
 
-def list_conversations(directory, limit=10) -> list[dict]:
+def list_conversations(directory, limit=10, *, before=None) -> list[dict]:
     """List session metadata and explicit unreadable entries, newest first."""
     _check_pagination(0, limit)
+    if before is not None:
+        _check_identity(before)
     try:
         directory_fd = _open_directory(Path(directory))
         try:
+            boundary = _session_summary(directory_fd, before) if before else None
+            boundary_key = (_timestamp(boundary['at']), boundary['session_id']) if boundary else None
             def summaries():
                 with os.scandir(directory_fd) as entries:
                     for entry in entries:
@@ -462,7 +466,9 @@ def list_conversations(directory, limit=10) -> list[dict]:
                         identity = entry.name[:-6]
                         if not _IDENTITY.fullmatch(identity):
                             continue
-                        yield _session_summary(directory_fd, identity)
+                        summary = _session_summary(directory_fd, identity)
+                        if boundary_key is None or (_timestamp(summary['at']), identity) < boundary_key:
+                            yield summary
             return heapq.nlargest(limit, summaries(), key=lambda event: (_timestamp(event['at']), event['session_id']))
         finally:
             os.close(directory_fd)

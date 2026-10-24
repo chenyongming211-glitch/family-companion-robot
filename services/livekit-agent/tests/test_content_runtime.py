@@ -32,7 +32,10 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.tts_texts = []
         self.answers = ['小狐狸来到森林。它找到一条红围巾。最后它高兴地回家。', '二加三等于五。']
         self.tool_name = None
+        self.tool_plan = []
         self.finish_reason = 'stop'
+        self.raw_text = False
+        self.extra_tool = None
         async def send(event):
             self.events.append(event)
             if self.hold_playout:
@@ -51,11 +54,21 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         response = web.StreamResponse(headers={'Content-Type': 'text/event-stream'})
         await response.prepare(request)
         answer = self.answers[min(len(self.llm_calls) - 1, len(self.answers) - 1)]
-        if self.tool_name:
-            delta = {'role': 'assistant', 'content': '我会继续。', 'tool_calls': [{'index': 0, 'id': 'resume-content', 'type': 'function', 'function': {'name': self.tool_name, 'arguments': '{"target":"main"}'}}]}
+        planned = self.tool_plan.pop(0) if self.tool_plan else None
+        name, arguments = planned if planned else (self.tool_name or 'respond',
+                                                   {'target': 'main'} if self.tool_name else {'text': answer})
+        if self.raw_text:
+            name = None
+        if name:
+            delta = {'role': 'assistant', 'content': '我会继续。', 'tool_calls': [{'index': 0, 'id': f'tool-{len(self.llm_calls)}', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(arguments)}}]}
+            if self.extra_tool:
+                extra_name, extra_args = self.extra_tool
+                delta['tool_calls'].append({'index': 1, 'id': f'extra-{len(self.llm_calls)}', 'type': 'function',
+                                           'function': {'name': extra_name, 'arguments': json.dumps(extra_args)}})
         else:
             delta = {'role': 'assistant', 'content': answer}
-        for value, finish in ((delta, None), ({}, 'tool_calls' if self.tool_name else self.finish_reason)):
+        terminal = 'tool_calls' if name and self.finish_reason == 'stop' else self.finish_reason
+        for value, finish in ((delta, None), ({}, terminal)):
             data = {'id': 'content-test', 'created': 1, 'model': 'qwen-plus', 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': value, 'finish_reason': finish}]}
             await response.write(('data: ' + json.dumps(data) + '\n\n').encode())
         await response.write(b'data: [DONE]\n\n')
@@ -97,12 +110,174 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         for block in tuple(self.voice.output.blocks.values()):
             self.voice.receipt({'block_id': block.id, 'epoch': block.epoch, 'played_samples': block.sent, 'finished': block.sealed})
         await self.until(lambda: self.voice.side.snapshot['state'] == 'completed')
+        self.tool_name = 'resume_content'
         await self.feed('first.wav')
         await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
         self.assertEqual(self.voice.main.snapshot['units'], original)
-        self.assertEqual(len(self.llm_calls), 2, 'direct resume plays frozen original, no regenerated story')
+        self.assertEqual(len(self.llm_calls), 3, 'model selects resume tool; frozen original is not regenerated')
         self.assertEqual(self.voice.main.snapshot['confirmed_count'], 3)
         self.assertFalse(any(getattr(i, 'role', None) == 'assistant' for i in self.voice.session.history.items), 'unplayed drafts are not spoken history')
+
+    async def test_continue_reaches_model_and_model_authors_clarification(self):
+        self.transcripts = ['继续', '小狐狸的故事']
+        await self.start()
+        question = '你想接着聊小狐狸，还是晚饭的事情？'
+        self.tool_plan = [('ask_clarification', {'question': question})]
+        await self.feed('first.wav')
+        await self.until(lambda: bool(self.llm_calls))
+        await self.until(lambda: question in self.tts_texts)
+        await self.until(lambda: self.voice.dialogue.snapshot['state'] == 'completed')
+        self.assertIsNone(self.voice.main.snapshot)
+        self.assertIsNone(self.voice.side.snapshot)
+        await self.feed('second.wav')
+        await self.until(lambda: len(self.llm_calls) == 2)
+        spoken = ''.join(m.get('content', '') for m in self.llm_calls[-1]['messages'] if m['role'] == 'assistant')
+        self.assertIn(question, spoken, 'next yes/no reply must see the actual model question')
+
+    async def test_archive_older_than_sdk_history_is_sent_to_model_after_reconnect(self):
+        from pathlib import Path
+        from family_voice.conversation_log import ConversationLog
+        folder = Path(self.temp.name) / 'conversations'
+        old = await ConversationLog.open(folder)
+        old.append('user.transcript', role='user', text='早期小猫叫松果。')
+        old.append('assistant.played', role='assistant', text='松果喜欢森林。', unit_id='old')
+        old.append('assistant.generated', role='assistant', text='从未播出的秘密。')
+        await old.close()
+        self.cfg = replace(self.cfg, text_record_dir=folder)
+        self.transcripts = ['上次的小猫叫什么']
+        await self.start()
+        await self.feed('first.wav')
+        await self.until(lambda: bool(self.llm_calls))
+        text = json.dumps(self.llm_calls[0]['messages'], ensure_ascii=False)
+        self.assertIn('松果喜欢森林', text)
+        self.assertNotIn('从未播出的秘密', text)
+
+    async def test_query_returns_facts_and_model_speaks_without_replacing_original(self):
+        self.transcripts = ['刚刚讲到哪里了']
+        await self.start()
+        self.voice.main.start('小狐狸来到森林。')
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+        before = self.voice.main.snapshot
+        self.tool_plan = [('query_content', {'target': 'main'})]
+        self.answers = ['刚才讲到小狐狸走进森林那里。']
+        await self.feed('first.wav')
+        await self.until(lambda: len(self.llm_calls) == 2)
+        await self.until(lambda: self.answers[0] in self.tts_texts)
+        self.assertEqual(self.voice.main.snapshot, before)
+        self.assertIsNone(self.voice.side.snapshot)
+        self.assertFalse(any('已确认完整播放' in text for text in self.tts_texts))
+
+    async def test_history_tool_returns_original_to_same_model_and_keeps_playback_separate(self):
+        from pathlib import Path
+        self.cfg = replace(self.cfg, text_record_dir=Path(self.temp.name) / 'conversations')
+        await self.start()
+        self.voice.record_text('user.transcript', role='user', text='合成旧事实：围巾是红色。', input_epoch=0)
+        self.tool_plan = [('conversation_history', {'mode': 'read', 'session_id': 'current'})]
+        self.answers = ['我们刚才聊了红围巾。']
+        await self.feed('first.wav')
+        await self.until(lambda: len(self.llm_calls) == 2)
+        tool_text = ''.join(m.get('content', '') for m in self.llm_calls[-1]['messages'] if m['role'] == 'tool')
+        self.assertIn('围巾是红色', tool_text)
+        await self.until(lambda: self.answers[0] in self.tts_texts)
+
+    async def test_history_read_finishing_after_new_speech_cannot_trigger_old_reply(self):
+        await self.start()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def delayed(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return {'status': 'ok', 'records': [{'text': '过期旧资料'}]}
+        self.voice.recall = delayed
+        self.tool_plan = [('conversation_history', {'mode': 'read'})]
+        await self.feed('first.wav')
+        await asyncio.wait_for(entered.wait(), 3)
+        self.voice.on_speech_started()
+        release.set()
+        await asyncio.sleep(.1)
+        self.assertEqual(len(self.llm_calls), 1)
+        self.assertEqual(self.tts_texts, [])
+        self.assertFalse(any(e['type'] == 'audio' for e in self.events))
+
+    async def test_ambiguous_tool_returns_candidates_without_fixed_speech(self):
+        await self.start()
+        self.hold_playout = True
+        self.voice.main.start('原故事。')
+        self.voice.side.start('旁支解释。')
+        self.voice.main.pause()
+        self.voice.side.pause()
+        before = [self.voice.main.snapshot, self.voice.side.snapshot]
+        result = self.voice.content_action('resume', 'auto')
+        self.assertIsInstance(result, dict, 'tool must return facts for model interpretation')
+        self.assertEqual(result['status'], 'needs_clarification')
+        self.assertEqual([self.voice.main.snapshot, self.voice.side.snapshot], before)
+        await asyncio.sleep(.03)
+        self.assertEqual(self.tts_texts, [])
+
+    async def test_unrouted_model_text_cannot_overwrite_a_paused_side_original(self):
+        await self.start()
+        self.raw_text = True
+        self.answers = ['你想修改哪个故事？']
+        self.voice.main.start('小狐狸原故事。')
+        self.voice.main.pause()
+        self.voice.side.start('木屋原解释。')
+        self.voice.side.pause()
+        before = [self.voice.main.snapshot, self.voice.side.snapshot]
+        await self.feed('first.wav')
+        await self.until(lambda: bool(self.llm_calls))
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events)
+                         or [self.voice.main.snapshot, self.voice.side.snapshot] != before)
+        self.assertEqual([self.voice.main.snapshot, self.voice.side.snapshot], before)
+        self.assertEqual(self.llm_calls[0].get('tool_choice'), 'required')
+
+    async def test_current_continue_request_does_not_hide_a_completed_original(self):
+        await self.start()
+        self.voice.main.start('原来的故事讲完了。')
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+        before = self.voice.main.snapshot
+        self.voice.on_speech_started()
+        await self.voice.agent.on_user_turn_completed(None, llm.ChatMessage(role='user', content=['继续这个故事']))
+        result = self.voice.content_action('resume', 'main')
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(self.voice.main.snapshot, before)
+
+    async def test_interrupted_position_answer_cannot_turn_query_into_unprepared_story(self):
+        await self.start()
+        self.voice.main.start('已经完整讲完的故事。')
+        await self.until(lambda: self.voice.main.snapshot['state'] == 'completed')
+        self.voice.on_speech_started()
+        await self.voice.agent.on_user_turn_completed(None, llm.ChatMessage(role='user', content=['讲到哪里了']))
+        self.assertEqual(self.voice.content_action('query', 'main')['status'], 'position')
+        self.voice.on_speech_started()
+        await self.voice.agent.on_user_turn_completed(None, llm.ChatMessage(role='user', content=['继续这个故事']))
+        result = self.voice.content_action('resume', 'main')
+        self.assertEqual(result['status'], 'completed')
+        self.assertIsNone(self.voice.unprepared_main)
+
+    async def test_multiple_state_changing_tools_are_rejected_before_execution(self):
+        await self.start()
+        self.voice.main.start('必须保留的故事。')
+        self.voice.main.pause()
+        before = self.voice.main.snapshot
+        self.extra_tool = ('discard_content', {'target': 'main'})
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'turn.error' for e in self.events)
+                         or self.voice.main.snapshot != before)
+        self.assertEqual(self.voice.main.snapshot, before)
+        self.assertEqual(self.tts_texts, [])
+
+    async def test_history_read_then_replacement_stays_resumable_main_content(self):
+        await self.start()
+        self.voice.main.start('旧狐狸故事。')
+        self.voice.main.pause()
+        self.tool_plan = [('conversation_history', {'mode': 'read'}), ('replace_content', {})]
+        self.answers = ['新故事中松果戴着蓝围巾。它高兴地回家。']
+        await self.feed('first.wav')
+        await self.until(lambda: len(self.llm_calls) == 3)
+        await self.until(lambda: any(e['type'] == 'content.state' and e['state'] == 'completed'
+                                    for e in self.events))
+        self.assertEqual(''.join(self.voice.main.snapshot['units']), self.answers[0])
+        self.assertEqual(self.voice.main.snapshot['state'], 'completed')
+        self.assertIsNone(self.voice.dialogue.snapshot)
 
     async def test_tool_resume_preamble_is_not_spoken_or_saved_as_new_content(self):
         self.transcripts = ['讲一个短故事', '把森林里没说完的那部分接回来']
@@ -169,8 +344,8 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await release.wait()
             return b'\1\0' * 480
-        self.voice.prepare_content = prepare
-        self.voice._notice('测试状态。')
+        self.voice.dialogue._prepare = prepare
+        self.voice.speak_dialogue('你想听哪个故事？')
         await entered.wait()
         await self.voice.hard_stop()
         release.set()
@@ -183,11 +358,12 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.hold_playout = True
         await self.feed('first.wav')
         await self.until(lambda: self.voice.output.outstanding_samples == 7200)
+        self.tool_name = 'resume_content'
         await self.feed('second.wav')
         await self.until(lambda: any(e['type'] == 'content.action' and e['action'] == 'resume' for e in self.events))
         action = next(e for e in self.events if e['type'] == 'content.action')
         self.assertEqual(action['target'], 'main')
-        self.assertEqual(len(self.llm_calls), 1)
+        self.assertEqual(len(self.llm_calls), 2)
 
     async def test_completed_old_side_does_not_mask_new_main_reply_resume(self):
         self.transcripts = ['解释一下月亮为什么发光', '继续刚才的回答']
@@ -197,6 +373,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.hold_playout = True
         await self.feed('first.wav')
         await self.until(lambda: self.voice.output.outstanding_samples == 7200)
+        self.tool_name = 'resume_content'
         await self.feed('second.wav')
         await self.until(lambda: any(e['type'] == 'content.action' for e in self.events))
         self.assertEqual(next(e for e in self.events if e['type'] == 'content.action')['target'], 'main')
@@ -218,7 +395,10 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.voice.agent.on_user_turn_completed(None, llm.ChatMessage(role='user', content=['解释一下月亮']))
         self.voice.on_speech_started()
         await self.voice.agent.on_user_turn_completed(None, llm.ChatMessage(role='user', content=['继续刚才的回答']))
-        self.assertEqual(self.voice.last_input, '解释一下月亮')
+        self.assertEqual(self.voice.last_input, '继续刚才的回答', 'keep the real current utterance')
+        result = self.voice.content_action('resume', 'side')
+        self.assertEqual(result['status'], 'needs_draft')
+        self.assertEqual(self.voice.draft_request, '解释一下月亮')
 
     async def test_confirmed_text_survives_replacement_in_next_model_context(self):
         self.transcripts = ['第一问题', '第二问题']
@@ -369,7 +549,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[-1]['kind'], 'session.end')
         self.assertFalse(any('data' in e or 'api_key' in e for e in rows))
 
-    async def test_text_archive_includes_played_notice_without_overwriting_originals(self):
+    async def test_text_archive_includes_model_dialogue_without_overwriting_originals(self):
         from pathlib import Path
         from family_voice.conversation_log import read_conversation
         self.cfg = replace(self.cfg, text_record_dir=Path(self.temp.name) / 'conversations')
@@ -377,21 +557,22 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.hold_playout = True
         async def short(text):
             return b'\1\0' * 480
-        self.voice.prepare_content = short
-        self.voice._notice('当前没有保留这段原稿。')
+        self.voice.dialogue._prepare = short
+        self.voice.speak_dialogue('你想听哪个故事？')
         await self.until(lambda: any(e['type'] == 'audio.end' for e in self.events))
         journal = self.voice.conversation
         await journal.flush()
         rows = read_conversation(self.cfg.text_record_dir, journal.id)['events']
-        notice = next(e for e in rows if e['kind'] == 'assistant.notice')
+        draft = next(e for e in rows if e['kind'] == 'assistant.content' and e['source'] == 'dialogue')
         self.assertFalse(any(e['kind'] == 'assistant.played' for e in rows))
         old = next(iter(self.voice.output.blocks.values()))
         self.voice.receipt({'block_id': old.id, 'epoch': old.epoch, 'played_samples': old.sent, 'finished': True})
-        await self.until(lambda: self.voice.notice_job.done())
+        await self.until(lambda: self.voice.dialogue.snapshot['state'] == 'completed')
         await journal.flush()
         rows = read_conversation(self.cfg.text_record_dir, journal.id)['events']
         played = next(e for e in rows if e['kind'] == 'assistant.played')
-        self.assertEqual((played['text'], played['unit_id']), (notice['text'], notice['unit_id']))
+        self.assertEqual(played['text'], draft['text'])
+        self.assertEqual(played['source'], 'dialogue')
         self.assertIsNone(self.voice.main.snapshot)
         self.assertIsNone(self.voice.side.snapshot)
 

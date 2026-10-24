@@ -8,7 +8,7 @@
 
 运行`family-robot-livekit-dev`与`family-robot-livekit-device`两项独立服务；后者监听loopback18020，原生终端通过SSH和120秒一次性配对票据接入小智v1/Opus。下行24k/60ms、上行16k/20ms，Mac以CoreAudio真实回调结算，Go扣除实际Opus lookahead并检查完整编码尾部。正常窗口300ms、待播120ms、原PCM全局420ms；Go累计设备逻辑额度600ms，不能当成物理声学上限。缓存合计最多三个12秒单位。
 
-两份独立systemd模板启用`VOICE_TEST_KEEP_OPEN=1`：仅drain测试模式取消60秒用户闲置、8轮与15分钟会话预算，ready报告`manual_close:true`、`session_seconds:null`、`max_turns:null`。持续发言超过25秒丢弃该语段，停顿后继续；不重建STT流以免尾段被误识别为新问题。SDK模型上下文最多32项、已播历史最多64项，活跃主旁稿不裁剪。旧manual/continuous模式预算仍保留；单会话、短期票据、传输/播放回报期限和资源额度仍生效。
+两份独立systemd模板启用`VOICE_TEST_KEEP_OPEN=1`：仅drain测试模式取消60秒用户闲置、8轮与15分钟会话预算，ready报告`manual_close:true`、`session_seconds:null`、`max_turns:null`。持续发言超过25秒丢弃该语段，停顿后继续；不重建STT流以免尾段被误识别为新问题。SDK滚动历史最多32项、内存已播历史最多64项，活跃主旁稿不裁剪；开启文字记录后，每轮另读服务器档案，较早内容可回查，不受这两个内存尾部限制。旧manual/continuous模式预算仍保留；单会话、短期票据、传输/播放回报期限和资源额度仍生效。
 
 验证：服务器109项Python、25项历史客户端、3项SDK及Go全库race/vet/build通过；原生CoreAudio和真实云端三句故事→插话→同一原稿恢复完成。真人麦克风/AEC、压力与网络分位数、M5实机和跨唤醒持久化尚待验收，见[本轮报告](../../docs/verification/2026-10-24-native-drain-handoff.md)。旧manual/continuous模式继续保留兼容，其清空策略不代表新的drain行为。
 
@@ -31,7 +31,13 @@ systemd模板见[`deploy/family-robot-livekit-dev.service`](../../deploy/family-
 
 用户明确要求保存文字后，独立服务模板通过`VOICE_TEXT_RECORD_DIR=/var/lib/family-robot-livekit-dev/conversations`启用私有JSONL存档。代码默认关闭；目录0700、文件0600，按会话和UTC时间记录，CLI显示上海时间。最终ASR转写、生成稿、固定语音稿/提示、完整播放单位与未确认完成单位分别标注。当前native/drain有完整播放语义；旧manual/continuous仅保存最终转写及SDK生成稿，不标成drain式实播。
 
-这些正文不进入普通日志、Git或音频文件。单写者线程使用有界队列并逐条fsync；关闭时排空。写盘或队列失败会报`text_recording_failed`并结束连接，不能默默转成无记录对话；损坏档案在列表中单独标明，其他会话仍可读取。档案不自动过期，也不自动注入LLM；文字保存与跨会话任务恢复是独立能力。首次启用前没有保存的LiveKit正文无法补回，原8000快照保持独立来源。
+这些正文不进入普通日志、Git或音频文件。单写者线程使用有界队列并逐条fsync；关闭时排空。写盘或队列失败会报`text_recording_failed`并结束连接，不能默默转成无记录对话；损坏档案在列表中单独标明，其他会话仍可读取。档案不自动过期。drain模式会给模型提供有界的当前通话文字、上一轮正文和历史元数据；文字记忆与跨会话播放器恢复是独立能力。首次启用前没有保存的LiveKit正文无法补回，原8000快照保持独立来源。
+
+### 模型读取历史与自然反问
+
+每轮在线程中读取最终转写和完整实播，unknown单独标注，生成稿/未播稿不冒充已听历史。短通话包含全文；长通话使用近期原文与带来源序号的提取式摘要（摘录，不保证概括每个细节）。档案上下文最多18000字符。模型可用`conversation_history`列会话、逐页读原文或搜索；列表可按`next_session_id`一直向前翻，搜索`all`仅覆盖最近20份，其`continuations`按具体会话续读，禁止全局seq游标。每页最多20条、结果最多12000字符；长单条按`next_offset`无损续读，游标属于对应会话。单档16MiB、一次搜索总扫描32MiB，超额/损坏明确返回unavailable。档案为只读低信任资料，不作为新的系统指令；当前单设备家庭测试共享此私有目录，多用户授权隔离另行实现。
+
+所有发声由模型明确选工具：正常答案/故事`respond`、自行措辞的反问`ask_clarification`、续讲/查询等内容工具。完整`tool_calls`终态通过后才执行，截断参数和工具外正文不播出。内容工具返回真实状态；成功恢复播放固定原稿，其他状态由同一模型继续理解和回答。没有关键词直接播报固定问句的路径。反问/状态回答用独立dialogue槽，不能覆盖主稿与旁支；确认完整播完后进入助手历史与档案，下一轮能理解用户对问题的回答。新语音起始会退休旧工具和临时播放。
 
 在服务器源码目录经已有SSH读取，不新增公开HTTP或网页入口：
 

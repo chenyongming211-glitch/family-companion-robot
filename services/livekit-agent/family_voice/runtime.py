@@ -15,6 +15,12 @@ from .providers import DashScopeSTT, DashScopeTTS, NO_RETRY, TurnSTT, text_model
 
 
 class BoundedAgentSession(AgentSession):
+    def _tool_items_added(self, items):
+        super()._tool_items_added(items)
+        # Tool-based speech adds call/output observations after the user-turn
+        # hook. Bound that independent report history at its actual write site.
+        self.history.truncate(max_items=32)
+
     def emit(self, event, arg):
         try:
             super().emit(event, arg)
@@ -22,6 +28,8 @@ class BoundedAgentSession(AgentSession):
             # LiveKit 1.8.8 retains every event even with record=False.
             # Keep its report tail bounded for the explicit keep-open test.
             del self._recorded_events[:-128]
+            if event == 'conversation_item_added':
+                self.history.truncate(max_items=32)
 
 
 async def play_count_unit(session, output, number, pcm):

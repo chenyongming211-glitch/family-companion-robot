@@ -12,6 +12,8 @@
 
 **文字存档：** 用户已明确要求保存后续语音对话文字。独立服务通过`VOICE_TEXT_RECORD_DIR`保存私有逐会话JSONL，最终转写、生成稿、固定稿/提示、完整实播与unknown分开；读取CLI见[服务说明](../services/livekit-agent/README.md#语音文字存档)。不再用SDK滚动历史代替全量存档；正文只留服务器，不进Git、普通日志或音频。开启前的LiveKit全文无法补回；旧8000快照单独注明来源，不能充当本轮记录。
 
+**模型通话记忆与自然反问：** 用户已授权让模型读取文字档案并自主理解/追问。新增有界档案上下文、上一轮回读与列表/原文/search工具；长通话采用提取式摘要和原文分页，不把未播稿当成已听事实。drain所有发声先由模型明确选respond/ask_clarification/content工具，完整tool_calls终态后执行；取消关键词直达与固定问句。自然反问用独立dialogue槽，完整实播进入下一轮历史，保留主/旁稿。设计与验证见[本轮说明](verification/2026-10-24-conversation-memory-dialogue.md)。旧32/64项滚动历史只是内存尾部，不再代表档案可读范围。读取旧聊天不等于跨会话恢复播放器。
+
 **最新实现：** 已新增小智WebSocket/Opus→云端Go设备桥18020→LiveKit drain模式18010，以及Mac原生CoreAudio终端、固定原稿和句级检查点。真实云端三句故事→插话问答→同一原稿/版本恢复完成，见[本轮验证](verification/2026-10-24-native-drain-handoff.md)。不再使用浏览器作主验收；真人麦克风/AEC与M5/I2S仍须分别验收。
 
 **最新插话行为：** 新drain路径停止旧下发、保留已收音频排空，终端在独立待播区和本地依赖栅栏之间交接；旧manual/continuous仍保留立即清空兼容策略。旧停声延迟不能作为新策略证据。
