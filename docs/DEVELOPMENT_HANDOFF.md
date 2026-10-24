@@ -1,5 +1,7 @@
 # 换电脑开发交接
 
+**语音路线最新决定（2026-10-24）：用户已批准优先开发独立Realtime入口，与三段式比较实际体验，尚未决定集成双后端；随后明确现有Realtime已部署并接小智。本轮复用已有Go/Qwen网关，在回环18030另开测试实例，独立配置/设备/会话且不启用持久记录，保留原网关已有中断重连和任务规则；未接三段式历史、准备回应或固定稿检查点。Mac新入口`tools/realtime-voice/open.command`复用AEC/Opus/CoreAudio，窗口“家庭陪伴 · Realtime独立测试”；不伪造旧协议的I2S回报。原8000及18010/18020不切换，交替使用前先结束另一窗口的对话。测完再决定是否共存或集成。见[当前范围](superpowers/specs/2026-10-24-dual-voice-backends-design.md#0-当前有效方案先独立体验再决定是否集成)和[验证报告](verification/2026-10-24-independent-realtime.md)，第0节覆盖原集成规划。**
+
 **当前产品范围决定（2026-10-24）：多人对话识别与声纹方案仅保留记录，用户已明确暂停开发，等待产品稳定后再恢复。当前无论实际几个人发言，都按同一个逻辑用户/user角色处理，沿用共享对话、文字存档、模型回读和任务状态；不开发声纹识别/登记、个人归属或按人查询，也不因别的开发会话结束自动启用。统一单用户不表示已经确认真实身份，不为现有记录伪造实名归属。未来设计见[暂停的多人方案](superpowers/specs/2026-10-24-speaker-identity-multiparty-design.md)，用户明确恢复后再重新评审排期。该暂停不影响其他语音稳定性工作继续推进。**
 
 更新：2026-10-24。仓库：[chenyongming211-glitch/family-companion-robot](https://github.com/chenyongming211-glitch/family-companion-robot)，默认分支`main`。历史资料迁移后，已在服务器建立独立LiveKit最小语音服务并完成三模型联调；原8000正式服务和手表未切换。
