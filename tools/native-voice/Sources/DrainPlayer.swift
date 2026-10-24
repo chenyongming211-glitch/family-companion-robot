@@ -150,6 +150,7 @@ final class DrainPlayer {
         try ledger.finish(id, discarded: discarded)
         guard let b = ledger.blocks[id] else { throw ClientFailure("missing_final") }
         if current == id { audio.end(); current = nil }
+        lastProgress.removeValue(forKey: id)
         let e = receipt(b, finished: true, discarded: discarded)
         let now = ProcessInfo.processInfo.systemUptime
         finals[id] = Final(payload: e, epoch: b.epoch, began: now, sent: now)
@@ -195,6 +196,7 @@ final class DrainPlayer {
         guard !stopped else { return }
         stopped = true; timer?.cancel(); timer = nil; audio.stop(); pendingPacket = nil
         finals.removeAll()
+        lastProgress.removeAll()
         for b in ledger.blocks.values { b.packets.removeAll() }
     }
 }

@@ -4,6 +4,8 @@
 
 **原生收音补充：** 已修复本机Voice Processing六声道转单声道产生静音的问题；真人复验已确认数学及三句话故事正常回复。见[麦克风修复](verification/2026-10-24-native-microphone-fix.md)。外设声道和完整AEC压力验收仍单独验证。
 
+**持续测试入口：** 原生窗口改为常开，点击开始时才取一次性票据，停止或错误后保留窗口可重连。独立drain测试模式通过`VOICE_TEST_KEEP_OPEN=1`取消闲置、轮次和总时长自动结束；用户关窗才退出。连续发言超过25秒只丢当前语段，停顿后继续。见[常开测试验证](verification/2026-10-24-keep-open-test.md)。正式手表的待机策略未更改。
+
 **最新实现：** 已新增小智WebSocket/Opus→云端Go设备桥18020→LiveKit drain模式18010，以及Mac原生CoreAudio终端、固定原稿和句级检查点。真实云端三句故事→插话问答→同一原稿/版本恢复完成，见[本轮验证](verification/2026-10-24-native-drain-handoff.md)。不再使用浏览器作主验收；真人麦克风/AEC与M5/I2S仍须分别验收。
 
 **最新插话行为：** 新drain路径停止旧下发、保留已收音频排空，终端在独立待播区和本地依赖栅栏之间交接；旧manual/continuous仍保留立即清空兼容策略。旧停声延迟不能作为新策略证据。
@@ -111,7 +113,7 @@ curl --max-time 10 http://82.156.48.111:8000/healthz
 
 ## 5. 新电脑有麦克风后如何继续
 
-优先运行`./tools/native-voice/open.command`，先看[原生终端说明](../tools/native-voice/README.md)与[本轮验证](verification/2026-10-24-native-drain-handoff.md)。新服务源代码和非root部署模板已在Git，凭据只留服务器；票据由SSH短期配对走stdin。以下段落是原浏览器阶段记录，不能据此恢复浏览器主验收，也不能把旧清空时延当作drain结果。
+优先运行`./tools/native-voice/open.command`，先看[原生终端说明](../tools/native-voice/README.md)与[本轮验证](verification/2026-10-24-native-drain-handoff.md)。新服务源代码和非root部署模板已在Git，凭据只留服务器；GUI点击开始才经SSH回环转发配对，合成fixture入口仍用stdin短期票据。以下段落是原浏览器阶段记录，不能据此恢复浏览器主验收，也不能把旧清空时延当作drain结果。
 
 服务器最小链路已完成：合成WAV经真实ASR→LLM→TTS连续问答，数数回复取消后还能回答新问题；播放证据来自按PCM时长计时的模拟客户端。固定文字播报不提前入历史、取消前后、旧回报和unknown降级有真实SDK测试；工具后抑制重复生成、Go任务/记录接线与准确自动接续仍未验收。
 

@@ -25,6 +25,7 @@ type Config struct {
 	BackendURL     string
 	BackendToken   string
 	SessionTimeout time.Duration
+	KeepOpen       bool
 }
 
 type ticket struct {
@@ -189,7 +190,13 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 	s.connections[c] = struct{}{}
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.connections, c); s.mu.Unlock() }()
-	ctx, cancel := context.WithTimeout(s.ctx, s.cfg.SessionTimeout)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if s.cfg.KeepOpen {
+		ctx, cancel = context.WithCancel(s.ctx)
+	} else {
+		ctx, cancel = context.WithTimeout(s.ctx, s.cfg.SessionTimeout)
+	}
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
@@ -220,7 +227,7 @@ func (s *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ready, err := parseEvent(data)
-	if err != nil || ready["type"] != "ready" || ready["mode"] != "drain" || integer(ready, "input_rate") != 16000 || integer(ready, "output_rate") != 24000 {
+	if err != nil || ready["type"] != "ready" || ready["mode"] != "drain" || integer(ready, "input_rate") != 16000 || integer(ready, "output_rate") != 24000 || (s.cfg.KeepOpen && ready["manual_close"] != true) {
 		sendJSON(c, map[string]any{"type": "error", "code": "backend_capability_required"})
 		return
 	}

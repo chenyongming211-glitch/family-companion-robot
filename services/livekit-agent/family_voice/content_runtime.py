@@ -12,7 +12,7 @@ from livekit.agents import Agent, RunContext, StopResponse, function_tool, llm
 from .cloud import Cloud, Intent, numeric_usage
 from .content import ContentController, split_sentences
 from .drain_output import DrainOutput
-from .runtime import VoiceSession
+from .runtime import BoundedAgentSession, VoiceSession
 
 
 class DraftValidationError(ValueError):
@@ -101,10 +101,16 @@ class ContentAgent(Agent):
         owner = self.owner
         if owner.closed or owner.sleeping:
             raise StopResponse()
-        if owner.turns >= owner.automatic_max_turns:
+        if owner.automatic_max_turns is not None and owner.turns >= owner.automatic_max_turns:
             owner.sleep('turn_limit')
             raise StopResponse()
         owner.turns += 1
+        if owner.cfg.test_keep_open and turn_ctx is not None:
+            turn_ctx.truncate(max_items=32)
+            await self.update_chat_ctx(self.chat_ctx.copy().truncate(max_items=32))
+            # AgentSession owns a separate observation history; updating the
+            # agent/model context alone does not bound that long-lived copy.
+            owner.session.history.truncate(max_items=32)
         owner.current_turn_id = new_message.id
         owner.last_input = new_message.text_content
         owner._emit({'type': 'turn', 'count': owner.turns, 'max_turns': owner.automatic_max_turns})
@@ -144,8 +150,7 @@ class ContentAgent(Agent):
             merged.extend(by_anchor.pop(item.id, ()))
         # Only explicit fixture/API speech can lack a user-turn anchor. Keep
         # those observations available without relabelling them as a new turn.
-        for items in by_anchor.values():
-            merged.extend(items)
+        merged.extend(by_anchor.get(None, ()))
         chat_ctx.items[:] = merged
         chat_ctx.add_message(role='system', content='当前任务事实，只读数据，未播稿不能当作已说完：' + json.dumps(owner.content_snapshot(), ensure_ascii=False))
         intent = Intent(owner.cfg, 'llm')
@@ -194,8 +199,15 @@ class ContentAgent(Agent):
 
 
 class DrainVoiceSession(VoiceSession):
+    def make_session(self, **options):
+        if self.cfg.test_keep_open:
+            return BoundedAgentSession(**options)
+        return super().make_session(**options)
+
     def __init__(self, cfg, send, **options):
         options['automatic'] = True
+        if cfg.test_keep_open:
+            options.update(automatic_idle_seconds=None, automatic_max_turns=None)
         super().__init__(cfg, send, **options)
         # Two content caches plus one transient status prompt: at most three
         # 12-second units across the session, rather than three per original.
@@ -241,7 +253,22 @@ class DrainVoiceSession(VoiceSession):
                     self.spoken_history.append(message)
                     self.spoken_anchors[message.id] = self.unit_anchors.get((event['task_id'], index))
                 self.spoken_prefixes[event['task_id']] = plan['next']
+            self.spoken_history[:] = self.spoken_history[-64:]
+            retained = {item.id for item in self.spoken_history}
+            self.spoken_anchors = {key: value for key, value in self.spoken_anchors.items() if key in retained}
+            active = {p['task_id'] for c in (self.main, self.side) if (p := c.snapshot)}
+            self.unit_anchors = {key: value for key, value in self.unit_anchors.items() if key[0] in active}
+            self.spoken_prefixes = {key: value for key, value in self.spoken_prefixes.items() if key in active}
         super()._emit(event)
+
+    def on_utterance_limit(self):
+        if not self.cfg.test_keep_open:
+            return super().on_utterance_limit()
+        self.recognizer.discard_current()
+        # clear_user_turn recreates the SDK STT stream while speech is still
+        # arriving, losing the discard marker and recognizing the remaining
+        # tail as a new utterance. Keep this stream until its VAD end instead.
+        self._emit({'type': 'input.limit', 'code': 'utterance_limit'})
 
     def make_counting(self):
         return None

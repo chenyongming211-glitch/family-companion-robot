@@ -25,7 +25,7 @@ xcrun swiftc -swift-version 5 -framework AppKit -framework AVFoundation \
   -import-objc-header "$source_dir/OpusBridge.h" \
   "$source_dir/Sources/AudioPipeline.swift" "$source_dir/Sources/MicrophonePCM.swift" "$source_dir/Sources/DrainPlayer.swift" \
   "$source_dir/Sources/Opus.swift" "$source_dir/Sources/PlaybackLedger.swift" \
-  "$source_dir/Sources/VoiceClient.swift" "$source_dir/Tests/FixtureSpec.swift" "$out_dir/OpusBridge.o" \
+  "$source_dir/Sources/NativeEndpoint.swift" "$source_dir/Sources/VoiceClient.swift" "$source_dir/Tests/FixtureSpec.swift" "$out_dir/OpusBridge.o" \
   -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" -o "$out_dir/fixture-spec"
 "$out_dir/fixture-spec"
 bash "$source_dir/Tests/launcher-spec.sh"

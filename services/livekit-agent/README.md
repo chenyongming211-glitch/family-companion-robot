@@ -8,6 +8,8 @@
 
 运行`family-robot-livekit-dev`与`family-robot-livekit-device`两项独立服务；后者监听loopback18020，原生终端通过SSH和120秒一次性配对票据接入小智v1/Opus。下行24k/60ms、上行16k/20ms，Mac以CoreAudio真实回调结算，Go扣除实际Opus lookahead并检查完整编码尾部。正常窗口300ms、待播120ms、原PCM全局420ms；Go累计设备逻辑额度600ms，不能当成物理声学上限。缓存合计最多三个12秒单位。
 
+两份独立systemd模板启用`VOICE_TEST_KEEP_OPEN=1`：仅drain测试模式取消60秒用户闲置、8轮与15分钟会话预算，ready报告`manual_close:true`、`session_seconds:null`、`max_turns:null`。持续发言超过25秒丢弃该语段，停顿后继续；不重建STT流以免尾段被误识别为新问题。SDK模型上下文最多32项、已播历史最多64项，活跃主旁稿不裁剪。旧manual/continuous模式预算仍保留；单会话、短期票据、传输/播放回报期限和资源额度仍生效。
+
 验证：服务器109项Python、25项历史客户端、3项SDK及Go全库race/vet/build通过；原生CoreAudio和真实云端三句故事→插话→同一原稿恢复完成。真人麦克风/AEC、压力与网络分位数、M5实机和跨唤醒持久化尚待验收，见[本轮报告](../../docs/verification/2026-10-24-native-drain-handoff.md)。旧manual/continuous模式继续保留兼容，其清空策略不代表新的drain行为。
 
 ## 服务器启动

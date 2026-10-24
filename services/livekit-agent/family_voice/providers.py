@@ -125,8 +125,17 @@ class TurnSTT(stt.STT):
         for stream in tuple(self.streams):
             await stream.aclose()
 
+    def discard_current(self):
+        for stream in tuple(self.streams):
+            stream.discard_current()
+
 
 class TurnRecognition(stt.SpeechStream):
+    _discard_current = False
+
+    def discard_current(self):
+        self._discard_current = True
+
     async def aclose(self):
         try:
             await super().aclose()
@@ -157,19 +166,23 @@ class TurnRecognition(stt.SpeechStream):
                 if epoch != generation:
                     return
                 raise
-            if epoch == generation and result.alternatives and result.alternatives[0].text:
+            if epoch == generation and not self._discard_current and result.alternatives and result.alternatives[0].text:
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=result.alternatives, speech_end_time=ended))
 
         async def detect(group):
             nonlocal generation, active
             async for event in detector:
                 if event.type == VADEventType.START_OF_SPEECH:
+                    self._discard_current = False
                     generation += 1
                     if active and not active.done():
                         active.cancel()
                     self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
                 elif event.type == VADEventType.END_OF_SPEECH:
                     self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                    if self._discard_current:
+                        self._discard_current = False
+                        continue
                     if len(jobs) >= 4:
                         raise APIError('recognition backlog limit', retryable=False)
                     ended = time.time() - event.silence_duration - event.inference_duration

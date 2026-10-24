@@ -5,6 +5,11 @@ import Foundation
         precondition(nativeEndpoint("ws://127.0.0.1:18021/xiaozhi/v1/") != nil, "Foundation normalized trailing slash must accept native endpoint")
         precondition(nativeEndpoint("ws://example.com/xiaozhi/v1/") == nil)
         precondition(nativeEndpoint("ws://127.0.0.1:18020/xiaozhi/v1/?ticket=secret") == nil)
+        precondition(nativePairingEndpoint("ws://127.0.0.1:18020/xiaozhi/v1/")?.absoluteString == "http://127.0.0.1:18020/v1/pair")
+        precondition(nativePairingEndpoint("ws://example.com/xiaozhi/v1/") == nil)
+        let ticket = try pairedNativeTicket(Data("{\"ticket\":\"synthetic-ticket-000000000000\",\"device_id\":\"native-mac\"}".utf8))
+        precondition(ticket == "synthetic-ticket-000000000000")
+        do { _ = try pairedNativeTicket(Data("{\"ticket\":\"bad\"}".utf8)); fatalError("invalid pair accepted") } catch {}
         let ledger = PlaybackLedger()
         try ledger.handoff(id: 1, epoch: 0, inputEpoch: 0, after: [])
         try ledger.accept(id: 1, epoch: 0, samples: 1440)

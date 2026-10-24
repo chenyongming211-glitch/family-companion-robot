@@ -12,6 +12,7 @@ EnvironmentFile=/etc/family-robot/server.env
 EnvironmentFile=/etc/family-robot/livekit-dev.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=VOICE_AUDIT_DIR=/var/lib/family-robot-livekit-dev/audit
+Environment=VOICE_TEST_KEEP_OPEN=1
 ExecStart=/opt/family-robot-livekit-runtime/venv/bin/python -m family_voice.server
 Restart=on-failure
 RestartSec=3

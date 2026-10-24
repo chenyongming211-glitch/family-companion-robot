@@ -27,10 +27,13 @@ if [[ -S "$shared_control" ]] && ssh -S "$shared_control" -O check ubuntu@82.156
   ssh -S "$control" -O forward -L "127.0.0.1:$port:127.0.0.1:18020" ubuntu@82.156.48.111
   forward_created=true
 else
-  ssh -M -S "$control" -o ControlPersist=600 -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
+  ssh -M -S "$control" -o ControlPersist=yes -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
     -L "127.0.0.1:$port:127.0.0.1:18020" -fN ubuntu@82.156.48.111
 fi
-# The one-use ticket goes directly from SSH stdout to client stdin. Never argv or disk.
-ssh -S "$control" -T ubuntu@82.156.48.111 \
-  "curl -q --fail --silent --show-error --max-time 5 -H 'Content-Type: application/json' --data '{\"device_id\":\"native-mac\"}' http://127.0.0.1:18020/v1/pair" \
-  | "$private_dir/NativeVoice.app/Contents/MacOS/NativeVoice" --url "ws://127.0.0.1:$port/xiaozhi/v1/" "$@"
+if [[ ${1:-} == --fixtures ]]; then
+  ssh -S "$control" -T ubuntu@82.156.48.111 \
+    "curl -q --fail --silent --show-error --max-time 5 -H 'Content-Type: application/json' --data '{\"device_id\":\"native-mac\"}' http://127.0.0.1:18020/v1/pair" \
+    | "$private_dir/NativeVoice.app/Contents/MacOS/NativeVoice" --url "ws://127.0.0.1:$port/xiaozhi/v1/" "$@"
+else
+  "$private_dir/NativeVoice.app/Contents/MacOS/NativeVoice" --url "ws://127.0.0.1:$port/xiaozhi/v1/" --pair-on-start --keep-open "$@"
+fi

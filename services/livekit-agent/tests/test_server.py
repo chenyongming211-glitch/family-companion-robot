@@ -3,6 +3,7 @@ import asyncio
 import base64
 import tempfile
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from aiohttp import WSServerHandshakeError
@@ -242,6 +243,32 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await ws.receive_json())['type'], 'ready')
             self.assertEqual((await ws.receive_json())['type'], 'agent.state')
             await ws.close()
+        finally:
+            await client.close()
+
+    async def test_keep_open_drain_ignores_session_budget_until_manual_close(self):
+        class KeepVoice(TestVoice):
+            def content_snapshot(self): return {}
+        cfg = replace(self.cfg, test_keep_open=True)
+        client = TestClient(TestServer(create_app(cfg, drain_factory=KeepVoice, session_seconds=.02)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio?mode=drain', headers={'Authorization': 'Bearer synthetic-token'})
+            ready = await ws.receive_json()
+            self.assertTrue(ready['manual_close'])
+            self.assertIsNone(ready['session_seconds'])
+            self.assertIsNone(ready['max_turns'])
+            await asyncio.sleep(.06)
+            await ws.send_json({'type': 'content.snapshot'})
+            self.assertEqual((await ws.receive_json())['type'], 'content.snapshot')
+            await ws.close()
+            async with asyncio.timeout(1):
+                while (await (await client.get('/healthz')).json())['active_sessions']:
+                    await asyncio.sleep(.01)
+            legacy = await client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
+            self.assertEqual((await legacy.receive_json())['session_seconds'], .02)
+            self.assertEqual((await legacy.receive_json())['code'], 'session_expired')
+            await legacy.close()
         finally:
             await client.close()
 

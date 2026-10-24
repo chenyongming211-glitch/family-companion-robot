@@ -34,6 +34,8 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
         if mode not in ('manual', 'continuous', 'drain') or (mode == 'drain' and request.path != '/v1/audio'):
             raise web.HTTPBadRequest()
         automatic = mode in ('continuous', 'drain')
+        keep_open = mode == 'drain' and cfg.test_keep_open
+        lifetime = None if keep_open else session_seconds
         if app[STATE]['active']:
             raise web.HTTPConflict()
         app[STATE]['active'] = True
@@ -68,7 +70,8 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
                 voice = session_factory(cfg, send, automatic=True) if automatic else session_factory(cfg, send)
             await voice.start()
             audit = Intent(cfg, 'client_session')
-            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': session_seconds, 'max_turns': 8, 'mode': mode,
+            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': lifetime, 'max_turns': None if keep_open else 8, 'mode': mode,
+                        'manual_close': keep_open,
                         **({'capabilities': ['drain', 'staging', 'content_checkpoint']} if mode == 'drain' else {})})
             opening = False
             for event in startup_events:
@@ -76,7 +79,7 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
             startup_events.clear()
             accepting = False
             input_samples = 0
-            budget = asyncio.timeout(session_seconds)
+            budget = asyncio.timeout(lifetime)
             async with budget:
                 async for message in ws:
                     if message.type != WSMsgType.TEXT:
@@ -159,7 +162,7 @@ def create_app(cfg, *, session_factory=VoiceSession, drain_factory=None, session
         finally:
             if audit:
                 try:
-                    audit.update(state=reason, last_command=phase, turns=input_id, limit_seconds=session_seconds, error_type=error_type)
+                    audit.update(state=reason, last_command=phase, turns=input_id, limit_seconds=lifetime, error_type=error_type)
                 except OSError:
                     pass
             try:

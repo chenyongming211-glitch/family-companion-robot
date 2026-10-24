@@ -8,6 +8,7 @@ final class VoiceClient: @unchecked Sendable {
     private var ticket: String
     let microphone: Bool
     let fixturePaths: [String]
+    let pairOnStart: Bool, keepOpen: Bool
     var status: ((String) -> Void)?
     var ended: ((Bool) -> Void)?
     private var session: URLSession?
@@ -22,19 +23,45 @@ final class VoiceClient: @unchecked Sendable {
     private var inputFrames = 0, inputSamples = 0, inputWindowSamples = 0, inputPeak = 0
     private var inputEnergy = 0.0, inputLoggedAt = ProcessInfo.processInfo.systemUptime
 
-    init(url: URL, ticket: String, fixturePaths: [String] = []) {
+    init(url: URL, ticket: String, fixturePaths: [String] = [], pairOnStart: Bool = false, keepOpen: Bool = false) {
         self.url = url; self.ticket = ticket; self.fixturePaths = fixturePaths
+        self.pairOnStart = pairOnStart; self.keepOpen = keepOpen
         self.microphone = fixturePaths.isEmpty
     }
-    func start() { queue.async { self.connect() } }
+    func start() { queue.async { if self.pairOnStart { self.pair() } else { self.connect() } } }
+    private func transport() -> URLSession {
+        if let session { return session }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 5
+        configuration.timeoutIntervalForResource = keepOpen ? 0 : 15 * 60
+        let session = URLSession(configuration: configuration)
+        self.session = session
+        return session
+    }
+    private func pair() {
+        guard !closed, let endpoint = nativePairingEndpoint(url.absoluteString) else { fail("invalid_pair_endpoint"); return }
+        status?("正在连接测试服务…")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{\"device_id\":\"native-mac\"}".utf8)
+        let session = transport()
+        Task { [weak self] in
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ClientFailure("pairing_unavailable") }
+                let token = try pairedNativeTicket(data)
+                self?.queue.async { [weak self] in
+                    guard let self, !self.closed else { return }
+                    self.ticket = token; self.connect()
+                }
+            } catch { self?.queue.async { self?.fail("pairing_unavailable") } }
+        }
+    }
     private func connect() {
         guard !closed else { return }
         status?("正在连接云端设备桥…")
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 15 * 60
-        let session = URLSession(configuration: configuration)
-        self.session = session
+        let session = transport()
         var request = URLRequest(url: url)
         request.setValue("Bearer " + ticket, forHTTPHeaderField: "Authorization")
         request.setValue("native-mac", forHTTPHeaderField: "Device-Id")
@@ -52,7 +79,7 @@ final class VoiceClient: @unchecked Sendable {
             guard let self, !self.closed, !self.ready else { return }
             self.fail("ready_timeout")
         }
-        queue.asyncAfter(deadline: .now() + 15 * 60) { [weak self] in self?.stopInternal(success: true) }
+        if !keepOpen { queue.asyncAfter(deadline: .now() + 15 * 60) { [weak self] in self?.stopInternal(success: true) } }
     }
     private func receive() {
         guard !closed, let socket else { return }
@@ -99,11 +126,12 @@ final class VoiceClient: @unchecked Sendable {
                       e["mode"] as? String == "drain", try integer(e, "input_rate") == 16000,
                       try integer(e, "output_rate") == 24000 else { throw ClientFailure("invalid_ready") }
                 try player.event(e)
+                if keepOpen && e["manual_close"] as? Bool != true { throw ClientFailure("keep_open_unavailable") }
                 try audio.start(microphone: microphone)
                 ready = true
                 audio.onPCM = { [weak self] in self?.input($0) }
                 if microphone {
-                    status?(audio.aecEnabled ? "对话中 · 连续收音 · 系统回声消除已启用" : "对话中 · 连续收音 · 系统回声消除未启用")
+                    status?(keepOpen ? "对话中 · 可持续测试，结束时关闭窗口" : "对话中 · 连续收音")
                 } else {
                     let fixture = try FixtureInput(paths: fixturePaths, queue: queue, player: player)
                     self.fixture = fixture
@@ -127,6 +155,8 @@ final class VoiceClient: @unchecked Sendable {
                     metadata("content.state", Dictionary(uniqueKeysWithValues: safe.compactMap { key in e[key].map { (key, $0) } }))
                 } else if type == "content.action" {
                     metadata("content.action", ["action": e["action"] as? String ?? "", "target": e["target"] as? String ?? ""])
+                } else if type == "input.limit" {
+                    status?("这句话较长，请稍停一下再继续；连接仍保持。")
                 }
                 // ASR, replies and content.snapshot payloads are deliberately never logged.
             }

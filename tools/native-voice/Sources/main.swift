@@ -18,12 +18,14 @@ func readTicket() throws -> String {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    let client: VoiceClient
+    private var client: VoiceClient?
+    private let makeClient: () -> VoiceClient
+    private var generation = 0
     var window: NSWindow!
     let button = NSButton(title: "开始对话", target: nil, action: nil)
-    let label = NSTextField(wrappingLabelWithString: "点一次开始，随后可直接开口插话。请在配对后两分钟内开始。")
+    let label = NSTextField(wrappingLabelWithString: "点一次开始即可持续测试；不测时关闭窗口。")
     private var started = false
-    init(client: VoiceClient) { self.client = client }
+    init(makeClient: @escaping () -> VoiceClient) { self.makeClient = makeClient }
     func applicationDidFinishLaunching(_ notification: Notification) {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 220),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
@@ -45,33 +47,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 label.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), label.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
                 note.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18), note.centerXAnchor.constraint(equalTo: content.centerXAnchor)])
         }
-        client.status = { [weak self] text in DispatchQueue.main.async { self?.label.stringValue = text } }
-        client.ended = { [weak self] success in DispatchQueue.main.async {
-            self?.button.title = "对话已结束"; self?.button.isEnabled = false
-            if success { self?.label.stringValue = "麦克风已关闭。再次对话请重新运行入口，取得新的一次性配对。" }
-        } }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
     @objc func toggle() {
-        if started { client.stop(); button.isEnabled = false; return }
+        if started { client?.stop(); button.isEnabled = false; return }
+        generation += 1
+        let active = generation
         started = true; button.isEnabled = false; label.stringValue = "正在请求麦克风权限…"
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.generation == active else { return }
                 if granted {
+                    let client = self.makeClient()
+                    self.client = client
+                    client.status = { [weak self] text in DispatchQueue.main.async {
+                        guard let self, self.generation == active else { return }
+                        self.label.stringValue = text
+                    } }
+                    client.ended = { [weak self] success in DispatchQueue.main.async {
+                        guard let self, self.generation == active else { return }
+                        self.client = nil; self.started = false
+                        self.button.title = "开始对话"; self.button.isEnabled = true
+                        if success { self.label.stringValue = "已停止收音，点击开始可继续。" }
+                        else { self.label.stringValue += "。可点击开始重新连接。" }
+                    } }
                     self.button.title = "结束对话"; self.button.isEnabled = true
-                    self.client.start()
+                    client.start()
                 } else {
                     self.label.stringValue = "麦克风未授权。请在系统设置中允许本应用使用麦克风后重新运行。"
                     metadata("microphone.permission", ["granted": false])
+                    self.started = false; self.button.isEnabled = true
                 }
             }
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) { client.stop() }
-    func windowWillClose(_ notification: Notification) { client.stop() }
+    func applicationWillTerminate(_ notification: Notification) { generation += 1; client?.stop() }
+    func windowWillClose(_ notification: Notification) { generation += 1; client?.stop() }
 }
 
 var args = Array(CommandLine.arguments.dropFirst())
@@ -86,6 +99,9 @@ if args == ["--self-test"] {
     withExtendedLifetime(test) { dispatchMain() }
 }
 var fixtures: [String] = []
+let pairOnStart = args.contains("--pair-on-start")
+let keepOpen = args.contains("--keep-open")
+args.removeAll { $0 == "--pair-on-start" || $0 == "--keep-open" }
 var address = "ws://127.0.0.1:18020/xiaozhi/v1/"
 if let index = args.firstIndex(of: "--url"), index + 1 < args.count {
     address = args[index + 1]; args.removeSubrange(index...(index + 1))
@@ -95,20 +111,25 @@ if args.first == "--fixtures", args.count == 2 {
     args.removeAll()
 }
 guard args.isEmpty, let url = nativeEndpoint(address) else {
-    fputs("Usage: NativeVoice [--url ws://127.0.0.1:18020/xiaozhi/v1/] [--fixtures path1,path2,path3] | --self-test\nTicket is accepted on stdin only.\n", stderr)
+    fputs("Usage: NativeVoice [--url ws://127.0.0.1:18020/xiaozhi/v1/] [--pair-on-start] [--keep-open] [--fixtures path1,path2,path3] | --self-test\nTickets use stdin or loopback pairing on start; never command-line arguments.\n", stderr)
     exit(2)
 }
 do {
-    let ticket = try readTicket()
-    let client = VoiceClient(url: url, ticket: ticket, fixturePaths: fixtures)
+    let ticket = pairOnStart ? "" : try readTicket()
     if !fixtures.isEmpty {
+        let client = VoiceClient(url: url, ticket: ticket, fixturePaths: fixtures, pairOnStart: pairOnStart, keepOpen: keepOpen)
         client.ended = { success in exit(success ? 0 : 1) }
         client.start()
         withExtendedLifetime(client) { dispatchMain() }
     } else {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
-        let delegate = AppDelegate(client: client)
+        var initialTicket = ticket
+        let delegate = AppDelegate(makeClient: {
+            let credential = initialTicket
+            initialTicket = ""
+            return VoiceClient(url: url, ticket: credential, pairOnStart: pairOnStart || credential.isEmpty, keepOpen: keepOpen)
+        })
         application.delegate = delegate
         withExtendedLifetime(delegate) { application.run() }
     }

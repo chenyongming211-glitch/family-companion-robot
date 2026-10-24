@@ -13,6 +13,16 @@ from .counting import CountController, is_count_resume, parse_count_request
 from .providers import DashScopeSTT, DashScopeTTS, NO_RETRY, TurnSTT, text_model
 
 
+class BoundedAgentSession(AgentSession):
+    def emit(self, event, arg):
+        try:
+            super().emit(event, arg)
+        finally:
+            # LiveKit 1.8.8 retains every event even with record=False.
+            # Keep its report tail bounded for the explicit keep-open test.
+            del self._recorded_events[:-128]
+
+
 async def play_count_unit(session, output, number, pcm):
     """A generated number becomes progress only after its own full receipt."""
     previous = session.current_speech
@@ -110,7 +120,7 @@ class VoiceSession:
         turn_handling = {'turn_detection': 'manual', 'interruption': {'resume_false_interruption': False}, 'preemptive_generation': {'enabled': False}}
         if automatic:
             turn_handling.update(turn_detection='vad', endpointing={'min_delay': .35, 'max_delay': 1}, interruption={'mode': 'vad', 'enabled': True, 'min_duration': .2, 'min_words': 0, 'resume_false_interruption': False})
-        self.session = AgentSession(
+        self.session = self.make_session(
             stt=self.recognizer, llm=self.providers[1], tts=self.providers[2], vad=vad,
             turn_handling=turn_handling,
             use_tts_aligned_transcript=False, user_away_timeout=automatic_idle_seconds if automatic else None,
@@ -122,6 +132,9 @@ class VoiceSession:
         self.closed = False
         self.commit_job = None
         self.counting = self.make_counting() if automatic else None
+
+    def make_session(self, **options):
+        return AgentSession(**options)
 
     def make_output(self, send):
         return PCMOutput(send)
@@ -213,7 +226,7 @@ class VoiceSession:
                     self.on_speech_started()
                     async def limit():
                         await asyncio.sleep(self.automatic_utterance_seconds)
-                        self.sleep('utterance_limit')
+                        self.on_utterance_limit()
                     self.speech_timer = asyncio.create_task(limit())
             @self.session.on('agent_state_changed')
             def agent_state(event):
@@ -229,6 +242,9 @@ class VoiceSession:
         def error(event):
             self._emit({'type': 'error', 'stage': 'runtime', 'code': type(event.error).__name__})
         await self.session.start(self.make_agent(), record=False)
+
+    def on_utterance_limit(self):
+        self.sleep('utterance_limit')
 
     def sleep(self, code):
         if not self.closed and not self.sleeping:

@@ -78,8 +78,9 @@ func (s *session) run() error {
 			defer readers.Done()
 			for {
 				readDeadline := deadline
-				if !back && time.Now().Add(30*time.Second).Before(deadline) {
-					readDeadline = time.Now().Add(30 * time.Second)
+				wireDeadline := time.Now().Add(30 * time.Second)
+				if !back && (deadline.IsZero() || wireDeadline.Before(deadline)) {
+					readDeadline = wireDeadline
 				}
 				c.SetReadDeadline(readDeadline)
 				kind, data, err := c.ReadMessage()

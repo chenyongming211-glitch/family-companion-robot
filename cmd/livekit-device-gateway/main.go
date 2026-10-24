@@ -20,7 +20,7 @@ func main() {
 		slog.Error("device gateway requires loopback listen address")
 		os.Exit(1)
 	}
-	bridge, err := devicebridge.New(devicebridge.Config{BackendURL: env("VOICE_DEVICE_BACKEND", "ws://127.0.0.1:18010/v1/audio?mode=drain"), BackendToken: os.Getenv("VOICE_CLIENT_TOKEN")})
+	bridge, err := devicebridge.New(devicebridge.Config{BackendURL: env("VOICE_DEVICE_BACKEND", "ws://127.0.0.1:18010/v1/audio?mode=drain"), BackendToken: os.Getenv("VOICE_CLIENT_TOKEN"), KeepOpen: os.Getenv("VOICE_TEST_KEEP_OPEN") == "1"})
 	if err != nil {
 		slog.Error("invalid device gateway configuration")
 		os.Exit(1)

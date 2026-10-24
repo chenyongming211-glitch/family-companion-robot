@@ -30,7 +30,18 @@ func newRig(t *testing.T, features map[string]bool) *testRig {
 }
 
 func newRigAtFrame(t *testing.T, features map[string]bool, frameMS int) *testRig {
+	rig := newUnnegotiatedRig(t, features, frameMS, Config{}, nil)
+	if features == nil || (features["drain"] && features["staging"] && features["coreaudio_playback"]) {
+		rig.negotiate()
+	}
+	return rig
+}
+
+func newUnnegotiatedRig(t *testing.T, features map[string]bool, frameMS int, cfg Config, ready map[string]any) *testRig {
 	t.Helper()
+	if ready == nil {
+		ready = map[string]any{"type": "ready", "mode": "drain", "input_rate": 16000, "output_rate": 24000}
+	}
 	connected := make(chan *websocket.Conn, 1)
 	input := make(chan map[string]any, 32)
 	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +55,7 @@ func newRigAtFrame(t *testing.T, features map[string]bool, frameMS int) *testRig
 			return
 		}
 		defer c.Close()
-		if err := c.WriteJSON(map[string]any{"type": "ready", "mode": "drain", "input_rate": 16000, "output_rate": 24000}); err != nil {
+		if err := c.WriteJSON(ready); err != nil {
 			return
 		}
 		connected <- c
@@ -56,7 +67,9 @@ func newRigAtFrame(t *testing.T, features map[string]bool, frameMS int) *testRig
 			input <- e
 		}
 	}))
-	s, err := New(Config{BackendURL: "ws" + strings.TrimPrefix(back.URL, "http") + "/v1/audio?mode=drain", BackendToken: "server-only-test-token"})
+	cfg.BackendURL = "ws" + strings.TrimPrefix(back.URL, "http") + "/v1/audio?mode=drain"
+	cfg.BackendToken = "server-only-test-token"
+	s, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,23 +101,28 @@ func newRigAtFrame(t *testing.T, features map[string]bool, frameMS int) *testRig
 	case <-time.After(time.Second):
 		t.Fatal("backend not opened")
 	}
-	hello := rig.readText()
+	return rig
+}
+
+func (r *testRig) negotiate() map[string]any {
+	r.t.Helper()
+	hello := r.readText()
 	if hello["type"] != "hello" {
-		t.Fatalf("hello=%v", hello)
+		r.t.Fatalf("hello=%v", hello)
 	}
 	if hello["control_seq"] != float64(1) {
-		t.Fatal("hello must initialize control sequence")
+		r.t.Fatal("hello must initialize control sequence")
 	}
-	rig.session, _ = hello["session_id"].(string)
+	r.session, _ = hello["session_id"].(string)
 	params := hello["audio_params"].(map[string]any)
-	if rig.session == "" || params["sample_rate"] != float64(24000) || params["frame_duration"] != float64(60) {
-		t.Fatalf("bad negotiated hello: %v", hello)
+	if r.session == "" || params["sample_rate"] != float64(24000) || params["frame_duration"] != float64(60) {
+		r.t.Fatalf("bad negotiated hello: %v", hello)
 	}
-	ready := rig.readText()
+	ready := r.readText()
 	if ready["type"] != "ready" || ready["control_seq"] != float64(2) {
-		t.Fatal("missing ready")
+		r.t.Fatal("missing ready")
 	}
-	return rig
+	return ready
 }
 
 func (r *testRig) ticket() string {
@@ -403,6 +421,105 @@ func TestCloseReleasesActiveSession(t *testing.T) {
 	}
 	if r.server.Active() != 0 {
 		t.Fatal("active session survived close")
+	}
+}
+
+func TestLegacySessionClosesAtConfiguredTimeout(t *testing.T) {
+	r := newUnnegotiatedRig(t, nil, 60, Config{SessionTimeout: 250 * time.Millisecond}, nil)
+	r.negotiate()
+	expectClosed(t, r)
+	r.waitInactive()
+}
+
+func TestKeepOpenSurvivesConfiguredTimeoutAndManualDisconnect(t *testing.T) {
+	const timeout = 250 * time.Millisecond
+	r := newUnnegotiatedRig(t, nil, 60, Config{KeepOpen: true, SessionTimeout: timeout}, map[string]any{
+		"type": "ready", "mode": "drain", "input_rate": 16000, "output_rate": 24000,
+		"manual_close": true, "session_seconds": nil, "max_turns": nil,
+	})
+	ready := r.negotiate()
+	if ready["manual_close"] != true || ready["session_seconds"] != nil || ready["max_turns"] != nil {
+		t.Fatalf("manual-close capability lost: %v", ready)
+	}
+	<-time.After(3 * timeout)
+	r.write(map[string]any{"type": "content.snapshot"})
+	if e := r.receive(); e["type"] != "content.snapshot" {
+		t.Fatalf("session did not remain usable: %v", e)
+	}
+	r.send(map[string]any{"type": "content.snapshot", "content": []any{}})
+	if e := r.readText(); e["type"] != "content.snapshot" {
+		t.Fatalf("backend read deadline was not cleared: %v", e)
+	}
+	if r.server.Active() != 1 {
+		t.Fatal("keep-open session lost its lease")
+	}
+	r.client.Close()
+	r.waitInactive()
+}
+
+func TestKeepOpenRequiresBackendManualCloseCapability(t *testing.T) {
+	for _, capability := range []any{nil, false, "true"} {
+		t.Run(fmt.Sprint(capability), func(t *testing.T) {
+			r := newUnnegotiatedRig(t, nil, 60, Config{KeepOpen: true}, map[string]any{
+				"type": "ready", "mode": "drain", "input_rate": 16000, "output_rate": 24000,
+				"manual_close": capability,
+			})
+			if e := r.readText(); e["type"] != "error" || e["code"] != "backend_capability_required" {
+				t.Fatalf("manual-close mismatch accepted: %v", e)
+			}
+			expectClosed(t, r)
+			r.waitInactive()
+		})
+	}
+}
+
+func TestCloseJoinsKeepOpenSessionReaders(t *testing.T) {
+	r := newUnnegotiatedRig(t, nil, 60, Config{KeepOpen: true}, map[string]any{
+		"type": "ready", "mode": "drain", "input_rate": 16000, "output_rate": 24000, "manual_close": true,
+	})
+	r.negotiate()
+	done := make(chan struct{})
+	go func() { r.server.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("keep-open shutdown did not join readers")
+	}
+	if r.server.Active() != 0 {
+		t.Fatal("keep-open active session survived server close")
+	}
+	expectClosed(t, r)
+}
+
+func (r *testRig) waitInactive() {
+	r.t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for r.server.Active() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if r.server.Active() != 0 {
+		r.t.Fatal("closed session kept its lease")
+	}
+}
+
+func TestKeepOpenPreservesSessionTimeoutDefaultAndValidation(t *testing.T) {
+	for _, keepOpen := range []bool{false, true} {
+		cfg := Config{BackendURL: "ws://127.0.0.1:18010/v1/audio?mode=drain", BackendToken: "test", KeepOpen: keepOpen}
+		s, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.cfg.SessionTimeout != 15*time.Minute {
+			t.Fatalf("keep_open=%t changed default timeout: %s", keepOpen, s.cfg.SessionTimeout)
+		}
+		s.Close()
+		for _, timeout := range []time.Duration{-time.Second, 15*time.Minute + time.Second} {
+			cfg.SessionTimeout = timeout
+			if s, err := New(cfg); err == nil {
+				s.Close()
+				t.Fatalf("keep_open=%t accepted invalid timeout %s", keepOpen, timeout)
+			}
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ class Settings:
     voice: str = 'Cherry'
     client_token: str = field(default='', repr=False)
     audit_dir: Path = Path('/var/lib/family-robot-livekit-dev/audit')
+    test_keep_open: bool = False
 
     @classmethod
     def from_env(cls, env):
@@ -37,6 +38,7 @@ class Settings:
             voice=env.get('VOICE_TTS_VOICE', 'Cherry'),
             client_token=env.get('VOICE_CLIENT_TOKEN', ''),
             audit_dir=Path(env.get('VOICE_AUDIT_DIR', '/var/lib/family-robot-livekit-dev/audit')),
+            test_keep_open=env.get('VOICE_TEST_KEEP_OPEN', '0') == '1',
         )
         for url, secure, local in ((cfg.asr_url, 'wss', 'ws'), (cfg.tts_url, 'wss', 'ws'), (cfg.llm_url, 'https', 'http')):
             u = urlsplit(url)

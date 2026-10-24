@@ -7,6 +7,7 @@
 - `VOICE_CLIENT_TOKEN`：读取现有服务器 `/etc/family-robot/livekit-dev.env`，仅用于向 PCM 后端鉴权，不发给终端。
 - `VOICE_DEVICE_BACKEND`：默认 `ws://127.0.0.1:18010/v1/audio?mode=drain`，只接受 loopback drain 端点。
 - `VOICE_DEVICE_LISTEN`：默认 `127.0.0.1:18020`，必须为 loopback 地址。
+- `VOICE_TEST_KEEP_OPEN`：仅当值为 `1` 时取消设备测试会话的总时长限制；后端也须启用此模式并在 ready 声明 `manual_close:true`，否则明确拒绝连接。默认仍为最长 15 分钟。
 
 依赖 Go 1.25+、系统 libopus 和 pkg-config；构建、测试和服务启动在云端执行。
 
@@ -14,7 +15,7 @@
 
 通过已授权 SSH 在服务器调用 `POST http://127.0.0.1:18020/v1/pair`，JSON 为 `{"device_id":"native-mac"}`。返回 `ticket`、`expires_in:120` 和 `websocket_path`。票据只用一次，绑定 `native-mac`，最多保留 8 个待用票据；通过标准输入交给原生客户端，不落盘或放进命令行参数。该端点的权限边界是服务器 loopback 与 SSH 授权，原生 SSH 转发不可开放给其他主机。
 
-连接 `GET /xiaozhi/v1/`，头部为 `Authorization: Bearer <ticket>`、`Device-Id: native-mac`、`Protocol-Version: 1`。任何 Origin 均拒绝；最多一个会话、最长 15 分钟。首个消息：
+连接 `GET /xiaozhi/v1/`，头部为 `Authorization: Bearer <ticket>`、`Device-Id: native-mac`、`Protocol-Version: 1`。任何 Origin 均拒绝；最多一个会话，默认最长 15 分钟。启用 keep-open 后，会话持续到终端关闭、手动停止、协议/连接错误或服务器停止；120 秒单次票据期限不变。首个消息：
 
 ```json
 {"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":20},"features":{"drain":true,"staging":true,"coreaudio_playback":true}}
@@ -54,6 +55,6 @@ Go 将真实设备位置映射为 `clamp(played_samples-lookahead_samples,0,vali
 
 ## 资源上限与证据边界
 
-读取限制 16KiB、消息队列 8 项、单次写入期限 250ms、首个 hello/backend ready 5 秒、终端输入空闲期限 30 秒；块账本最多 16 个未结算块，历史 64 项，每块有效 PCM 最长 12 秒。Go 检查未播有效 PCM 不超过 420ms，另把所有块所需编码尾帧计入最多 600ms 的设备逻辑时间线；后端违反额度时显式终止，避免缓存无限增长。这些是逻辑上限，不是声学延迟实测。
+读取限制 16KiB、消息队列 8 项、单次写入期限 250ms、首个 hello/backend ready 5 秒、终端消息接收期限 30 秒；keep-open 仍保留这些限制。原生终端在静音时也持续发送麦克风帧，用户未说话不会触发此连接存活检查。块账本最多 16 个未结算块，历史 64 项，每块有效 PCM 最长 12 秒。Go 检查未播有效 PCM 不超过 420ms，另把所有块所需编码尾帧计入最多 600ms 的设备逻辑时间线；后端违反额度时显式终止，避免缓存无限增长。这些是逻辑上限，不是声学延迟实测。
 
 云端 Go 测试使用真实 Gorilla WebSocket、libopus 编解码和受保护的合成 PCM 后端，可验证协议与坐标；不证明 CoreAudio 扬声器实播、真人麦克风、云模型质量或 M5/I2S 行为。

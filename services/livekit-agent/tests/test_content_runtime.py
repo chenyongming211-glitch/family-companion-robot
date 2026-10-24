@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import unittest
+from dataclasses import replace
 
 from aiohttp import web
 from livekit.agents import llm
@@ -25,7 +26,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
     until = fixtures.ContinuousTests.until
     asr = fixtures.ContinuousTests.asr
 
-    async def start(self):
+    async def start(self, **options):
         self.assertIsNotNone(DrainVoiceSession, 'drain content runtime is not implemented')
         self.hold_playout = False
         self.tts_texts = []
@@ -40,7 +41,7 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.voice.receipt({**event, 'played_samples': block.sent, 'finished': False})
             elif event['type'] == 'audio.end':
                 self.voice.receipt({**event, 'played_samples': event['sent_samples'], 'finished': True})
-        self.voice = DrainVoiceSession(self.cfg, send)
+        self.voice = DrainVoiceSession(self.cfg, send, **options)
         await self.voice.start()
 
     async def llm(self, request):
@@ -297,3 +298,52 @@ class ContentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         failed = next(r for r in records if r['stage'] == 'llm' and r['state'] == 'outcome_unknown')
         self.assertEqual(failed['failure_code'], 'ending')
         self.assertNotIn(self.answers[0], json.dumps(records))
+
+    async def test_keep_open_survives_idle_and_ninth_real_sdk_turn(self):
+        self.cfg = replace(self.cfg, test_keep_open=True)
+        await self.start(automatic_idle_seconds=.02)
+        self.answers = ['五。']
+        for index in range(64):
+            self.voice.session.history.add_message(role='user', content=f'旧消息{index}')
+        await asyncio.sleep(.07)
+        self.assertFalse(self.voice.sleeping)
+        for index in range(9):
+            await self.feed('first.wav')
+            await self.until(lambda: self.voice.turns == index + 1 and self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertEqual(len(self.llm_calls), 9)
+        self.assertFalse(self.voice.sleeping)
+        self.assertIsNone(self.voice.automatic_max_turns)
+        self.assertLessEqual(len(self.voice.session.history.items), 33)
+
+    async def test_keep_open_discards_long_utterance_without_closing_session(self):
+        self.cfg = replace(self.cfg, test_keep_open=True)
+        await self.start(automatic_utterance_seconds=.03)
+        fast_pcm = self.pcm
+        async def paced(pcm):
+            for offset in range(0, len(pcm), 640):
+                self.voice.feed(pcm[offset:offset + 640])
+                await asyncio.sleep(.02)
+            await self.voice.input.drain()
+        self.pcm = paced
+        await self.feed('first.wav')
+        await self.until(lambda: any(e['type'] == 'input.limit' for e in self.events))
+        self.assertFalse(self.voice.sleeping)
+        self.assertEqual(self.llm_calls, [])
+        self.assertEqual(self.asr_calls, [])
+        prior_asr = len(self.asr_calls)
+        self.voice.automatic_utterance_seconds = 25
+        self.pcm = fast_pcm
+        await self.feed('second.wav')
+        await self.until(lambda: self.voice.main.snapshot and self.voice.main.snapshot['state'] == 'completed')
+        self.assertEqual(len(self.asr_calls), prior_asr + 1)
+
+    async def test_keep_open_sdk_event_history_is_bounded_without_losing_callbacks(self):
+        self.cfg = replace(self.cfg, test_keep_open=True)
+        await self.start()
+        observed = []
+        # Exercise the SDK emitter without triggering user-state side effects.
+        self.voice.session.on('history_bound_probe', observed.append)
+        for index in range(300):
+            self.voice.session.emit('history_bound_probe', llm.ChatMessage(role='user', content=[str(index)]))
+        self.assertEqual(len(observed), 300)
+        self.assertLessEqual(len(self.voice.session._recorded_events), 128)

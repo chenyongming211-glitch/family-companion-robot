@@ -12,6 +12,7 @@ WorkingDirectory=/opt/family-robot-livekit-dev
 EnvironmentFile=/etc/family-robot/livekit-dev.env
 Environment=VOICE_DEVICE_LISTEN=127.0.0.1:18020
 Environment=VOICE_DEVICE_BACKEND=ws://127.0.0.1:18010/v1/audio?mode=drain
+Environment=VOICE_TEST_KEEP_OPEN=1
 ExecStart=/opt/family-robot-livekit-runtime/bin/livekit-device-gateway
 Restart=on-failure
 RestartSec=3
