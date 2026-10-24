@@ -1,0 +1,27 @@
+[Unit]
+Description=Family robot existing Realtime gateway isolated Mac test
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=family-robot
+Group=family-robot
+WorkingDirectory=/var/lib/family-robot-realtime-test
+EnvironmentFile=/etc/family-robot/realtime-test.env
+ExecStart=/opt/family-robot/realtime-test/realtime-mac-test
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+StateDirectory=family-robot-realtime-test
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
