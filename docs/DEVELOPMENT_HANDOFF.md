@@ -2,6 +2,10 @@
 
 更新：2026-10-24。仓库：[chenyongming211-glitch/family-companion-robot](https://github.com/chenyongming211-glitch/family-companion-robot)，默认分支`main`。历史资料迁移后，已在服务器建立独立LiveKit最小语音服务并完成三模型联调；原8000正式服务和手表未切换。
 
+**最新测试约定：** 用户要求后续停止浏览器主测试，采用[实际设备测试方案](superpowers/specs/2026-10-24-device-voice-test-design.md)：小智WebSocket/Opus→云端Go设备适配→LiveKit，终端为原生Mac或M5StopWatch，最终实机分别验收。现有浏览器结果保留历史证据；原生终端、Go→LiveKit设备桥及故事句级检查点目前仍待实现，不能把更换客户端当作已修复故事断点。
+
+**最新插话行为：** 用户明确允许回复有延迟，要求服务端停止旧内容继续下发，本地把已接收的旧音频播完，再播放新问题的答案。以[排空交接方案](superpowers/specs/2026-10-24-drain-handoff-design.md)为准；当前立即清空播放缓冲的实现尚未改为此策略，旧停声延迟测试不能作为新策略已通过的证据。
+
 干净克隆、Go与固件主机测试、资料核对结果见[本次迁移检查](verification/2026-10-24-development-handoff.md)。
 
 ## 1. 新电脑从这里开始
