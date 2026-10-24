@@ -46,9 +46,9 @@ def wav_pcm(path):
 
 
 class Intent:
-    def __init__(self, directory, stage):
+    def __init__(self, directory, stage, *, synthetic_only=True):
         self.path = directory / (stage + '-' + uuid.uuid4().hex + '.json')
-        self.data = {'stage': stage, 'state': 'intent_saved', 'synthetic_only': True}
+        self.data = {'stage': stage, 'state': 'intent_saved', 'synthetic_only': synthetic_only}
         self.started = time.monotonic()
         self.update()
 
@@ -63,7 +63,7 @@ class Native:
         self.client = self.ws = None
 
     async def open(self, context):
-        self.intent = Intent(self.directory, 'native_session')
+        self.intent = Intent(self.directory, 'native_session', synthetic_only=self.cfg.get('synthetic_only', True))
         self.client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=70))
         try:
             async with asyncio.timeout(12):
