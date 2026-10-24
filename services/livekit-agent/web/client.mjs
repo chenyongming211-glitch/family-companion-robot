@@ -1,9 +1,10 @@
 import { PlaybackLedger } from './audio-core.mjs';
-import { AsyncResource, AttemptGate, aborted } from './lifecycle.mjs';
+import { AsyncResource, AttemptGate, aborted, serviceErrorMessage } from './lifecycle.mjs';
 
 const $ = id => document.getElementById(id);
 let ctx, stream, capture, ws, player, ready = false, recording = false, inputId = null, paired = false;
 let request = 0, inFrames = 0, outFrames = 0, waitInput, recordTimer, releaseTimer;
+let sessionTimer, sessionUntil = 0, turnLimit = 8, usedTurns = 0;
 const stops = new Map();
 const microphoneResource = new AsyncResource(), connection = new AttemptGate(), inputOps = new AttemptGate();
 function log(value) { $('log').textContent = `${new Date().toLocaleTimeString()} ${value}\n${$('log').textContent}`.slice(0, 6000); }
@@ -16,9 +17,13 @@ function send(event) {
 function controls() {
   $('connect').disabled = !paired || !!ws || connection.busy;
   $('disconnect').disabled = !ws;
-  $('start').disabled = !ready || recording || !!waitInput || inputOps.busy;
+  $('start').disabled = !ready || recording || !!waitInput || inputOps.busy || usedTurns >= turnLimit;
   $('end').disabled = !recording || inputOps.busy;
   $('cancel').disabled = !ready;
+}
+function sessionBudget() {
+  const seconds = Math.max(0, Math.ceil((sessionUntil - performance.now()) / 1000));
+  $('budget').textContent = `本次会话剩余 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} · 已用 ${usedTurns}/${turnLimit} 轮${usedTurns >= turnLimit ? '，请断开后重新连接' : ''}`;
 }
 function clock() {
   const timestamp = ctx?.getOutputTimestamp?.();
@@ -145,12 +150,14 @@ function disconnect() {
   connection.cancel(); inputOps.cancel();
   recording = false; ready = false; waitInput?.reject(aborted()); waitInput = null;
   clearTimeout(recordTimer); clearTimeout(releaseTimer);
+  clearInterval(sessionTimer);
   player?.close(); player = null;
   const socket = ws; ws = null; socket?.close();
   releaseMicrophone(); ctx?.close(); ctx = null;
+  $('budget').textContent = '本次连接已结束，重新连接后重新计时';
   status('已断开，麦克风已释放'); controls();
 }
-function fail(error) { $('error').textContent = error.message || '操作失败'; log(`失败：${error.name || 'Error'}`); disconnect(); }
+function fail(error) { $('error').textContent = error.message || '操作失败'; log(`失败：${error.code || error.name || 'Error'}`); disconnect(); status(error.message || '操作失败'); }
 const action = fn => async () => { $('error').textContent = ''; try { await fn(); } catch (error) { if (error.name !== 'AbortError') fail(error); } };
 async function inputAction(fn, cancel = false) {
   if (cancel) { inputOps.cancel(); waitInput?.reject(aborted()); waitInput = null; }
@@ -183,15 +190,20 @@ $('connect').onclick = action(async () => {
     if (ws !== socket) return;
     try {
       const e = JSON.parse(event.data);
-      if (e.type === 'ready') { ready = true; status('已连接，可以开始说话'); controls(); }
-      if (e.type === 'input.ready') { inputId = e.input_id; player.muted = false; waitInput?.resolve(); }
+      if (e.type === 'ready') {
+        ready = true; usedTurns = 0; turnLimit = e.max_turns || 8;
+        sessionUntil = performance.now() + (e.session_seconds || 900) * 1000;
+        clearInterval(sessionTimer); sessionBudget(); sessionTimer = setInterval(sessionBudget, 1000);
+        status('已连接，可以开始说话'); controls();
+      }
+      if (e.type === 'input.ready') { inputId = e.input_id; usedTurns = inputId; sessionBudget(); player.muted = false; waitInput?.resolve(); }
       if (e.type === 'transcript') $('transcript').textContent = e.text + (e.final ? '' : ' …');
       if (e.type === 'reply') { $('reply').textContent = e.text || '（回复已中断）'; if (!recording) status(e.interrupted ? '回复已中断' : '本轮结束，可以继续提问'); }
       if (e.type === 'audio') player.frame(e);
       if (e.type === 'audio.end') player.seal(e);
       if (e.type === 'audio.cancel') player.stop(e.next_epoch);
-      if (e.type === 'cancelled') { status('服务器已确认取消，可以开始新问题'); log('服务器取消确认'); }
-      if (e.type === 'error') throw new Error(`服务错误：${e.code || e.stage}，本次不会自动重试`);
+      if (e.type === 'cancelled') { status('已确认停播；下一问题请点“开始说话”，说完点“结束发送”'); log('服务器取消确认'); }
+      if (e.type === 'error') { const error = new Error(serviceErrorMessage(e)); error.code = e.code; throw error; }
     } catch (error) { fail(error); }
   };
   ws.onerror = () => { if (ws === socket) fail(new Error('连接失败，请重新运行配对入口；检查SSH隧道与服务器')); };
@@ -232,7 +244,8 @@ async function pair() {
   if (!ticket) { $('pair').textContent = '请运行 tools/mac-voice/open.command，通过SSH取得一次性配对链接。'; return; }
   const response = await fetch('/v1/browser/pair', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ticket})});
   if (!response.ok) throw new Error('配对链接已过期或已使用，请重新运行入口');
-  paired = true; $('pair').textContent = '已配对：5分钟内有效。点击连接后允许麦克风。'; controls();
+  const info = await response.json();
+  paired = true; $('pair').textContent = `已配对：${Math.ceil(info.expires_in / 60)}分钟内有效。点击连接后允许麦克风。`; controls();
 }
 pair().catch(fail);
 window.addEventListener('hashchange', () => pair().catch(fail));

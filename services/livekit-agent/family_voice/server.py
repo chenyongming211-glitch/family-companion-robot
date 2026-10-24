@@ -8,13 +8,14 @@ from aiohttp import web, WSMsgType
 from .config import Settings
 from .runtime import VoiceSession
 from .logging_safe import configure_logging
-from .browser import install_browser
+from .browser import SESSION_SECONDS, install_browser
+from .cloud import Intent
 
 
 STATE = web.AppKey('voice_state', dict)
 
 
-def create_app(cfg, *, session_factory=VoiceSession):
+def create_app(cfg, *, session_factory=VoiceSession, session_seconds=SESSION_SECONDS):
     if not cfg.client_token:
         raise ValueError('VOICE_CLIENT_TOKEN is required for the test service')
     app = web.Application(client_max_size=16384)
@@ -34,6 +35,8 @@ def create_app(cfg, *, session_factory=VoiceSession):
         app[STATE]['active'] = True
         ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=10, receive_timeout=30)
         voice, commit_job, cancel_job = None, None, None
+        budget, audit = None, None
+        input_id, phase, reason, error_type = 0, 'opening', 'disconnected', None
         try:
             await ws.prepare(request)
             async def send(event):
@@ -44,19 +47,23 @@ def create_app(cfg, *, session_factory=VoiceSession):
                     raise
             voice = session_factory(cfg, send)
             await voice.start()
-            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000})
-            input_id = 0
+            audit = Intent(cfg, 'client_session')
+            await send({'type': 'ready', 'input_rate': 16000, 'output_rate': 24000, 'session_seconds': session_seconds, 'max_turns': 8})
             accepting = False
             input_samples = 0
-            async with asyncio.timeout(300):
+            budget = asyncio.timeout(session_seconds)
+            async with budget:
                 async for message in ws:
                     if message.type != WSMsgType.TEXT:
                         break
                     event = message.json()
                     kind = event.get('type')
+                    phase = kind if kind in ('input.start', 'input.audio', 'input.end', 'cancel', 'playback') else 'invalid_command'
                     if kind == 'input.start':
                         if input_id >= 8:
-                            raise ValueError('turn limit')
+                            reason = 'turn_limit'
+                            await send({'type': 'error', 'code': reason, 'max_turns': 8})
+                            break
                         if commit_job and not commit_job.done():
                             commit_job.cancel()
                             await asyncio.gather(commit_job, return_exceptions=True)
@@ -94,13 +101,25 @@ def create_app(cfg, *, session_factory=VoiceSession):
                         voice.receipt(event)
                     else:
                         raise ValueError('invalid command')
-        except (ValueError, KeyError, TypeError, BufferError):
+        except (ValueError, KeyError, TypeError, BufferError) as error:
+            reason, error_type = 'invalid_input', type(error).__name__
             if not ws.closed:
-                await ws.send_json({'type': 'error', 'code': 'invalid_input'})
-        except Exception:
+                await ws.send_json({'type': 'error', 'code': reason, 'stage': phase, 'error_type': error_type})
+        except TimeoutError:
+            reason = 'session_expired' if budget and budget.expired() else 'operation_timeout'
+            error_type = 'TimeoutError'
             if not ws.closed:
-                await ws.send_json({'type': 'error', 'code': 'session_failed'})
+                await ws.send_json({'type': 'error', 'code': reason, 'stage': phase, 'error_type': error_type})
+        except Exception as error:
+            reason, error_type = 'session_failed', type(error).__name__
+            if not ws.closed:
+                await ws.send_json({'type': 'error', 'code': reason, 'stage': phase, 'error_type': error_type})
         finally:
+            if audit:
+                try:
+                    audit.update(state=reason, last_command=phase, turns=input_id, limit_seconds=session_seconds, error_type=error_type)
+                except OSError:
+                    pass
             try:
                 for job in (commit_job, cancel_job):
                     if job and not job.done():

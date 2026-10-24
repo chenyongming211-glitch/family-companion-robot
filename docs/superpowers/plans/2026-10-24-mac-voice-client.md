@@ -4,7 +4,7 @@
 
 **Goal:** Mac真实麦克风以16k mono s16发送到既有AgentSession，24k输出在浏览器播放；本地立即取消、过滤旧代次并报告浏览器输出时钟估算。物理听感与停声须用户参与确认。
 
-**Architecture:** 服务器18010同时提供静态页面与原PCM协议。浏览器不能设置WS Authorization header，故新增SSH授权领取的120秒一次性配对票据，换300秒HttpOnly/SameSite cookie，严格检查同源与loopback Host；既有Bearer入口不变。模型Key和长期测试令牌始终留服务器。Mac仅做SSH转发；不部署本地HTTP/语音服务。
+**Architecture:** 服务器18010同时提供静态页面与原PCM协议。浏览器不能设置WS Authorization header，故新增SSH授权领取的120秒一次性配对票据，换900秒HttpOnly/SameSite cookie，严格检查同源与loopback Host；既有Bearer入口不变。最初300秒测试窗口在实际联调中修正为900秒，页面显示时间/轮数，仍最多8轮。模型Key和长期测试令牌始终留服务器。Mac仅做SSH转发；不部署本地HTTP/语音服务。
 
 **Alternatives:** 原生Swift客户端需本机编译/签名和单独音频适配；Python客户端需本机音频依赖。选服务器托管的Chrome页面，可逐层显示权限、输入电平、转写、回答与播放状态，无Mac运行库安装。
 

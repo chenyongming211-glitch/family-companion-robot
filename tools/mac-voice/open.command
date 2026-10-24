@@ -16,6 +16,6 @@ pair_url=$(ssh -S "$control" -T ubuntu@82.156.48.111 \
   "cd /opt/family-robot-livekit-dev/services/livekit-agent && sudo -n /opt/family-robot-livekit-runtime/venv/bin/python -m family_voice.pair --origin http://127.0.0.1:$port")
 open -a 'Google Chrome' "$pair_url"
 unset pair_url
-echo '已打开Chrome。配对链接一次有效；5分钟会话到期后重新运行本入口。'
+echo '已打开Chrome。配对链接一次有效；15分钟配对到期后重新运行本入口。'
 echo '允许麦克风后先检查电平、试听提示音，再连接和提问。'
 read -r -p '请保持此窗口；按回车关闭本次SSH转发。' ignored

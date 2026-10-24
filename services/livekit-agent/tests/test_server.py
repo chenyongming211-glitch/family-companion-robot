@@ -1,6 +1,9 @@
 import unittest
 import asyncio
 import base64
+import tempfile
+import json
+from pathlib import Path
 
 from aiohttp import WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
@@ -33,7 +36,8 @@ class TestVoice:
 
 class ServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        cfg = Settings.from_env({'DASHSCOPE_API_KEY': 'synthetic-key', 'VOICE_CLIENT_TOKEN': 'synthetic-token'})
+        self.temp = tempfile.TemporaryDirectory()
+        cfg = self.cfg = Settings.from_env({'DASHSCOPE_API_KEY': 'synthetic-key', 'VOICE_CLIENT_TOKEN': 'synthetic-token', 'VOICE_AUDIT_DIR': self.temp.name})
         self.voices = []
         def factory(cfg, send):
             voice = TestVoice(cfg, send)
@@ -44,6 +48,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.client.close()
+        self.temp.cleanup()
 
     async def test_health_and_auth_and_single_session(self):
         response = await self.client.get('/healthz')
@@ -52,7 +57,10 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
             await self.client.ws_connect('/v1/audio')
         self.assertEqual(denied.exception.status, 401)
         ws = await self.client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
-        self.assertEqual((await ws.receive_json())['type'], 'ready')
+        ready = await ws.receive_json()
+        self.assertEqual(ready['type'], 'ready')
+        self.assertEqual(ready['session_seconds'], 900)
+        self.assertEqual(ready['max_turns'], 8)
         with self.assertRaises(WSServerHandshakeError) as busy:
             await self.client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
         self.assertEqual(busy.exception.status, 409)
@@ -124,6 +132,42 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({'type': 'input.end', 'input_id': second})
         self.assertEqual((await asyncio.wait_for(ws.receive_json(), .5))['type'], 'committed')
         await ws.close()
+
+    async def test_session_deadline_has_explicit_reason_and_releases_lease(self):
+        client = TestClient(TestServer(create_app(self.cfg, session_factory=TestVoice, session_seconds=.06)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
+            ready = await ws.receive_json()
+            event = await asyncio.wait_for(ws.receive_json(), .5)
+            self.assertEqual(event['code'], 'session_expired')
+            self.assertEqual(ready['session_seconds'], .06)
+            await ws.close()
+            async with asyncio.timeout(1):
+                while (await (await client.get('/healthz')).json())['active_sessions']:
+                    await asyncio.sleep(.01)
+            records = [json.loads(p.read_text()) for p in Path(self.temp.name).glob('*.json')]
+            self.assertTrue(any(r['stage'] == 'client_session' and r['state'] == 'session_expired' for r in records))
+        finally:
+            await client.close()
+
+    async def test_operation_timeout_is_not_mislabelled_as_session_expiry(self):
+        class TimedOutVoice(TestVoice):
+            async def begin_input(self):
+                raise TimeoutError()
+        client = TestClient(TestServer(create_app(self.cfg, session_factory=TimedOutVoice)))
+        await client.start_server()
+        try:
+            ws = await client.ws_connect('/v1/audio', headers={'Authorization': 'Bearer synthetic-token'})
+            await ws.receive_json()
+            await ws.send_json({'type': 'input.start'})
+            event = await asyncio.wait_for(ws.receive_json(), .5)
+            self.assertEqual(event['code'], 'operation_timeout')
+            self.assertEqual(event['stage'], 'input.start')
+            self.assertEqual(event['error_type'], 'TimeoutError')
+            await ws.close()
+        finally:
+            await client.close()
 
 
 if __name__ == '__main__':

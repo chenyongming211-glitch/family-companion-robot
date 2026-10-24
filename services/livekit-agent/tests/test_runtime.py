@@ -19,6 +19,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.release_final = asyncio.Event()
         self.old_asr_closed = asyncio.Event()
         self.asr_count = 0
+        self.tts_frames = 1
+        self.auto_receipt = True
+        self.asr_text, self.answer = '一加一等于几？', '2'
         app = web.Application()
         app.router.add_get('/asr', self.asr)
         app.router.add_get('/tts', self.tts)
@@ -31,8 +34,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         cfg = Settings.from_env({'DASHSCOPE_API_KEY': 'synthetic-key', 'VOICE_ASR_URL': f'ws://127.0.0.1:{port}/asr', 'VOICE_TTS_URL': f'ws://127.0.0.1:{port}/tts', 'VOICE_LLM_URL': f'http://127.0.0.1:{port}/v1', 'VOICE_AUDIT_DIR': self.temp.name})
         async def send(event):
             self.events.append(event)
-            if event['type'] == 'audio.end':
+            if event['type'] == 'audio.end' and self.auto_receipt:
                 self.voice.receipt({**event, 'played_samples': event['sent_samples'], 'valid': True, 'finished': True})
+            if event['type'] == 'audio.cancel' and not self.auto_receipt:
+                for block in tuple(self.voice.output.pending):
+                    self.voice.receipt({'block_id': block.id, 'epoch': block.epoch, 'played_samples': min(block.sent, 16 * 24000), 'valid': True, 'finished': True})
         self.voice = VoiceSession(cfg, send)
         await self.voice.start()
 
@@ -62,7 +68,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                         self.old_asr_closed.set()
                         await ws.close()
                         return ws
-                await ws.send_json({'header': {'event': 'result-generated', 'task_id': task}, 'payload': {'output': {'sentence': {'text': '一加一等于几？', 'sentence_end': True}}}})
+                await ws.send_json({'header': {'event': 'result-generated', 'task_id': task}, 'payload': {'output': {'sentence': {'text': self.asr_text, 'sentence_end': True}}}})
                 await ws.send_json({'header': {'event': 'task-finished', 'task_id': task}})
                 break
         await ws.close()
@@ -76,7 +82,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await ws.send_json({'type': 'session.updated'})
         await ws.receive_json()
         await ws.receive_json()
-        await ws.send_json({'type': 'response.audio.delta', 'response_id': 'r', 'delta': base64.b64encode(b'\x01\x00' * 480).decode()})
+        for _ in range(self.tts_frames):
+            await ws.send_json({'type': 'response.audio.delta', 'response_id': 'r', 'delta': base64.b64encode(b'\x01\x00' * 480).decode()})
         await ws.send_json({'type': 'response.done', 'response': {'id': 'r', 'status': 'completed'}})
         await ws.close()
         return ws
@@ -86,7 +93,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body['model'], 'qwen-plus')
         response = web.StreamResponse(headers={'Content-Type': 'text/event-stream'})
         await response.prepare(request)
-        for delta, finish in (({'role': 'assistant', 'content': '2'}, None), ({}, 'stop')):
+        for delta, finish in (({'role': 'assistant', 'content': self.answer}, None), ({}, 'stop')):
             data = {'id': 'chat-test', 'created': 1, 'model': 'qwen-plus', 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
             await response.write(('data: ' + json.dumps(data) + '\n\n').encode())
         await response.write(b'data: [DONE]\n\n')
@@ -133,6 +140,28 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             if not commit.done():
                 commit.cancel()
             await asyncio.gather(commit, return_exceptions=True)
+
+    async def test_cancel_buffered_long_playout_then_answer_new_question(self):
+        self.tts_frames, self.auto_receipt = 1500, False
+        await self.voice.begin_input()
+        self.voice.feed(b'\0' * 640)
+        await self.voice.commit()
+        async with asyncio.timeout(5):
+            while not any(e['type'] == 'audio.end' for e in self.events):
+                await asyncio.sleep(.01)
+        self.assertTrue(self.voice.output.pending, 'TTS has finished but client playout must still be pending')
+        await asyncio.wait_for(self.voice.interrupt(), 1)
+        self.assertTrue(any(e['type'] == 'audio.cancel' for e in self.events))
+        self.tts_frames, self.auto_receipt = 1, True
+        self.asr_text, self.answer = '二加三等于几？', '5'
+        start = len(self.events)
+        await asyncio.wait_for(self.voice.begin_input(), 1)
+        self.voice.feed(b'\0' * 640)
+        await self.voice.commit()
+        async with asyncio.timeout(5):
+            while not any(e['type'] == 'reply' and e.get('text') == '5' for e in self.events[start:]):
+                await asyncio.sleep(.01)
+        self.assertTrue(any(e['type'] == 'audio' for e in self.events[start:]))
 
 
 if __name__ == '__main__':

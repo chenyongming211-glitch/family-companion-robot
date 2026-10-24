@@ -10,6 +10,7 @@ from aiohttp import web
 GATE = web.AppKey('browser_gate', object)
 ASSETS = {'client.mjs', 'audio-core.mjs', 'input-worklet.mjs', 'lifecycle.mjs', 'client.css'}
 ROOT = Path(__file__).parent.parent / 'web'
+SESSION_SECONDS = 900
 
 
 def loopback_origin(origin):
@@ -88,9 +89,9 @@ def install_browser(app, cfg):
             raise web.HTTPUnauthorized()
         del gate.tickets[value]
         cookie = secrets.token_urlsafe(32)
-        gate.sessions[cookie] = (origin, gate.clock() + 300)
-        response = web.json_response({'paired': True, 'expires_in': 300}, headers={'Cache-Control': 'no-store'})
-        response.set_cookie('voice_browser', cookie, httponly=True, samesite='Strict', max_age=300, path='/v1/browser')
+        gate.sessions[cookie] = (origin, gate.clock() + SESSION_SECONDS)
+        response = web.json_response({'paired': True, 'expires_in': SESSION_SECONDS}, headers={'Cache-Control': 'no-store'})
+        response.set_cookie('voice_browser', cookie, httponly=True, samesite='Strict', max_age=SESSION_SECONDS, path='/v1/browser')
         return response
 
     app.router.add_get('/client', static)

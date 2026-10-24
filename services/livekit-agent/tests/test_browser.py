@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+import tempfile
 
 from aiohttp import WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
@@ -11,13 +12,15 @@ from test_server import TestVoice
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.cfg = Settings.from_env({'DASHSCOPE_API_KEY': 'synthetic-key', 'VOICE_CLIENT_TOKEN': 'synthetic-token'})
+        self.temp = tempfile.TemporaryDirectory()
+        self.cfg = Settings.from_env({'DASHSCOPE_API_KEY': 'synthetic-key', 'VOICE_CLIENT_TOKEN': 'synthetic-token', 'VOICE_AUDIT_DIR': self.temp.name})
         self.client = TestClient(TestServer(create_app(self.cfg, session_factory=TestVoice)))
         await self.client.start_server()
         self.origin = str(self.client.make_url('')).rstrip('/')
 
     async def asyncTearDown(self):
         await self.client.close()
+        self.temp.cleanup()
 
     async def ticket(self):
         response = await self.client.post('/v1/browser/ticket', headers={'Authorization': 'Bearer synthetic-token'}, json={'origin': self.origin})
@@ -31,6 +34,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         cookie = response.cookies['voice_browser']
         self.assertTrue(cookie['httponly'])
         self.assertEqual(cookie['samesite'], 'Strict')
+        self.assertEqual(cookie['max-age'], '900')
         return ticket, {'Cookie': f'voice_browser={cookie.value}', 'Origin': self.origin}
 
     async def test_static_client_and_headers_do_not_expose_server_key(self):
@@ -79,7 +83,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 401)
         gate.clock = real_clock
         _, headers = await self.pair()
-        gate.clock = lambda: real_clock() + 301
+        gate.clock = lambda: real_clock() + 901
         with self.assertRaises(WSServerHandshakeError):
             await self.client.ws_connect('/v1/browser/audio', headers=headers)
         response = await self.client.get('/client', headers={'Host': 'evil.example'})

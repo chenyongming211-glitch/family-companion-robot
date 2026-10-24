@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AsyncResource, AttemptGate } from '../web/lifecycle.mjs';
+import { AsyncResource, AttemptGate, serviceErrorMessage } from '../web/lifecycle.mjs';
 
 test('concurrent microphone requests share one acquisition', async () => {
   const gate = new AsyncResource(); let calls = 0, release;
@@ -31,4 +31,12 @@ test('a pending connection is exclusive and cancellation invalidates its continu
   assert.equal(gate.current(first), false); assert.equal(gate.current(next), true);
   gate.finish(first); assert.equal(gate.current(next), true);
   gate.finish(next); assert.equal(gate.busy, false);
+});
+
+test('session expiry explains reconnection instead of pretending cancellation blocked', () => {
+  const message = serviceErrorMessage({code: 'session_expired'});
+  assert.match(message, /会话.*到期/);
+  assert.match(message, /重新连接/);
+  assert.match(serviceErrorMessage({code: 'operation_timeout', stage: 'input.start'}), /input.start/);
+  assert.match(serviceErrorMessage({code: 'turn_limit'}), /轮数/);
 });
