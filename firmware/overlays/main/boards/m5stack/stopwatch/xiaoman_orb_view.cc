@@ -10,7 +10,11 @@
 
 namespace family_robot {
 namespace {
-std::atomic<int> motion_mode{2}; // 0 static comparison, 1 5fps, 2 target 15fps
+// Low two bits hold requested mode; the bounded revision makes even a repeated
+// explicit "on" observable after an automatic static fallback. Console is the
+// single writer. Effective degradation never changes this user request.
+std::atomic<uint32_t> motion_request{2};
+std::atomic<int> effective_mode{2}; // 0 static, 1 5fps, 2 target 15fps
 std::atomic<uint32_t> frame_count{0},max_draw_us{0},buffer_bytes{0},slow_frames{0};
 void Hidden(lv_obj_t* obj,bool hidden) {
     if (!obj) return;
@@ -19,16 +23,20 @@ void Hidden(lv_obj_t* obj,bool hidden) {
 }
 }
 bool XiaomanOrbConsole(const char* line) {
-    if(std::strcmp(line,"orb_ui off")==0 || std::strcmp(line,"orb_ui static")==0) motion_mode.store(0);
-    else if(std::strcmp(line,"orb_ui low")==0) motion_mode.store(1);
-    else if(std::strcmp(line,"orb_ui on")==0) motion_mode.store(2);
+    int requested=-1;
+    if(std::strcmp(line,"orb_ui off")==0 || std::strcmp(line,"orb_ui static")==0) requested=0;
+    else if(std::strcmp(line,"orb_ui low")==0) requested=1;
+    else if(std::strcmp(line,"orb_ui on")==0) requested=2;
     else if(std::strcmp(line,"orb_stats")==0) {
-        std::printf("orb_stats mode=%d frames=%lu max_draw_us=%lu slow=%lu psram=%lu\n",motion_mode.load(),
+        std::printf("orb_stats mode=%d frames=%lu max_draw_us=%lu slow=%lu psram=%lu requested=%u\n",effective_mode.load(),
             static_cast<unsigned long>(frame_count.load()),static_cast<unsigned long>(max_draw_us.load()),
-            static_cast<unsigned long>(slow_frames.load()),static_cast<unsigned long>(buffer_bytes.load()));
+            static_cast<unsigned long>(slow_frames.load()),static_cast<unsigned long>(buffer_bytes.load()),
+            static_cast<unsigned>(motion_request.load()&3u));
         return true;
     } else return false;
-    std::printf("orb_ui mode=%d (0=static,1=5fps,2=15fps)\n",motion_mode.load());
+    const auto revision=(motion_request.load()+4u)&~uint32_t{3};
+    motion_request.store(revision|static_cast<uint32_t>(requested));
+    std::printf("orb_ui mode=%d (0=static,1=5fps,2=15fps)\n",requested);
     return true;
 }
 XiaomanOrbView::~XiaomanOrbView() {
@@ -75,7 +83,9 @@ void XiaomanOrbView::Initialize(const lv_font_t* font,void (*refresh)(void*),voi
         lv_image_set_src(image_,&descriptor_);
         lv_image_set_scale(image_,544); // 128 ->272px max including glow
         lv_obj_set_pos(image_,169,174); // unscaled 128px box centred (233,238)
-        lv_image_set_antialias(image_,true);
+        // The soft contour is already in the 128px source. Nearest-neighbour
+        // scaling avoids per-output-pixel bilinear work; text stays native.
+        lv_image_set_antialias(image_,false);
     } else {
         // No internal-SRAM fallback: state remains readable without stealing
         // audio/DMA memory. A static LVGL disc costs no framebuffer.
@@ -120,7 +130,13 @@ bool XiaomanOrbView::Update(OrbFacts facts) {
         return visible;
     }
     lv_timer_resume(timer_);
-    const int mode=motion_mode.load();
+    const auto request=motion_request.load();
+    if(applied_request_!=request) {
+        refresh_policy_.Request(static_cast<int>(request&3u));
+        applied_request_=request;
+    }
+    const int mode=refresh_policy_.effective();
+    effective_mode.store(mode);
     const bool mode_changed=mode_!=mode; mode_=mode;
     lv_timer_set_period(timer_,(!visible || mode!=2)?200:67);
     if(!visible) {phase_=p.phase;painted_=false;return false;}
@@ -151,12 +167,12 @@ bool XiaomanOrbView::Update(OrbFacts facts) {
     const auto elapsed=static_cast<uint32_t>(esp_timer_get_time()-before);
     frame_count.fetch_add(1);
     if(elapsed>max_draw_us.load()) max_draw_us.store(elapsed);
-    // Computation budget degradation only: never changes audio or its guards.
-    if(elapsed>25000) {
-        slow_frames.fetch_add(1);
-        if(mode==2) motion_mode.store(1);
-        else if(elapsed>80000) motion_mode.store(0);
-    }
+    // Budget observations affect only the next UI refresh period. Ten fast
+    // rendered frames can recover a transient slowdown under requested mode2.
+    if(elapsed>OrbRefreshPolicy::kFastFrameUs) slow_frames.fetch_add(1);
+    refresh_policy_.ObserveFrame(elapsed);
+    effective_mode.store(refresh_policy_.effective());
+    lv_timer_set_period(timer_,refresh_policy_.effective()==2?67:200);
     lv_obj_invalidate(image_);
     painted_=true;
     return true;

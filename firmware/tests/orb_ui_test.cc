@@ -1,6 +1,7 @@
 #include "orb_activity.h"
 #include "orb_model.h"
 #include "orb_renderer.h"
+#include "orb_refresh_policy.h"
 #include "playback_progress.h"
 #include <array>
 #include <cassert>
@@ -60,6 +61,41 @@ static void StateTruth() {
     // Missing server end-of-turn evidence never invents a waiting phase.
     f.error=false; f.audio.output.active=false; f.now_us+=5000000;
     assert(model.Update(f).phase==OrbPhase::Listening);
+}
+
+static void RefreshPolicyTruth() {
+    OrbRefreshPolicy policy;
+    assert(policy.requested()==2 && policy.effective()==2);
+    // Reproduce the observed cold/preemption spike without changing user intent.
+    policy.ObserveFrame(138822);
+    assert(policy.requested()==2 && policy.effective()==1);
+    for(int i=0;i<9;++i) {policy.ObserveFrame(25000);assert(policy.effective()==1);}
+    policy.ObserveFrame(25000);assert(policy.effective()==2);
+    // Recovery needs ten consecutive fast frames, not an accumulating total.
+    policy.ObserveFrame(30000);assert(policy.effective()==1);
+    for(int i=0;i<6;++i) policy.ObserveFrame(10000);
+    policy.ObserveFrame(25001);
+    for(int i=0;i<9;++i) {policy.ObserveFrame(10000);assert(policy.effective()==1);}
+    policy.ObserveFrame(10000);assert(policy.effective()==2);
+    policy.Request(1);
+    for(int i=0;i<30;++i) policy.ObserveFrame(5000);
+    assert(policy.requested()==1 && policy.effective()==1);
+    policy.Request(0);
+    policy.ObserveFrame(200000);
+    for(int i=0;i<30;++i) policy.ObserveFrame(5000);
+    assert(policy.requested()==0 && policy.effective()==0);
+    policy.Request(2);
+    policy.ObserveFrame(90000);assert(policy.effective()==1);
+    policy.ObserveFrame(90000);assert(policy.effective()==0 && policy.requested()==2);
+    // A critical static fallback does not generate frames to probe recovery.
+    for(int i=0;i<30;++i) policy.ObserveFrame(5000);
+    assert(policy.effective()==0);
+    policy.Request(2); // same requested value is an explicit retry
+    assert(policy.requested()==2 && policy.effective()==2);
+    policy.ObserveFrame(90000);
+    policy.ObserveFrame(30000); // isolated critical frames cannot latch static
+    policy.ObserveFrame(90000);assert(policy.effective()==1);
+    assert(sizeof(OrbRefreshPolicy)<=16);
 }
 
 static void DmaTruth() {
@@ -136,4 +172,4 @@ static void RenderBudget(const char* destination) {
         std::fclose(out);
     }
 }
-int main(int argc,char** argv) { StateTruth(); DmaTruth(); RenderBudget(argc>1?argv[1]:nullptr); }
+int main(int argc,char** argv) { StateTruth(); RefreshPolicyTruth(); DmaTruth(); RenderBudget(argc>1?argv[1]:nullptr); }

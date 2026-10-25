@@ -3,6 +3,7 @@
 #if CONFIG_XIAOMAN_ORB_UI
 #include "orb_model.h"
 #include "orb_renderer.h"
+#include "orb_refresh_policy.h"
 #include <lvgl.h>
 
 namespace family_robot {
@@ -19,6 +20,8 @@ public:
     void SetPowerSave(bool on) { power_save_=on; }
 private:
     OrbModel model_;
+    OrbRefreshPolicy refresh_policy_;
+    uint32_t applied_request_=UINT32_MAX;
     void (*refresh_)(void*)=nullptr;
     void* context_=nullptr;
     lv_obj_t *root_=nullptr,*name_=nullptr,*image_=nullptr,*caption_=nullptr,*hint_=nullptr;
