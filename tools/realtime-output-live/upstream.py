@@ -2,16 +2,47 @@
 import asyncio
 import base64
 import json
+import os
 import time
 import uuid
+from urllib.parse import urlsplit
 
 import aiohttp
 
 from state import Turn  # establishes the existing isolated provider module path
-from providers import Native, Intent, ProbeError
+from providers import Native, Intent, ProbeError, settings as provider_settings
+
+
+def settings():
+    cfg = provider_settings()
+    search = os.environ.get('OUTPUT_LIVE_ENABLE_SEARCH', '1')
+    if search not in ('0', '1'):
+        raise ValueError('invalid_search_setting')
+    cfg['enable_search'] = search == '1'
+    return cfg
 
 
 class StreamingNative(Native):
+    def __init__(self, cfg, directory):
+        super().__init__(cfg, directory)
+        self.search_config = None
+        self.on_search = None
+
+    async def expect(self, kind):
+        event = await super().expect(kind)
+        if kind == 'session.updated' and 'enable_search' in self.cfg:
+            session = event.get('session', {})
+            if 'enable_search' not in session and self.search_config is not None:
+                return event
+            enabled = session.get('enable_search')
+            if enabled is not self.cfg['enable_search']:
+                raise ProbeError('search_setting_not_confirmed')
+            self.search_config = {'enabled': enabled,
+                'source_requested': session.get('search_options', {}).get('enable_source') is True}
+            if self.on_search:
+                self.on_search({'phase': 'configured', **self.search_config})
+        return event
+
     async def listen(self):
         await self.open('仅检测语音轮次，不自动生成回复。')
         await self.ws.send_json({'type': 'session.update', 'session': {
@@ -65,8 +96,46 @@ class StreamingNative(Native):
                         if response.get('id') != identity or response.get('status') != 'completed' or not size:
                             raise ProbeError('response_terminal')
                         completed = True
+                        usage = response.get('usage')
+                        usage = usage if isinstance(usage, dict) else {}
+                        plugins = usage.get('plugins')
+                        plugins = plugins if isinstance(plugins, dict) else {}
+                        search = plugins.get('search')
+                        search = search if isinstance(search, dict) else {}
+                        info = response.get('search_info')
+                        info = info if isinstance(info, dict) else {}
+                        results = info.get('search_results')
+                        results = results if isinstance(results, list) else []
+                        sources = []
+                        for source in results[:32]:
+                            if not isinstance(source, dict):
+                                continue
+                            title, url = source.get('title'), source.get('url')
+                            if not isinstance(title, str) or not isinstance(url, str) or len(url) > 4096:
+                                continue
+                            try:
+                                parsed = urlsplit(url)
+                            except ValueError:
+                                continue
+                            if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+                                continue
+                            item = {'title': title[:512], 'url': url}
+                            if type(source.get('index')) is int:
+                                item['index'] = source['index']
+                            sources.append(item)
+                        search_evidence = {}
+                        if type(search.get('count')) is int and search['count'] >= 0:
+                            search_evidence['count'] = search['count']
+                        if isinstance(search.get('strategy'), str):
+                            search_evidence['strategy'] = search['strategy'][:64]
+                        if sources:
+                            search_evidence['sources'] = sources
+                        if self.on_search and search_evidence:
+                            self.on_search({'phase': 'completed', 'response_id': identity,
+                                **search_evidence})
                         audit.update(state='completed', output_samples=size // 2,
-                            usage={k: v for k, v in response.get('usage', {}).items() if type(v) in (int, float)})
+                            usage={k: v for k, v in usage.items() if type(v) in (int, float)},
+                            search=search_evidence)
                         return
                 raise ProbeError('event_limit')
         finally:

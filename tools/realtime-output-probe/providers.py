@@ -63,6 +63,10 @@ class Native:
         self.client = self.ws = None
 
     async def open(self, context):
+        if 'enable_search' in self.cfg and type(self.cfg['enable_search']) is not bool:
+            raise ProbeError('invalid_search_setting')
+        if self.cfg.get('enable_search') is True and self.cfg.get('tools'):
+            raise ProbeError('search_tools_incompatible')
         self.intent = Intent(self.directory, 'native_session', synthetic_only=self.cfg.get('synthetic_only', True))
         self.client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=70))
         try:
@@ -70,13 +74,18 @@ class Native:
                 self.ws = await self.client.ws_connect(self.cfg['QWEN_REALTIME_URL'],
                     headers={'Authorization': 'Bearer ' + self.cfg['DASHSCOPE_API_KEY']}, max_msg_size=2**21)
                 await self.expect('session.created')
-                await self.ws.send_json({'type': 'session.update', 'session': {
+                session = {
                     'modalities': ['text', 'audio'], 'instructions': context,
                     'turn_detection': None, 'input_audio_transcription': None,
                     'audio': {'input': {'format': {'type': 'pcm', 'sample_rate': 16000,
                          'sample_format': 's16le', 'channels': 1, 'packing': 'interleaved', 'channel_layout': 'mono'}},
                          'output': {'voice': self.cfg.get('QWEN_VOICE', 'Tina'),
-                                    'format': {'type': 'pcm', 'sample_rate': 24000}}}}})
+                                    'format': {'type': 'pcm', 'sample_rate': 24000}}}}
+                if 'enable_search' in self.cfg:
+                    session['enable_search'] = self.cfg['enable_search']
+                    if self.cfg['enable_search']:
+                        session['search_options'] = {'enable_source': True}
+                await self.ws.send_json({'type': 'session.update', 'session': session})
                 await self.expect('session.updated')
                 self.intent.update(state='connected')
             return self

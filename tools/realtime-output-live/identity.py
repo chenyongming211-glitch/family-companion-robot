@@ -26,6 +26,8 @@ def capability_snapshot(cfg, context, *, connected):
         ('reminders', '设置并执行提醒或闹钟'), ('image_analysis', '当前没有拍照、图片上传、查看或分析通道'),
         ('live_information', '联网检索、实时天气或新闻查询'),
         ('device_control', '控制音量、亮度、家电等设备'), ('physical_actions', '移动、拿取等实体动作'))})
+    if cfg.get('enable_search') is True:
+        caps['live_information'] = {'status': voice_status, 'description': '使用内置联网搜索查询天气、新闻等最新信息'}
     return {'product': copy.deepcopy(_PRODUCT), 'entry': 'realtime-output-live', 'input_channels': ['audio'],
         'model': {'id': model, 'provider': provider}, 'capabilities': caps,
         'memory': {'max_recent_turns': RECENT_TURN_LIMIT,

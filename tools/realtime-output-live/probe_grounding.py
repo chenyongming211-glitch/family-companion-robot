@@ -8,8 +8,8 @@ from pathlib import Path
 
 from replay_history import replay
 from server import instructions_for
-from upstream import StreamingNative
-from providers import settings, wav_pcm, private_json
+from upstream import StreamingNative, settings
+from providers import wav_pcm, private_json
 
 
 async def probe(args):
