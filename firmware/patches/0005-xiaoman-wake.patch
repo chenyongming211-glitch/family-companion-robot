@@ -1,0 +1,354 @@
+diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_audio_engine.cc
+--- a/main/audio/engines/afe_audio_engine.cc
++++ b/main/audio/engines/afe_audio_engine.cc
+@@ -116,12 +116,17 @@
+                 }
+             }
+         }
++    }
+ #if CONFIG_SEND_WAKE_WORD_DATA
++    if (wake_detector_ == WakeDetector::kWakeNet ||
++        (codec_->SoftwareReference() && wake_detector_ == WakeDetector::kMultiNet)) {
+         if (!wake_word_audio_cache_.Initialize(16000 * 2)) {
+             ESP_LOGW(TAG, "Wake-word audio upload disabled: PSRAM cache allocation failed");
+-        }
++            if (codec_->SoftwareReference())
++                return false;
++        }
++    }
+ #endif
+-    }
+ 
+     const bool needs_afe = kUseAfeForVoiceProcessing || wake_detector_ != WakeDetector::kNone;
+     if (!needs_afe) {
+@@ -418,6 +423,19 @@
+     }
+ }
+ 
++void AfeAudioEngine::ResetWakeWordCapture() {
++    if (!codec_ || !codec_->SoftwareReference())
++        return;
++    if (custom_wake_word_)
++        custom_wake_word_->ResetCapture();
++    std::lock_guard<std::mutex> wake_lock(wake_word_mutex_);
++    const auto generation = codec_->WakeAudioGeneration();
++    if (wake_cache_generation_ != generation) {
++        wake_word_audio_cache_.Clear();
++        wake_cache_generation_ = generation;
++    }
++}
++
+ void AfeAudioEngine::ApplyPendingReset() {
+     if (!reset_pending_.exchange(false)) {
+         return;
+@@ -426,6 +444,7 @@
+     // serializes the reset against Feed(); fetch/reset both run in this task.
+     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+     input_buffer_.clear();
++    ResetWakeWordCapture();
+     afe_iface_->reset_buffer(afe_data_);
+ }
+ 
+@@ -447,14 +466,7 @@
+             }
+             input_buffer_.clear();
+             output_buffer_.clear();
+-            {
+-                std::lock_guard<std::mutex> wake_lock(wake_word_mutex_);
+-                const auto wake_generation = codec_->WakeAudioGeneration();
+-                if (wake_cache_generation_ != wake_generation) {
+-                    wake_word_audio_cache_.Clear();
+-                    wake_cache_generation_ = wake_generation;
+-                }
+-            }
++            ResetWakeWordCapture();
+             codec_->ResetDiagnosticStream(2);
+             afe_iface_->reset_buffer(afe_data_);
+             applied_capture_generation_ = codec_->CaptureGeneration();
+@@ -515,7 +527,7 @@
+         }
+         EventBits_t bits = xEventGroupGetBits(event_group_);
+         if (bits & kWakeWordEnabled) {
+-            HandleWakeWordResult(result);
++            HandleWakeWordResult(result, capture);
+         }
+         if (kUseAfeForVoiceProcessing && (bits & kVoiceProcessingEnabled)) {
+             HandleVoiceResult(result);
+@@ -523,12 +535,7 @@
+     }
+ }
+ 
+-void AfeAudioEngine::HandleWakeWordResult(const afe_fetch_result_t* result) {
+-    if (wake_detector_ == WakeDetector::kMultiNet) {
+-        custom_wake_word_->FeedMono(result->data, result->data_size / sizeof(int16_t));
+-        return;
+-    }
+-
++void AfeAudioEngine::HandleWakeWordResult(const afe_fetch_result_t* result, uint32_t capture_generation) {
+ #if CONFIG_SEND_WAKE_WORD_DATA
+     if (codec_->SoftwareReference()) {
+         std::lock_guard<std::mutex> lock(wake_word_mutex_);
+@@ -539,7 +546,14 @@
+             wake_cache_generation_ = emitted_wake_generation_;
+         }
+         wake_word_audio_cache_.Store(result->data, result->data_size / sizeof(int16_t));
+-    } else
++    }
++#endif
++    if (wake_detector_ == WakeDetector::kMultiNet) {
++        custom_wake_word_->FeedMono(result->data, result->data_size / sizeof(int16_t), capture_generation);
++        return;
++    }
++#if CONFIG_SEND_WAKE_WORD_DATA
++    if (!codec_->SoftwareReference())
+         wake_word_audio_cache_.Store(result->data, result->data_size / sizeof(int16_t));
+ #endif
+     if (result->wakeup_state != WAKENET_DETECTED) {
+@@ -728,11 +742,7 @@
+ }
+ 
+ void AfeAudioEngine::EncodeExperimentWakeWordData() {
+-    if (wake_detector_ == WakeDetector::kMultiNet) {
+-        custom_wake_word_->EncodeWakeWordData();
+-        return;
+-    }
+-    if (wake_detector_ != WakeDetector::kWakeNet)
++    if (wake_detector_ == WakeDetector::kNone)
+         return;
+ 
+     {
+@@ -847,9 +857,7 @@
+ }
+ 
+ bool AfeAudioEngine::GetExperimentWakeWordOpus(std::vector<uint8_t>& opus) {
+-    if (wake_detector_ == WakeDetector::kMultiNet)
+-        return custom_wake_word_->GetWakeWordOpus(opus);
+-    if (wake_detector_ != WakeDetector::kWakeNet)
++    if (wake_detector_ == WakeDetector::kNone)
+         return false;
+     std::unique_lock<std::mutex> lock(wake_word_mutex_);
+     wake_word_cv_.wait(lock, [this] { return !experiment_wake_word_opus_.empty(); });
+diff --git a/main/audio/engines/afe_audio_engine.h b/main/audio/engines/afe_audio_engine.h
+--- a/main/audio/engines/afe_audio_engine.h
++++ b/main/audio/engines/afe_audio_engine.h
+@@ -133,8 +133,9 @@
+     void UpdateAecState();
+     void ApplyAfeControls();
+     void ApplyPendingReset();
++    void ResetWakeWordCapture();
+     void OutputRawAudio(const std::vector<int16_t>& data);
+-    void HandleWakeWordResult(const afe_fetch_result_t* result);
++    void HandleWakeWordResult(const afe_fetch_result_t* result, uint32_t capture_generation);
+     void HandleVoiceResult(const afe_fetch_result_t* result);
+ };
+ 
+diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
+--- a/main/audio/wake_words/custom_wake_word.cc
++++ b/main/audio/wake_words/custom_wake_word.cc
+@@ -99,7 +99,8 @@
+         ParseWakenetModelConfig();
+     }
+ 
+-    if (models_ == nullptr || models_->num == -1) {
++    if (codec_ == nullptr || models_ == nullptr || models_->num <= 0 || commands_.empty() ||
++        duration_ <= 0 || !(threshold_ >= 0.0f && threshold_ < 1.0f)) {
+         ESP_LOGE(TAG, "Failed to initialize wakenet model");
+         return false;
+     }
+@@ -107,28 +108,42 @@
+     // 初始化 multinet (命令词识别)
+     mn_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, language_.c_str());
+     if (mn_name_ == nullptr) {
+-        ESP_LOGW(TAG, "Language '%s' multinet not found, falling back to any multinet model", language_.c_str());
+-        mn_name_ = esp_srmodel_filter(models_, ESP_MN_PREFIX, NULL);
+-    }
+-    if (mn_name_ == nullptr) {
+         ESP_LOGE(TAG, "Failed to initialize multinet, mn_name is nullptr");
+         ESP_LOGI(TAG, "Please refer to https://pcn7cs20v8cr.feishu.cn/wiki/CpQjwQsCJiQSWSkYEvrcxcbVnwh to add custom wake word");
+         return false;
+     }
+ 
+     multinet_ = esp_mn_handle_from_name(mn_name_);
++    if (multinet_ == nullptr) {
++        ESP_LOGE(TAG, "No interface for MultiNet model %s", mn_name_);
++        return false;
++    }
+     multinet_model_data_ = multinet_->create(mn_name_, duration_);
++    if (multinet_model_data_ == nullptr) {
++        ESP_LOGE(TAG, "Failed to create MultiNet model %s", mn_name_);
++        return false;
++    }
+     multinet_->set_det_threshold(multinet_model_data_, threshold_);
+-    input_buffer_.reserve(multinet_->get_samp_chunksize(multinet_model_data_));
+-    esp_mn_commands_clear();
++    const int chunksize = multinet_->get_samp_chunksize(multinet_model_data_);
++    if (chunksize <= 0 || esp_mn_commands_clear() != ESP_OK) {
++        ESP_LOGE(TAG, "Invalid MultiNet frame size or command state");
++        return false;
++    }
++    input_buffer_.reserve(chunksize);
+     for (int i = 0; i < commands_.size(); i++) {
+-        esp_mn_commands_add(i + 1, commands_[i].command.c_str());
+-    }
+-    esp_mn_commands_update();
++        if (esp_mn_commands_add(i + 1, commands_[i].command.c_str()) != ESP_OK) {
++            ESP_LOGE(TAG, "MultiNet rejected command %d", i + 1);
++            return false;
++        }
++    }
++    if (esp_mn_commands_update() != nullptr) {
++        ESP_LOGE(TAG, "MultiNet failed to activate the configured commands");
++        return false;
++    }
+     
+     multinet_->print_active_speech_commands(multinet_model_data_);
+ #if CONFIG_SEND_WAKE_WORD_DATA
+-    if (!wake_word_audio_cache_.Initialize(16000 * 2)) {
++    if (!codec_->SoftwareReference() && !wake_word_audio_cache_.Initialize(16000 * 2)) {
+         ESP_LOGW(TAG, "Wake-word audio upload disabled: PSRAM cache allocation failed");
+     }
+ #endif
+@@ -150,15 +165,24 @@
+     input_buffer_.clear();
+ }
+ 
++void CustomWakeWord::ResetCapture() {
++    // Only the AFE fetch owner resets model state. Stop() may run on the main task.
++    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
++    input_buffer_.clear();
++    if (multinet_ != nullptr && multinet_model_data_ != nullptr) {
++        multinet_->clean(multinet_model_data_);
++    }
++}
++
+ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
+-    FeedSamples(data.data(), data.size(), false);
+-}
+-
+-void CustomWakeWord::FeedMono(const int16_t* data, size_t samples) {
+-    FeedSamples(data, samples, true);
+-}
+-
+-void CustomWakeWord::FeedSamples(const int16_t* data, size_t samples, bool mono) {
++    FeedSamples(data.data(), data.size(), false, codec_ ? codec_->CaptureGeneration() : 0);
++}
++
++void CustomWakeWord::FeedMono(const int16_t* data, size_t samples, uint32_t capture_generation) {
++    FeedSamples(data, samples, true, capture_generation);
++}
++
++void CustomWakeWord::FeedSamples(const int16_t* data, size_t samples, bool mono, uint32_t capture_generation) {
+     if (multinet_model_data_ == nullptr || data == nullptr || samples == 0) {
+         return;
+     }
+@@ -169,6 +193,17 @@
+         return;
+     }
+ 
++    // The AFE fetch owner supplies the source frame's capture generation. A newer
++    // codec generation must never relabel PCM fetched before a pause or fault.
++    auto capture_valid = [&] {
++        if (!codec_->SoftwareReference() || capture_generation == codec_->CaptureGeneration())
++            return true;
++        input_buffer_.clear();
++        multinet_->clean(multinet_model_data_);
++        return false;
++    };
++    if (!capture_valid())
++        return;
+     // If input channels is 2, we need to fetch the left channel data
+     if (!mono && codec_->input_channels() > 1) {
+         for (size_t i = 0; i < samples; i += codec_->input_channels()) {
+@@ -180,18 +215,29 @@
+     
+     int chunksize = multinet_->get_samp_chunksize(multinet_model_data_);
+     while (input_buffer_.size() >= chunksize) {
++        if (!capture_valid())
++            return;
+ #if CONFIG_SEND_WAKE_WORD_DATA
+-        wake_word_audio_cache_.Store(input_buffer_.data(), chunksize);
++        if (!codec_->SoftwareReference())
++            wake_word_audio_cache_.Store(input_buffer_.data(), chunksize);
+ #endif
+ 
+         esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());
++        if (!capture_valid())
++            return;
+         
+         if (mn_state == ESP_MN_STATE_DETECTED) {
+             esp_mn_results_t *mn_result = multinet_->get_results(multinet_model_data_);
+-            for (int i = 0; i < mn_result->num && running_; i++) {
++            for (int i = 0; mn_result != nullptr && i < mn_result->num &&
++                            i < ESP_MN_RESULT_MAX_NUM && running_; i++) {
+                 ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
+                         mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
+-                auto& command = commands_[mn_result->command_id[i] - 1];
++                const int command_id = mn_result->command_id[i];
++                if (command_id <= 0 || command_id > static_cast<int>(commands_.size())) {
++                    ESP_LOGW(TAG, "Ignoring invalid MultiNet command id %d", command_id);
++                    continue;
++                }
++                auto& command = commands_[command_id - 1];
+                 if (command.action == "wake") {
+                     last_detected_wake_word_ = command.text;
+                     running_ = false;
+diff --git a/main/audio/wake_words/custom_wake_word.h b/main/audio/wake_words/custom_wake_word.h
+--- a/main/audio/wake_words/custom_wake_word.h
++++ b/main/audio/wake_words/custom_wake_word.h
+@@ -27,10 +27,11 @@
+ 
+     bool Initialize(AudioCodec* codec, srmodel_list_t* models_list);
+     void Feed(const std::vector<int16_t>& data);
+-    void FeedMono(const int16_t* data, size_t samples);
++    void FeedMono(const int16_t* data, size_t samples, uint32_t capture_generation);
+     void OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback);
+     void Start();
+     void Stop();
++    void ResetCapture();
+     size_t GetFeedSize();
+     void EncodeWakeWordData();
+     bool GetWakeWordOpus(std::vector<uint8_t>& opus);
+@@ -69,7 +70,7 @@
+     std::mutex wake_word_mutex_;
+     std::condition_variable wake_word_cv_;
+ 
+-    void FeedSamples(const int16_t* data, size_t samples, bool mono);
++    void FeedSamples(const int16_t* data, size_t samples, bool mono, uint32_t capture_generation);
+     void ParseWakenetModelConfig();
+ };
+ 
+diff --git a/main/boards/m5stack/stopwatch/config.json b/main/boards/m5stack/stopwatch/config.json
+--- a/main/boards/m5stack/stopwatch/config.json
++++ b/main/boards/m5stack/stopwatch/config.json
+@@ -29,6 +29,31 @@
+                 "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n",
+                 "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y"
+             ]
++        },
++        {
++            "name": "m5stack-stopwatch-xiaoman",
++            "sdkconfig_append": [
++                "CONFIG_SPIRAM=y",
++                "CONFIG_SPIRAM_MODE_OCT=y",
++                "CONFIG_SPIRAM_SPEED_80M=y",
++                "CONFIG_USE_AUDIO_PROCESSOR=y",
++                "CONFIG_STOPWATCH_SOFTWARE_AEC=y",
++                "CONFIG_USE_DEVICE_AEC=y",
++                "CONFIG_USE_AUDIO_DEBUGGER=n",
++                "CONFIG_I2S_ISR_IRAM_SAFE=n",
++                "CONFIG_ESP_CONSOLE_UART_DEFAULT=n",
++                "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y",
++                "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n",
++                "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y",
++                "CONFIG_USE_AFE_WAKE_WORD=n",
++                "CONFIG_USE_CUSTOM_WAKE_WORD=y",
++                "CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=n",
++                "CONFIG_SR_MN_CN_MULTINET7_QUANT=y",
++                "CONFIG_CUSTOM_WAKE_WORD=\"xiao man\"",
++                "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"小满\"",
++                "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
++                "CONFIG_SEND_WAKE_WORD_DATA=y"
++            ]
+         }
+     ]
+ }

@@ -65,6 +65,32 @@ endpoint. The separate experimental source below implements software reference, 
 and opt-in realtime gating. Its target build and physical acoustic acceptance
 remain separate from stock CI.
 
+### Xiaoman wake-word candidate
+
+The independent `m5stack-stopwatch-xiaoman` variant retains the software-AEC
+hardware path and selects the Chinese MultiNet7 model. Its acoustic command is
+`xiao man`; the detected-word text is `小满`. The two previous variants remain
+available. Build this candidate on the cloud host in the exact locked SDK:
+
+```sh
+python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch-xiaoman --language zh-CN --zip
+```
+
+Patch `0005-xiaoman-wake.patch` shares the AFE wake-audio cache and tagged encode
+worker across WakeNet and MultiNet in software-AEC mode. Capture boundaries clear
+MultiNet partial input and recognition state on the AFE fetch task; results that
+finish across a capture-generation change are discarded. Model creation, command
+registration and activation failures reject the candidate instead of silently
+using another language model. The initial threshold is 20 percent, not a measured
+accuracy target.
+
+The experimental evidence verifier checks the effective configuration and the
+packed asset index/model table for `xiao man`, `小满`, `mn7_cn` and `fst`. Host
+tests use SDK/codec fakes and do not run a speech model. A successful target build
+still needs real-device model registration, two-syllable detection, false-wake,
+playback/AEC, standby-power and stability checks. Shared asset changes also need
+the separate private backup and flash-layout checks before device installation.
+
 The complete upstream MIT license is in `third_party/xiaozhi-LICENSE`; see the
 repository's `THIRD_PARTY_NOTICES.txt` for attribution. Dependencies retain their
 own licenses.

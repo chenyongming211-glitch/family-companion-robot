@@ -8,7 +8,7 @@ bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected, uint32_t* clo
     // Saturation permanently disables receipts on this protocol object.
     if (playback_connection_ != UINT32_MAX) ++playback_connection_;
     if (closed_epoch) *closed_epoch = playback_connection_;
-    playback_negotiated_ = playback_receiving_ = playback_tracking_ = false;
+    playback_negotiated_ = playback_receiving_ = playback_tracking_ = playback_drain_negotiated_ = false;
     playback_id_ = {}; playback_first_ = 0;
     session_id_.clear();
     auto* codec = Board::GetInstance().GetAudioCodec();
@@ -60,10 +60,21 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
         playback_tracking_ = codec->PlaybackControl(AudioCodec::PlaybackOp::Start, id);
     } else if (id != playback_id_) return false;
     else if (strcmp(state->valuestring, "stop") == 0) {
-        playback_receiving_ = false;
         auto* reason = cJSON_GetObjectItem(root, "reason");
         const bool interrupted = cJSON_IsTrue(cJSON_GetObjectItem(root, "interrupted")) ||
             (cJSON_IsString(reason) && strcmp(reason->valuestring, "interrupted") == 0);
+        if (playback_drain_negotiated_) {
+            auto* sent = cJSON_GetObjectItem(root, "sent_samples");
+            if (!cJSON_IsNumber(sent) || !std::isfinite(sent->valuedouble) ||
+                sent->valuedouble < 0 || sent->valuedouble > UINT32_MAX ||
+                std::floor(sent->valuedouble) != sent->valuedouble ||
+                static_cast<uint64_t>(sent->valuedouble) % 1440 != 0 ||
+                static_cast<uint64_t>(sent->valuedouble) != playback_first_ || interrupted) {
+                codec->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, id);
+                return false;
+            }
+        }
+        playback_receiving_ = false;
         if (interrupted) {
             if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
             Application::GetInstance().GetAudioService().ResetDecoder();
@@ -138,7 +149,9 @@ void WebsocketProtocol::SendAbortSpeaking(AbortReason reason) {
     {
         std::lock_guard<std::mutex> lock(playback_mutex_);
         if (playback_negotiated_) {
-            playback_receiving_ = false;
+            // Retire scheduled speaking UI, but keep receiving the ordered
+            // tail until the server seals this same playback identity.
+            if (!playback_drain_negotiated_) playback_receiving_ = false;
             if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
         }
     }
@@ -182,6 +195,8 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root, uint32_t connection)
     playback_negotiated_ = playback_connection_ != 0 && playback_connection_ != UINT32_MAX && cJSON_IsString(session_id) &&
         family_robot::PlaybackSessionSupported(session_id_.data(), session_id_.size()) && Board::GetInstance().GetAudioCodec()->PlaybackSupported() &&
         cJSON_IsTrue(cJSON_GetObjectItem(features, "playback_progress_v1"));
+    playback_drain_negotiated_ = playback_negotiated_ &&
+        cJSON_IsTrue(cJSON_GetObjectItem(features, "playback_drain_v1"));
     Application::GetInstance().GetAudioService().PreserveServerPlayback(playback_negotiated_);
     xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
 }

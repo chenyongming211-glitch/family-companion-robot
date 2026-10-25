@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import struct
 import tempfile
 import unittest
 
@@ -79,6 +80,65 @@ class EvidenceTests(unittest.TestCase):
         config = self.tree/'sdkconfig'
         config.write_text(config.read_text().replace('# CONFIG_USE_DEVICE_AEC is not set\n', ''))
         self.assertEqual(self.verify('m5stack-stopwatch')['effective_config']['CONFIG_STOPWATCH_SOFTWARE_AEC'], 'n')
+
+    def xiaoman_assets(self, command='xiao man', model='mn7_cn'):
+        index = json.dumps(dict(version=1, srmodels='srmodels.bin', multinet_model=dict(
+            language='cn', duration=3000, threshold=0.2,
+            commands=[dict(command=command, text='小满', action='wake')]))).encode()
+        # Native srmodels table with two bounded, nonempty synthetic payloads.
+        entries = [(model, 'weights'), ('fst', 'tokens')]
+        header_size = 4 + len(entries) * (32 + 4 + 32 + 4 + 4)
+        models = bytearray(struct.pack('<I', len(entries)))
+        payload = bytearray()
+        for name, file in entries:
+            models.extend(struct.pack('<32sI32sII', name.encode(), 1, file.encode(),
+                                      header_size + len(payload), 4))
+            payload.extend(b'test')
+        models.extend(payload)
+        records = bytearray()
+        data = bytearray()
+        for name, content in [('index.json', index), ('srmodels.bin', models)]:
+            records.extend(struct.pack('<32sIIHH', name.encode(), len(content), len(data), 0, 0))
+            data.extend(b'\x5a\x5a' + content)
+        body = records + data
+        asset = self.tree/'build/generated_assets.bin'
+        asset.parent.mkdir(exist_ok=True)
+        asset.write_bytes(struct.pack('<III', 2, sum(body) & 0xffff, len(body)) + body)
+        config = self.tree/'sdkconfig'
+        config.write_text(config.read_text() + '\n'.join([
+            'CONFIG_USE_CUSTOM_WAKE_WORD=y', '# CONFIG_USE_AFE_WAKE_WORD is not set',
+            'CONFIG_SR_MN_CN_MULTINET7_QUANT=y', 'CONFIG_CUSTOM_WAKE_WORD="xiao man"',
+            'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="小满"', 'CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20',
+            'CONFIG_SEND_WAKE_WORD_DATA=y']) + '\n')
+        return asset
+
+    def test_xiaoman_requires_acoustic_model_and_command_in_packed_assets(self):
+        self.xiaoman_assets()
+        evidence = self.verify('m5stack-stopwatch-xiaoman')
+        self.assertEqual(evidence['wake_word']['command'], 'xiao man')
+        self.assertEqual(evidence['wake_word']['models'], ['fst', 'mn7_cn'])
+
+    def test_xiaoman_rejects_label_only_change_and_wrong_model_or_config(self):
+        self.xiaoman_assets(command='ni hao xiao zhi')
+        with self.assertRaisesRegex(ValueError, 'wake word'):
+            self.verify('m5stack-stopwatch-xiaoman')
+        self.config(True)
+        self.xiaoman_assets(model='mn6_cn')
+        with self.assertRaisesRegex(ValueError, 'model'):
+            self.verify('m5stack-stopwatch-xiaoman')
+        self.config(True)
+        self.xiaoman_assets()
+        config = self.tree/'sdkconfig'
+        config.write_text(config.read_text().replace('CONFIG_SR_MN_CN_MULTINET7_QUANT=y',
+                                                    '# CONFIG_SR_MN_CN_MULTINET7_QUANT is not set'))
+        with self.assertRaisesRegex(ValueError, 'CONFIG_SR_MN_CN_MULTINET7_QUANT'):
+            self.verify('m5stack-stopwatch-xiaoman')
+
+    def test_xiaoman_rejects_corrupt_assets(self):
+        asset = self.xiaoman_assets()
+        asset.write_bytes(asset.read_bytes()[:-1])
+        with self.assertRaisesRegex(ValueError, 'assets'):
+            self.verify('m5stack-stopwatch-xiaoman')
 
     def test_native_style_identical_sdk_config_repeats_are_accepted(self):
         config = self.tree/'sdkconfig'

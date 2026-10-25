@@ -69,7 +69,9 @@ class Board {public:PowerSaveLevel power=PowerSaveLevel::PERFORMANCE;TestDisplay
     void SetPowerSaveLevel(PowerSaveLevel p){power=p;}TestDisplay* GetDisplay(){return &display;}};
 class AudioService {public:bool preserve=false;int resets=0;void PreserveServerPlayback(bool b){preserve=b;}void ResetDecoder(){++resets;codec.PlaybackControl(AudioCodec::PlaybackOp::Reset);}};
 enum AbortReason {kAbortReasonNone};
-class Protocol {public:virtual ~Protocol()=default;void SendAbortSpeaking(AbortReason) {}
+class Protocol {public:virtual ~Protocol()=default;virtual void SendAbortSpeaking(AbortReason) {}
+    virtual bool PlaybackNegotiated()const{return false;}
+    virtual bool PlaybackDrainNegotiated()const{return false;}
     virtual uint32_t AudioChannelEpoch()const{return 0;}
     virtual bool PlaybackEventCurrent(PlaybackEvent)const{return true;}};
 enum {kDeviceStateIdle,kDeviceStateSpeaking,kDeviceStateListening,kListeningModeManualStop,kListeningModeAutoStop};
@@ -83,6 +85,7 @@ class Application {public:AudioService audio_service_;Protocol* protocol_=nullpt
     int GetDeviceState(){return state;}void SetDeviceState(int s){state=s;}
     void ScheduleAudioChannelClosed(uint32_t);
     void SchedulePlaybackStart(PlaybackEvent);void SchedulePlaybackStop(PlaybackEvent,bool);
+    void AbortSpeaking(AbortReason);
 };
 struct AudioStreamPacket {int sample_rate=24000,frame_duration=60;PlaybackIdentity receipt_id{};uint32_t receipt_first=0,output_generation=0;};
 
@@ -95,7 +98,7 @@ public:
     uint32_t playback_connection_=0,socket_connection_=0,playback_event_lease_=0;
     PlaybackIdentity playback_id_{};
     uint64_t playback_first_=0;
-    bool playback_negotiated_=false,playback_receiving_=false,playback_tracking_=false;
+    bool playback_negotiated_=false,playback_receiving_=false,playback_tracking_=false,playback_drain_negotiated_=false;
     std::string session_id_;
     std::function<void(std::unique_ptr<AudioStreamPacket>)> on_incoming_audio_;
     int server_sample_rate_=24000,server_frame_duration_=60,event_group_handle_=0;
@@ -104,12 +107,14 @@ public:
     std::function<void(uint32_t)> on_audio_channel_closed_;
     void NotifyPlaybackClosed(uint32_t);uint32_t AudioChannelEpoch()const override;
     bool ResetPlaybackConnection(uint32_t expected=0,uint32_t* closed_epoch=nullptr);bool PlaybackNegotiated()const;
+    bool PlaybackDrainNegotiated()const override {std::lock_guard<std::mutex> lock(playback_mutex_);return playback_drain_negotiated_;}
     PlaybackEvent PlaybackEventIdentity(const cJSON*)const;bool PlaybackEventCurrent(PlaybackEvent)const override;
     bool HandlePlaybackTts(cJSON*,uint32_t);void DeliverAudio(std::unique_ptr<AudioStreamPacket>,uint32_t);
     void SendPlayback(const PlaybackSnapshot&);void SendAbortSpeaking(AbortReason);
 };
 #define CONFIG_STOPWATCH_SOFTWARE_AEC 1
 #define ESP_LOGE(...) (void)0
+#define ESP_LOGI(...) (void)0
 #define WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT 1
 static void xEventGroupSetBits(int,int) {}
 #include "playback_websocket.inc"
@@ -218,5 +223,63 @@ int main(){
     exhausted.on_audio_channel_closed_=[&](uint32_t){++exhausted_notifications;};
     exhausted.NotifyPlaybackClosed(UINT32_MAX-1);exhausted.NotifyPlaybackClosed(UINT32_MAX-1);
     assert(exhausted_notifications==1&&!exhausted.ResetPlaybackConnection());
+    // New mutually negotiated drain mode must preserve software and late network tails.
+    {
+        codec.core=PlaybackProgress{};codec.generation=0;
+        WebsocketProtocol d;d.ResetPlaybackConnection();
+        auto h=std::unique_ptr<cJSON>(cJSON_CreateObject());
+        cJSON_AddStringToObject(h.get(),"transport","websocket");
+        cJSON_AddStringToObject(h.get(),"session_id","drain-session");
+        auto caps=std::unique_ptr<cJSON>(cJSON_CreateObject());
+        cJSON_AddBoolToObject(caps.get(),"playback_progress_v1",true);
+        cJSON_AddBoolToObject(caps.get(),"playback_drain_v1",true);
+        h->children["features"]=std::move(caps);
+        d.ParseServerHello(h.get(),d.playback_connection_);
+        assert(d.playback_drain_negotiated_);
+        auto start=tts("start",1,"drain-session");
+        assert(d.HandlePlaybackTts(start.get(),d.playback_connection_));
+        const auto old_event=d.PlaybackEventIdentity(start.get());
+        std::vector<AudioStreamPacket> received;
+        d.on_incoming_audio_=[&](std::unique_ptr<AudioStreamPacket> p){received.push_back(*p);};
+        d.DeliverAudio(std::make_unique<AudioStreamPacket>(),d.playback_connection_);
+        int16_t pcm[240]{};
+        for(size_t i=0;i<6;++i)assert(codec.core.Submit(old_event.identity,i*240,pcm,240)==PlaybackProgress::SubmitResult::Accepted);
+        const auto resets=app.audio_service_.resets; const auto generation=codec.generation;
+        app.protocol_=&d;
+#ifdef FAMILY_ROBOT_DRAIN_APPLICATION
+        app.AbortSpeaking(kAbortReasonNone);
+#else
+        assert(false && "drain requires the actual production AbortSpeaking method");
+#endif
+        assert(app.aborted_&&app.audio_service_.resets==resets&&codec.generation==generation);
+        assert(!d.PlaybackEventCurrent(old_event)); // retire only scheduled UI
+        d.DeliverAudio(std::make_unique<AudioStreamPacket>(),d.playback_connection_);
+        assert(received.size()==2&&received.back().receipt_first==1440);
+        for(size_t i=6;i<12;++i)assert(codec.core.Submit(old_event.identity,i*240,pcm,240)==PlaybackProgress::SubmitResult::Accepted);
+        codec.core.Release(old_event.identity);codec.core.Release(old_event.identity);
+        auto seal=tts("stop",1,"drain-session");
+        cJSON_AddStringToObject(seal.get(),"reason","drain");
+        cJSON_AddNumberToObject(seal.get(),"sent_samples",2880);
+        assert(d.HandlePlaybackTts(seal.get(),d.playback_connection_));
+        d.DeliverAudio(std::make_unique<AudioStreamPacket>(),d.playback_connection_);
+        assert(received.size()==2&&!codec.core.Snapshot(old_event.identity).finished);
+        int16_t dma[6][240]{};
+        for(int tick=0;tick<18;++tick)codec.core.Complete(dma[tick%6],240,(tick+1)*10000);
+        auto final=codec.core.Snapshot(old_event.identity);
+        assert(final.valid&&final.finished&&!final.interrupted&&final.played_samples==2880);
+        // An advertised total must match the same ID's actually admitted frames.
+        for(double wrong:{-1.0,0.0,1440.5,1441.0,4294967296.0}){
+            d.ResetPlaybackConnection();d.ParseServerHello(h.get(),d.playback_connection_);
+            auto begin=tts("start",1,"drain-session");assert(d.HandlePlaybackTts(begin.get(),d.playback_connection_));
+            d.DeliverAudio(std::make_unique<AudioStreamPacket>(),d.playback_connection_);
+            auto bad=tts("stop",1,"drain-session");cJSON_AddNumberToObject(bad.get(),"sent_samples",wrong);
+            assert(!d.HandlePlaybackTts(bad.get(),d.playback_connection_));
+        }
+        d.ResetPlaybackConnection();d.ParseServerHello(h.get(),d.playback_connection_);
+        assert(d.HandlePlaybackTts(tts("start",1,"drain-session").get(),d.playback_connection_));
+        assert(!d.HandlePlaybackTts(tts("stop",1,"drain-session").get(),d.playback_connection_));
+        // A transport close clears both negotiated capabilities.
+        d.ResetPlaybackConnection();assert(!d.playback_drain_negotiated_);
+    }
     puts("production WebSocket identity/stop/reconnect/fallback integration passed");
 }

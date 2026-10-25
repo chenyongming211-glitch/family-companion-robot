@@ -20,6 +20,7 @@ struct Display {void SetChatMessage(const char*, const char*){}};
 struct Board {static Board& GetInstance(){static Board b; return b;} void SetPowerSaveLevel(PowerSaveLevel){} Display* GetDisplay(){static Display d; return &d;}};
 struct Packet {int index;};
 struct Protocol {
+    bool PlaybackDrainNegotiated()const{return false;}
     bool opened=true, open_result=true;
     int open_calls=0, close_calls=0, sends=0, fail_at=-1;
     bool detect_ok=true, start_ok=true;

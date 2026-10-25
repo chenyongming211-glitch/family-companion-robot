@@ -1,0 +1,79 @@
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -939,13 +939,15 @@
+                 RecoverListeningFailure();
+                 return;
+             }
+-            audio_service_.ResetDecoder();
+-            audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
++            if (!protocol_->PlaybackDrainNegotiated()) {
++                audio_service_.ResetDecoder();
++                audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
++            }
+             // Re-enable wake word detection as it was stopped by the detection itself
+             audio_service_.EnableWakeWordDetection(true);
+         } else {
+             // Play popup sound and start listening again
+-            play_popup_on_listening_ = true;
++            play_popup_on_listening_ = !protocol_->PlaybackDrainNegotiated();
+             SetListeningMode(GetDefaultListeningMode());
+         }
+     } else if (state == kDeviceStateActivating) {
+@@ -1246,14 +1248,6 @@
+     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
+ }
+ 
+-void Application::AbortSpeaking(AbortReason reason) {
+-    ESP_LOGI(TAG, "Abort speaking");
+-    aborted_ = true;
+-    if (protocol_ && protocol_->PlaybackNegotiated()) audio_service_.ResetDecoder();
+-    if (protocol_) {
+-        protocol_->SendAbortSpeaking(reason);
+-    }
+-}
+ 
+ void Application::SetListeningMode(ListeningMode mode) {
+     listening_mode_ = mode;
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -63,6 +63,7 @@
+ 
+     virtual uint32_t AudioChannelEpoch() const { return 0; }
+     virtual bool PlaybackNegotiated() const { return false; }
++    virtual bool PlaybackDrainNegotiated() const { return false; }
+     virtual family_robot::PlaybackEvent PlaybackEventIdentity(const cJSON*) const { return {}; }
+     virtual bool PlaybackEventCurrent(family_robot::PlaybackEvent) const { return true; }
+     virtual void SendPlayback(const family_robot::PlaybackSnapshot&) {}
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -19,6 +19,10 @@
+     bool Start() override;
+     uint32_t AudioChannelEpoch() const override;
+     bool PlaybackNegotiated() const override;
++    bool PlaybackDrainNegotiated() const override {
++        std::lock_guard<std::mutex> lock(playback_mutex_);
++        return playback_drain_negotiated_;
++    }
+     family_robot::PlaybackEvent PlaybackEventIdentity(const cJSON* root) const override;
+     bool PlaybackEventCurrent(family_robot::PlaybackEvent event) const override;
+     void SendAbortSpeaking(AbortReason reason) override;
+@@ -37,6 +41,7 @@
+     family_robot::PlaybackIdentity playback_id_{};
+     uint64_t playback_first_ = 0;
+     bool playback_negotiated_ = false, playback_receiving_ = false, playback_tracking_ = false;
++    bool playback_drain_negotiated_ = false;
+     // Only the WebSocket receive task mutates ingress order. Main polls reports;
+     // this mutex protects connection/session checks, never taken in an ISR.
+     void DeliverAudio(std::unique_ptr<AudioStreamPacket> packet, uint32_t connection);
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -221,6 +221,8 @@
+     cJSON_AddBoolToObject(features, "mcp", true);
+-    if (Board::GetInstance().GetAudioCodec()->PlaybackSupported())
++    if (Board::GetInstance().GetAudioCodec()->PlaybackSupported()) {
+         cJSON_AddBoolToObject(features, "playback_progress_v1", true);
++        cJSON_AddBoolToObject(features, "playback_drain_v1", true);
++    }
+     cJSON_AddItemToObject(root, "features", features);
+     AddTextFontCapabilities(root);
+     cJSON_AddStringToObject(root, "transport", "websocket");

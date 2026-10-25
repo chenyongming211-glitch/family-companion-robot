@@ -1,3 +1,4 @@
+#define FAMILY_ROBOT_DRAIN_APPLICATION 1
 // Actual scheduled application transitions, also compiled by the native harness.
 void Application::ScheduleAudioChannelClosed(uint32_t epoch) {
     Schedule([this, epoch] {
@@ -24,4 +25,13 @@ void Application::SchedulePlaybackStop(family_robot::PlaybackEvent event, bool i
                 ? kDeviceStateIdle : kDeviceStateListening);
         }
     });
+}
+
+// Barge-in in drain mode cancels production without revoking received PCM.
+void Application::AbortSpeaking(AbortReason reason) {
+    ESP_LOGI(TAG, "Abort speaking");
+    aborted_ = true;
+    if (protocol_ && protocol_->PlaybackNegotiated() && !protocol_->PlaybackDrainNegotiated())
+        audio_service_.ResetDecoder();
+    if (protocol_) protocol_->SendAbortSpeaking(reason);
 }

@@ -10,10 +10,11 @@ import json
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 
 FIRMWARE = Path(__file__).resolve().parents[1]
-VARIANTS = ('m5stack-stopwatch', 'm5stack-stopwatch-software-aec')
+VARIANTS = ('m5stack-stopwatch', 'm5stack-stopwatch-software-aec', 'm5stack-stopwatch-xiaoman')
 BUILD_FILES = ('build/xiaozhi.bin', 'build/merged-binary.bin', 'build/generated_assets.bin',
                'build/bootloader/bootloader.bin', 'build/partition_table/partition-table.bin',
                'build/flasher_args.json')
@@ -26,6 +27,61 @@ def digest(path):
 def inputs(directory, pattern):
     return [dict(path=path.relative_to(directory).as_posix(), sha256=digest(path))
             for path in sorted(directory.glob(pattern)) if path.is_file()]
+
+
+def verify_xiaoman_assets(path):
+    """Inspect the locked upstream mmap-assets and srmodels containers, without execution."""
+    data = path.read_bytes()
+    if not 12 <= len(data) <= 8 * 1024 * 1024:
+        raise ValueError('invalid Xiaoman assets size')
+    count, checksum, size = struct.unpack_from('<III', data)
+    body = data[12:]
+    if (count == 0 or count > 4096 or size != len(body) or count * 44 > size
+            or checksum != sum(body) & 0xffff):
+        raise ValueError('invalid Xiaoman assets header/checksum')
+    files = {}
+    content = body[count * 44:]
+    for number in range(count):
+        name, length, offset, _, _ = struct.unpack_from('<32sIIHH', body, number * 44)
+        name = name.split(b'\0', 1)[0].decode('utf-8')
+        if (name in files or offset + 2 + length > len(content)
+                or content[offset:offset + 2] != b'\x5a\x5a'):
+            raise ValueError('invalid Xiaoman assets file entry')
+        files[name] = content[offset + 2:offset + 2 + length]
+    try:
+        index = json.loads(files['index.json'])
+        models = files[index['srmodels']]
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ValueError('missing/invalid Xiaoman assets index or models') from exc
+    expected = dict(language='cn', duration=3000, threshold=0.2,
+                    commands=[dict(command='xiao man', text='小满', action='wake')])
+    if index.get('multinet_model') != expected:
+        raise ValueError('Xiaoman wake word configuration differs from xiao man')
+    if len(models) < 4:
+        raise ValueError('invalid Xiaoman model table')
+    model_count, = struct.unpack_from('<I', models)
+    if not 0 < model_count <= 16:
+        raise ValueError('invalid Xiaoman model count')
+    position = 4
+    names, payloads = [], []
+    for _ in range(model_count):
+        if position + 36 > len(models):
+            raise ValueError('truncated Xiaoman model table')
+        name, file_count = struct.unpack_from('<32sI', models, position)
+        names.append(name.split(b'\0', 1)[0].decode('ascii'))
+        position += 36
+        if file_count == 0 or file_count > 512 or position + file_count * 40 > len(models):
+            raise ValueError('invalid Xiaoman model file count')
+        for _ in range(file_count):
+            _, offset, length = struct.unpack_from('<32sII', models, position)
+            if length == 0 or offset + length > len(models):
+                raise ValueError('invalid Xiaoman model payload')
+            payloads.append((offset, length))
+            position += 40
+    if sorted(names) != ['fst', 'mn7_cn'] or any(offset < position for offset, _ in payloads):
+        raise ValueError('Xiaoman assets must contain only mn7_cn and fst models')
+    return dict(command='xiao man', display='小满', language='cn', threshold=0.2,
+                duration_ms=3000, models=sorted(names), assets_sha256=digest(path))
 
 
 def verify(firmware, tree, variant, idf_commit):
@@ -65,7 +121,7 @@ def verify(firmware, tree, variant, idf_commit):
         if key in effective and effective[key] != value:
             raise ValueError('conflicting SDK config key: '+key)
         effective[key] = value
-    experiment = variant == VARIANTS[1]
+    experiment = variant in VARIANTS[1:]
     required = {'CONFIG_IDF_TARGET': '"esp32s3"', 'CONFIG_BOARD_TYPE_M5STACK_STOPWATCH': 'y',
                 'CONFIG_SPIRAM': 'y', 'CONFIG_USE_AUDIO_PROCESSOR': 'y',
                 'CONFIG_I2S_ISR_IRAM_SAFE': 'n', 'CONFIG_USE_AUDIO_DEBUGGER': 'n',
@@ -89,6 +145,12 @@ def verify(firmware, tree, variant, idf_commit):
         if not -2400 <= offset <= 2400:
             raise ValueError('calibration offset out of range')
         required['CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES'] = str(offset)
+    if variant == 'm5stack-stopwatch-xiaoman':
+        required.update(CONFIG_USE_CUSTOM_WAKE_WORD='y', CONFIG_USE_AFE_WAKE_WORD='n',
+                        CONFIG_SR_MN_CN_MULTINET7_QUANT='y',
+                        CONFIG_CUSTOM_WAKE_WORD='"xiao man"',
+                        CONFIG_CUSTOM_WAKE_WORD_DISPLAY='"小满"',
+                        CONFIG_CUSTOM_WAKE_WORD_THRESHOLD='20', CONFIG_SEND_WAKE_WORD_DATA='y')
     # Kconfig omits the device-AEC symbol when this stock board's dependency
     # expression is false. Absent means disabled, never an enabled core path.
     if not experiment:
@@ -96,9 +158,12 @@ def verify(firmware, tree, variant, idf_commit):
     for key, value in required.items():
         if effective.get(key) != value:
             raise ValueError('effective configuration mismatch: '+key)
-    return dict(variant=variant, idf_commit=idf_commit, critical_versions=versions,
-                dependencies_sha256=expected_hash, effective_config=required,
-                acoustic_acceptance='pending')
+    evidence = dict(variant=variant, idf_commit=idf_commit, critical_versions=versions,
+                    dependencies_sha256=expected_hash, effective_config=required,
+                    acoustic_acceptance='pending')
+    if variant == 'm5stack-stopwatch-xiaoman':
+        evidence['wake_word'] = verify_xiaoman_assets(tree/'build/generated_assets.bin')
+    return evidence
 
 
 def bundle(firmware, tree, output, source_sha, evidence):
