@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from replay_history import replay
-from server import INSTRUCTIONS
+from server import instructions_for
 from upstream import StreamingNative
 from providers import settings, wav_pcm, private_json
 
@@ -20,7 +20,7 @@ async def probe(args):
     directory.mkdir(mode=0o700)
     cfg = settings()
     cfg['synthetic_only'] = True
-    instructions = INSTRUCTIONS + json.dumps(snapshot, ensure_ascii=False)
+    instructions = instructions_for(cfg, json.dumps(snapshot, ensure_ascii=False))
     native = StreamingNative(cfg, directory)
     started, first, samples, text = time.monotonic(), None, 0, ''
     try:

@@ -9,6 +9,9 @@ from alignment import PrefixTracker
 from history import playback_evidence
 
 
+RECENT_TURN_LIMIT = 16
+
+
 class AudioRing:
     def __init__(self, capacity=16000 * 35):
         self.capacity, self.end, self.data = capacity, 0, bytearray()
@@ -72,7 +75,7 @@ class Turn:
 
 def context_for(turns):
     result = []
-    for turn in turns[-16:]:
+    for turn in turns[-RECENT_TURN_LIMIT:]:
         evidence = playback_evidence(turn)
         complete = evidence['boundary'] == 'complete_response'
         prefix = evidence['spoken_text']
@@ -81,4 +84,4 @@ def context_for(turns):
             'assistant_spoken_prefix': prefix,
             'position': 'complete' if complete else 'candidate' if prefix else 'unknown',
             'playback_evidence': evidence, 'interrupted': turn.cut})
-    return json.dumps({'recent_turns': result, 'older_turns_omitted': len(turns) > 16}, ensure_ascii=False)
+    return json.dumps({'recent_turns': result, 'older_turns_omitted': len(turns) > RECENT_TURN_LIMIT}, ensure_ascii=False)

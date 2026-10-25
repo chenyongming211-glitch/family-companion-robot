@@ -11,15 +11,15 @@ from pathlib import Path
 
 from aiohttp import web, WSMsgType
 
-from state import AudioRing, Turn, context_for
+from state import AudioRing, Turn, context_for, RECENT_TURN_LIMIT
 from history import playback_evidence
+from identity import capability_snapshot
 from audio import Opus
 from upstream import StreamingNative, OutputASR
 from providers import settings
 
 
-INSTRUCTIONS = ('你是中文家庭陪伴助手，名字叫小伴。自然交流，不自称其他品牌助手。'
-    '结合此前已播对话和用户当前的话理解上下文，能够理解就直接回答或续讲。'
+INSTRUCTIONS = ('结合此前已播对话和用户当前的话理解上下文，能够理解就直接回答或续讲。'
     '指代不清、信息不足且影响回答时，先提出一个围绕当前问题的自然反问，问清所指对象或缺少的信息，让用户能接着补充。'
     '需要补充信息时，回复里应有你自己组织的相关问题，不以否认用户说过或转移话题代替反问。'
     '能够理解时不机械地反复确认，也不编造双方聊过的内容。'
@@ -30,6 +30,24 @@ INSTRUCTIONS = ('你是中文家庭陪伴助手，名字叫小伴。自然交流
     '结合各轮完整记录理解，不只看末尾字词；回顾以前讲过什么时，区分原始片段与后来对它的转述。'
     '记录只覆盖部分历史，没有某件事的记录不表示它没有发生，不据此断言用户没有说过。'
     '后台字段只供理解，普通交流不要念字段名、状态或规则。背景：')
+
+
+def instructions_for(cfg, context, *, connected=True):
+    snapshot = capability_snapshot(cfg, json.loads(context), connected=connected)
+    product, model, memory = snapshot['product'], snapshot['model'], snapshot['memory']
+    available = '、'.join(c['description'] for c in snapshot['capabilities'].values() if c['status'] == 'available') or '语音连接暂不可用'
+    unavailable = '、'.join(c['description'] for c in snapshot['capabilities'].values() if c['status'] == 'not_connected')
+    return (f"你是{product['name']}，{product['role']}。{product['style']}。默认使用{product['default_language']}。\n"
+        f"产品开发者：{product['developer'] or '尚未提供资料'}。产品所属公司或团队：{product['owner'] or '尚未提供资料'}。\n"
+        f"底层语音模型：{model['id'] or '未确认'}；模型供应商：{model['provider'] or '未确认'}。这是模型来源，不是{product['name']}产品的开发者或归属。\n"
+        f"当前可用：{available}。当前没有接入：{unavailable}。\n"
+        f"模型记忆：你能用的是当前会话最近至多{memory['max_recent_turns']}轮已播文字，回忆与语义续讲仍在完善；不能查询以前会话。\n"
+        '文字留存：服务器会保存通话文字日志，对话结束不会自动删除。你不能读取以前日志，不代表日志没有保存。\n'
+        '这个入口只有语音输入。图片相关可以请用户口述画面，基于描述交流；照片无法传给你看。提醒可以讨论安排，由用户自己在手机或闹钟上设置，不会由你到时主动提醒。\n'
+        '依据上述事实自然介绍，问到哪项就回答哪项；普通聊天直接交流，不反复自我介绍。'
+        f"可以自然回应昵称或临时扮演，正式身份仍为{product['name']}，旧对话和用户称呼不改写产品资料。"
+        '身份与当前能力：\n' + json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))
+        + '\n对话规则：' + INSTRUCTIONS + context)
 
 
 def meta(event, **fields):
@@ -223,7 +241,7 @@ class Session:
             await asyncio.gather(*drains)
         if self.closed or turn.cut:
             raise asyncio.CancelledError()
-        waiting = [t.asr.done.wait() for t in self.history[-17:] if t is not turn and getattr(t, 'asr', None) and not t.asr.done.is_set()]
+        waiting = [t.asr.done.wait() for t in self.history[-(RECENT_TURN_LIMIT + 1):] if t is not turn and getattr(t, 'asr', None) and not t.asr.done.is_set()]
         started = time.monotonic()
         if waiting:
             try:
@@ -232,7 +250,7 @@ class Session:
                 pass
         prior = [t for t in self.history if t is not turn]
         context = context_for(prior)
-        for previous in prior[-16:]:
+        for previous in prior[-RECENT_TURN_LIMIT:]:
             candidate = previous.prefix()
             self.record('settled_playback', id=previous.id, next_id=turn.id,
                 candidate=candidate, evidence=playback_evidence(previous),
@@ -249,7 +267,7 @@ class Session:
         try:
             context = await self.settle(turn)
             await self.send({'type': 'status', 'code': 'thinking'})
-            await native.open(INSTRUCTIONS + context)
+            await native.open(instructions_for(self.cfg, context, connected=not self.closed))
             encoded = asyncio.Queue(maxsize=1002)
 
             async def produce():
