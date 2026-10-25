@@ -115,7 +115,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(item['playback_evidence']['claim_scope'], 'this_response_only')
         self.assertEqual(item['playback_evidence']['observed_text'], '123')
 
-    def test_recall_answer_is_retained_but_not_in_source_playback_index(self):
+    def test_original_and_recall_answers_remain_in_chronological_context(self):
         source = self.interrupted('小兔走进森林。后面有狐狸。')
         source.user = '讲个小兔的故事'
         add(source, [('小兔走进森林', 100, 1000)])
@@ -125,15 +125,17 @@ class HistoryTests(unittest.TestCase):
         claim.sent = claim.completed = 2400 * 24
         claim.ended = True
         context = json.loads(context_for([source, claim]))
-        self.assertEqual([e['id'] for e in context['source_playback_records']], [1])
+        self.assertEqual([e['id'] for e in context['recent_turns']], [1, 2])
+        self.assertEqual(context['recent_turns'][0]['assistant_spoken_prefix'], '小兔走进森林。')
         self.assertEqual(context['recent_turns'][1]['assistant_spoken_prefix'], claim.generated)
-        self.assertEqual(context['recent_turns'][1]['record_role'], 'reference_answer_not_source_progress')
+        self.assertEqual(context['recent_turns'][1]['user'], claim.user)
 
-    def test_continuation_request_remains_source_content(self):
+    def test_continuation_request_keeps_user_words_and_playback_evidence(self):
         turn = self.interrupted()
         turn.user = '继续刚才讲到的地方'
         context = json.loads(context_for([turn]))
-        self.assertEqual([item['id'] for item in context['source_playback_records']], [1])
+        self.assertEqual(context['recent_turns'][0]['user'], turn.user)
+        self.assertIn('playback_evidence', context['recent_turns'][0])
 
 
 if __name__ == '__main__':

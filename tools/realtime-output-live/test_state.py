@@ -53,14 +53,15 @@ class StateTests(unittest.TestCase):
         self.assertIn('小兔进森林。', value)
         self.assertNotIn('狐狸', value)
 
-    def test_mismatch_is_unknown_without_generated_tail(self):
+    def test_unaligned_asr_is_usable_context_without_generated_tail(self):
         turn = Turn(1)
         turn.user, turn.generated = '讲故事', '未播的秘密'
         turn.sent, turn.completed = 48000, 28800
         turn.tracker.total_audio_ms = 2000
         turn.tracker.add(sentence('识别错误'), 1100)
         value = context_for([turn])
-        self.assertIn('unknown', value)
+        self.assertIn('candidate', value)
+        self.assertIn('识别错误', value)
         self.assertNotIn('未播的秘密', value)
 
 

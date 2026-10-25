@@ -8,15 +8,6 @@ NUMBERS = re.compile(r'[0-9０-９〇零一二两三四五六七八九十百千]
 DIGITS = {c: str(i) for i, c in enumerate('零一二三四五六七八九')}
 DIGITS.update({'〇': '0', '两': '2'})
 UNITS = {'十': 10, '百': 100, '千': 1000}
-REFERENCE_QUERY = re.compile(
-    r'(?:刚才|刚刚|之前|先前|上次|上一[轮段句]).*(?:[说讲数念读播]到|停[在到]|进度|[哪几]|什么|记录)'
-    r'|(?:有没有|没[有]?|没有了).*记录')
-
-
-def is_reference_answer(user_text):
-    # This labels evidence scope only: it never routes a reply or supplies speech.
-    return bool(REFERENCE_QUERY.search(user_text)
-        and re.search(r'[?？哪几]|什么|记录', user_text))
 
 
 def number_key(raw):
