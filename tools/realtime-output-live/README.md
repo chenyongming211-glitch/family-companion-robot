@@ -1,16 +1,16 @@
 # 真人Realtime已播位置实验
 
-运行`./tools/realtime-output-live/open.command`，打开“家庭陪伴 · Realtime 排空测试”。点一次开始并允许麦克风，之后自由说话。结束按钮停止收音，窗口保留；关窗退出并清理本启动器的SSH转发。不要同时开启其他语音窗口的对话。
+运行`./tools/realtime-output-live/open.command`，默认打开蓝色“小满 · Go 测试版（云端 18040）”。点一次开始并允许麦克风，之后自由说话。结束按钮停止收音，窗口保留；关窗退出并清理本启动器的SSH转发。不要同时开启其他语音窗口的对话。
 
 当前先听排空策略：让它讲一个故事，播放中插问“2加3等于几”；听旧尾音多久停、新回答多久开始。之后说“继续刚才的故事”，核对语义衔接。也可以用数数核对候选断点，实现没有计数专用规则。准确接续位置仍未验收。
 
-当前保留两个独立入口：Go测试版云端18040、Python对照版云端18032。默认启动器仍指向Python，等标识清楚后的真人对比确认再切换。一次性票据、单会话、拒绝浏览器Origin保持，Mac只构建/运行客户端，Key仅留服务器。
+当前保留两个独立入口：Go测试版云端18040、Python对照版云端18032。标识修正后，用户已确认两端体验接近，后台复验无运行故障；默认启动器已切到Go 18040，Python仅作对照/回退。一次性票据、单会话、拒绝浏览器Origin保持，Mac只构建/运行客户端，Key仅留服务器。
 
 两个窗口使用不同标题和常驻标识：**蓝色Go测试版（18040）**在左，**橙色Python对照版（18032）**在右。先结束一个窗口的对话，再开始另一个；窗口由用户自行关闭。标签中的云端端口来自启动器的远端映射，不能只看本地转发端口猜后端。Go标签由health.backend确认；保留的Python基线通过受控18032映射与其health签名识别，无法确认时显示“未核对入口”。
 
 ```sh
-# Go独立测试
-OUTPUT_LIVE_LOCAL_PORT=18040 OUTPUT_LIVE_REMOTE_PORT=18040 ./tools/realtime-output-live/open.command
+# 默认Go入口
+./tools/realtime-output-live/open.command
 # Python对照（本地18042仍映射云端18032）
 OUTPUT_LIVE_LOCAL_PORT=18042 OUTPUT_LIVE_REMOTE_PORT=18032 ./tools/realtime-output-live/open.command
 ```

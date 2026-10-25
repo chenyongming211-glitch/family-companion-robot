@@ -68,7 +68,7 @@ final class LiveApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { generation += 1; client?.stop() }
 }
 
-var args = Array(CommandLine.arguments.dropFirst()), port = 18032
+var args = Array(CommandLine.arguments.dropFirst()), port = 18040
 var plan: String?
 var backend = "unknown", remotePort: Int?
 if let i = args.firstIndex(of: "--port"), i + 1 < args.count { port = Int(args[i + 1]) ?? 0; args.removeSubrange(i...(i + 1)) }

@@ -3,8 +3,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 "$repo_root/tools/realtime-output-live/build.command"
 control=${REALTIME_NATIVE_SSH_CONTROL:-$repo_root/.superpowers/ssh/cloud.sock}
-port=${OUTPUT_LIVE_LOCAL_PORT:-18032}
-remote_port=${OUTPUT_LIVE_REMOTE_PORT:-18032}
+port=${OUTPUT_LIVE_LOCAL_PORT:-18040}
+remote_port=${OUTPUT_LIVE_REMOTE_PORT:-18040}
 for candidate in "$port" "$remote_port"; do
   case "$candidate" in ''|*[!0-9]*) exit 2;; esac
   if ((candidate<1024 || candidate>65535)); then exit 2; fi

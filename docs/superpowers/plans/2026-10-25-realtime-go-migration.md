@@ -45,9 +45,10 @@ Files: `internal/realtimelive/{session,server}.go`、`cmd/realtime-output-live/m
 
 Files: `tools/realtime-output-live/open.command`、`docs/verification/2026-10-25-realtime-go-migration.md`、`docs/DEVELOPMENT_HANDOFF.md`。
 
-- [x] 启动器增加远端端口选择，默认仍18032，Swift音频/播放器代码不改。
+- [x] 启动器增加远端端口选择，初期默认18032；对照与真人确认后已切默认18040，Swift音频/播放器代码不改。
 - [x] 同Mac交替对照32普通轮、每边12排空、搜索与重连，记录分组时延；用户后来取消满20分钟等待，长测按实际约18分4秒/32轮记录，不声称20分钟通过。历史/语义续讲体验纳入真人复验。
-- [ ] 合成CoreAudio与真人听感分别记录。普通问答中位退化超过max(100ms,10%)先调查复测，不测后放宽。
+- [x] 合成CoreAudio与真人反馈分别记录；用户明确分别测试后反馈体验接近，并追加Go复验。普通问答未触发max(100ms,10%)诊断线。
 - [x] Go结束→Python新会话配对/播放实际回退演练。
-- [ ] 真人复验及所有功能证据满足前不切默认、不停Python；切换与停旧服务分开。
+- [x] 对照与真人确认后已切Mac默认入口到Go18040；当前窗口不重启，Python18032继续作回退。
+- [ ] 后续观察稳定性、检查消费者后再停用Python；本轮未停旧服务，也未清理Python源码。
 - [x] 分阶段提交推送main，报告准确区分已完成与待验收。
