@@ -63,6 +63,28 @@ Go18040和Python18032默认开启`enable_search`，并请求`search_options.enab
 
 ## 云端运行与记录
 
+### Go18040终端与会话归属
+
+新版Mac客户端在首次开始时通过现有SSH转发登记终端，之后以终端专用凭据换取一次性票据。相同安装/profile重启、重连仍是同一个`device_id`，每次连接生成新的`session_id`；一轮回复的完整编号是`session_id + id`。这些编号不代表说话人的身份，也不自动恢复上次聊天或音频。
+
+客户端凭据仅在本机`~/Library/Application Support/FamilyCompanion/Realtime18040/`的0600文件内，目录0700。默认真人客户端使用`default-mac_native.json`；合成验证使用独立`mac_fixture`身份。可用`--device-profile validation-a`、`validation-b`模拟不同逻辑终端。它们不是不同物理设备或硬件证明。不要上传、打印或复制凭据内容；文件损坏或认证失败会明确连接失败，不自动覆盖/换身份。
+
+18040新增`POST /devices`，只允许当前回环/SSH信任边界内登记，不作为公网自助绑定接口。服务器生成身份、仅落凭据摘要；`POST /pair`的身份与凭据必须匹配，票据绑定终端，`/live`无法改绑。新客户端的控制和播放回报必须匹配当前`session_id`。原有Opus封装、样本窗口、取消与排空策略不变。
+
+每个新会话目录增加`session.json`，包含终端、会话、客户端类型/版本、服务构建和起止信息。`events.jsonl`及提供方intent都附同一归属，生成、下发、实播仍分别记录。服务器`devices.json`是私有登记表，不是聊天正文。未完成或崩溃时没有结束字段，不能推断已正常结束。
+
+旧窗口/无身份客户端仍可连接，记录标为`legacy_unattributed`，不推测其稳定终端身份；已有旧记录不批量改写。**需要启动新版客户端，才会获得稳定终端归属。** 旧Python入口不受此次改动影响。
+
+仅在云端通过新CLI查询，默认只输出元数据；明确选定一个会话并加`--events`才输出私人对话事件。没有公开历史HTTP接口，也没有跨会话模型记忆。
+
+```sh
+/opt/family-robot-livekit-runtime/bin/realtime-records --device dev_终端编号
+/opt/family-robot-livekit-runtime/bin/realtime-records --session 会话编号
+/opt/family-robot-livekit-runtime/bin/realtime-records --session 会话编号 --events
+```
+
+Mac纯凭据文件验证运行`./tools/realtime-output-live/test-device-identity.command`，不启动服务、收音或调用模型。Go所有运行测试仍只在云端执行。
+
 当前Go服务为`family-robot-realtime-output-go.service`，回环18040；部署单元在`deploy/`，启动文件为`cmd/realtime-output-live/`。仅在云端构建/运行；Mac不启动语音服务。当前Go私有文字/Intent目录为`/var/lib/family-robot-realtime-test/verification/output-live-go/`。默认搜索开关保持`OUTPUT_LIVE_ENABLE_SEARCH=1`。
 
 下面是仍保留的Python基线命令，在服务器checkout根目录使用既有环境：
