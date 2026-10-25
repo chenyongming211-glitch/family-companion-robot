@@ -9,6 +9,7 @@ out="$repo_root/.superpowers/realtime-output-soak"
 opus_root=${NATIVE_OPUS_ROOT:-/usr/local/Cellar/opus/1.6.1}
 mkdir -p "$out/OutputLiveSoak.app/Contents/MacOS"
 chmod 700 "$out"
+rm -f "$out/OutputLiveSoak.app/Contents/MacOS/OutputLiveSoak"
 python3 - "$repo_root" "$out" <<'PY'
 from pathlib import Path
 import sys
@@ -41,7 +42,7 @@ xcrun swiftc -swift-version 5 -O -framework AppKit -framework AVFoundation \
   "$common/Sources/Opus.swift" "$common/Sources/PlaybackLedger.swift" \
   "$out/Fixture.swift" "$src/LiveClient.swift" "$src/main.swift" \
   "$out/OpusBridge.o" -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" \
-  -o "$out/OutputLiveSoak.app/Contents/MacOS/OutputLiveSoak"
+  -o "$out/OutputLiveSoak.app/Contents/MacOS/OutputLive"
 cp "$src/Info.plist" "$out/OutputLiveSoak.app/Contents/Info.plist"
 codesign --force --sign - --identifier com.familycompanion.outputlive.soak "$out/OutputLiveSoak.app" >/dev/null
 printf '已构建20分钟合成播放验证客户端（不启用麦克风）\n'

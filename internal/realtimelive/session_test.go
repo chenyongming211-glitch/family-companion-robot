@@ -180,8 +180,8 @@ func TestLateOldFailureDoesNotInterruptNewReply(t *testing.T) {
 	}
 }
 func TestOrderlyClientExitDoesNotCreateProviderErrors(t *testing.T) {
-	for _, normalClose := range []bool{false, true} {
-		t.Run(map[bool]string{false: "stop", true: "normal_close"}[normalClose], func(t *testing.T) {
+	for _, mode := range []string{"stop", "normal_close", "transport_close"} {
+		t.Run(mode, func(t *testing.T) {
 			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				c, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 				if e != nil {
@@ -210,7 +210,9 @@ func TestOrderlyClientExitDoesNotCreateProviderErrors(t *testing.T) {
 			if e := client.ReadJSON(&ready); e != nil {
 				t.Fatal(e)
 			}
-			if normalClose {
+			if mode == "transport_close" {
+				client.Close()
+			} else if mode == "normal_close" {
 				client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(1000, ""), time.Now().Add(time.Second))
 			} else {
 				client.WriteJSON(map[string]any{"type": "stop"})

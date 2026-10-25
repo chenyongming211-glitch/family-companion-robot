@@ -1,0 +1,103 @@
+{
+  "code_under_comparison": "636ac95",
+  "input": "synthetic realtime-paced Opus",
+  "playback_basis": "CoreAudio_dataPlayedBack",
+  "timing": "server VAD speech_stopped to first packet, ms",
+  "backends": {
+    "go": {
+      "ordinary": {
+        "n": 16,
+        "median_ms": 998.5,
+        "min_ms": 846,
+        "max_ms": 1267
+      },
+      "drain": {
+        "n": 12,
+        "all_equal_sent_completed": true,
+        "median_ms": 279.0,
+        "max_ms": 305
+      },
+      "new_question_after_interrupt": {
+        "n": 12,
+        "median_ms": 1023.5,
+        "max_ms": 1217
+      },
+      "search": [
+        {
+          "session": "20261025T050238-ad8b3fbc",
+          "samples": [
+            {
+              "id": 1,
+              "count": 1,
+              "strategy": "agent",
+              "sources": 17
+            }
+          ],
+          "latency": [
+            {
+              "id": 1,
+              "speech_stop_to_packet_ms": 2831
+            },
+            {
+              "id": 2,
+              "speech_stop_to_packet_ms": 871
+            },
+            {
+              "id": 3,
+              "speech_stop_to_packet_ms": 1064
+            }
+          ]
+        }
+      ],
+      "turn_or_drain_error_events": []
+    },
+    "python": {
+      "ordinary": {
+        "n": 16,
+        "median_ms": 1038.5,
+        "min_ms": 893,
+        "max_ms": 1163
+      },
+      "drain": {
+        "n": 12,
+        "all_equal_sent_completed": true,
+        "median_ms": 278.0,
+        "max_ms": 312
+      },
+      "new_question_after_interrupt": {
+        "n": 12,
+        "median_ms": 1010.0,
+        "max_ms": 1316
+      },
+      "search": [
+        {
+          "session": "20261025T130319-2d7df905",
+          "samples": [
+            {
+              "id": 1,
+              "count": 1,
+              "strategy": "agent",
+              "sources": 17
+            }
+          ],
+          "latency": [
+            {
+              "id": 1,
+              "speech_stop_to_packet_ms": 2578
+            },
+            {
+              "id": 2,
+              "speech_stop_to_packet_ms": 932
+            },
+            {
+              "id": 3,
+              "speech_stop_to_packet_ms": 1199
+            }
+          ]
+        }
+      ],
+      "turn_or_drain_error_events": []
+    }
+  },
+  "audit_note": "636ac95 misclassified successful client teardown as input_failed/session_error; corrected separately. These events are not silently counted as successful provider health."
+}

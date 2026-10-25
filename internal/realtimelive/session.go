@@ -236,10 +236,15 @@ func (s *Session) Run() (err error) {
 		s.ws.SetReadDeadline(time.Time{})
 		kind, b, e := s.ws.ReadMessage()
 		if e != nil {
-			if websocket.IsCloseError(e, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return nil
+			// aiohttp's client iterator ends on transport close/error. Preserve
+			// that boundary; parsing/codec/receipt failures still return errors.
+			fields := map[string]any{}
+			var closeError *websocket.CloseError
+			if errors.As(e, &closeError) {
+				fields["close_code"] = closeError.Code
 			}
-			return e
+			s.record("transport_closed", fields)
+			return nil
 		}
 		if kind == websocket.BinaryMessage {
 			pcm, e := codec.Decode(b)
