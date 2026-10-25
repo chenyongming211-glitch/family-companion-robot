@@ -4,7 +4,18 @@
 
 当前先听排空策略：让它讲一个故事，播放中插问“2加3等于几”；听旧尾音多久停、新回答多久开始。之后说“继续刚才的故事”，核对语义衔接。也可以用数数核对候选断点，实现没有计数专用规则。准确接续位置仍未验收。
 
-这是独立实验，不是18030日常入口。云端18032回环、一次性票据、单个连接、拒绝浏览器Origin。Mac只构建/运行客户端；Key只留服务器，不安装依赖。依赖已有Python3.12/aiohttp/libopus与Mac Xcode/libopus。使用audioop，未适配Python3.13。
+当前保留两个独立入口：Go测试版云端18040、Python对照版云端18032。默认启动器仍指向Python，等标识清楚后的真人对比确认再切换。一次性票据、单会话、拒绝浏览器Origin保持，Mac只构建/运行客户端，Key仅留服务器。
+
+两个窗口使用不同标题和常驻标识：**蓝色Go测试版（18040）**在左，**橙色Python对照版（18032）**在右。先结束一个窗口的对话，再开始另一个；窗口由用户自行关闭。标签中的云端端口来自启动器的远端映射，不能只看本地转发端口猜后端。Go标签由health.backend确认；保留的Python基线通过受控18032映射与其health签名识别，无法确认时显示“未核对入口”。
+
+```sh
+# Go独立测试
+OUTPUT_LIVE_LOCAL_PORT=18040 OUTPUT_LIVE_REMOTE_PORT=18040 ./tools/realtime-output-live/open.command
+# Python对照（本地18042仍映射云端18032）
+OUTPUT_LIVE_LOCAL_PORT=18042 OUTPUT_LIVE_REMOTE_PORT=18032 ./tools/realtime-output-live/open.command
+```
+
+SSH ControlMaster仍通过`REALTIME_NATIVE_SSH_CONTROL`指定。Go服务不调用Python；本说明中的Python函数/命令是保留基线的参考实现，Go对应`internal/realtimelive`、`internal/realtimestate`和`internal/realtimeaudio`。验证和时延边界见[迁移验证](../../docs/verification/2026-10-25-realtime-go-migration.md)。
 
 ## 数据路径与差别
 
@@ -34,15 +45,15 @@ Mac Voice Processing持续收音，16k/20ms Opus上传；云端原生千问连�
 
 语音聊天、一般问答、故事和中英文交流可用；近期回忆与语义续讲仍在完善。内置联网搜索按下面的开关配置。当前没有全量档案检索、跨会话记忆、图片输入/分析、提醒/闹钟、设备控制或实体动作接口。服务器留存文字记录与模型能否读取以前会话分开说明，不把不可读取说成记录已删除；服务器不保存真人原音频。能力说明由模型根据问题自然组织，不保证任意问法下都不会误述，需看真实模型及终端验证。
 
-该身份文件为后续入口复用准备，当前只有18032使用；其他入口、三段式、会话历史和工具没有因此合并或改名。见[身份方案](../../docs/superpowers/specs/2026-10-25-xiaoman-identity-design.md)。
+Go18040与保留的Python18032都加载该身份文件；其他入口、三段式、会话历史和工具没有因此合并或改名。见[身份方案](../../docs/superpowers/specs/2026-10-25-xiaoman-identity-design.md)。
 
 ## 内置联网搜索
 
-18032默认开启`enable_search`，并请求`search_options.enable_source=true`。模型自行决定需要搜索的问题；不增加外部文本LLM或强制每轮查询。仅生成连接联网，VAD/转写监听连接明确关闭。每轮核对服务端配置确认，使用实际搜索计量和来源记录验证查询，不把模型自称查过当作证据。
+Go18040和Python18032默认开启`enable_search`，并请求`search_options.enable_source=true`。模型自行决定需要搜索的问题；不增加外部文本LLM或强制每轮查询。仅生成连接联网，VAD/转写监听连接明确关闭。每轮核对服务端配置确认，使用实际搜索计量和来源记录验证查询，不把模型自称查过当作证据。
 
 搜索次数、策略与返回来源保存在服务器私有intent及`events.jsonl`的`native_search`事件，普通日志不打印链接/正文。当前窗口不新增来源列表UI，模型可自然回答来源问题；元数据处理不阻断正常音频。没有返回计量不擅自记为已确认的0。
 
-服务环境可设置`OUTPUT_LIVE_ENABLE_SEARCH=0`关闭，默认值为1，重启18032后生效；无需修改模型Key配置。该开关不改变其他入口或旧探针默认行为。官方要求内置搜索与`tools`互斥，后续工具接入及Go迁移须处理此限制。
+服务环境可设置`OUTPUT_LIVE_ENABLE_SEARCH=0`关闭，默认值为1，重启对应入口后生效；无需修改模型Key配置。该开关不改变其他入口或旧探针默认行为。官方要求内置搜索与`tools`互斥，后续工具接入及Go迁移须处理此限制。
 
 搜索会增加等待，真实查询结果也可能混合预报/实况，不能仅因有来源就认为天气数据已核实为实时观测。其他选项及版本限制见[配置清单](../../docs/verification/2026-10-25-realtime-config-switches.md)，实测见[搜索验证](../../docs/verification/2026-10-25-realtime-search.md)。
 
@@ -50,7 +61,9 @@ Mac Voice Processing持续收音，16k/20ms Opus上传；云端原生千问连�
 
 ## 云端运行与记录
 
-在服务器checkout根目录使用既有环境：
+当前Go服务为`family-robot-realtime-output-go.service`，回环18040；部署单元在`deploy/`，启动文件为`cmd/realtime-output-live/`。仅在云端构建/运行；Mac不启动语音服务。当前Go私有文字/Intent目录为`/var/lib/family-robot-realtime-test/verification/output-live-go/`。默认搜索开关保持`OUTPUT_LIVE_ENABLE_SEARCH=1`。
+
+下面是仍保留的Python基线命令，在服务器checkout根目录使用既有环境：
 
 ```sh
 /opt/family-robot-livekit-runtime/venv/bin/python -m unittest discover -s tools/realtime-output-live -v

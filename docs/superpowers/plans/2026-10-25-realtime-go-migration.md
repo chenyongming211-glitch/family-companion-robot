@@ -38,7 +38,7 @@ Files: `internal/realtimelive/{session,server}.go`、`cmd/realtime-output-live/m
 - [x] 受控传输测试：首PCM后上游挂起仍先发包；封口锁包含在途包；旧音频不越过drain；新轮等待排空，3秒缺确认断开；后续新问题可回复；取消不重复请求。
 - [x] HTTP测试：120秒一次票据、Origin、并发单会话、8192消息、错误receipt和关窗清理；实际CoreAudio basis不伪造。
 - [x] 保留100/1002/1024队列、7200样本窗口、1.2秒ASR结算、120ms安全余量、输入25秒上限；不改变历史回收或同步日志。
-- [ ] 云端 `go test -race ./...`、`go vet ./...`、`go build ./...`；原Python49+probe8测试回归。
+- [x] 云端 `go test -race ./...`、`go vet ./...`、`go build ./...`；原Python49+probe8测试回归。
 - [x] 再确认18040空闲，独立部署、不同日志目录；18032与原四服务保持。
 
 ## 5. 对照与切换门槛
@@ -46,8 +46,8 @@ Files: `internal/realtimelive/{session,server}.go`、`cmd/realtime-output-live/m
 Files: `tools/realtime-output-live/open.command`、`docs/verification/2026-10-25-realtime-go-migration.md`、`docs/DEVELOPMENT_HANDOFF.md`。
 
 - [x] 启动器增加远端端口选择，默认仍18032，Swift音频/播放器代码不改。
-- [ ] 同Mac交替对照普通问答、搜索、回查、插话/排空、重连，记录分组时延、失败和配置；至少30普通轮、10排空、20分钟持续会话。
+- [x] 同Mac交替对照32普通轮、每边12排空、搜索与重连，记录分组时延；用户后来取消满20分钟等待，长测按实际约18分4秒/32轮记录，不声称20分钟通过。历史/语义续讲体验纳入真人复验。
 - [ ] 合成CoreAudio与真人听感分别记录。普通问答中位退化超过max(100ms,10%)先调查复测，不测后放宽。
-- [ ] Go结束→Python新会话配对/播放实际回退演练。
+- [x] Go结束→Python新会话配对/播放实际回退演练。
 - [ ] 真人复验及所有功能证据满足前不切默认、不停Python；切换与停旧服务分开。
-- [ ] 分阶段提交推送main，报告准确区分已完成与待验收。
+- [x] 分阶段提交推送main，报告准确区分已完成与待验收。

@@ -1,0 +1,20 @@
+{
+  "implementation": "b6f6ebd",
+  "session": "20261025T050820-dbdde09c",
+  "duration_definition": "server first speech_started to closed",
+  "duration_seconds": 1084.305,
+  "inputs": 32,
+  "fully_played": 32,
+  "all_sent_accepted_completed_equal": true,
+  "max_restored_turns": 16,
+  "older_omitted_observed": true,
+  "error_events": [],
+  "end_reason": "user requested stop; 20-minute requirement waived before completion",
+  "client_exit": 143,
+  "transport_close_codes": [
+    1006
+  ],
+  "raw_audio_saved": false,
+  "human_microphone_test": false,
+  "stability_load_note": "Cloud unit tests also ran during part of this session; this is stability evidence, not a performance or capacity comparison."
+}

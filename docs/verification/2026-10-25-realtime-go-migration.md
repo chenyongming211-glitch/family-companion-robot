@@ -1,8 +1,8 @@
-# Realtime Go 迁移验证（进行中）
+# Realtime Go 迁移验证（自动验证完成，待真人验收）
 
 ## 当前边界
 
-方案5417671已审核；冻结Python版本3b89df8，Go实现636ac95，依赖/公开文件摘要见[冻结清单](2026-10-25-realtime-go-baseline.json)。独立Go服务18040已部署，默认18032仍Python，原8000/18010/18020/18030均保持。尚未切换日常入口或停用Python，不宣称迁移验收完成。
+方案5417671已审核；冻结Python版本3b89df8，初始Go实现636ac95，当前运行实现b6f6ebd，依赖/公开文件摘要见[冻结清单](2026-10-25-realtime-go-baseline.json)。独立Go服务18040已部署，默认18032仍Python，原8000/18010/18020/18030均保持。尚未切换日常入口或停用Python，不宣称迁移验收完成。
 
 ## 确定性与受控传输
 
@@ -10,18 +10,24 @@
 - 新`realtimestate`：494组Python差异用例，固定北京时间完整提示词字节相同；覆盖近期16轮、数字规范化、ASR观察、未播稿隔离和严格receipt。race/vet通过，覆盖88.6%。
 - 新`realtimelive`：请求字段、搜索确认/异常来源、意图先落盘、票据/Origin/单会话、首包流式、排空栅栏、取消及失败恢复测试通过。独立审查增加8项短回归×10次、41秒慢建连/首音频预算和65秒静默/心跳回归，race通过。
 - 审查修复：监听不继承生成事件35秒超时；下发/ASR feed与封口同锁；旧任务失败只可封口同一回复；Open不侵占40秒包等待；ASR完成先join发送端；退出等待活动会话清理。
-- 云端全仓`go vet ./...`、`go build ./...`通过。`go test -race ./...`未全绿：未修改的旧gateway在两次全跑中出现清空会话相关测试不稳定，见下方；不能写成全库通过。
+- 最终完整云端副本与仓库17个Go包清单一致：`go test -json -race ./...`通过（580通过、0失败、2个既有opt-in长测跳过；这2项此前已单独以41秒/65秒实测通过），`go vet ./...`、`go build ./...`通过。初期旧gateway测试失败及测试夹具修正见下方，不隐去失败记录。
 - Python旧入口49项＋原probe8项仍通过。新服务核心无Python调用或跨语言IPC，Python仅用于测试oracle与保留对照服务。
 
-## 旧gateway测试限制
+## 独立的旧gateway测试夹具修复
 
-全仓第1次失败`TestRecordsDisconnectDuringClearKeepsDeviceLease`；第2次另出现`TestClearUsesFreshNativeConversation/true`。前一项在冻结3b89df8未修改仓库重复30次也复现，静态分析指向fixture复用队列中残留的已取消模型连接，尚未修改；后者在基线单独重复10次通过。当前Go迁移没有改`internal/gateway`、旧`internal/qwen`或旧`internal/audio`；这两项全套压力下的不稳定仍需单列调查，不用重复跑到绿掩盖失败，也不在本轮顺手改旧清空逻辑。
+初期验证出现`TestRecordsDisconnectDuringClearKeepsDeviceLease` EOF、`TestClearUsesFreshNativeConversation/true`超时。冻结3b89df8的第一项也可复现；独立验证副本修正前30次race重复失败16次。
+
+测试修正提交818189a只改`records_test.go`和`clear_native_test.go`，不改gateway/qwen/audio运行代码或业务断言。前一项明确消费、握手并观察被取消的clear替换连接，避免残留peer被错认成设备重连；在Clear仍阻塞时保留409断言，再用session完成屏障替代20ms等待和反复拨号。后一helper对设备/提供方双socket注入增加manual→auto配置请求屏障，仍以auto模式执行原断言。独立审查确认无断言弱化。
+
+修正后目标pair race重复100次通过，全部TestClear*消费者重复10次通过；最终完整17包race、vet、build均通过。真正的uncached全跑中gateway耗时52.4秒，最终门禁在适用时使用测试缓存。初期验证副本漏`tools/voice-audit`/Python参考文件，以及一次备份目录误入包枚举，均作为setup失败留存；最终改用完整git archive，核对清单一致后验证，不能拿不完整副本冒称全仓通过。
+
+云端证据：`/opt/family-robot-livekit-validation/go-migration-ci/`中的red.log、scoped-race.log、clear-helpers-race.log、full-snapshot-race.jsonl、full-vet.log、full-build.log及package inventory。全量私有日志不进Git。
 
 ## 真实模型与播放
 
-最初Go/CoreAudio烟测2轮通过：数学与小满身份，2次完整播放，0客户端错误。普通问答交替完成32轮（Go/Python各16），客户端0错误。服务端VAD话尾至首包：Go中位998.5ms、范围846—1267ms；Python中位1038.5ms、范围893—1163ms。未触发max(100ms,10%)诊断线，不宣称Go普遍提速或P95领先。插话排空与搜索的交替验证也已完成，详细数值见[对照JSON](2026-10-25-realtime-go-comparison.json)；接下来做20分钟持续连接测试；全部使用合成输入及真实CoreAudio回报，不代表真人麦克风/AEC或主观自然度验收。
+最初Go/CoreAudio烟测2轮通过：数学与小满身份，2次完整播放，0客户端错误。普通问答交替完成32轮（Go/Python各16），客户端0错误。服务端VAD话尾至首包：Go中位998.5ms、范围846—1267ms；Python中位1038.5ms、范围893—1163ms。未触发max(100ms,10%)诊断线，不宣称Go普遍提速或P95领先。插话排空与搜索的交替验证也已完成，详细数值见[对照JSON](2026-10-25-realtime-go-comparison.json)；长测结果见下面；全部使用合成输入及真实CoreAudio回报，不代表真人麦克风/AEC或主观自然度验收。
 
-636ac95的审计曾将正常关窗记成`input_failed/session_error`（每次退出出现），不是这些轮次的真实提供方失败。已用可复现测试修正：正常stop/1000/1001与会话取消后的收音清理不记故障；活跃会话的提供方/协议错误仍保留。新回归race通过，独立复审无P1/P2；待当前批次空闲再更新二进制。
+636ac95的审计曾将正常关窗记成`input_failed/session_error`（每次退出出现），不是这些轮次的真实提供方失败。已用可复现测试修正：正常stop/1000/1001与会话取消后的收音清理不记故障；活跃会话的提供方/协议错误仍保留。新回归race通过，独立复审无P1/P2；修正已在空闲时更新，当前b6f6ebd实际退出验证见下文。
 
 ### 完成的交替对照
 
@@ -43,11 +49,23 @@
 
 ## 部署
 
-- 云端源码与二进制：636ac95；服务`family-robot-realtime-output-go.service`，初始PID905326，回环18040。
+- 云端运行二进制：b6f6ebd（go version -m确认vcs.modified=false）；服务`family-robot-realtime-output-go.service`，当前PID918937，回环18040。后续提交仅文档/测试，不因此重启正在测试的服务。
 - 模型/Key只读服务器`/etc/family-robot/realtime-test.env`，小满档案仍`config/product-identity.json`，搜索默认1。原Python服务PID874598保持。
 - Go私有文字/Intent：`/var/lib/family-robot-realtime-test/verification/output-live-go/`；Python仍原`output-live/`。不共写文件，不存原音频，不在Git提交正文或凭据。
 - 启动器新增`OUTPUT_LIVE_REMOTE_PORT`；缺省仍18032。Mac音频/Opus/播放回报源码不变。新入口必须同时核对本地转发目标与`/healthz.backend=go`。
 
-## 未通过前禁止切换
+## 持续会话与用户调整
 
-功能逐项、普通/搜索等分组时延、10次排空、20分钟持续会话、回退演练和真人听感均需有证据；诊断线保持max(100ms,10%)。模型已知的天气/能力/缺失历史/候选误差不算语言迁移修复。正式设备、跨会话记忆、判题和精确同稿恢复均不在本轮。
+会话`20261025T050820-dbdde09c`完成32输入、32次CoreAudio完整播放，下发/接收/完成样本全部相等；最大恢复16轮，older_turns_omitted实际出现。身份插入第8/32轮仍为小满，第16轮表示开发者资料未提供，第24轮区分千问模型与阿里云来源。没有turn_error、drain_timeout、input_failed、session_error。
+
+用户在32轮完成后明确要求“不用满20分钟了，继续后面的吧”，因此提前结束。服务端首次speech_started至closed为1084.305秒（约18分4秒），**不记为20分钟通过**。终止测试进程退出143，transport_closed保留1006；这是本次用户要求结束的证据，不改成客户端fixture_success。详见[长测数据](2026-10-25-realtime-go-soak.json)。
+
+长测调度器只在忽略目录生成测试用Fixture副本，扩展轮数/间隔及等待；正式Swift音频、Opus、播放ledger和LiveClient源码不改。输入全部合成，真实CoreAudio播放；测试后半程同时有云端单测负载，不能用它宣称性能或容量。服务器日志只保存文字和来源，不存原音频。
+
+## 真人标识问题与默认入口
+
+当前自动对照、每边12次排空、实际搜索、按新会话回退和用户调整后的长测已记录；普通问答诊断线保持max(100ms,10%)。Go真人收音/AEC、主观自然度、故事续讲体验及连续追问仍待用户复验；因此不切默认、不停Python。模型已知的天气/能力/缺失历史/候选误差不算语言迁移修复。正式设备、跨会话记忆、判题和精确同稿恢复均不在本轮。
+
+用户曾回复“体验基本一致”，随后指出两个相同标题的窗口无法区分。因此该反馈不作为已确认Go来源的真人验收结论，未提交默认切换；启动器和无参数客户端缺省仍18032。
+
+已修正测试UI：标题栏与窗口内均常驻“Go测试版·云端18040”（蓝色、左侧）或“Python对照版·云端18032”（橙色、右侧）；标签取启动器的远端映射与健康信息，其他入口不擅自命名。正式音频、Opus、播放ledger及LiveClient源码没有改动。Swift重新编译、bash语法检查通过，原生AX/截图已核对Python标题及橙色常驻标识，Go进程以明确Go/18040参数启动在左侧。两个窗口已重新打开供明确对照，由用户自行关闭；不同时收音。当前等待标识清楚后的真人反馈，Python回退与原四服务保持。
