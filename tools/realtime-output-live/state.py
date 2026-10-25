@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'realtime-output-probe'))
 from alignment import PrefixTracker
+from history import playback_evidence, is_reference_answer
 
 
 class AudioRing:
@@ -72,8 +73,16 @@ class Turn:
 def context_for(turns):
     result = []
     for turn in turns[-16:]:
-        candidate = turn.prefix()
-        result.append({'user': turn.user[:2048] or '[原始语音已交给模型，文字转写尚未就绪]',
-            'assistant_spoken_prefix': candidate['prefix'],
-            'position': candidate['status'], 'interrupted': turn.cut})
-    return json.dumps({'recent_turns': result, 'older_turns_omitted': len(turns) > 16}, ensure_ascii=False)
+        evidence = playback_evidence(turn)
+        complete = evidence['boundary'] == 'complete_response'
+        prefix = evidence['spoken_text'] if complete else evidence['aligned_prefix']
+        result.append({'id': turn.id,
+            'user': turn.user[:2048] or '[原始语音已交给模型，文字转写尚未就绪]',
+            'assistant_spoken_prefix': prefix,
+            'position': 'complete' if complete else 'candidate' if prefix else 'unknown',
+            'playback_evidence': evidence, 'interrupted': turn.cut,
+            'record_role': 'reference_answer_not_source_progress' if is_reference_answer(turn.user) else 'source_content'})
+    source_records = [{'id': item['id'], 'user_request': item['user'], 'playback_evidence': item['playback_evidence']}
+        for item in result if item['record_role'] == 'source_content']
+    return json.dumps({'recent_turns': result, 'older_turns_omitted': len(turns) > 16,
+        'source_playback_records': source_records}, ensure_ascii=False)
