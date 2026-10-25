@@ -34,7 +34,10 @@ public:
     virtual void SetPowerSaveMode(bool){}
     virtual void ShowNotification(const char*,int=3000){notification.hidden=false;status.hidden=true;}
     virtual void ShowNotification(const std::string&,int=3000){}
-    virtual void SetPreviewImage(std::unique_ptr<LvglImage> p){preview.hidden=!p;}
+    virtual void SetPreviewImage(std::unique_ptr<LvglImage> p){
+        preview.hidden=!p;
+        emoji.hidden=bool(p); // matches pinned LcdDisplay: preview owns emoji visibility
+    }
     virtual void SetTheme(Theme* p){current_theme_=p;}
 };
 namespace family_robot {
@@ -49,7 +52,7 @@ public:
     bool Update(OrbFacts f){f.screen_on=screen&&!save;last=f;return shown=model.Update(f).phase!=OrbPhase::Hidden;}
 };
 }
-enum DeviceState{kDeviceStateIdle,kDeviceStateConnecting,kDeviceStateListening,kDeviceStateSpeaking,kDeviceStateWifiConfiguring};
+enum DeviceState{kDeviceStateIdle,kDeviceStateConnecting,kDeviceStateListening,kDeviceStateSpeaking,kDeviceStateNotifying,kDeviceStateWifiConfiguring};
 struct AudioServiceFake {family_robot::OrbAudioActivity facts{};family_robot::OrbAudioActivity GetOrbAudioActivity(){++audio_reads;return facts;}};
 struct Application {
     DeviceState state=kDeviceStateIdle;AudioServiceFake audio;
@@ -104,8 +107,17 @@ int main(){
     display.SetPowerSaveMode(false);assert(display.OrbShown());
     display.battery.hidden=false;display.SetEmotion("happy");assert(!display.OrbShown());
     display.battery.hidden=true;display.SetEmotion("happy");assert(display.OrbShown());
-    display.SetPreviewImage(std::make_unique<LvglImage>());assert(!display.OrbShown());
+    display.SetPreviewImage(std::make_unique<LvglImage>());
+    assert(!display.OrbShown() && display.emoji.hidden);
+    display.SetStatus("preview active");
+    assert(!display.OrbShown() && display.emoji.hidden);
     display.SetPreviewImage(nullptr);assert(display.OrbShown());
+    app.state=kDeviceStateNotifying;display.SetStatus("notifying");assert(!display.OrbShown());
+    const auto notification_writes=display.chat_writes;
+    display.SetChatMessage("assistant","existing notification text");
+    assert(display.chat_writes==notification_writes+1 && !display.bottom.hidden);
+    app.state=kDeviceStateIdle;display.SetChatMessage("assistant","stale conversation reply");
+    assert(display.chat_writes==notification_writes+1);
     app.state=kDeviceStateWifiConfiguring;display.SetStatus("setup");assert(!display.OrbShown());
     app.state=kDeviceStateIdle;display.SetStatus("clock");assert(!display.OrbShown()&&!display.status.hidden);
     // Observer getter uses actual gate and current capture, and fails closed on

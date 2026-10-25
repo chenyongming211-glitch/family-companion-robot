@@ -30,7 +30,9 @@ private:
             if(bottom_bar_) lv_obj_add_flag(bottom_bar_,LV_OBJ_FLAG_HIDDEN);
             if(status_label_) lv_obj_add_flag(status_label_,LV_OBJ_FLAG_HIDDEN);
         } else {
-            if(emoji_box_) lv_obj_remove_flag(emoji_box_,LV_OBJ_FLAG_HIDDEN);
+            // LcdDisplay hides the emoji while a preview owns the centre.
+            // Yielding the orb must not reverse that existing ownership.
+            if(emoji_box_ && !visible(preview_image_)) lv_obj_remove_flag(emoji_box_,LV_OBJ_FLAG_HIDDEN);
             if(status_label_ && !visible(notification_label_)) lv_obj_remove_flag(status_label_,LV_OBJ_FLAG_HIDDEN);
         }
     }
@@ -46,7 +48,11 @@ public:
         SpiLcdDisplay::SetEmotion(emotion); RefreshOrb();
     }
     void SetChatMessage(const char* role,const char* content) override {
-        if(role && (std::strcmp(role,"user")==0 || std::strcmp(role,"assistant")==0)) return;
+        const bool assistant=role && std::strcmp(role,"assistant")==0;
+        const bool conversation=role && (std::strcmp(role,"user")==0 || assistant);
+        // Existing notification pages use the assistant role for their text.
+        // Ordinary/stale chat transcripts stay hidden outside that page too.
+        if(conversation && !(assistant && Application::GetInstance().GetDeviceState()==kDeviceStateNotifying)) return;
         {DisplayLockGuard lock(this);
             orb_system_text_=content && content[0];
             SpiLcdDisplay::SetChatMessage(role,content);
