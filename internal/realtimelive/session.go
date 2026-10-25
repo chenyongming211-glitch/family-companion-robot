@@ -408,6 +408,19 @@ func (s *Session) receiveReceipt(event map[string]any) error {
 		basis = "i2s_dma"
 	}
 	if err != nil || !rt.turn.ReceiptWithBasis(normalized, basis) {
+		if device {
+			// Keep bounded protocol evidence, never arbitrary client fields or
+			// provider messages, when an invalid hardware receipt closes a session.
+			fields := map[string]any{"id": rt.turn.ID, "sent": rt.turn.Sent, "completed": rt.turn.Completed,
+				"raw_played_samples": event["played_samples"], "valid": event["valid"],
+				"interrupted": event["interrupted"], "state": event["state"]}
+			if err != nil {
+				fields["reason"] = err.Error() // Adapter errors are fixed local codes.
+			} else {
+				fields["reason"] = "playback_ledger_rejected"
+			}
+			s.record("playback_rejected", fields)
+		}
 		s.mu.Unlock()
 		return errors.New("invalid_playback_receipt")
 	}
