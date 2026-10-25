@@ -44,6 +44,7 @@ class Session:
         self.changed = asyncio.Event()
         self.send_lock = asyncio.Lock()
         self.closed = False
+        self.drain_timeout = 3.0
 
     def record(self, event, **fields):
         with os.fdopen(os.open(self.directory / 'events.jsonl',
@@ -54,9 +55,13 @@ class Session:
         async with self.send_lock:
             await self.ws.send_json(event)
 
-    async def binary(self, identity, packet):
+    async def binary(self, turn, packet):
         async with self.send_lock:
-            await self.ws.send_bytes(struct.pack('!I', identity) + packet)
+            if turn.cut or self.closed:
+                return False
+            turn.sent += 1440
+            await self.ws.send_bytes(struct.pack('!I', turn.id) + packet)
+            return True
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -90,9 +95,11 @@ class Session:
                         if turn is None or not turn.receipt(event):
                             raise ValueError('invalid_playback_receipt')
                         self.changed.set()
-                        if event.get('terminal') in ('cut', 'played'):
+                        if event.get('terminal') in ('drained', 'played'):
                             self.record('playback', id=turn.id, terminal=event['terminal'],
-                                completed=turn.completed, accepted=turn.accepted, sent=turn.sent)
+                                completed=turn.completed, accepted=turn.accepted, sent=turn.sent,
+                                drain_ms=(round((time.monotonic() - turn.drain_started) * 1000)
+                                    if event['terminal'] == 'drained' else None))
                     elif event.get('type') == 'stop':
                         break
                     else:
@@ -128,15 +135,34 @@ class Session:
         if turn.sent and turn.completed == turn.sent and self.reply_task and self.reply_task.done():
             self.output = None
             return
-        turn.cut = True
+        # The packet already holding send_lock is included. No later old packet
+        # can pass this seal, including one blocked on the playback window.
+        async with self.send_lock:
+            turn.seal_for_drain()
+            turn.drain_started = time.monotonic()
+            self.output = None
+            if self.reply_task and not self.reply_task.done() and self.reply_task is not asyncio.current_task():
+                self.reply_task.cancel()
+            if turn.begun:
+                await self.ws.send_json({'type': 'drain', 'id': turn.id, 'sent': turn.drain_target})
+            else:
+                turn.drain_done.set()
         if getattr(turn, 'asr', None):
             turn.asr.finish()
-        if self.reply_task and not self.reply_task.done():
-            self.reply_task.cancel()
-        await self.send({'type': 'cut', 'id': turn.id})
+        if turn.begun:
+            self.spawn(self.watch_drain(turn))
         self.record('interrupt', id=turn.id, sent=turn.sent, completed_before_receipt=turn.completed)
         meta('live.interrupt', id=turn.id, sent_ms=turn.sent // 24)
-        self.output = None
+
+    async def watch_drain(self, turn):
+        try:
+            await asyncio.wait_for(turn.drain_done.wait(), self.drain_timeout)
+        except TimeoutError:
+            # Unknown playback must not be converted into success or overlap.
+            self.record('drain_timeout', id=turn.id, sent=turn.sent, completed=turn.completed)
+            self.closed = True
+            await self.send({'type': 'status', 'code': 'drain_failed'})
+            await self.ws.close(code=1011, message=b'playback_drain_timeout')
 
     async def listen_events(self):
         while True:
@@ -184,6 +210,14 @@ class Session:
                     meta('live.user_text', id=turn.id, characters=len(text))
 
     async def settle(self, turn):
+        # Snapshot restored context only after all already released old audio
+        # has completed. Input capture remains live throughout this wait.
+        drains = [t.drain_done.wait() for t in self.history if t is not turn
+            and t.drain_target is not None and not t.drain_done.is_set()]
+        if drains:
+            await asyncio.gather(*drains)
+        if self.closed or turn.cut:
+            raise asyncio.CancelledError()
         waiting = [t.asr.done.wait() for t in self.history[-17:] if t is not turn and getattr(t, 'asr', None) and not t.asr.done.is_set()]
         started = time.monotonic()
         if waiting:
@@ -206,7 +240,6 @@ class Session:
         native = StreamingNative(self.cfg, self.directory)
         codec, producer = Opus(24000, 1440), None
         turn.asr = None
-        begun = False
         try:
             context = await self.settle(turn)
             await self.send({'type': 'status', 'code': 'thinking'})
@@ -250,23 +283,30 @@ class Session:
                 while not turn.can_send():
                     self.changed.clear()
                     await asyncio.wait_for(self.changed.wait(), 5)
-                if not begun:
-                    await self.send({'type': 'begin', 'id': turn.id})
-                    begun = True
+                if not turn.begun:
+                    async with self.send_lock:
+                        if turn.cut or self.closed:
+                            return
+                        turn.begun = True
+                        await self.ws.send_json({'type': 'begin', 'id': turn.id})
                     def final_sentence(sentence, elapsed):
                         turn.tracker.add(sentence, elapsed)
                         self.record('output_asr_final', id=turn.id, elapsed_ms=elapsed, sentence=sentence)
                     turn.asr = OutputASR(self.cfg, self.directory, final_sentence)
                     meta('live.first_packet', id=turn.id,
                         speech_stop_to_packet_ms=round((time.monotonic() - turn.stopped_at) * 1000))
-                turn.sent += 1440
-                await self.binary(turn.id, packet)
+                if not await self.binary(turn, packet):
+                    return
                 # Only released audio enters ASR. No future generated PCM is fed here.
                 decoded = codec.decode(packet)
                 converted, rate_state = audioop.ratecv(decoded, 2, 1, 24000, 16000, rate_state)
                 turn.asr.feed(converted)
             if not turn.cut:
-                await self.send({'type': 'end', 'id': turn.id, 'generated_text': turn.generated})
+                async with self.send_lock:
+                    if turn.cut or self.closed:
+                        return
+                    turn.ended = True
+                    await self.ws.send_json({'type': 'end', 'id': turn.id, 'generated_text': turn.generated})
                 self.record('generated', id=turn.id, text=turn.generated, sent=turn.sent)
         except asyncio.CancelledError:
             self.record('generated_interrupted', id=turn.id, text=turn.generated, sent=turn.sent)
@@ -275,9 +315,8 @@ class Session:
             self.record('turn_error', id=turn.id, error_type=type(error).__name__)
             meta('live.turn_error', id=turn.id, error_type=type(error).__name__)
             if self.output is turn:
-                await self.send({'type': 'cut', 'id': turn.id})
+                await self.interrupt()
                 await self.send({'type': 'status', 'code': 'turn_failed'})
-                self.output = None
         finally:
             if producer:
                 producer.cancel()

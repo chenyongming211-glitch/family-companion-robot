@@ -1,4 +1,5 @@
 """Bounded sample timelines and conservative, played-only text context."""
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -32,19 +33,34 @@ class Turn:
         self.user = self.generated = ''
         self.sent = self.completed = self.accepted = 0
         self.cut = False
+        self.begun = self.ended = False
+        self.drain_target = None
+        self.drain_done = asyncio.Event()
         self.tracker = PrefixTracker('', 0)
 
     def can_send(self):
         return not self.cut and self.sent - self.completed < 7200
 
+    def seal_for_drain(self):
+        if self.drain_target is None:
+            self.cut = True
+            self.drain_target = self.sent
+
     def receipt(self, event):
         completed, accepted = event.get('completed'), event.get('accepted')
+        terminal = event.get('terminal', 'progress')
         if (type(event.get('id')) is not int or event.get('id') != self.id or event.get('basis') != 'CoreAudio_dataPlayedBack'
                 or type(completed) is not int or type(accepted) is not int
                 or not self.completed <= completed <= accepted <= self.sent
-                or accepted < self.accepted or completed % 1440 or accepted % 1440):
+                or accepted < self.accepted or completed % 1440 or accepted % 1440
+                or terminal not in ('progress', 'played', 'drained')
+                or (terminal == 'drained' and (self.drain_target is None
+                    or completed != self.drain_target or accepted != self.drain_target))
+                or (terminal == 'played' and (not self.ended or completed != self.sent or accepted != self.sent))):
             return False
         self.completed, self.accepted = completed, accepted
+        if terminal == 'drained':
+            self.drain_done.set()
         return True
 
     def prefix(self):

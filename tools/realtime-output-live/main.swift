@@ -5,16 +5,16 @@ final class LiveApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let url: URL
     var window: NSWindow!, client: LiveClient?, generation = 0
     let button = NSButton(title: "开始对话", target: nil, action: nil)
-    let label = NSTextField(wrappingLabelWithString: "先让它从 1 数到 50，中途插问 2+3，再让它继续数。")
+    let label = NSTextField(wrappingLabelWithString: "点一次开始，自由聊天。播放中直接插问，听听旧尾音和新回复的间隔。")
     init(url: URL) { self.url = url }
     func applicationDidFinishLaunching(_ notification: Notification) {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 260),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "家庭陪伴 · Realtime 已播位置实验"; window.delegate = self; window.center()
+        window.title = "家庭陪伴 · Realtime 排空测试"; window.delegate = self; window.center()
         button.target = self; button.action = #selector(toggle); button.bezelStyle = .rounded
         button.font = .systemFont(ofSize: 21, weight: .medium)
         label.alignment = .center; label.font = .systemFont(ofSize: 15)
-        let note = NSTextField(labelWithString: "实验版：接续位置可能保守重述。关闭窗口即可结束测试。")
+        let note = NSTextField(labelWithString: "插话后播完已收到的音频。窗口常开，关闭窗口即可结束测试。")
         note.textColor = .secondaryLabelColor
         let content = window.contentView!
         [button, label, note].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }

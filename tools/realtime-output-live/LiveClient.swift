@@ -8,6 +8,7 @@ final class LiveClient: @unchecked Sendable {
     private var session: URLSession?, socket: URLSessionWebSocketTask?, audio: AudioPipeline?, encoder: OpusEncoder?
     private var closed = false, ready = false, sending = false
     private var active = false, sealed = false, identity = 0, accepted = 0, completed = 0
+    private var draining = false, drainStarted = 0.0
     private var outgoing: [URLSessionWebSocketTask.Message] = [], input: [Int16] = []
     private var fixture: RealtimeFixture?, outputIndex = -1, transcript = ""
     init(url: URL, plan: String? = nil) { self.url = url; self.plan = plan }
@@ -89,7 +90,7 @@ final class LiveClient: @unchecked Sendable {
                 audio.onPCM = { [weak self] in self?.inputPCM($0) }
                 audio.onFailure = { [weak self] _ in self?.fail("音频设备发生变化，请重新开始。") }
                 try audio.start(microphone: plan == nil)
-                ready = true; status?("对话中 · 可以自由说话和插话")
+                ready = true; status?("对话中 · 插话后播完已收到的尾音，再接新回复")
                 metadata("live.client_ready", ["microphone": plan == nil, "basis": "CoreAudio_dataPlayedBack"])
                 if let plan {
                     let fixture = try RealtimeFixture(path: plan, queue: queue); self.fixture = fixture
@@ -99,23 +100,31 @@ final class LiveClient: @unchecked Sendable {
                 }
             case "begin":
                 guard ready, !active, let id = event["id"] as? Int, id > identity else { throw ClientFailure("begin_identity") }
-                identity = id; accepted = 0; completed = 0; active = true; sealed = false; transcript = ""
+                identity = id; accepted = 0; completed = 0; active = true; sealed = false; draining = false; transcript = ""
                 outputIndex = fixture?.index ?? -1
                 try audio?.begin(); let token = id
                 audio?.onCompleted = { [weak self] samples in
                     guard let self, !self.closed, self.active, self.identity == token else { return }
                     guard samples >= self.completed, samples <= self.accepted else { self.fail("播放回报异常，可重新开始。"); return }
+                    if self.completed == 0 && samples > 0 {
+                        metadata("live.output_first_complete", ["id": token, "samples": samples])
+                    }
                     self.completed = samples; self.receipt()
                     if self.sealed && self.completed == self.accepted { self.played() }
                     else { self.fixture?.progress(samples: samples, outputIndex: self.outputIndex) }
                 }
                 metadata("live.output_begin", ["id": id])
-            case "cut":
-                guard let id = event["id"] as? Int else { throw ClientFailure("cut_identity") }
-                if active && id == identity {
-                    receipt(terminal: "cut"); active = false; audio?.end(); fixture?.interrupted()
-                    metadata("live.output_cut", ["id": id, "completed": completed, "accepted": accepted])
-                }
+            case "drain":
+                guard let id = event["id"] as? Int, let target = event["sent"] as? Int,
+                      id == identity, target == accepted else { throw ClientFailure("drain_boundary") }
+                // WebSocket ordering guarantees all sealed packets arrived first.
+                // Do not stop/reset the player until dataPlayedBack covers them.
+                sealed = true
+                if !draining { drainStarted = ProcessInfo.processInfo.systemUptime; draining = true }
+                metadata("live.output_drain", ["id": id, "completed": completed, "accepted": accepted,
+                    "remaining_ms": Double(accepted - completed) / 24])
+                if completed == accepted { played() }
+                else { status?("正在播完刚才的尾音 · 你可以继续说话") }
             case "end":
                 guard active, event["id"] as? Int == identity else { throw ClientFailure("end_identity") }
                 sealed = true; transcript = event["generated_text"] as? String ?? ""
@@ -126,6 +135,7 @@ final class LiveClient: @unchecked Sendable {
                 case "listening": status?("正在听…")
                 case "thinking": status?("正在回应…")
                 case "turn_failed": status?("这次回复未完成，可以继续说话。")
+                case "drain_failed": status?("未收到播放完成确认，请结束后重新开始。")
                 case "input_too_long": status?("这句话较长，请分几句说。")
                 default: break
                 }
@@ -139,10 +149,12 @@ final class LiveClient: @unchecked Sendable {
               "basis": "CoreAudio_dataPlayedBack", "terminal": terminal])
     }
     private func played() {
-        receipt(terminal: "played"); active = false; audio?.end()
-        metadata("live.output_played", ["id": identity, "samples": completed])
+        receipt(terminal: draining ? "drained" : "played"); active = false; audio?.end()
+        metadata(draining ? "live.output_drained" : "live.output_played", ["id": identity, "samples": completed,
+            "drain_ms": draining ? Int((ProcessInfo.processInfo.systemUptime - drainStarted) * 1000) : 0])
         status?("对话中 · 可以自由说话和插话")
-        fixture?.outputCompleted(index: outputIndex, generatedText: transcript)
+        if draining { fixture?.interrupted() }
+        else { fixture?.outputCompleted(index: outputIndex, generatedText: transcript) }
     }
     private func inputPCM(_ pcm: [Int16]) {
         guard ready, !closed, let encoder else { return }
