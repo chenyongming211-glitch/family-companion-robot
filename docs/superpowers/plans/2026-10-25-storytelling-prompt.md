@@ -7,5 +7,5 @@
 - [x] 修改`internal/realtimestate/differential_test.go`，instructions对照中仅给冻结Python的期望结果附加这段声明差异，其余内容逐字比较。冻结Python源码保持。
 - [x] 云端针对性及全仓`go test -race ./...`、`go vet ./...`、`go build ./...`通过。
 - [x] 对照相同合成输入/模型，检查完整故事、两种催促、插问后续讲、数学、停止和对象不清。逐条阅读结果，不仅依赖字数。
-- [ ] 空闲时云端部署18040，Mac合成输入＋真实CoreAudio验证故事、插问、续讲、已播回报及终端/会话归属。保留用户窗口。
-- [ ] 更新验证报告、DEVELOPMENT_HANDOFF及客户端说明；main提交推送，核对远端和健康状态，保留回退二进制。
+- [x] 空闲时云端部署18040，Mac合成输入＋真实CoreAudio验证故事、插问、续讲、已播回报及终端/会话归属。保留用户窗口。
+- [x] 更新验证报告、DEVELOPMENT_HANDOFF及客户端说明；main提交推送，核对远端和健康状态，保留回退二进制。
