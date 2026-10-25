@@ -23,7 +23,16 @@ func beginNativeClear(t *testing.T, h *toolHarness, old *toolPeer) {
 
 func prepareNativeClear(t *testing.T, h *toolHarness, old *toolPeer, frames int) {
 	t.Helper()
-	h.device.send(t, map[string]any{"type": "listen", "state": "start", "mode": "auto"})
+	// A write on the device socket does not order injected provider events on
+	// the other socket. Force mode updates to acknowledge both starts before
+	// supplying transcripts, ending in the same auto mode as the scenario.
+	for _, mode := range []string{"manual", "auto"} {
+		h.device.send(t, map[string]any{"type": "listen", "state": "start", "mode": mode})
+		update := old.want(t, "session.update")["session"].(map[string]any)
+		if (update["turn_detection"] == nil) != (mode == "manual") {
+			t.Fatal("start barrier did not acknowledge requested mode", update)
+		}
+	}
 	old.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "secret", "transcript": "private-before-clear"})
 	h.device.want(t, "stt")
 	old.send(t, map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "clear", "transcript": "请清空本设备对话记录"})

@@ -499,6 +499,15 @@ func TestRecordsDisconnectDuringClearKeepsDeviceLease(t *testing.T) {
 	defer g.Close()
 	server := httptest.NewServer(g.Handler())
 	defer server.Close()
+	// Release the deliberately blocked store even if a handshake assertion fails.
+	releaseClear := func() {
+		select {
+		case <-b.release:
+		default:
+			close(b.release)
+		}
+	}
+	defer releaseClear()
 	dial := func() (*websocket.Conn, *http.Response, error) {
 		return websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/xiaozhi/v1/", http.Header{"Authorization": []string{"Bearer " + testToken}, "Device-Id": []string{"c4:9e:7e:12:99:10"}})
 	}
@@ -534,26 +543,46 @@ func TestRecordsDisconnectDuringClearKeepsDeviceLease(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("clear was not dispatched")
 	}
+	// Clear replaces the native connection before the disk operation completes.
+	// Own that peer explicitly so a canceled clear socket cannot later be
+	// mistaken for the model connection belonging to the reopened device.
+	var clearPeer *toolPeer
+	select {
+	case clearPeer = <-models:
+	case <-time.After(time.Second):
+		t.Fatal("no clear replacement model")
+	}
+	defer clearPeer.c.Close()
+	clearPeer.send(t, map[string]any{"type": "session.created"})
+	clearPeer.want(t, "session.update")
+	clearPeer.want(t, "conversation.item.create")
 	c.Close()
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case event := <-clearPeer.in:
+		if event.err == nil {
+			t.Fatal("clear replacement model did not close with the device", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("device disconnect was not processed")
+	}
 	if duplicate, res, e := dial(); e == nil {
 		duplicate.Close()
-		close(b.release)
 		t.Fatal("lease released during unadmitted clear")
 	} else if res.StatusCode != http.StatusConflict {
-		close(b.release)
 		t.Fatal(res.Status)
 	}
-	close(b.release)
-	deadline := time.Now().Add(time.Second)
-	var next *websocket.Conn
-	for time.Now().Before(deadline) {
-		next, _, e = dial()
-		if e == nil {
-			break
-		}
-		time.Sleep(time.Millisecond)
+	releaseClear()
+	leaseReleased := make(chan struct{})
+	go func() {
+		g.sessions.Wait()
+		close(leaseReleased)
+	}()
+	select {
+	case <-leaseReleased:
+	case <-time.After(time.Second):
+		t.Fatal("lease not released after clear")
 	}
+	next, _, e := dial()
 	if e != nil {
 		t.Fatal("lease not released after clear", e)
 	}
