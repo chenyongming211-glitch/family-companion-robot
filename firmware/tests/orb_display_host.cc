@@ -8,37 +8,39 @@
 #include "experiment_gate.h"
 
 static int mutations=0,audio_reads=0;
-using lv_state_t=uint16_t;
+// Keep the distinct LVGL enum types: C++20+ rejects their implicit bitwise
+// combination under the target's deprecated-enum-enum-conversion warning.
+enum lv_state_t {LV_STATE_DEFAULT=0,LV_STATE_CHECKED=0x0001,LV_STATE_USER_4=0x8000};
+enum lv_part_t {LV_PART_MAIN=0,LV_PART_SCROLLBAR=0x010000};
+using lv_style_selector_t=uint32_t;
 using lv_color_t=uint32_t;
-constexpr lv_state_t LV_STATE_CHECKED=0x0001,LV_STATE_USER_4=0x8000;
-constexpr uint32_t LV_PART_MAIN=0;
 constexpr int LV_OPA_TRANSP=0,LV_OPA_50=127;
 struct lv_obj_t {
     bool hidden=false;
-    lv_state_t state=0;
+    lv_state_t state=LV_STATE_DEFAULT;
     int bg_opa=LV_OPA_50,orb_bg_opa=-1;
     lv_color_t text_color=0,orb_text_color=0;
     bool has_orb_text=false;
 };
 static inline lv_color_t lv_color_hex(uint32_t color){return color;}
 static inline lv_state_t lv_obj_get_state(lv_obj_t* p){return p->state;}
-static inline void lv_obj_add_state(lv_obj_t* p,lv_state_t state){++mutations;p->state|=state;}
-static inline void lv_obj_remove_state(lv_obj_t* p,lv_state_t state){++mutations;p->state&=~state;}
-static inline void lv_obj_set_style_bg_opa(lv_obj_t* p,int opacity,uint32_t selector){
+static inline void lv_obj_add_state(lv_obj_t* p,lv_state_t state){++mutations;p->state=static_cast<lv_state_t>(p->state|state);}
+static inline void lv_obj_remove_state(lv_obj_t* p,lv_state_t state){++mutations;p->state=static_cast<lv_state_t>(p->state&~state);}
+static inline void lv_obj_set_style_bg_opa(lv_obj_t* p,int opacity,lv_style_selector_t selector){
     ++mutations;
     if(selector==0)p->bg_opa=opacity;
     else {assert(selector==LV_STATE_USER_4);p->orb_bg_opa=opacity;}
 }
-static inline void lv_obj_set_style_text_color(lv_obj_t* p,lv_color_t color,uint32_t selector){
+static inline void lv_obj_set_style_text_color(lv_obj_t* p,lv_color_t color,lv_style_selector_t selector){
     ++mutations;
     if(selector==0)p->text_color=color;
     else {assert(selector==LV_STATE_USER_4);p->orb_text_color=color;p->has_orb_text=true;}
 }
 // Matches LVGL's state-specific selector precedence over default local style.
-static int lv_obj_get_style_bg_opa(lv_obj_t* p,uint32_t){
+static int lv_obj_get_style_bg_opa(lv_obj_t* p,lv_part_t){
     return p->state&LV_STATE_USER_4 && p->orb_bg_opa>=0?p->orb_bg_opa:p->bg_opa;
 }
-static lv_color_t lv_obj_get_style_text_color(lv_obj_t* p,uint32_t){
+static lv_color_t lv_obj_get_style_text_color(lv_obj_t* p,lv_part_t){
     return p->state&LV_STATE_USER_4 && p->has_orb_text?p->orb_text_color:p->text_color;
 }
 constexpr int LV_OBJ_FLAG_HIDDEN=1;

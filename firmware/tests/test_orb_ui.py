@@ -62,8 +62,13 @@ class OrbUiTests(unittest.TestCase):
                     program = Path(directory) / source
                     program.write_text((FIRMWARE / 'tests' / source).read_text().replace(
                         '// PRODUCTION_METHODS', '\n'.join(methods)))
+                # LVGL's separate part/state enums require explicit selector
+                # conversion in the target's C++23 build; exercise that warning.
+                standard = 'c++20' if source == 'orb_display_host.cc' else 'c++17'
+                enum_warning = ['-Werror=deprecated-enum-enum-conversion'] if source == 'orb_display_host.cc' else []
                 result = subprocess.run([
-                    'c++', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
+                    'c++', f'-std={standard}', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
+                    *enum_warning,
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                     '-DCONFIG_XIAOMAN_ORB_UI=1', '-I', directory,
                     '-I', str(FIRMWARE / 'overlays/main/audio'),

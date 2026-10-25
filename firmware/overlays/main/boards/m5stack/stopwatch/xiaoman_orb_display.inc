@@ -19,7 +19,8 @@ private:
         orb_.Initialize(font->font(),[](void* context) {
             static_cast<RoundLcdDisplay*>(context)->RefreshOrb();
         },this);
-        const auto selector=LV_PART_MAIN|kOrbChromeState;
+        const lv_style_selector_t selector=static_cast<lv_style_selector_t>(LV_PART_MAIN)|
+            static_cast<lv_style_selector_t>(kOrbChromeState);
         if(top_bar_) lv_obj_set_style_bg_opa(top_bar_,LV_OPA_TRANSP,selector);
         lv_obj_t* icons[]{network_label_,mute_label_,battery_label_};
         for(auto* icon:icons) if(icon)
