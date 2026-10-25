@@ -1,12 +1,29 @@
 // Included inside RoundLcdDisplay. Every LVGL mutation holds the existing lock.
 private:
     family_robot::XiaomanOrbView orb_;
-    bool orb_system_text_=false;
+    bool orb_system_text_=false,orb_chrome_active_=false;
+    // Reserved locally: pinned board/display code uses no USER_4 state. State
+    // selectors leave the current theme's default styles intact on every page.
+    static constexpr lv_state_t kOrbChromeState=LV_STATE_USER_4;
+    void SetOrbChromeActive(bool active) {
+        if(orb_chrome_active_==active) return;
+        orb_chrome_active_=active;
+        lv_obj_t* objects[]{top_bar_,network_label_,mute_label_,battery_label_};
+        for(auto* object:objects) if(object) {
+            if(active) lv_obj_add_state(object,kOrbChromeState);
+            else lv_obj_remove_state(object,kOrbChromeState);
+        }
+    }
     void SetupOrbUI() {
         auto font=current_theme_->GetTextFont();
         orb_.Initialize(font->font(),[](void* context) {
             static_cast<RoundLcdDisplay*>(context)->RefreshOrb();
         },this);
+        const auto selector=LV_PART_MAIN|kOrbChromeState;
+        if(top_bar_) lv_obj_set_style_bg_opa(top_bar_,LV_OPA_TRANSP,selector);
+        lv_obj_t* icons[]{network_label_,mute_label_,battery_label_};
+        for(auto* icon:icons) if(icon)
+            lv_obj_set_style_text_color(icon,lv_color_hex(0xc5ccd8),selector);
     }
     void RefreshOrb() {
         // RestoreBrightness runs during board construction, before SetupUI.
@@ -25,6 +42,7 @@ private:
         auto visible=[](lv_obj_t* object) {return object && !lv_obj_has_flag(object,LV_OBJ_FLAG_HIDDEN);};
         facts.system_page=orb_system_text_ || visible(preview_image_) || visible(low_battery_popup_) || visible(notification_label_);
         const bool shown=orb_.Update(facts);
+        SetOrbChromeActive(shown);
         if(shown) {
             if(emoji_box_) lv_obj_add_flag(emoji_box_,LV_OBJ_FLAG_HIDDEN);
             if(bottom_bar_) lv_obj_add_flag(bottom_bar_,LV_OBJ_FLAG_HIDDEN);
