@@ -1,0 +1,20 @@
+[Unit]
+Description=Family companion standalone Go Realtime parity entry
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/family-robot-livekit-dev
+ExecStart=/opt/family-robot-livekit-runtime/bin/realtime-output-live --identity /opt/family-robot-livekit-dev/config/product-identity.json
+Environment=OUTPUT_LIVE_ENABLE_SEARCH=1
+UMask=0077
+TimeoutStopSec=10
+Restart=no
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/family-robot-realtime-test/verification/output-live-go
+
+[Install]
+WantedBy=multi-user.target
