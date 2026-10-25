@@ -193,6 +193,22 @@ const Instructions = "结合此前已播对话和用户当前的话理解上下�
 	"记录只覆盖部分历史，没有某件事的记录不表示它没有发生，不据此断言用户没有说过。" +
 	"后台字段只供理解，普通交流不要念字段名、状态或规则。背景："
 
+// StorytellingGuidance is an intentional post-migration prompt addition. Keep
+// it separate so frozen Python comparisons still verify every other byte.
+const StorytellingGuidance = "本轮讲述要求：先读前面的实际对话记录，再理解用户这次要听什么。" +
+	"记录中的position=complete、boundary=complete_response、exact_stop_known和interrupted等字段，只描述某段音频的播放情况与播放边界。" +
+	"音频完整播完不代表故事、情节或用户任务已经完成；是否讲完要根据实际说出的内容与用户要求判断，不能按这些字段判断。" +
+	"用户请你讲故事时，默认给出约一百二十字的完整短故事，包含起因、人物行动、事情变化和结果，然后自然收束。" +
+	"用户指定篇幅时以用户要求为准；长故事可以分段，但每段至少有新的事件、行动和阶段性结果。" +
+	"当上下文已有未讲完的故事，用户问为什么停了、指出没讲完或要求继续时，把这理解为希望你继续交付故事内容。" +
+	"这次回复从接下来的故事正文开始，至少讲出一件新事情以及结果；不要只回顾停在哪里、解释为何停止、承诺马上讲，或再次询问是否要继续。" +
+	"示例仅演示承接方式，示例人物和情节不是实际历史，也不要照抄：" +
+	"背景是小刺猬替邻居找一把丢失的钥匙，还没有找到。用户问‘没讲完，怎么停了？’。" +
+	"合适的回应是‘小刺猬沿着门前的脚印走到花坛，看见钥匙卡在石头缝里。它请小鸟衔来一根细树枝，轻轻拨出了钥匙。邻居终于打开了家门，端来热茶谢谢它。’。" +
+	"实际续讲必须沿用真实已播记录的人物与事件，推进后续情节，不大段重播已讲内容。" +
+	"无法确定要继续哪件事且历史不足以判断时，才自然询问所指对象；没有故障诊断信息时，不猜测网络、信号或服务器故障。" +
+	"插问先回答新问题，用户要求续讲才回旧故事；要求停止或换题时立即尊重其意图。普通问答保持简洁，不扩写成故事。\n"
+
 // InstructionsFor uses the supplied instant, allowing the wire prompt to be
 // compared deterministically without changing the production wall clock.
 func (p *Product) InstructionsFor(cfg map[string]any, context string, connected bool, now time.Time) (string, error) {
@@ -236,7 +252,7 @@ func (p *Product) InstructionsFor(cfg map[string]any, context string, connected 
 		"这个入口只有语音输入。图片相关可以请用户口述画面，基于描述交流；照片无法传给你看。提醒可以讨论安排，由用户自己在手机或闹钟上设置，不会由你到时主动提醒。\n" +
 		"依据上述事实自然介绍，问到哪项就回答哪项；普通聊天直接交流，不反复自我介绍。" +
 		fmt.Sprintf("可以自然回应昵称或临时扮演，正式身份仍为%s，旧对话和用户称呼不改写产品资料。", p.name) +
-		searchInstruction + "身份与当前能力：\n" + marshalPython(snapshot, true) + "\n对话规则：" + Instructions + context, nil
+		searchInstruction + "身份与当前能力：\n" + marshalPython(snapshot, true) + "\n对话规则：" + Instructions + context + "\n\n" + StorytellingGuidance, nil
 }
 func display(value any, fallback string) string {
 	if !truthy(value) {
