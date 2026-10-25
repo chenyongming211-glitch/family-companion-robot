@@ -2,10 +2,10 @@
 
 用户已确认方案并要求执行；main顺序实施，模型调用/Go测试/部署在云端，Mac仅生成合成输入和运行测试客户端。
 
-- [ ] 在云端私有评估目录用旧提示重放“讲个故事”“为什么停了”“没讲完为什么停了”，记录具体输出与是否完成情节。
-- [ ] 修改`internal/realtimestate/identity.go`，增加独立讲述指导常量并在背景JSON之后注入。只新增这一段，不改旧身份、能力或状态。
-- [ ] 修改`internal/realtimestate/differential_test.go`，instructions对照中仅给冻结Python的期望结果附加这段声明差异，其余内容逐字比较。冻结Python源码保持。
-- [ ] 云端针对性及全仓`go test -race ./...`、`go vet ./...`、`go build ./...`通过。
-- [ ] 对照相同合成输入/模型，检查完整故事、两种催促、插问后续讲、数学、停止和对象不清。逐条阅读结果，不仅依赖字数。
+- [x] 在云端私有评估目录用旧提示重放“讲个故事”“为什么停了”“没讲完为什么停了”，记录具体输出与是否完成情节。
+- [x] 修改`internal/realtimestate/identity.go`，增加独立讲述指导常量并在背景JSON之后注入。只新增这一段，不改旧身份、能力或状态。
+- [x] 修改`internal/realtimestate/differential_test.go`，instructions对照中仅给冻结Python的期望结果附加这段声明差异，其余内容逐字比较。冻结Python源码保持。
+- [x] 云端针对性及全仓`go test -race ./...`、`go vet ./...`、`go build ./...`通过。
+- [x] 对照相同合成输入/模型，检查完整故事、两种催促、插问后续讲、数学、停止和对象不清。逐条阅读结果，不仅依赖字数。
 - [ ] 空闲时云端部署18040，Mac合成输入＋真实CoreAudio验证故事、插问、续讲、已播回报及终端/会话归属。保留用户窗口。
 - [ ] 更新验证报告、DEVELOPMENT_HANDOFF及客户端说明；main提交推送，核对远端和健康状态，保留回退二进制。
