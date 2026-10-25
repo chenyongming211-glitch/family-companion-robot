@@ -29,6 +29,7 @@ type Server struct {
 	product     *realtimestate.Product
 	root, build string
 	run         func(*websocket.Conn, string)
+	runDevice   func(*Session)
 }
 
 func NewServer(cfg Config, product *realtimestate.Product, root, build string) *Server {
@@ -39,6 +40,7 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
 		session.Run()
 	}
+	s.runDevice = func(session *Session) { session.Run() }
 	return s
 }
 
@@ -153,17 +155,24 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Unlock()
 		defer func() { s.mu.Lock(); s.active = nil; s.mu.Unlock() }()
 		ws.SetReadLimit(8192)
-		owner := binding.owner
-		owner.SessionID = randomID()
-		dir := filepath.Join(s.root, time.Now().UTC().Format("20060102T150405")+"-"+owner.SessionID)
-		if e = os.Mkdir(dir, 0700); e != nil {
-			return
-		}
-		info := SessionInfo{Ownership: owner, SchemaVersion: 1, Build: s.build, StartedAt: time.Now().UTC()}
-		if e = privateJSON(filepath.Join(dir, "session.json"), info); e != nil {
+		dir, e := s.sessionDirectory(binding.owner)
+		if e != nil {
 			return
 		}
 		s.run(ws, dir)
 	})
 	return http.MaxBytesHandler(mux, 8192)
+}
+
+func (s *Server) sessionDirectory(owner Ownership) (string, error) {
+	owner.SessionID = randomID()
+	dir := filepath.Join(s.root, time.Now().UTC().Format("20060102T150405")+"-"+owner.SessionID)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return "", err
+	}
+	info := SessionInfo{Ownership: owner, SchemaVersion: 1, Build: s.build, StartedAt: time.Now().UTC()}
+	if err := privateJSON(filepath.Join(dir, "session.json"), info); err != nil {
+		return "", err
+	}
+	return dir, nil
 }

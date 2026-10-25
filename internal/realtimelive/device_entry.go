@@ -32,7 +32,7 @@ func (s *Server) enrollDevice(w http.ResponseWriter, r *http.Request) {
 	var v struct {
 		ClientType string `json:"client_type"`
 	}
-	if decodeEntry(r, &v) != nil || !voiceidentity.ValidClient(v.ClientType) {
+	if decodeEntry(r, &v) != nil || !voiceidentity.ValidEnrollmentClient(v.ClientType) {
 		w.WriteHeader(400)
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) pairOwner(r *http.Request) (Ownership, int) {
 		return Ownership{}, 400
 	}
 	device, e := s.devices.Authenticate(v.DeviceID, strings.TrimPrefix(auth, "Bearer "))
-	if e != nil {
+	if e != nil || !voiceidentity.ValidEnrollmentClient(device.ClientType) {
 		return Ownership{}, 403
 	}
 	return Ownership{DeviceID: device.ID, ClientType: device.ClientType, ClientVersion: v.ClientVersion}, 200

@@ -58,6 +58,8 @@ type Turn struct {
 	DrainTarget               *int64
 	DrainDone                 chan struct{}
 	Tracker                   *PrefixTracker
+	PlaybackBasis             string
+	PlaybackFinal             bool
 	drainSignalled            bool
 }
 
@@ -84,6 +86,15 @@ func (t *Turn) MarkDrainDone() {
 	}
 }
 func (t *Turn) Receipt(event map[string]any) bool {
+	return t.ReceiptWithBasis(event, "CoreAudio_dataPlayedBack")
+}
+
+// expectedBasis is selected by the authenticated terminal adapter, never by a
+// client-supplied field. Mac receipt semantics remain the default contract.
+func (t *Turn) ReceiptWithBasis(event map[string]any, expectedBasis string) bool {
+	if expectedBasis != "CoreAudio_dataPlayedBack" && expectedBasis != "i2s_dma" {
+		return false
+	}
 	id, idOK := strictInt(event["id"])
 	completed, completedOK := strictInt(event["completed"])
 	accepted, acceptedOK := strictInt(event["accepted"])
@@ -91,7 +102,7 @@ func (t *Turn) Receipt(event map[string]any) bool {
 	if !exists {
 		terminal = "progress"
 	}
-	if !idOK || id != t.ID || event["basis"] != "CoreAudio_dataPlayedBack" || !completedOK || !acceptedOK || !(t.Completed <= completed && completed <= accepted && accepted <= t.Sent) || accepted < t.Accepted || completed%PacketSamples != 0 || accepted%PacketSamples != 0 {
+	if !idOK || id != t.ID || event["basis"] != expectedBasis || !completedOK || !acceptedOK || !(t.Completed <= completed && completed <= accepted && accepted <= t.Sent) || accepted < t.Accepted || completed%PacketSamples != 0 || accepted%PacketSamples != 0 {
 		return false
 	}
 	label, ok := terminal.(string)
@@ -105,6 +116,12 @@ func (t *Turn) Receipt(event map[string]any) bool {
 		return false
 	}
 	t.Completed, t.Accepted = completed, accepted
+	if expectedBasis == "i2s_dma" {
+		t.PlaybackBasis = expectedBasis
+		if label == "played" || label == "drained" {
+			t.PlaybackFinal = true
+		}
+	}
 	if label == "drained" {
 		t.MarkDrainDone()
 	}

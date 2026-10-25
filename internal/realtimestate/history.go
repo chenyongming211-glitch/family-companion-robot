@@ -187,6 +187,7 @@ type Evidence struct {
 	MarginMS             int            `json:"margin_ms"`
 	ClaimScope           string         `json:"claim_scope"`
 	RecognitionMayDiffer bool           `json:"recognition_may_differ"`
+	Basis                string         `json:"basis,omitempty"`
 }
 
 func PlaybackEvidence(turn *Turn) Evidence {
@@ -200,7 +201,7 @@ func PlaybackEvidence(turn *Turn) Evidence {
 	if observed != nil {
 		aligned = EquivalentPrefix(turn.Generated, *observed)
 	}
-	complete := turn.Ended && turn.Sent > 0 && turn.Completed == turn.Sent
+	complete := turn.Ended && turn.Sent > 0 && turn.Completed == turn.Sent && (turn.PlaybackBasis != "i2s_dma" || turn.PlaybackFinal)
 	spoken := aligned
 	if spoken == nil {
 		spoken = observed
@@ -226,7 +227,7 @@ func PlaybackEvidence(turn *Turn) Evidence {
 	if len(tail) > 6 {
 		tail = tail[len(tail)-6:]
 	}
-	return Evidence{spoken, observed, source, alignment, aligned, pythonFloat(float64(turn.Completed) / 24), pythonFloat(float64(turn.Sent) / 24), boundary, complete, wordEnd, tail, 120, "this_response_only", true}
+	return Evidence{spoken, observed, source, alignment, aligned, pythonFloat(float64(turn.Completed) / 24), pythonFloat(float64(turn.Sent) / 24), boundary, complete, wordEnd, tail, 120, "this_response_only", true, turn.PlaybackBasis}
 }
 func optional(text string) *string {
 	if text == "" {

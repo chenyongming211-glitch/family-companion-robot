@@ -2,7 +2,6 @@ package realtimelive
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"familyrobot/internal/realtimeaudio"
 	"familyrobot/internal/realtimestate"
@@ -24,6 +23,8 @@ type liveTurn struct {
 }
 type Session struct {
 	ws                *websocket.Conn
+	wire              sessionWire
+	inputFrame        int
 	cfg               Config
 	directory         string
 	product           *realtimestate.Product
@@ -56,6 +57,8 @@ func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimesta
 	off := false
 	lc.Search = &off
 	s := &Session{ws: ws, cfg: cfg, directory: dir, product: product, ctx: ctx, cancel: cancel, ring: realtimestate.NewAudioRing(16000 * 35), input: make(chan []byte, 100), listener: NewNative(lc, dir), items: map[string]*liveTurn{}, changed: make(chan struct{}, 1), rec: recorder{dir: dir}}
+	s.wire = &macWire{ws: ws}
+	s.inputFrame = 320
 	info, err := ReadSessionInfo(dir)
 	if err != nil && !os.IsNotExist(err) {
 		s.ownerErr = err
@@ -88,8 +91,9 @@ func (s *Session) terminalFailure() string {
 	return s.failureReason
 }
 func (s *Session) spawn(fn func()) { s.wg.Add(1); go func() { defer s.wg.Done(); fn() }() }
-func (s *Session) sendLocked(event any) error {
-	if fields, ok := event.(map[string]any); ok && s.rec.owner.SessionID != "" {
+func (s *Session) sendLocked(event map[string]any) error {
+	if s.rec.owner.SessionID != "" {
+		fields := event
 		copy := make(map[string]any, len(fields)+1)
 		for k, v := range fields {
 			copy[k] = v
@@ -98,9 +102,13 @@ func (s *Session) sendLocked(event any) error {
 		event = copy
 	}
 	s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	return s.ws.WriteJSON(event)
+	return s.wire.sendEvent(event)
 }
-func (s *Session) send(event any) error { s.mu.Lock(); defer s.mu.Unlock(); return s.sendLocked(event) }
+func (s *Session) send(event map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sendLocked(event)
+}
 func (s *Session) binary(rt *liveTurn, packet []byte) (bool, error) {
 	return s.release(rt, packet, nil, nil)
 }
@@ -111,11 +119,8 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 		return false, nil
 	}
 	rt.turn.Sent += 1440
-	b := make([]byte, 4+len(packet))
-	binary.BigEndian.PutUint32(b, uint32(rt.turn.ID))
-	copy(b[4:], packet)
 	s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if e := s.ws.WriteMessage(websocket.BinaryMessage, b); e != nil {
+	if e := s.wire.sendAudio(rt.turn.ID, packet); e != nil {
 		return true, e
 	}
 	if codec != nil {
@@ -159,7 +164,12 @@ func (s *Session) interruptExpected(expected *liveTurn) error {
 		return nil
 	}
 	t := rt.turn
-	if t.Sent > 0 && t.Completed == t.Sent && closed(rt.done) {
+	_, device := s.wire.(*xiaozhiWire)
+	playbackDone := closed(rt.done)
+	if device {
+		playbackDone = t.PlaybackFinal
+	}
+	if t.Sent > 0 && t.Completed == t.Sent && playbackDone {
 		s.output = nil
 		s.mu.Unlock()
 		return nil
@@ -249,16 +259,27 @@ func (s *Session) Run() (err error) {
 	if e := s.record("session_started", map[string]any{}); e != nil {
 		return e
 	}
-	codec, e := realtimeaudio.New(16000, 320)
+	codec, e := realtimeaudio.New(16000, s.inputFrame)
 	if e != nil {
 		return e
 	}
 	defer codec.Close()
+	_, device := s.wire.(*xiaozhiWire)
+	ready := map[string]any{"type": "ready", "model": s.cfg.Model, "voice": s.cfg.Voice}
+	// Firmware waits for server hello before enabling capture. Send it before
+	// the provider handshake; the Mac retains its original ready ordering.
+	if device {
+		if e = s.send(ready); e != nil {
+			return e
+		}
+	}
 	if e = s.listener.Open(s.ctx, "仅检测语音轮次，不自动生成回复。", true); e != nil {
 		return e
 	}
-	if e = s.send(map[string]any{"type": "ready", "model": s.cfg.Model, "voice": s.cfg.Voice}); e != nil {
-		return e
+	if !device {
+		if e = s.send(ready); e != nil {
+			return e
+		}
 	}
 	s.spawn(func() {
 		if e := s.microphone(); e != nil && s.ctx.Err() == nil {
@@ -290,9 +311,17 @@ func (s *Session) Run() (err error) {
 			}
 		}
 	})
-	s.ws.SetReadLimit(8192)
+	if device {
+		s.ws.SetReadLimit(16384)
+	} else {
+		s.ws.SetReadLimit(8192)
+	}
 	for {
-		s.ws.SetReadDeadline(time.Time{})
+		deadline := time.Time{}
+		if w, ok := s.wire.(*xiaozhiWire); ok {
+			deadline = w.readDeadline()
+		}
+		s.ws.SetReadDeadline(deadline)
 		kind, b, e := s.ws.ReadMessage()
 		if e != nil {
 			// aiohttp's client iterator ends on transport close/error. Preserve
@@ -313,9 +342,12 @@ func (s *Session) Run() (err error) {
 			return nil
 		}
 		if kind == websocket.BinaryMessage {
-			pcm, e := codec.Decode(b)
+			pcm, e := s.wire.decodeAudio(b, codec)
 			if e != nil {
 				return e
+			}
+			if len(pcm) == 0 {
+				continue
 			}
 			select {
 			case s.input <- pcm:
@@ -324,9 +356,12 @@ func (s *Session) Run() (err error) {
 			}
 		}
 		if kind == websocket.TextMessage {
-			event, e := decodeObject(b)
+			event, e := s.wire.control(b)
 			if e != nil {
 				return e
+			}
+			if event == nil {
+				continue
 			}
 			if e = s.validateScope(event); e != nil {
 				return e
@@ -335,43 +370,75 @@ func (s *Session) Run() (err error) {
 			case "stop":
 				reason = "client_stop"
 				return nil
+			case "interrupt":
+				if !device {
+					return errors.New("unknown_client_control")
+				}
+				if e = s.interrupt(); e != nil {
+					return e
+				}
 			case "receipt":
-				s.mu.Lock()
-				var rt *liveTurn
-				for i := len(s.history) - 1; i >= 0; i-- {
-					if id, ok := integer(event["id"]); ok && s.history[i].turn.ID == id {
-						rt = s.history[i]
-						break
-					}
-				}
-				if rt == nil || !rt.turn.Receipt(event) {
-					s.mu.Unlock()
-					return errors.New("invalid_playback_receipt")
-				}
-				term := event["terminal"]
-				var f map[string]any
-				if term == "drained" || term == "played" {
-					var ms any
-					if term == "drained" {
-						ms = time.Since(rt.drainStarted).Milliseconds()
-					}
-					f = map[string]any{"id": rt.turn.ID, "terminal": term, "completed": rt.turn.Completed, "accepted": rt.turn.Accepted, "sent": rt.turn.Sent, "drain_ms": ms}
-				}
-				s.mu.Unlock()
-				select {
-				case s.changed <- struct{}{}:
-				default:
-				}
-				if f != nil {
-					if e = s.record("playback", f); e != nil {
-						return e
-					}
+				if e = s.receiveReceipt(event); e != nil {
+					return e
 				}
 			default:
 				return errors.New("unknown_client_control")
 			}
 		}
 	}
+}
+
+func (s *Session) receiveReceipt(event map[string]any) error {
+	s.mu.Lock()
+	var rt *liveTurn
+	for i := len(s.history) - 1; i >= 0; i-- {
+		if id, ok := wireInteger(event["id"]); ok && s.history[i].turn.ID == id {
+			rt = s.history[i]
+			break
+		}
+	}
+	if rt == nil {
+		s.mu.Unlock()
+		return errors.New("invalid_playback_receipt")
+	}
+	normalized, err := s.wire.normalizeReceipt(rt.turn, event)
+	basis := "CoreAudio_dataPlayedBack"
+	_, device := s.wire.(*xiaozhiWire)
+	if device {
+		basis = "i2s_dma"
+	}
+	if err != nil || !rt.turn.ReceiptWithBasis(normalized, basis) {
+		s.mu.Unlock()
+		return errors.New("invalid_playback_receipt")
+	}
+	term := normalized["terminal"]
+	var fields map[string]any
+	if term == "drained" || term == "played" {
+		var ms any
+		if term == "drained" {
+			ms = time.Since(rt.drainStarted).Milliseconds()
+		}
+		fields = map[string]any{"id": rt.turn.ID, "terminal": term, "completed": rt.turn.Completed, "accepted": rt.turn.Accepted, "sent": rt.turn.Sent, "drain_ms": ms}
+		if device {
+			fields["basis"] = basis
+			fields["raw_played_samples"] = event["played_samples"]
+			fields["accepted_basis"] = "played_lower_bound"
+		}
+	}
+	s.mu.Unlock()
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
+	if device {
+		if err = s.record("device_playback", map[string]any{"id": rt.turn.ID, "state": event["state"], "basis": basis, "raw_played_samples": event["played_samples"], "completed": normalized["completed"], "accepted": normalized["accepted"], "accepted_basis": "played_lower_bound"}); err != nil {
+			return err
+		}
+	}
+	if fields != nil {
+		return s.record("playback", fields)
+	}
+	return nil
 }
 func (s *Session) microphone() error {
 	for {

@@ -10,9 +10,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -25,6 +27,7 @@ type Device struct {
 	ID         string `json:"device_id"`
 	ClientType string `json:"client_type"`
 	Digest     string `json:"credential_sha256"`
+	ExternalID string `json:"external_id,omitempty"`
 }
 type diskStore struct {
 	Version int      `json:"schema_version"`
@@ -36,7 +39,8 @@ type Store struct {
 	devices map[string]Device
 }
 
-func ValidClient(kind string) bool { return kind == "mac_native" || kind == "mac_fixture" }
+func ValidEnrollmentClient(kind string) bool { return kind == "mac_native" || kind == "mac_fixture" }
+func ValidClient(kind string) bool           { return ValidEnrollmentClient(kind) || kind == "xiaozhi" }
 func Open(path string) (*Store, error) {
 	s := &Store{path: path, devices: map[string]Device{}}
 	st, e := os.Lstat(path)
@@ -57,6 +61,7 @@ func Open(path string) (*Store, error) {
 	if json.Unmarshal(raw, &disk) != nil || disk.Version != 1 || len(disk.Devices) > 1024 {
 		return nil, ErrIdentity
 	}
+	external := map[string]bool{}
 	for _, d := range disk.Devices {
 		if !idPattern.MatchString(d.ID) || !ValidClient(d.ClientType) || !digestPattern.MatchString(d.Digest) {
 			return nil, ErrIdentity
@@ -64,12 +69,21 @@ func Open(path string) (*Store, error) {
 		if _, exists := s.devices[d.ID]; exists {
 			return nil, ErrIdentity
 		}
+		if d.ClientType == "xiaozhi" {
+			mac, err := net.ParseMAC(d.ExternalID)
+			if err != nil || len(mac) != 6 || mac.String() != d.ExternalID || external[d.ExternalID] {
+				return nil, ErrIdentity
+			}
+			external[d.ExternalID] = true
+		} else if d.ExternalID != "" {
+			return nil, ErrIdentity
+		}
 		s.devices[d.ID] = d
 	}
 	return s, nil
 }
 func (s *Store) Enroll(kind string) (Device, string, error) {
-	if !ValidClient(kind) {
+	if !ValidEnrollmentClient(kind) {
 		return Device{}, "", ErrIdentity
 	}
 	s.mu.Lock()
@@ -87,17 +101,59 @@ func (s *Store) Enroll(kind string) (Device, string, error) {
 	}
 	secret := base64.RawURLEncoding.EncodeToString(key[:])
 	sum := sha256.Sum256([]byte(secret))
-	d := Device{"dev_" + hex.EncodeToString(id[:]), kind, hex.EncodeToString(sum[:])}
+	d := Device{ID: "dev_" + hex.EncodeToString(id[:]), ClientType: kind, Digest: hex.EncodeToString(sum[:])}
+	if e := s.saveDevice(d); e != nil {
+		return Device{}, "", e
+	}
+	return d, secret, nil
+}
+
+// BindXiaozhi is called only after the configured token and MAC have both been
+// authenticated. It is deliberately unavailable through public enrollment.
+func (s *Store) BindXiaozhi(externalID, secret string) (Device, error) {
+	mac, err := net.ParseMAC(externalID)
+	if err != nil || len(mac) != 6 || len(secret) < 32 || len(secret) > 512 || strings.ContainsAny(secret, "\x00\r\n") {
+		return Device{}, ErrIdentity
+	}
+	externalID = mac.String()
+	sum := sha256.Sum256([]byte(secret))
+	digest := hex.EncodeToString(sum[:])
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.devices {
+		if d.ClientType == "xiaozhi" && d.ExternalID == externalID {
+			if subtle.ConstantTimeCompare([]byte(d.Digest), []byte(digest)) != 1 {
+				return Device{}, ErrIdentity
+			}
+			return d, nil
+		}
+	}
+	if len(s.devices) >= 1024 {
+		return Device{}, errors.New("device_registry_full")
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return Device{}, err
+	}
+	d := Device{ID: "dev_" + hex.EncodeToString(id[:]), ClientType: "xiaozhi", Digest: digest, ExternalID: externalID}
+	if err := s.saveDevice(d); err != nil {
+		return Device{}, err
+	}
+	return d, nil
+}
+
+// Caller holds s.mu; a failed durable write must never mutate the live registry.
+func (s *Store) saveDevice(d Device) error {
 	disk := diskStore{Version: 1, Devices: make([]Device, 0, len(s.devices)+1)}
 	for _, v := range s.devices {
 		disk.Devices = append(disk.Devices, v)
 	}
 	disk.Devices = append(disk.Devices, d)
 	if e := WritePrivateJSON(s.path, disk); e != nil {
-		return Device{}, "", e
+		return e
 	}
 	s.devices[d.ID] = d
-	return d, secret, nil
+	return nil
 }
 func (s *Store) Authenticate(id, secret string) (Device, error) {
 	s.mu.Lock()
