@@ -58,6 +58,9 @@ public:
             case PlaybackOp::Reset:core.InterruptAll();++generation;break;
         }return true;
     }
+#if CONFIG_XIAOMAN_ORB_UI
+    void MarkOrbDraining(PlaybackIdentity id) {core.MarkOrbDraining(id);}
+#endif
     uint32_t PlaybackGeneration(){return generation;}
     bool PlaybackSupported(){return true;}
 };
@@ -252,6 +255,9 @@ int main(){
         assert(false && "drain requires the actual production AbortSpeaking method");
 #endif
         assert(app.aborted_&&app.audio_service_.resets==resets&&codec.generation==generation);
+#if CONFIG_XIAOMAN_ORB_UI
+        assert(codec.core.OrbActivity().draining);
+#endif
         assert(!d.PlaybackEventCurrent(old_event)); // retire only scheduled UI
         d.DeliverAudio(std::make_unique<AudioStreamPacket>(),d.playback_connection_);
         assert(received.size()==2&&received.back().receipt_first==1440);
@@ -261,12 +267,18 @@ int main(){
         cJSON_AddStringToObject(seal.get(),"reason","drain");
         cJSON_AddNumberToObject(seal.get(),"sent_samples",2880);
         assert(d.HandlePlaybackTts(seal.get(),d.playback_connection_));
+#if CONFIG_XIAOMAN_ORB_UI
+        assert(codec.core.OrbActivity().draining);
+#endif
         d.DeliverAudio(std::make_unique<AudioStreamPacket>(),d.playback_connection_);
         assert(received.size()==2&&!codec.core.Snapshot(old_event.identity).finished);
         int16_t dma[6][240]{};
         for(int tick=0;tick<18;++tick)codec.core.Complete(dma[tick%6],240,(tick+1)*10000);
         auto final=codec.core.Snapshot(old_event.identity);
         assert(final.valid&&final.finished&&!final.interrupted&&final.played_samples==2880);
+#if CONFIG_XIAOMAN_ORB_UI
+        assert(!codec.core.OrbActivity().draining && !codec.core.OrbActivity().active);
+#endif
         // An advertised total must match the same ID's actually admitted frames.
         for(double wrong:{-1.0,0.0,1440.5,1441.0,4294967296.0}){
             d.ResetPlaybackConnection();d.ParseServerHello(h.get(),d.playback_connection_);

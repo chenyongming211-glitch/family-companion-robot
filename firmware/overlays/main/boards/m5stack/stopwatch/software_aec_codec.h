@@ -19,6 +19,10 @@ public:
     uint32_t PlaybackGeneration() const override;
     bool PlaybackPoll(family_robot::PlaybackSnapshot& out) override;
     bool PlaybackBusy() const override;
+#if CONFIG_XIAOMAN_ORB_UI
+    family_robot::OrbOutputActivity GetOrbOutputActivity() const override;
+    void MarkOrbDraining(family_robot::PlaybackIdentity id) override;
+#endif
     void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity id,
                       uint64_t first, uint32_t generation) override;
     void EnableInput(bool enable) override;

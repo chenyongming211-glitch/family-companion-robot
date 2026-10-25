@@ -10,6 +10,9 @@
 #include <cstdio>
 #include <cstring>
 #include "application.h"
+#if CONFIG_XIAOMAN_ORB_UI
+#include "xiaoman_orb_view.h"
+#endif
 #include "software_aec_codec.h"
 
 bool AecDiagnostics::Start() {
@@ -127,6 +130,9 @@ void AecDiagnostics::Worker() {
     vTaskDelete(nullptr);
 }
 void AecDiagnostics::Command(const char* line) {
+#if CONFIG_XIAOMAN_ORB_UI
+    if (family_robot::XiaomanOrbConsole(line)) return;
+#endif
     if (std::strcmp(line, "aec_stats") == 0) {
         codec_.PrintStats();
         portENTER_CRITICAL(&mux_);

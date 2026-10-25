@@ -92,6 +92,10 @@ public:
     uint32_t PlaybackGeneration() const;
     bool PlaybackPoll(PlaybackSnapshot&);
     bool PlaybackBusy() const;
+#if CONFIG_XIAOMAN_ORB_UI
+    OrbOutputActivity GetOrbOutputActivity() const;
+    void MarkOrbDraining(PlaybackIdentity);
+#endif
     void OutputData(std::vector<int16_t>&);
     void OutputTagged(std::vector<int16_t>&, PlaybackIdentity, uint64_t, uint32_t);
     mutable std::mutex mux_;
@@ -184,9 +188,17 @@ int main() {
     callback.OutputTagged(pcm,{1,1},0,callback.PlaybackGeneration());
     callback.PlaybackControl(Op::Release,{1,1});callback.PlaybackControl(Op::Seal,{1,1});
     int16_t physical[6][240]{};
+#if CONFIG_XIAOMAN_ORB_UI
+    assert(callback.GetOrbOutputActivity().stamp_us==0);
+#endif
     for(int i=0;i<12;++i) {
         i2s_event_data_t event{physical[i%6],480};now_us=3000000+i*10000;
         callback.Complete(&event,true);
+#if CONFIG_XIAOMAN_ORB_UI
+        const auto activity=callback.GetOrbOutputActivity();
+        if(i<6) assert(activity.stamp_us==0);
+        else assert(activity.stamp_us==now_us && activity.level==OrbPcmLevel(pcm.data(),240));
+#endif
         assert(callback.reference_.observed==(i<6?0:99)); // reference BEFORE refill
         assert(physical[i%6][0]==(i<6?99:0));
     }

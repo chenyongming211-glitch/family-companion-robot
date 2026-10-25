@@ -64,6 +64,7 @@ class EvidenceTests(unittest.TestCase):
             'CONFIG_ESP_CONSOLE_SECONDARY_NONE': 'y' if experiment else 'n',
             'CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES': '0',
             'CONFIG_STOPWATCH_DEFAULT_REALTIME': 'n',
+            'CONFIG_XIAOMAN_ORB_UI': 'n',
         }
         (self.tree/'sdkconfig').write_text('\n'.join(f'# {k} is not set' if v == 'n' else f'{k}={v}'
                                                    for k, v in options.items())+'\n')
@@ -107,8 +108,9 @@ class EvidenceTests(unittest.TestCase):
         asset.write_bytes(struct.pack('<III', 2, sum(body) & 0xffff, len(body)) + body)
         config = self.tree/'sdkconfig'
         config.write_text(config.read_text().replace('# CONFIG_STOPWATCH_DEFAULT_REALTIME is not set',
-                                                    'CONFIG_STOPWATCH_DEFAULT_REALTIME=y') + '\n'.join([
-            'CONFIG_USE_CUSTOM_WAKE_WORD=y', '# CONFIG_USE_AFE_WAKE_WORD is not set',
+                                                    'CONFIG_STOPWATCH_DEFAULT_REALTIME=y').replace('# CONFIG_XIAOMAN_ORB_UI is not set',
+                                                    'CONFIG_XIAOMAN_ORB_UI=y') + '\n'.join([
+            'CONFIG_USE_DEFAULT_MESSAGE_STYLE=y', 'CONFIG_USE_CUSTOM_WAKE_WORD=y', '# CONFIG_USE_AFE_WAKE_WORD is not set',
             'CONFIG_SR_MN_CN_MULTINET7_QUANT=y', 'CONFIG_CUSTOM_WAKE_WORD="xiao man"',
             'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="小满"', 'CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20',
             'CONFIG_SEND_WAKE_WORD_DATA=y']) + '\n')

@@ -1,0 +1,139 @@
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1002,6 +1002,15 @@
+         Logical MR from physical mono ES8311 DMA. Observation only at boot.
+         Requires the unique USB-console experiment variant. No acoustic acceptance.
+ 
++config XIAOMAN_ORB_UI
++    bool "Xiaoman StopWatch fluid orb conversation UI"
++    default n
++    depends on BOARD_TYPE_M5STACK_STOPWATCH && STOPWATCH_DEFAULT_REALTIME && USE_DEFAULT_MESSAGE_STYLE
++    help
++        Local low-rate RGB565 orb and short truthful state only. No transcripts.
++        USB orb_ui off/low/on selects static, 5fps, or target 15fps for comparison.
++        Audio gates, queueing, cancellation and power policy remain authoritative.
++
+ config STOPWATCH_DEFAULT_REALTIME
+     bool "Request realtime conversation by default when StopWatch AEC is ready"
+     default n
+--- a/main/boards/m5stack/stopwatch/config.json
++++ b/main/boards/m5stack/stopwatch/config.json
+@@ -52,7 +52,8 @@
+                 "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"小满\"",
+                 "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
+                 "CONFIG_SEND_WAKE_WORD_DATA=y",
+-                "CONFIG_STOPWATCH_DEFAULT_REALTIME=y"
++                "CONFIG_STOPWATCH_DEFAULT_REALTIME=y",
++                "CONFIG_XIAOMAN_ORB_UI=y"
+             ]
+         }
+     ]
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -44,6 +44,10 @@
+     virtual uint32_t PlaybackGeneration() const { return 0; }
+     virtual bool PlaybackPoll(family_robot::PlaybackSnapshot&) { return false; }
+     virtual bool PlaybackBusy() const { return false; }
++#if CONFIG_XIAOMAN_ORB_UI
++    virtual family_robot::OrbOutputActivity GetOrbOutputActivity() const { return {}; }
++    virtual void MarkOrbDraining(family_robot::PlaybackIdentity) {}
++#endif
+     virtual void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity,
+                               uint64_t, uint32_t) { OutputData(pcm); }
+ 
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -150,6 +150,9 @@
+     void EnableDeviceAec(bool enable);
+     void SetExperimentUplink(bool enabled, bool observer_tail = false);
+ 
++#if CONFIG_XIAOMAN_ORB_UI
++    family_robot::OrbAudioActivity GetOrbAudioActivity();
++#endif
+     void WaitForCaptureReady(bool enabled) { capture_ready_waiting_.store(enabled); }
+     void SetCallbacks(AudioServiceCallbacks& callbacks);
+ 
+@@ -167,6 +170,9 @@
+     std::atomic<bool> preserve_server_playback_{false};
+     std::atomic<bool> capture_ready_waiting_{false};
+     void NotifyCaptureReady();
++#if CONFIG_XIAOMAN_ORB_UI
++    family_robot::OrbInputActivity orb_input_activity_{};
++#endif
+     family_robot::ExperimentGate experiment_gate_;
+     family_robot::UplinkAuthorization experiment_authorization_;
+     family_robot::CaptureActivation capture_activation_;
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -678,6 +678,10 @@
+     task.type = type;
+     task.pcm = std::move(pcm);
+ 
++#if CONFIG_XIAOMAN_ORB_UI
++    const auto orb_level=type==kAudioTaskTypeEncodeToSendQueue ?
++        family_robot::OrbPcmLevel(task.pcm.data(),task.pcm.size()):0;
++#endif
+     uint32_t dropped_total = 0;
+     {
+         /* Push the task to the encode queue */
+@@ -688,6 +692,13 @@
+             if (!experiment_gate_.Allows(task.uplink_epoch))
+                 return;
+         }
++#if CONFIG_XIAOMAN_ORB_UI
++        if(type==kAudioTaskTypeEncodeToSendQueue && codec_->SoftwareReference()) {
++            const auto capture=codec_->CaptureGeneration();
++            if(audio_engine_->OutputCaptureGeneration()==capture && capture_generation_.load()==capture)
++                orb_input_activity_={capture,task.uplink_epoch,static_cast<uint8_t>(orb_level),esp_timer_get_time()};
++        }
++#endif
+         /* If the task is to send queue, we need to set the timestamp */
+         if (type == kAudioTaskTypeEncodeToSendQueue && !timestamp_queue_.empty()) {
+             task.timestamp = timestamp_queue_.front();
+@@ -1038,3 +1049,7 @@
+     audio_engine_->EnableDeviceAec(device_aec_enabled_);
+     return true;
+ }
++
++#if CONFIG_XIAOMAN_ORB_UI
++#include "orb_audio_service.inc"
++#endif
+--- a/main/boards/m5stack/stopwatch/m5stack_stopwatch.cc
++++ b/main/boards/m5stack/stopwatch/m5stack_stopwatch.cc
+@@ -7,6 +7,11 @@
+ #include "software_aec_codec.h"
+ #endif
+ #include "application.h"
++#if CONFIG_XIAOMAN_ORB_UI
++#include "xiaoman_orb_view.h"
++#include "display/lvgl_display/lvgl_font.h"
++#include <cstring>
++#endif
+ #include "button.h"
+ #include "M5IOE1.h"
+ #include "M5PM1.h"
+@@ -87,7 +92,13 @@
+         }
+ 
+         lv_display_add_event_cb(display_, rounder_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+-    }
++#if CONFIG_XIAOMAN_ORB_UI
++        SetupOrbUI();
++#endif
++    }
++#if CONFIG_XIAOMAN_ORB_UI
++#include "xiaoman_orb_display.inc"
++#endif
+ };
+ 
+ class StopwatchBacklight : public Backlight {
+@@ -97,6 +108,9 @@
+ 
+ protected:
+     void SetBrightnessImpl(uint8_t brightness) override {
++#if CONFIG_XIAOMAN_ORB_UI
++        static_cast<RoundLcdDisplay*>(display_)->SetOrbScreenOn(brightness!=0);
++#endif
+         DisplayLockGuard lock(display_);
+         uint8_t data[] = {static_cast<uint8_t>((255 * brightness) / 100)};
+         int lcd_cmd = 0x51;

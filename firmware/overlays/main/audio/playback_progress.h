@@ -3,6 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#if CONFIG_XIAOMAN_ORB_UI
+#include "orb_activity.h"
+#endif
 
 namespace family_robot {
 // Bound transient report serialization too. Other opaque session formats safely
@@ -37,7 +40,11 @@ public:
     static constexpr uint64_t kMaxSamples = 9007199254740991ULL; // exact JSON integer
     enum class SubmitResult { Accepted, Full, Rejected };
     void Connect(uint32_t connection) {
-        records_ = {}; connection_ = connection; last_id_ = 0; head_ = used_ = 0;
+        records_ = {};
+#if CONFIG_XIAOMAN_ORB_UI
+        orb_completed_ = {};
+#endif
+        connection_ = connection; last_id_ = 0; head_ = used_ = 0;
         // DMA tags remain: those physical samples may still be sent. Old identity
         // is ignored on completion and can never become the new connection's PCM.
     }
@@ -62,7 +69,11 @@ public:
     bool Allows(PlaybackIdentity id) const {
         const auto* r=Find(id); return r && !r->interrupted;
     }
-    SubmitResult Submit(PlaybackIdentity id, uint64_t first, const int16_t* pcm, size_t n) {
+    SubmitResult Submit(PlaybackIdentity id, uint64_t first, const int16_t* pcm, size_t n
+#if CONFIG_XIAOMAN_ORB_UI
+                        , uint8_t level=0
+#endif
+                        ) {
         auto* r = Find(id);
         if (id && (!r || r->interrupted)) return SubmitResult::Rejected;
         if (!pcm || n == 0 || n > kBlock || (r && (first > kMaxSamples - n || first+n > r->received))) {
@@ -74,6 +85,9 @@ public:
         if (r) r->submitted = first+n;
         auto& b = queue_[(head_+used_)%kQueue];
         b.tag = {id, first, static_cast<uint16_t>(n)};
+#if CONFIG_XIAOMAN_ORB_UI
+        b.tag.level = level;
+#endif
         std::memcpy(b.pcm.data(), pcm, n*sizeof(int16_t));
         ++used_; return SubmitResult::Accepted;
     }
@@ -130,7 +144,16 @@ public:
         if(auto* r=Find(s->tag.id)) {
             if(r->valid) {
                 if(s->tag.first!=r->played || r->played>kMaxSamples-s->tag.count) r->valid=false;
-                else r->played+=s->tag.count;
+                else {
+                    r->played+=s->tag.count;
+#if CONFIG_XIAOMAN_ORB_UI
+                    if (s->tag.count) {
+                        orb_completed_.identity = {s->tag.id.connection,s->tag.id.playback};
+                        orb_completed_.stamp_us=stamp;
+                        orb_completed_.level=s->tag.level;
+                    }
+#endif
+                }
             }
         }
         s->tag={};
@@ -165,8 +188,35 @@ public:
         for(const auto& s:slots_) if(s.tag.count) return true;
         return false;
     }
+#if CONFIG_XIAOMAN_ORB_UI
+    // Task-facing snapshot under the adapter's existing mux. Complete publishes
+    // only the tag scalar; this scan and all PCM energy work stay outside ISR.
+    void MarkOrbDraining(PlaybackIdentity id) {
+        if(auto* r=Find(id)) r->orb_draining=true;
+    }
+    OrbOutputActivity OrbActivity() const {
+        auto out=orb_completed_;
+        out.connection=connection_;
+        const PlaybackIdentity id{out.identity.connection,out.identity.playback};
+        const auto* r=Find(id);
+        out.valid=hardware_ok_ && r && r->valid && id.connection==connection_;
+        out.active=out.valid && !Finished(*r);
+        out.draining=false;
+        for(const auto& tail:records_) {
+            if(tail.id && tail.id.connection==connection_ &&
+               (tail.orb_draining || tail.interrupted) && !Finished(tail) &&
+               (tail.work || HasPending(tail.id))) out.draining=true;
+        }
+        if(!out.valid) {out.level=0; out.stamp_us=0;}
+        return out;
+    }
+#endif
 private:
-    struct Tag { PlaybackIdentity id{}; uint64_t first=0; uint16_t count=0; };
+    struct Tag { PlaybackIdentity id{}; uint64_t first=0; uint16_t count=0;
+#if CONFIG_XIAOMAN_ORB_UI
+        uint8_t level=0; // occupies existing alignment padding, no larger DMA/PCM tag
+#endif
+    };
     struct Block { Tag tag{}; std::array<int16_t,kBlock> pcm{}; };
     struct Slot { int16_t* address=nullptr; Tag tag{}; };
     struct Record {
@@ -175,6 +225,9 @@ private:
         int64_t report_time=0;
         uint32_t work=0;
         bool valid=false,sealed=false,interrupted=false,reported=false,reported_valid=false;
+#if CONFIG_XIAOMAN_ORB_UI
+        bool orb_draining=false; // observation only; never changes cancellation
+#endif
     };
     Record* Find(PlaybackIdentity id) {
         if(!id) return nullptr;
@@ -186,6 +239,13 @@ private:
         for(const auto& r:records_) if(r.id==id) return &r;
         return nullptr;
     }
+#if CONFIG_XIAOMAN_ORB_UI
+    bool HasPending(PlaybackIdentity id) const {
+        for(size_t i=0;i<used_;++i) if(queue_[(head_+i)%kQueue].tag.id==id) return true;
+        for(const auto& s:slots_) if(s.tag.id==id) return true;
+        return false;
+    }
+#endif
     bool Finished(const Record& r) const {
         if(!r.sealed || r.work) return false;
         for(size_t i=0;i<used_;++i) if(queue_[(head_+i)%kQueue].tag.id==r.id) return false;
@@ -199,6 +259,9 @@ private:
     int64_t last_stamp_=0;
     uint32_t connection_=0,last_id_=0;
     bool hardware_ok_=true;
+#if CONFIG_XIAOMAN_ORB_UI
+    OrbOutputActivity orb_completed_{};
+#endif
 };
 static_assert(sizeof(PlaybackProgress)<=7360,"playback tracker internal SRAM bound");
 } // namespace family_robot

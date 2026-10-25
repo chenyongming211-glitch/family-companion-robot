@@ -32,6 +32,19 @@ bool SoftwareAecCodec::PlaybackPoll(family_robot::PlaybackSnapshot& out) {
     portEXIT_CRITICAL(&mux_);
     return result;
 }
+#if CONFIG_XIAOMAN_ORB_UI
+family_robot::OrbOutputActivity SoftwareAecCodec::GetOrbOutputActivity() const {
+    portENTER_CRITICAL(&mux_);
+    auto value=refill_mode_ && playback_ ? playback_->OrbActivity() : family_robot::OrbOutputActivity{};
+    portEXIT_CRITICAL(&mux_);
+    return value;
+}
+void SoftwareAecCodec::MarkOrbDraining(family_robot::PlaybackIdentity id) {
+    portENTER_CRITICAL(&mux_);
+    if (playback_) playback_->MarkOrbDraining(id);
+    portEXIT_CRITICAL(&mux_);
+}
+#endif
 bool SoftwareAecCodec::PlaybackBusy() const {
     portENTER_CRITICAL(&mux_);
     const bool result = refill_mode_ && playback_ && playback_->Busy();
@@ -58,9 +71,16 @@ void SoftwareAecCodec::OutputTagged(std::vector<int16_t>& data, family_robot::Pl
     int64_t last_progress = esp_timer_get_time();
     while (offset < data.size()) {
         const size_t n = std::min(data.size()-offset, family_robot::PlaybackProgress::kBlock);
+#if CONFIG_XIAOMAN_ORB_UI
+        const auto level=family_robot::OrbPcmLevel(data.data()+offset,n);
+#endif
         portENTER_CRITICAL(&mux_);
         const bool usable = playback_ && accepting_ && output_enabled_ && output_generation_ != UINT32_MAX && generation == output_generation_;
-        const auto result = usable ? playback_->Submit(id, first+offset, data.data()+offset, n)
+        const auto result = usable ? playback_->Submit(id, first+offset, data.data()+offset, n
+#if CONFIG_XIAOMAN_ORB_UI
+                , level
+#endif
+            )
             : family_robot::PlaybackProgress::SubmitResult::Rejected;
         if (!usable && playback_ && generation == output_generation_) playback_->Invalidate(id);
         portEXIT_CRITICAL(&mux_);

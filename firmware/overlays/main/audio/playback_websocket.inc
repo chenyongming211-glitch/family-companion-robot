@@ -74,6 +74,10 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
                 return false;
             }
         }
+#if CONFIG_XIAOMAN_ORB_UI
+        if (playback_drain_negotiated_ && cJSON_IsString(reason) && strcmp(reason->valuestring,"drain")==0)
+            codec->MarkOrbDraining(id); // only after the existing exact sent_samples validation
+#endif
         playback_receiving_ = false;
         if (interrupted) {
             if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
@@ -152,6 +156,9 @@ void WebsocketProtocol::SendAbortSpeaking(AbortReason reason) {
             // Retire scheduled speaking UI, but keep receiving the ordered
             // tail until the server seals this same playback identity.
             if (!playback_drain_negotiated_) playback_receiving_ = false;
+#if CONFIG_XIAOMAN_ORB_UI
+            else Board::GetInstance().GetAudioCodec()->MarkOrbDraining(playback_id_);
+#endif
             if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
         }
     }
