@@ -1,5 +1,7 @@
 # 换电脑开发交接
 
+**当前工作与暂停决定（2026-10-25）：用户已明确暂停音频保护故障的进一步排查，先记录，后续多次复现再查；不开发自动恢复。本轮开始实施已确认的“小满唤醒＋B流体光球＋简短状态”，默认不显示对话字幕，保留现有音频/云端记录。设计见[界面设计](superpowers/specs/2026-10-25-xiaoman-watch-orb-ui-design.md)，执行与验收见[实施计划](superpowers/plans/2026-10-25-xiaoman-watch-orb-ui.md)。此段覆盖下方建议继续排障的任务优先级，既有故障证据不删除。**
+
 **小满唤醒故障后续（2026-10-25，临时恢复）：用户报告唤醒后1–2秒退回待命。已证现场为音频时钟/播放资格锁存失效，设备首批回报valid=false、played_samples0，Go拒绝无效I2S证据后断开；并非此现场的唤醒词失效或模型未生成。新增playback_rejected有界诊断，未放宽保护。保存现场后仅复位、未刷写flash/NVS；默认实时恢复，身份及数学实际I2S全播通过，用户确认能正常回答并继续对话。固件仍54ec169，尚未实现故障自动恢复；具体Cadence触发事件与此前约300秒input_provider_failed仍未定因，不能把最早一次无响应一概归到本原因。云端全仓race/vet/build通过。见[诊断、恢复与未解决边界](verification/2026-10-25-stopwatch-wake-failure.md)。本段补充下方短轮验收，不代表长稳通过。**
 
 **StopWatch“小满”接入及默认实时已完成（2026-10-25）：Go a5a4e54运行PID1128374，同一18040核心新增设备专用公网18041（仅/xiaozhi/v1/，既有token＋允许MAC鉴权），18040仍回环；8000 OTA已下发18041，服务PID1145530，原二进制/unit/env备份只在云端。真唤醒已由wn9你好小智改为mn7_cn的xiao man→小满，资源及词注册已实机验证。54ec169仅小满variant默认实时意图，唤醒Pause后先恢复本地processor，再等当前capture/channel的AFE ready才发listen.start及上行；故障/Off/取消/断连保留保护，超时安全Auto，原两个variant默认Off及其显式On行为保持。87项固件host＋110上游脚本、独立审查及三variant目标构建通过；最后只刷app且读回相同，启动/配置区域与刷前快照相同，既有资源未改。新Wi-Fi通过官方配网完成，口令不入源码/Git；重启联网与激活通过。最终未手工on，日志realtime_start ready capture4/channel1，用户单独复测反馈“正常，能打断并回复新问题”；真实I2S排空及记录归属通过，设备稳定ID重连不变、session更新。现场合成混测出现空转写，后续单独真人通过不代表弱音问题根治；噪声/误唤醒/续航/长稳仍待扩大验收，不宣称全面声学通过。备份、凭据和原音频私有；未加旧工具、判题、提醒或长期记忆。见[验证记录](verification/2026-10-25-stopwatch-xiaoman-realtime.md)及[实施计划](superpowers/plans/2026-10-25-stopwatch-xiaoman-realtime.md)。**
