@@ -112,6 +112,9 @@ class XiaomanWakeTests(unittest.TestCase):
         self.assertTrue({'m5stack-stopwatch', 'm5stack-stopwatch-software-aec'} <= variants.keys())
         self.assertIn('m5stack-stopwatch-xiaoman', variants)
         options = variants['m5stack-stopwatch-xiaoman']['sdkconfig_append']
+        self.assertFalse(any(option.startswith(('CONFIG_LANGUAGE_', 'CONFIG_SR_WN_'))
+                             for option in options),
+                         'upstream build parameters own language and WakeNet selection')
         for expected in ['CONFIG_STOPWATCH_SOFTWARE_AEC=y', 'CONFIG_USE_DEVICE_AEC=y',
                          'CONFIG_USE_CUSTOM_WAKE_WORD=y', 'CONFIG_USE_AFE_WAKE_WORD=n',
                          'CONFIG_SR_MN_CN_MULTINET7_QUANT=y',

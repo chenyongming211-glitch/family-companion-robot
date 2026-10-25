@@ -320,7 +320,7 @@ diff --git a/main/audio/wake_words/custom_wake_word.h b/main/audio/wake_words/cu
 diff --git a/main/boards/m5stack/stopwatch/config.json b/main/boards/m5stack/stopwatch/config.json
 --- a/main/boards/m5stack/stopwatch/config.json
 +++ b/main/boards/m5stack/stopwatch/config.json
-@@ -29,6 +29,31 @@
+@@ -29,6 +29,30 @@
                  "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n",
                  "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y"
              ]
@@ -342,7 +342,6 @@ diff --git a/main/boards/m5stack/stopwatch/config.json b/main/boards/m5stack/sto
 +                "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y",
 +                "CONFIG_USE_AFE_WAKE_WORD=n",
 +                "CONFIG_USE_CUSTOM_WAKE_WORD=y",
-+                "CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=n",
 +                "CONFIG_SR_MN_CN_MULTINET7_QUANT=y",
 +                "CONFIG_CUSTOM_WAKE_WORD=\"xiao man\"",
 +                "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"小满\"",

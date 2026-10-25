@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [m5stack-stopwatch, m5stack-stopwatch-software-aec]
+        variant: [m5stack-stopwatch, m5stack-stopwatch-software-aec, m5stack-stopwatch-xiaoman]
     container:
       image: espressif/idf:v6.1
     env:
