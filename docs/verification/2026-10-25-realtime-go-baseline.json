@@ -1,0 +1,71 @@
+{
+  "python_commit": "3b89df839f3d297fc293f5d68c6b1b225b0cfb82",
+  "design_commit": "5417671",
+  "candidate_go_port": 18040,
+  "python_port": 18032,
+  "sha256": {
+    "tools/realtime-output-live/server.py": "b3f444a7a0c63fc92a0e5064b22c76d032d0a04f3be8dc64a9d531c90934c754",
+    "tools/realtime-output-live/upstream.py": "07f8a8a7d5672252eef1a59fd2a7dfc1fa7577867c1373db321179213b1df805",
+    "tools/realtime-output-live/state.py": "46d30df3fd7d3b718d9ec9c5d326461571800baeb5c5dd829d648adde66b6d0e",
+    "tools/realtime-output-live/history.py": "6863a2c183a270923f78ea4020b5c12f59a1e87f0b923e08afed6f1beb50e434",
+    "tools/realtime-output-live/identity.py": "a3fe9ee61b41e05ea54b195c87211d703e90423148d940b372d35810c4dc6e00",
+    "tools/realtime-output-live/audio.py": "c962f29be0f166fd7612a33527f795111c42d75b4c137c0d29305108a7f463b1",
+    "tools/realtime-output-live/LiveClient.swift": "6e52fbf23b244149d5e01f5579ba20c4e1019ad6ffb35427a68680c48e4a6726",
+    "tools/realtime-output-live/open.command": "d4f71c60f069d70d2a8f0f602a84533ef785f495a39cd8398c549abaa9c3f7e9",
+    "tools/realtime-output-probe/providers.py": "da107671cab393d491db86566adca0ccb4a008dc155363c804f7a09cbf546894",
+    "tools/realtime-output-probe/alignment.py": "f04be26ad565e32a8f9af0f46e68ac9ba5868ebd1379cd387836345687a58d24",
+    "config/product-identity.json": "8675e372b70183b0beb865a904c308746eca09afbd06c22cf90ecd08b9527c16"
+  },
+  "effective_config": {
+    "model": "qwen3.8-omni-flash-realtime",
+    "voice": "Tina",
+    "enable_search": true,
+    "search_options": {
+      "enable_source": true
+    },
+    "listener_search": false,
+    "listener_transcription_model": "qwen3-asr-flash-realtime",
+    "listener_vad": {
+      "type": "server_vad",
+      "threshold": 0.5,
+      "silence_duration_ms": 600,
+      "create_response": false,
+      "interrupt_response": false
+    },
+    "generation_turn_detection": null,
+    "generation_input_audio_transcription": null,
+    "tools": "absent",
+    "input_rate": 16000,
+    "output_rate": 24000,
+    "opus_application": 2049,
+    "opus_frame_samples": 1440,
+    "sample_window": 7200,
+    "max_recent_turns": 16,
+    "asr_settle_ms": 1200,
+    "asr_margin_ms": 120,
+    "drain_timeout_ms": 3000,
+    "input_queue": 100,
+    "encoded_queue": 1002,
+    "output_asr_queue": 1024
+  },
+  "protected_config_reference": "/etc/family-robot/realtime-test.env",
+  "known_limitations": [
+    "forecast_vs_current_weather",
+    "compound_capability_claims",
+    "missing_history_misunderstanding",
+    "output_asr_candidate_error",
+    "semantic_story_continuation_not_exact_resume"
+  ],
+  "acceptance": {
+    "ordinary_turns_min": 30,
+    "drains_min": 10,
+    "continuous_session_minutes_min": 20,
+    "latency_diagnostic": "Go median - Python median > max(100ms, 10% Python median)",
+    "human_acceptance_required": true
+  },
+  "cloud_dependencies": {
+    "python": "3.12.3",
+    "libopus": "1.4",
+    "go": "1.27.3"
+  }
+}
