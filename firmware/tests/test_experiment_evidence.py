@@ -63,6 +63,7 @@ class EvidenceTests(unittest.TestCase):
             'CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG': 'n' if experiment else 'y',
             'CONFIG_ESP_CONSOLE_SECONDARY_NONE': 'y' if experiment else 'n',
             'CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES': '0',
+            'CONFIG_STOPWATCH_DEFAULT_REALTIME': 'n',
         }
         (self.tree/'sdkconfig').write_text('\n'.join(f'# {k} is not set' if v == 'n' else f'{k}={v}'
                                                    for k, v in options.items())+'\n')
@@ -105,7 +106,8 @@ class EvidenceTests(unittest.TestCase):
         asset.parent.mkdir(exist_ok=True)
         asset.write_bytes(struct.pack('<III', 2, sum(body) & 0xffff, len(body)) + body)
         config = self.tree/'sdkconfig'
-        config.write_text(config.read_text() + '\n'.join([
+        config.write_text(config.read_text().replace('# CONFIG_STOPWATCH_DEFAULT_REALTIME is not set',
+                                                    'CONFIG_STOPWATCH_DEFAULT_REALTIME=y') + '\n'.join([
             'CONFIG_USE_CUSTOM_WAKE_WORD=y', '# CONFIG_USE_AFE_WAKE_WORD is not set',
             'CONFIG_SR_MN_CN_MULTINET7_QUANT=y', 'CONFIG_CUSTOM_WAKE_WORD="xiao man"',
             'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="小满"', 'CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20',
@@ -139,6 +141,22 @@ class EvidenceTests(unittest.TestCase):
         asset.write_bytes(asset.read_bytes()[:-1])
         with self.assertRaisesRegex(ValueError, 'assets'):
             self.verify('m5stack-stopwatch-xiaoman')
+
+    def test_realtime_boot_intent_is_scoped_to_xiaoman(self):
+        for experiment, variant in [(False, 'm5stack-stopwatch'),
+                                    (True, 'm5stack-stopwatch-software-aec')]:
+            self.config(experiment)
+            config = self.tree/'sdkconfig'
+            config.write_text(config.read_text().replace('# CONFIG_STOPWATCH_DEFAULT_REALTIME is not set',
+                                                        'CONFIG_STOPWATCH_DEFAULT_REALTIME=y'))
+            with self.subTest(variant=variant), self.assertRaisesRegex(ValueError, 'CONFIG_STOPWATCH_DEFAULT_REALTIME'):
+                self.verify(variant)
+        self.config(True)
+        self.xiaoman_assets()
+        config = self.tree/'sdkconfig'
+        config.write_text(config.read_text().replace('# CONFIG_STOPWATCH_DEFAULT_REALTIME is not set',
+                                                    'CONFIG_STOPWATCH_DEFAULT_REALTIME=y'))
+        self.assertEqual(self.verify('m5stack-stopwatch-xiaoman')['effective_config']['CONFIG_STOPWATCH_DEFAULT_REALTIME'], 'y')
 
     def test_native_style_identical_sdk_config_repeats_are_accepted(self):
         config = self.tree/'sdkconfig'

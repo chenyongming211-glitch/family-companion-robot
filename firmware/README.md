@@ -91,6 +91,28 @@ still needs real-device model registration, two-syllable detection, false-wake,
 playback/AEC, standby-power and stability checks. Shared asset changes also need
 the separate private backup and flash-layout checks before device installation.
 
+Patch `0006-xiaoman-default-realtime.patch` adds the explicit startup intent
+`CONFIG_STOPWATCH_DEFAULT_REALTIME`. It defaults to disabled and only the Xiaoman
+variant requests it. Software-reference mode selection still returns auto until
+`RealtimeEligible()` confirms a valid reference and AFE readiness for the current
+capture generation. A capture restart may temporarily revoke that readiness;
+fault fallback and a manual realtime-off request remain authoritative. The two
+previous variants keep their original startup Off state and explicit-On selector
+behavior. Neither this flag nor an eligible-reference snapshot establishes
+acoustic acceptance.
+
+For a cold voice start, wake audio is sent before entering Listening. The Xiaoman
+variant then restores local voice processing with the uplink closed. AFE output
+provides its source capture generation as a ready hint; the main task rechecks
+the current generation, reference eligibility, state and audio-channel epoch
+before sending `listen.start` and opening the uplink. This avoids reusing AFE
+readiness from before wake detection suspended capture. The two-second deadline
+is checked by ready events and the existing one-second clock tick, so clock and
+main-task scheduling may delay fallback beyond that deadline. Expiry starts auto
+mode without rearming the same wait. Leaving Listening, manual Off,
+connection replacement and reference faults retire the pending start. Ordinary
+output fallback without a software reference also stays in auto mode.
+
 The complete upstream MIT license is in `third_party/xiaozhi-LICENSE`; see the
 repository's `THIRD_PARTY_NOTICES.txt` for attribution. Dependencies retain their
 own licenses.
@@ -412,7 +434,7 @@ permissions, rejection, segmentation, disk bounds, timeout and stopping.
 
 ## Experimental target CI and field gate
 
-**Actions → StopWatch software AEC experiment** builds two isolated matrix jobs
+**Actions → StopWatch software AEC experiment** builds three isolated matrix jobs
 in the official `espressif/idf:v6.1` container, asserts the exact locked SDK
 commit, and runs host tests plus the canonical source preparation/build. Both
 jobs prepare the same tracked patch/overlay inputs in a fresh tree:
@@ -422,6 +444,7 @@ python3 firmware/tools/prepare_experiment.py
 cd firmware/.cache/experiment
 python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch-software-aec --language zh-CN --zip
 # In the other isolated job: --name m5stack-stopwatch
+# Xiaoman job: --name m5stack-stopwatch-xiaoman
 ```
 
 `tools/verify_experiment.py` rejects resolved native dependency-byte drift,

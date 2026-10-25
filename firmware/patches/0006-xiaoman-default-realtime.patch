@@ -1,0 +1,354 @@
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1002,6 +1002,15 @@
+         Logical MR from physical mono ES8311 DMA. Observation only at boot.
+         Requires the unique USB-console experiment variant. No acoustic acceptance.
+ 
++config STOPWATCH_DEFAULT_REALTIME
++    bool "Request realtime conversation by default when StopWatch AEC is ready"
++    default n
++    depends on STOPWATCH_SOFTWARE_AEC && USE_DEVICE_AEC
++    help
++        Records the startup realtime intent for the Xiaoman variant only.
++        Runtime selection still requires the current capture's valid AEC reference.
++        Fault fallback and an explicit realtime-off request remain authoritative.
++
+ config STOPWATCH_AEC_OFFSET_SAMPLES
+     int "Fixed playback reference lookback (physical 24k samples)"
+     depends on STOPWATCH_SOFTWARE_AEC
+diff --git a/main/application.cc b/main/application.cc
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -26,7 +26,7 @@
+ 
+ #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
+ #error "CONFIG_USE_DEVICE_AEC and CONFIG_USE_SERVER_AEC cannot be enabled at the same time"
+-#elif CONFIG_STOPWATCH_SOFTWARE_AEC
++#elif CONFIG_STOPWATCH_SOFTWARE_AEC && !CONFIG_STOPWATCH_DEFAULT_REALTIME
+     aec_mode_ = kAecOff;
+ #elif CONFIG_USE_DEVICE_AEC
+     aec_mode_ = kAecOnDeviceSide;
+@@ -61,6 +61,10 @@
+ bool Application::SetDeviceState(DeviceState state) {
+     if (!state_machine_.TransitionTo(state))
+         return false;
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++    if (state != kDeviceStateListening)
++        CancelPendingRealtimeStart();
++#endif
+     if (state != kDeviceStateListening &&
+         !(state == kDeviceStateSpeaking && listening_mode_ == kListeningModeRealtime)) {
+         audio_service_.SetExperimentUplink(false);
+@@ -95,6 +99,12 @@
+     callbacks.on_vad_change = [this](bool speaking) {
+         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
+     };
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++    callbacks.on_capture_ready = [this](uint32_t generation) {
++        capture_ready_generation_.store(generation);
++        xEventGroupSetBits(event_group_, MAIN_EVENT_CAPTURE_READY);
++    };
++#endif
+     callbacks.on_playback_drained = [this]() {
+         xEventGroupSetBits(event_group_, MAIN_EVENT_PLAYBACK_DRAINED);
+     };
+@@ -192,7 +202,7 @@
+         MAIN_EVENT_VAD_CHANGE | MAIN_EVENT_CLOCK_TICK | MAIN_EVENT_ERROR |
+         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
+         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
+-        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED;
++        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED | MAIN_EVENT_CAPTURE_READY;
+ 
+     while (true) {
+         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, pdMS_TO_TICKS(20));
+@@ -288,6 +298,11 @@
+             }
+         }
+ 
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++        // Process cancellation/scheduled channel changes before any ready hint.
++        if (bits & (MAIN_EVENT_CAPTURE_READY | MAIN_EVENT_CLOCK_TICK))
++            ContinueRealtimeListeningStart();
++#endif
+         if (bits & MAIN_EVENT_CLOCK_TICK) {
+             clock_ticks_++;
+             auto display = Board::GetInstance().GetDisplay();
+@@ -833,6 +848,9 @@
+     } else if (state == kDeviceStateSpeaking) {
+         AbortSpeaking(kAbortReasonNone);
+     } else if (state == kDeviceStateListening) {
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++        CancelPendingRealtimeStart();
++#endif
+         protocol_->CloseAudioChannel();
+     }
+ }
+@@ -1124,6 +1142,9 @@
+ }
+ 
+ void Application::RecoverListeningFailure() {
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++    CancelPendingRealtimeStart();
++#endif
+     // Main-task recovery: prevent a deferred start or popup from surviving the
+     // failed invocation. Close even a partially opened channel before retry.
+     pending_listening_start_ = false;
+@@ -1140,6 +1161,44 @@
+     });
+ }
+ 
++void Application::CancelPendingRealtimeStart() {
++    pending_realtime_start_ = false;
++    skip_realtime_wait_once_ = false;
++    realtime_start_deadline_us_ = 0;
++    capture_ready_generation_.store(UINT32_MAX);
++    audio_service_.WaitForCaptureReady(false);
++}
++
++void Application::ContinueRealtimeListeningStart() {
++    if (!pending_realtime_start_)
++        return;
++    auto* codec = Board::GetInstance().GetAudioCodec();
++    if (GetDeviceState() != kDeviceStateListening || aec_mode_ != kAecOnDeviceSide ||
++        !codec->SoftwareReference() || !protocol_ || !protocol_->IsAudioChannelOpened() ||
++        protocol_->AudioChannelEpoch() != realtime_start_channel_epoch_) {
++        CancelPendingRealtimeStart();
++        return;
++    }
++    if (codec->ReferenceFaulted()) {
++        SetAecMode(kAecOff);
++        return;
++    }
++    const bool expired = esp_timer_get_time() >= realtime_start_deadline_us_;
++    if (!expired && (capture_ready_generation_.load() != codec->CaptureGeneration() ||
++                     !codec->RealtimeEligible()))
++        return;
++    const auto mode = expired ? kListeningModeAutoStop : GetDefaultListeningMode();
++    ESP_LOGI(TAG, "realtime_start %s capture=%lu channel=%lu",
++             expired ? "timeout_auto" : (mode == kListeningModeRealtime ? "ready" : "readiness_lost_auto"),
++             static_cast<unsigned long>(codec->CaptureGeneration()),
++             static_cast<unsigned long>(realtime_start_channel_epoch_));
++    CancelPendingRealtimeStart();
++    listening_mode_ = mode;
++    // A timeout must not rearm even when the audio processor failed to start.
++    skip_realtime_wait_once_ = true;
++    StartListeningAudio();
++}
++
+ void Application::StartListeningAudio() {
+     // Runs in the main loop, either directly from HandleStateChangedEvent or
+     // deferred via MAIN_EVENT_PLAYBACK_DRAINED once the playback queue drains.
+@@ -1147,6 +1206,36 @@
+         return;
+     }
+ 
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++    if (pending_realtime_start_)
++        return;
++    const bool skip_wait = skip_realtime_wait_once_;
++    skip_realtime_wait_once_ = false;
++    auto* codec = Board::GetInstance().GetAudioCodec();
++    // A fault may have arrived after the ready hint was checked on this task.
++    if (codec->SoftwareReference() && aec_mode_ != kAecOff && codec->ReferenceFaulted()) {
++        SetAecMode(kAecOff);
++        return;
++    }
++    if (!skip_wait && codec->SoftwareReference() && aec_mode_ == kAecOnDeviceSide &&
++        listening_mode_ != kListeningModeManualStop && !audio_service_.IsAudioProcessorRunning() &&
++        protocol_ && protocol_->IsAudioChannelOpened()) {
++        pending_realtime_start_ = true;
++        realtime_start_deadline_us_ = esp_timer_get_time() + 2000000;
++        realtime_start_channel_epoch_ = protocol_->AudioChannelEpoch();
++        capture_ready_generation_.store(UINT32_MAX);
++        // Wake data has already drained before entering Listening. Rebuild the
++        // current capture's AFE readiness while the ordinary uplink stays closed.
++        audio_service_.SetExperimentUplink(false);
++        audio_service_.WaitForCaptureReady(true);
++        audio_service_.EnableWakeWordDetection(false);
++        audio_service_.EnableVoiceProcessing(true);
++        return;
++    }
++    if (listening_mode_ == kListeningModeRealtime && codec->SoftwareReference() &&
++        !codec->RealtimeEligible())
++        listening_mode_ = kListeningModeAutoStop;
++#endif
+     // Send the start listening command
+     if (!protocol_->SendStartListening(listening_mode_)) {
+         RecoverListeningFailure();
+@@ -1255,7 +1344,14 @@
+ }
+ 
+ ListeningMode Application::GetDefaultListeningMode() const {
+-    return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
++    if (aec_mode_ == kAecOff)
++        return kListeningModeAutoStop;
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++    auto* codec = Board::GetInstance().GetAudioCodec();
++    if (!codec->SoftwareReference() || !codec->RealtimeEligible())
++        return kListeningModeAutoStop;
++#endif
++    return kListeningModeRealtime;
+ }
+ 
+ void Application::Reboot() {
+@@ -1405,6 +1501,10 @@
+     auto* codec = Board::GetInstance().GetAudioCodec();
+     if (codec->SoftwareReference() && mode != kAecOff && !codec->RealtimeEligible())
+         return;
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++    if (mode == kAecOff)
++        CancelPendingRealtimeStart();
++#endif
+     audio_service_.SetExperimentUplink(false);
+     aec_mode_ = mode;
+     Schedule([this]() {
+diff --git a/main/application.h b/main/application.h
+--- a/main/application.h
++++ b/main/application.h
+@@ -6,6 +6,7 @@
+ #include <freertos/task.h>
+ #include <esp_timer.h>
+ 
++#include <atomic>
+ #include <string>
+ #include <mutex>
+ #include <deque>
+@@ -36,6 +37,7 @@
+ #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
+ #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
+ #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
++#define MAIN_EVENT_CAPTURE_READY        (1 << 14)
+ 
+ 
+ enum AecMode {
+@@ -154,6 +156,11 @@
+     bool assets_version_checked_ = false;
+     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
+     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
++    bool pending_realtime_start_ = false;
++    bool skip_realtime_wait_once_ = false;
++    int64_t realtime_start_deadline_us_ = 0;
++    uint32_t realtime_start_channel_epoch_ = 0;
++    std::atomic<uint32_t> capture_ready_generation_{UINT32_MAX};
+     int clock_ticks_ = 0;
+     TaskHandle_t activation_task_handle_ = nullptr;
+ 
+@@ -171,6 +178,8 @@
+     void BeginWakeWordInvoke(const std::string& wake_word);
+     void ContinueWakeWordInvoke(const std::string& wake_word);
+     void RecoverListeningFailure();
++    void CancelPendingRealtimeStart();
++    void ContinueRealtimeListeningStart();
+     void StartListeningAudio();
+     void ConfigureWakeWordForListening();
+     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
+diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -86,6 +86,7 @@
+     audio_engine_ = std::make_unique<LiteAudioEngine>();
+ #endif
+     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
++        NotifyCaptureReady();
+         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
+     });
+     audio_engine_->OnVadStateChange([this](bool speaking) {
+@@ -897,6 +898,15 @@
+     }
+ }
+ 
++void AudioService::NotifyCaptureReady() {
++    if (!capture_ready_waiting_.load() || !callbacks_.on_capture_ready ||
++        !codec_->SoftwareReference())
++        return;
++    const auto generation = audio_engine_->OutputCaptureGeneration();
++    if (generation == codec_->CaptureGeneration() && codec_->RealtimeEligible())
++        callbacks_.on_capture_ready(generation);
++}
++
+ void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) { callbacks_ = callbacks; }
+ 
+ void AudioService::PlaySound(const std::string_view& ogg) {
+diff --git a/main/audio/audio_service.h b/main/audio/audio_service.h
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -84,6 +84,7 @@
+     std::function<void(void)> on_send_queue_available;
+     std::function<void(const std::string&)> on_wake_word_detected;
+     std::function<void(bool)> on_vad_change;
++    std::function<void(uint32_t)> on_capture_ready;
+     std::function<void(void)> on_audio_testing_queue_full;
+     // Fired when the decode/playback queues and their in-flight work are drained.
+     std::function<void(void)> on_playback_drained;
+@@ -149,6 +150,7 @@
+     void EnableDeviceAec(bool enable);
+     void SetExperimentUplink(bool enabled, bool observer_tail = false);
+ 
++    void WaitForCaptureReady(bool enabled) { capture_ready_waiting_.store(enabled); }
+     void SetCallbacks(AudioServiceCallbacks& callbacks);
+ 
+     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
+@@ -163,6 +165,8 @@
+ private:
+     AudioCodec* codec_ = nullptr;
+     std::atomic<bool> preserve_server_playback_{false};
++    std::atomic<bool> capture_ready_waiting_{false};
++    void NotifyCaptureReady();
+     family_robot::ExperimentGate experiment_gate_;
+     family_robot::UplinkAuthorization experiment_authorization_;
+     family_robot::CaptureActivation capture_activation_;
+diff --git a/main/audio/audio_engine.h b/main/audio/audio_engine.h
+--- a/main/audio/audio_engine.h
++++ b/main/audio/audio_engine.h
+@@ -23,6 +23,7 @@
+     }
+     virtual void SetOutputEpoch(uint32_t epoch) { (void)epoch; }
+     virtual uint32_t OutputEpoch() const { return 0; }
++    virtual uint32_t OutputCaptureGeneration() const { return 0; }
+     virtual void ResetCapture() {}
+ 
+     virtual void EnableWakeWordDetection(bool enable) = 0;
+diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_audio_engine.cc
+--- a/main/audio/engines/afe_audio_engine.cc
++++ b/main/audio/engines/afe_audio_engine.cc
+@@ -521,6 +521,7 @@
+             codec_->NotifyAecReady(applied_reference_valid_.load(), capture);
+         emitted_epoch_ = epoch;
+         emitted_wake_generation_ = wake_capture;
++        emitted_capture_generation_ = capture;
+         if (codec_->SoftwareReference()) {
+             codec_->RecordDiagnostic(2, result->data, result->data_size / sizeof(int16_t), 1,
+                                      capture);
+diff --git a/main/audio/engines/afe_audio_engine.h b/main/audio/engines/afe_audio_engine.h
+--- a/main/audio/engines/afe_audio_engine.h
++++ b/main/audio/engines/afe_audio_engine.h
+@@ -31,6 +31,7 @@
+     void FeedCaptured(std::vector<int16_t>&& data, uint32_t generation) override;
+     void SetOutputEpoch(uint32_t epoch) override;
+     uint32_t OutputEpoch() const override { return emitted_epoch_; }
++    uint32_t OutputCaptureGeneration() const override { return emitted_capture_generation_; }
+     void ResetCapture() override;
+ 
+     void EnableWakeWordDetection(bool enable) override;
+@@ -72,6 +73,7 @@
+     std::atomic<uint32_t> output_epoch_{0};
+     uint32_t emitted_epoch_ = 0;
+     uint32_t emitted_wake_generation_ = 0;
++    uint32_t emitted_capture_generation_ = 0;
+     uint32_t applied_capture_generation_ = 0;
+     std::atomic<bool> capture_reset_pending_{false};
+     std::atomic<bool> applied_reference_valid_{false};
+diff --git a/main/boards/m5stack/stopwatch/config.json b/main/boards/m5stack/stopwatch/config.json
+--- a/main/boards/m5stack/stopwatch/config.json
++++ b/main/boards/m5stack/stopwatch/config.json
+@@ -51,7 +51,8 @@
+                 "CONFIG_CUSTOM_WAKE_WORD=\"xiao man\"",
+                 "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"小满\"",
+                 "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
+-                "CONFIG_SEND_WAKE_WORD_DATA=y"
++                "CONFIG_SEND_WAKE_WORD_DATA=y",
++                "CONFIG_STOPWATCH_DEFAULT_REALTIME=y"
+             ]
+         }
+     ]

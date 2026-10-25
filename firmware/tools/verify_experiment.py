@@ -129,6 +129,7 @@ def verify(firmware, tree, variant, idf_commit):
                 'CONFIG_PARTITION_TABLE_OFFSET': '0x8000',
                 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME': '"partitions/v2/16m.csv"',
                 'CONFIG_STOPWATCH_SOFTWARE_AEC': 'y' if experiment else 'n',
+                'CONFIG_STOPWATCH_DEFAULT_REALTIME': 'y' if variant == 'm5stack-stopwatch-xiaoman' else 'n',
                 'CONFIG_USE_DEVICE_AEC': 'y' if experiment else 'n',
                 'CONFIG_ESP_CONSOLE_UART_DEFAULT': 'n' if experiment else 'y',
                 'CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG': 'y' if experiment else 'n'}
@@ -151,6 +152,8 @@ def verify(firmware, tree, variant, idf_commit):
                         CONFIG_CUSTOM_WAKE_WORD='"xiao man"',
                         CONFIG_CUSTOM_WAKE_WORD_DISPLAY='"小满"',
                         CONFIG_CUSTOM_WAKE_WORD_THRESHOLD='20', CONFIG_SEND_WAKE_WORD_DATA='y')
+    # The default-realtime option is absent when software AEC is not selected.
+    effective.setdefault('CONFIG_STOPWATCH_DEFAULT_REALTIME', 'n')
     # Kconfig omits the device-AEC symbol when this stock board's dependency
     # expression is false. Absent means disabled, never an enabled core path.
     if not experiment:
