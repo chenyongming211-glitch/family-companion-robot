@@ -1,5 +1,7 @@
 # 服务器 LiveKit 最小语音链路
 
+> **已弃用的产品路径（2026-10-25）。** 完整ASR→LLM→TTS三段式不再用于后续产品主路径，也不继续新增语音功能。源码保留历史/业务参考；下文是旧链路说明，不是当前部署指令。云端旧18010/18020进程仍在线，本次只标记，未停服。当前入口是[Go Realtime](../../tools/realtime-output-live/README.md)，详见[代码生命周期](../../docs/CODE_LIFECYCLE.md)。
+
 独立测试服务：真实 `AgentSession`＋Fun-ASR→官方OpenAI兼容LLM插件→Qwen实时TTS。仅监听服务器 `127.0.0.1:18010`，没有替换8000上的原Go网关。运行环境、模型Key与自动化测试均在服务器；新的主测试入口为[Mac原生终端](../../tools/native-voice/README.md)，经独立Go设备桥18020接入。
 
 ## 新主测试入口：原生排空交接

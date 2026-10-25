@@ -1,3 +1,5 @@
+// DEPRECATED_PRODUCT_PATH (2026-10-25): legacy device bridge for the LiveKit cascade.
+// The default voice core is cmd/realtime-output-live; see docs/CODE_LIFECYCLE.md.
 package main
 
 import (

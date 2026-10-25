@@ -1,3 +1,6 @@
+# LEGACY_VALIDATION_REFERENCE (2026-10-25): Python baseline/probe, not Go runtime.
+# Some modules remain active Go differential-test or legacy rollback dependencies.
+# Keep reference behavior stable; see docs/CODE_LIFECYCLE.md.
 """Synthetic-only output-memory experiment. Not a daily voice service."""
 import argparse
 import asyncio

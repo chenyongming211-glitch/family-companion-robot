@@ -1,3 +1,6 @@
+# LEGACY_VALIDATION_REFERENCE (2026-10-25): Python baseline/probe, not Go runtime.
+# Some modules remain active Go differential-test or legacy rollback dependencies.
+# Keep reference behavior stable; see docs/CODE_LIFECYCLE.md.
 """Isolated, bounded paid calls. Machine fixtures only. No automatic retries."""
 import asyncio
 import base64

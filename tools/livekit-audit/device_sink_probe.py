@@ -1,3 +1,5 @@
+# LEGACY_VALIDATION_REFERENCE (2026-10-25): historical LiveKit cascade SDK audit.
+# Not part of the Go Realtime product runtime; see docs/CODE_LIFECYCLE.md.
 """Single-segment SDK contract probe; not a production audio adapter."""
 
 from livekit import rtc

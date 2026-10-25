@@ -1,3 +1,6 @@
+# DEPRECATED_PRODUCT_PATH (2026-10-25): legacy cascade deployment template.
+# Not the default Go Realtime service; retained until separate consumer-aware retirement.
+# This annotation does not change or stop an installed service. See docs/CODE_LIFECYCLE.md.
 [Unit]
 Description=Family robot isolated LiveKit voice-chain test service
 After=network-online.target

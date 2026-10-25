@@ -1,5 +1,7 @@
 # Mac 原生语音测试终端
 
+> **旧三段式入口已弃用（2026-10-25）。** 本目录的open.command是旧18020→18010入口，当前主入口为[Go Realtime](../realtime-output-live/README.md)。但本目录Sources/与OpusBridge.c/h仍被当前Go客户端复用，不能一并删除或标成无用。旧服务本次未停。见[代码生命周期](../../docs/CODE_LIFECYCLE.md)。
+
 Swift / AppKit / AVAudioEngine / 系统 CoreAudio / libopus。只运行测试终端；语音服务、模型 Key 和运行时依赖留在云端。默认连接经 SSH 转发的 `127.0.0.1:18020`，不使用浏览器。
 
 ## 构建与开始

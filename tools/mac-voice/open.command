@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED_PRODUCT_PATH (2026-10-25): legacy cascade test entry only.
+# Use tools/realtime-output-live/open.command for the default Go Realtime entry.
+# Shared tools/native-voice/Sources and OpusBridge files remain active; do not remove.
 set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 port=${VOICE_LOCAL_PORT:-18010}

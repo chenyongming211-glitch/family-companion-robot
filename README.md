@@ -1,4 +1,26 @@
-# 家庭陪伴机器人：最小 Go 实时语音网关
+# 家庭陪伴机器人：Go Realtime语音核心
+
+当前产品主线为**Go原生Realtime**，以已经验证的语音核心为基础，后续逐项适配旧Go业务模块。默认入口云端18040，Mac只作客户端；后端依赖、运行测试和部署均在云端。先读[开发交接](docs/DEVELOPMENT_HANDOFF.md)与[代码生命周期清单](docs/CODE_LIFECYCLE.md)。
+
+- 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
+- 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
+- 旧Python Realtime实现已弃用为产品路径，只保留临时18032回退、对照和Go差异测试参考。
+- 旧LiveKit ASR→LLM→TTS完整三段式、18020桥与旧浏览器入口退出后续产品主路径；源码保留参考，不继续作为常设第二语音后端。
+- 旧Go的设备协议、鉴权、工具和存储按模块盘点复用；判题、提醒和长期记忆没有因这次标记自动实现。
+
+**代码弃用与服务停用是不同状态。** 旧18010/18020/18032服务目前仍在线，本次没有停服或删数据。共用的`tools/native-voice/Sources`、OpusBridge与Python测试参考仍在使用，不能整体删除。当前运行清单及后续退役边界见[代码生命周期](docs/CODE_LIFECYCLE.md)。
+
+```text
+终端 → Go接入与Realtime会话核心 → 千问原生Realtime
+                   ↕
+           当前播放/已播上下文/身份
+                   ↕
+          后续逐项接入Go业务模块
+```
+
+## 历史说明：旧Go网关与三段式实验
+
+以下保留此前阶段的说明及验证链接，涉及18010/18020/三段式的“当前方向”“主测试入口”均指当时状态。8000旧Go网关仍运行，下方设备工具/记录能力属于该旧入口，不代表新18040已经接入。新的运行与开发入口以上方链接为准。
 
 换电脑继续开发先读[开发交接说明](docs/DEVELOPMENT_HANDOFF.md)：环境恢复、服务器约定、已完成/未完成、新电脑麦克风接入的下一步，以及本机历史实验资料的归档位置。
 
@@ -24,13 +46,12 @@ Go 网关：设备鉴权、编解码、会话调度、有界播放队列、固�
 千问实时语音
 ```
 
-## 本地开发
+### 旧Go网关的云端构建（保留参考）
 
 需要 Go 1.25+、C 编译器、libopus 开发文件、pkg-config。
 
 ```sh
-# macOS
-brew install opus pkgconf
+# 以下仅在云服务器执行
 # Ubuntu
 sudo apt-get install libopus-dev pkg-config gcc
 
@@ -42,7 +63,7 @@ go build -o bin/smoke ./cmd/smoke
 
 参考 `deploy/server.env.example` 设置环境变量后运行 `bin/gateway`。必须配置独立的设备 token、引导 URL 密钥和上游 API Key；三者不能混用。默认监听 `127.0.0.1:8000`。
 
-## 接口与设备配置
+### 接口与设备配置
 
 - `GET /healthz`：进程健康及活动会话数。
 - `/xiaozhi/ota/<ROBOT_OTA_SECRET>/`：在设备自定义 OTA 地址中填写这个完整地址。收到有效设备元数据后返回 WebSocket 地址和设备 token，不下载或更换固件。
@@ -51,7 +72,7 @@ go build -o bin/smoke ./cmd/smoke
 
 仅支持 16kHz、单声道 Opus 上行，20/40/60ms 帧；支持二进制协议 v1/v2/v3，OTA 下发 v1。下行是 24kHz、单声道、60ms Opus。`manual` 在 listen.stop 后提交，`auto/realtime` 交给千问 VAD；auto 固件通常在播放时停止普通收音，不能据此宣称支持任意语音插话。
 
-## 音量与屏幕控制
+### 音量与屏幕控制
 
 设备声明 MCP 后，网关先完成工具发现，再向千问注册实际可用的状态读取、音量和屏幕亮度工具。这些固定控制工具兼容小智v2.5.2；本轮无需重新刷机。音量、亮度均为 0—100；“关闭屏幕”设置亮度为 0，恢复时可指定亮度。
 
@@ -61,7 +82,7 @@ go build -o bin/smoke ./cmd/smoke
 
 本次修复的检查、真实模型和实机结果见 [控制与音频验证](docs/verification/2026-10-21-device-controls.md)。
 
-## 打断策略与限制
+### 打断策略与限制
 
 网关在打断时发送 `{"type":"tts","state":"stop","reason":"interrupted","session_id":"..."}`；正常播放结束的 stop 省略 `reason` 字段。这个可选字段本身不会让当前原版固件清空播放队列或支持自然插话，这些能力仍需定制固件实现并通过实机验收。
 
@@ -74,7 +95,7 @@ go build -o bin/smoke ./cmd/smoke
 - 初期 HTTP/WS 入口只用于联调，正式使用前配置 HTTPS/WSS。服务器 API Key 始终保存在服务器，不下发给设备。
 - 服务日志不包含音频、对话转录、鉴权值或上游原始错误。
 
-## 文字记录与清空
+### 文字记录与清空
 
 `ROBOT_RECORD_DIR` 为空时明确关闭持久化，仅保留当前连接的临时背景；非空时启动会独占该目录，打开或校验失败则拒绝启动。`ROBOT_RECORD_RETENTION` 默认 `168h`，必须为正时长。按鉴权头中规范化后的设备 MAC 隔离记录，同一设备同时最多一个连接。
 
@@ -92,7 +113,7 @@ go build -o bin/smoke ./cmd/smoke
 
 本网关不持久化音频，实时转发和插话使用的有界 PCM 仅在内存中。云端音频和文字的留存由云厂商政策决定，本记录能力不承诺其行为。准确自动接续仍要求文字覆盖/边界验证和设备播放坐标标定；生产未增加辅助 ASR。
 
-## 服务器部署
+### 服务器部署
 
 systemd 模板为 `deploy/family-robot.service`。现有服务器使用 `family-robot` 账户；配置 `/etc/family-robot/server.env` 由 root 管理，权限 `0640 root:family-robot`。发布目录 `/opt/family-robot/releases/<version>/`，`current` 链接指向启用版本。Linux 发布工具链使用官方 SHA256 校验后的 Go 版本，发布前在 Linux 运行完整测试和 vet。
 
@@ -109,7 +130,7 @@ curl http://127.0.0.1:8000/healthz
 
 回滚时将 `current` 链接指向之前的已验证发布目录，重启 `family-robot` 并验证健康接口；不要覆盖正在使用的二进制。
 
-## 实际模型联调
+### 实际模型联调
 
 `cmd/smoke` 模拟小智设备，读取单声道 16kHz/16bit WAV，按设备速度发送真实 Opus；至少两轮，并保存收到的 Opus 解码 WAV 和 JSON 结果。
 
@@ -122,7 +143,7 @@ bin/smoke -input /absolute/first.wav -followup /absolute/second.wav -out /absolu
 
 这些测试证明网关和真实 API 的链路，不能替代 M5StopWatch 扬声器、麦克风、Wi-Fi 和实际停播延迟的测试。
 
-## 实现来源
+### 实现来源
 
 协议依据：[小智官方 WebSocket 文档](https://github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md)及对应固件实现。
 千问依据：[实时语音](https://help.aliyun.com/zh/model-studio/realtime)、[客户端事件](https://help.aliyun.com/zh/model-studio/client-events)、[服务端事件](https://help.aliyun.com/zh/model-studio/server-events)。

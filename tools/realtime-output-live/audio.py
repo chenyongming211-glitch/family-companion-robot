@@ -1,3 +1,7 @@
+# DEPRECATED_PRODUCT_PATH (2026-10-25): replaced in the default voice path by Go.
+# Go implementation: internal/realtimeaudio/
+# Retained only for temporary Python rollback and differential-test reference.
+# Do not add product features here; see docs/CODE_LIFECYCLE.md.
 """Persistent Opus state; ASR decodes exactly the packets sent to the Mac."""
 import ctypes as c
 

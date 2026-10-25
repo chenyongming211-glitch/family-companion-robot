@@ -1,3 +1,7 @@
+# DEPRECATED_PRODUCT_PATH (2026-10-25): replaced in the default voice path by Go.
+# Go implementation: internal/realtimestate/identity.go
+# Retained only for temporary Python rollback and differential-test reference.
+# Do not add product features here; see docs/CODE_LIFECYCLE.md.
 """Read-only product identity and facts for this isolated voice entry."""
 import copy
 import json

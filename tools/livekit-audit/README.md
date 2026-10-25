@@ -1,5 +1,7 @@
 # LiveKit SDK 接入审计
 
+> **历史验证参考（2026-10-25）。** 此SDK审计属于已弃用的三段式方案，按需保留，不是当前Go服务的运行依赖，也不代表LiveKit接入仍在推进。见[代码生命周期](../../docs/CODE_LIFECYCLE.md)。
+
 服务器上的独立契约探针，不是设备适配器或可通话服务。[真实验证结果](../../docs/verification/2026-10-24-livekit-stage-zero.md)。
 
 ## 环境与运行

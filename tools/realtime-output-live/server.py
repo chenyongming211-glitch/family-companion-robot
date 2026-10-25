@@ -1,3 +1,7 @@
+# DEPRECATED_PRODUCT_PATH (2026-10-25): replaced in the default voice path by Go.
+# Go implementation: cmd/realtime-output-live/ and internal/realtimelive/
+# Retained only for temporary Python rollback and differential-test reference.
+# Do not add product features here; see docs/CODE_LIFECYCLE.md.
 """SSH-only live experiment. No raw audio persistence or production cutover."""
 import asyncio
 import audioop

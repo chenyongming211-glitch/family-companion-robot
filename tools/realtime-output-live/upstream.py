@@ -1,3 +1,7 @@
+# DEPRECATED_PRODUCT_PATH (2026-10-25): replaced in the default voice path by Go.
+# Go implementation: internal/realtimelive/native.go and asr.go
+# Retained only for temporary Python rollback and differential-test reference.
+# Do not add product features here; see docs/CODE_LIFECYCLE.md.
 """Native voice input/output plus a separate output-only streaming ASR."""
 import asyncio
 import base64
