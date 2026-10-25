@@ -40,7 +40,7 @@ xcrun swiftc -swift-version 5 -O -framework AppKit -framework AVFoundation \
   -import-objc-header "$common/OpusBridge.h" \
   "$common/Sources/AudioPipeline.swift" "$common/Sources/MicrophonePCM.swift" \
   "$common/Sources/Opus.swift" "$common/Sources/PlaybackLedger.swift" \
-  "$out/Fixture.swift" "$src/LiveClient.swift" "$src/main.swift" \
+  "$out/Fixture.swift" "$src/DeviceIdentity.swift" "$src/LiveClient.swift" "$src/main.swift" \
   "$out/OpusBridge.o" -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" \
   -o "$out/OutputLiveSoak.app/Contents/MacOS/OutputLive"
 cp "$src/Info.plist" "$out/OutputLiveSoak.app/Contents/Info.plist"

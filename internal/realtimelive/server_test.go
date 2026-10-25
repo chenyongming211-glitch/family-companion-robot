@@ -36,7 +36,9 @@ func TestTicketSingleUseOriginExpiryAndAdmission(t *testing.T) {
 	token := pair()
 	expired := pair()
 	s.mu.Lock()
-	s.tickets[expired] = time.Now().Add(-time.Second)
+	binding := s.tickets[expired]
+	binding.expiry = time.Now().Add(-time.Second)
+	s.tickets[expired] = binding
 	s.mu.Unlock()
 	dial := func(token string) (*websocket.Conn, *http.Response, error) {
 		return websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(h.URL, "http")+"/live", http.Header{"Authorization": []string{"Bearer " + token}})

@@ -38,6 +38,9 @@ func main() {
 		log.Fatal("record_directory_failed")
 	}
 	app := realtimelive.NewServer(cfg, product, *root, build)
+	if app.InitializationError() != nil {
+		log.Fatal("device_registry_invalid")
+	}
 	srv := &http.Server{Addr: *port, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

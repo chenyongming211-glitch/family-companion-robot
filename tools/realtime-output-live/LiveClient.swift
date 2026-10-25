@@ -4,6 +4,8 @@ import AVFoundation
 final class LiveClient: @unchecked Sendable {
     let queue = DispatchQueue(label: "family.output.live")
     let url: URL, plan: String?
+    let ownsIdentity: Bool, deviceProfile: String
+    private var sessionID: String?
     var status: ((String) -> Void)?, ended: ((Bool) -> Void)?
     private var session: URLSession?, socket: URLSessionWebSocketTask?, audio: AudioPipeline?, encoder: OpusEncoder?
     private var closed = false, ready = false, sending = false
@@ -11,7 +13,9 @@ final class LiveClient: @unchecked Sendable {
     private var draining = false, drainStarted = 0.0
     private var outgoing: [URLSessionWebSocketTask.Message] = [], input: [Int16] = []
     private var fixture: RealtimeFixture?, outputIndex = -1, transcript = ""
-    init(url: URL, plan: String? = nil) { self.url = url; self.plan = plan }
+    init(url: URL, plan: String? = nil, ownsIdentity: Bool = true, deviceProfile: String = "default") {
+        self.url = url; self.plan = plan; self.ownsIdentity = ownsIdentity; self.deviceProfile = deviceProfile
+    }
     func start() { queue.async { self.pair() } }
     func stop() { queue.async { self.finish(true) } }
     private func pair() {
@@ -22,13 +26,24 @@ final class LiveClient: @unchecked Sendable {
         parts.scheme = "http"; parts.path = "/pair"
         var request = URLRequest(url: parts.url!); request.httpMethod = "POST"; request.timeoutInterval = 8
         status?("正在连接…")
+        let owned = ownsIdentity, profile = deviceProfile, kind = plan == nil ? "mac_native" : "mac_fixture"
         Task { [weak self] in
             do {
-                let (data, response) = try await session.data(for: request)
+                var pairRequest = request
+                var device: DeviceIdentity?
+                if owned {
+                    device = try await DeviceIdentity.prepare(session: session, endpoint: request.url!, profile: profile, kind: kind)
+                    pairRequest.setValue("Bearer " + device!.credential, forHTTPHeaderField: "Authorization")
+                    pairRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    pairRequest.httpBody = try JSONSerialization.data(withJSONObject: ["device_id": device!.deviceID, "client_version": "ownership-v1"])
+                }
+                let (data, response) = try await session.data(for: pairRequest)
                 guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 1024,
                       let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let ticket = value["ticket"] as? String,
                       ticket.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else { throw ClientFailure("pair_unavailable") }
+                if let device, value["device_id"] as? String != device.deviceID { throw ClientFailure("pair_identity_mismatch") }
+                if let device { metadata("live.terminal_authenticated", ["device_id": device.deviceID, "client_type": device.clientType]) }
                 self?.queue.async { [weak self] in self?.connect(ticket) }
             } catch { self?.queue.async { [weak self] in self?.fail("连接未成功，请稍后重新开始。") } }
         }
@@ -43,7 +58,9 @@ final class LiveClient: @unchecked Sendable {
         }
     }
     private func send(_ event: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: event), let text = String(data: data, encoding: .utf8) else { return }
+        var scoped = event
+        if let sessionID { scoped["session_id"] = sessionID }
+        guard let data = try? JSONSerialization.data(withJSONObject: scoped), let text = String(data: data, encoding: .utf8) else { return }
         enqueue(.string(text))
     }
     private func enqueue(_ value: URLSessionWebSocketTask.Message) {
@@ -83,6 +100,13 @@ final class LiveClient: @unchecked Sendable {
         case .string(let text):
             guard let data = text.data(using: .utf8), data.count <= 16384,
                   let event = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ClientFailure("control") }
+            if ownsIdentity {
+                guard let scope = event["session_id"] as? String,
+                      scope.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else { throw ClientFailure("session_scope_missing") }
+                if event["type"] as? String == "ready", sessionID == nil {
+                    sessionID = scope; metadata("live.session_bound", ["session_id": scope])
+                } else if scope != sessionID { throw ClientFailure("session_scope_mismatch") }
+            }
             switch event["type"] as? String {
             case "ready":
                 guard !ready else { throw ClientFailure("duplicate_ready") }

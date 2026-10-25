@@ -7,6 +7,8 @@ import (
 	"familyrobot/internal/realtimeaudio"
 	"familyrobot/internal/realtimestate"
 	"github.com/gorilla/websocket"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -40,6 +42,11 @@ type Session struct {
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
 	rec               recorder
+	manifest          SessionInfo
+	ownerErr          error
+	serverStopping    func() bool
+	failureMu         sync.Mutex
+	failureReason     string
 	generate          func(context.Context, int64, string, []byte, func(string, []byte) error) error
 }
 
@@ -49,19 +56,47 @@ func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimesta
 	off := false
 	lc.Search = &off
 	s := &Session{ws: ws, cfg: cfg, directory: dir, product: product, ctx: ctx, cancel: cancel, ring: realtimestate.NewAudioRing(16000 * 35), input: make(chan []byte, 100), listener: NewNative(lc, dir), items: map[string]*liveTurn{}, changed: make(chan struct{}, 1), rec: recorder{dir: dir}}
+	info, err := ReadSessionInfo(dir)
+	if err != nil && !os.IsNotExist(err) {
+		s.ownerErr = err
+	}
+	s.manifest = info
+	s.rec.owner = info.Ownership
 	s.generate = s.generateNative
 	return s
 }
 func (s *Session) record(event string, m map[string]any) error {
 	e := s.rec.add(event, m)
 	if e != nil {
-		s.fail()
+		s.failReason("record_write_failed")
 	}
 	return e
 }
-func (s *Session) fail()           { s.cancel(); s.ws.Close() }
+func (s *Session) fail() { s.failReason("session_error") }
+func (s *Session) failReason(reason string) {
+	s.failureMu.Lock()
+	if s.failureReason == "" {
+		s.failureReason = reason
+	}
+	s.failureMu.Unlock()
+	s.cancel()
+	s.ws.Close()
+}
+func (s *Session) terminalFailure() string {
+	s.failureMu.Lock()
+	defer s.failureMu.Unlock()
+	return s.failureReason
+}
 func (s *Session) spawn(fn func()) { s.wg.Add(1); go func() { defer s.wg.Done(); fn() }() }
 func (s *Session) sendLocked(event any) error {
+	if fields, ok := event.(map[string]any); ok && s.rec.owner.SessionID != "" {
+		copy := make(map[string]any, len(fields)+1)
+		for k, v := range fields {
+			copy[k] = v
+		}
+		copy["session_id"] = s.rec.owner.SessionID
+		event = copy
+	}
 	s.ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	return s.ws.WriteJSON(event)
 }
@@ -162,7 +197,7 @@ func (s *Session) interruptExpected(expected *liveTurn) error {
 				s.mu.Unlock()
 				s.record("drain_timeout", f)
 				s.send(map[string]any{"type": "status", "code": "drain_failed"})
-				s.fail()
+				s.failReason("drain_timeout")
 			}
 		})
 	}
@@ -172,11 +207,10 @@ func (s *Session) interruptExpected(expected *liveTurn) error {
 	return err
 }
 func (s *Session) Run() (err error) {
-	codec, e := realtimeaudio.New(16000, 320)
-	if e != nil {
-		return e
+	if s.ownerErr != nil {
+		return s.ownerErr
 	}
-	defer codec.Close()
+	reason := "session_error"
 	defer func() {
 		s.cancel()
 		s.listener.Close()
@@ -193,8 +227,33 @@ func (s *Session) Run() (err error) {
 		if err != nil {
 			s.record("session_error", map[string]any{"error_type": "session_terminated"})
 		}
-		s.record("closed", map[string]any{"turns": len(history)})
+		if failure := s.terminalFailure(); failure != "" {
+			reason = failure
+			if err == nil {
+				err = errors.New(failure)
+			}
+		}
+		if s.serverStopping != nil && s.serverStopping() {
+			reason = "server_shutdown"
+		}
+		s.record("closed", map[string]any{"turns": len(history), "reason": reason})
+		if s.manifest.SessionID != "" {
+			now := time.Now().UTC()
+			s.manifest.EndedAt = &now
+			s.manifest.EndReason = reason
+			if e := privateJSON(filepath.Join(s.directory, "session.json"), s.manifest); e != nil && err == nil {
+				err = e
+			}
+		}
 	}()
+	if e := s.record("session_started", map[string]any{}); e != nil {
+		return e
+	}
+	codec, e := realtimeaudio.New(16000, 320)
+	if e != nil {
+		return e
+	}
+	defer codec.Close()
 	if e = s.listener.Open(s.ctx, "仅检测语音轮次，不自动生成回复。", true); e != nil {
 		return e
 	}
@@ -204,13 +263,13 @@ func (s *Session) Run() (err error) {
 	s.spawn(func() {
 		if e := s.microphone(); e != nil && s.ctx.Err() == nil {
 			s.record("input_failed", map[string]any{"error_type": "input_provider_failed"})
-			s.fail()
+			s.failReason("input_provider_failed")
 		}
 	})
 	s.spawn(func() {
 		if e := s.listen(); e != nil && s.ctx.Err() == nil {
 			s.record("input_failed", map[string]any{"error_type": "input_provider_failed"})
-			s.fail()
+			s.failReason("input_provider_failed")
 		}
 	})
 	s.spawn(func() {
@@ -243,7 +302,14 @@ func (s *Session) Run() (err error) {
 			if errors.As(e, &closeError) {
 				fields["close_code"] = closeError.Code
 			}
+			reason = "transport_lost"
+			if closeError != nil && closeError.Code == websocket.CloseNormalClosure {
+				reason = "client_closed"
+			}
 			s.record("transport_closed", fields)
+			if failure := s.terminalFailure(); failure != "" {
+				return errors.New(failure)
+			}
 			return nil
 		}
 		if kind == websocket.BinaryMessage {
@@ -262,8 +328,12 @@ func (s *Session) Run() (err error) {
 			if e != nil {
 				return e
 			}
+			if e = s.validateScope(event); e != nil {
+				return e
+			}
 			switch event["type"] {
 			case "stop":
+				reason = "client_stop"
 				return nil
 			case "receipt":
 				s.mu.Lock()

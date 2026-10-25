@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"familyrobot/internal/realtimestate"
+	"familyrobot/internal/voiceidentity"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"os"
@@ -19,7 +20,9 @@ type Server struct {
 	stopping    bool
 	activeDone  chan struct{}
 	mu          sync.Mutex
-	tickets     map[string]time.Time
+	tickets     map[string]ticketBinding
+	devices     *voiceidentity.Store
+	initErr     error
 	busy        bool
 	active      *websocket.Conn
 	cfg         Config
@@ -29,10 +32,23 @@ type Server struct {
 }
 
 func NewServer(cfg Config, product *realtimestate.Product, root, build string) *Server {
-	s := &Server{tickets: map[string]time.Time{}, cfg: cfg, product: product, root: root, build: build}
-	s.run = func(ws *websocket.Conn, dir string) { NewSession(ws, cfg, dir, product).Run() }
+	devices, initErr := voiceidentity.Open(filepath.Join(root, "devices.json"))
+	s := &Server{tickets: map[string]ticketBinding{}, devices: devices, initErr: initErr, cfg: cfg, product: product, root: root, build: build}
+	s.run = func(ws *websocket.Conn, dir string) {
+		session := NewSession(ws, cfg, dir, product)
+		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
+		session.Run()
+	}
 	return s
 }
+
+type ticketBinding struct {
+	expiry time.Time
+	owner  Ownership
+}
+
+func (s *Server) InitializationError() error { return s.initErr }
+
 func respond(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -62,13 +78,27 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Lock()
 		busy := s.busy
 		s.mu.Unlock()
-		respond(w, 200, map[string]any{"ready": true, "busy": busy, "experiment": "output-asr-live", "backend": "go", "build": s.build})
+		status := 200
+		if s.initErr != nil {
+			status = 503
+		}
+		respond(w, status, map[string]any{"device_identity": 1, "ready": s.initErr == nil, "busy": busy, "experiment": "output-asr-live", "backend": "go", "build": s.build})
 	})
+	mux.HandleFunc("POST /devices", s.enrollDevice)
 	mux.HandleFunc("POST /pair", func(w http.ResponseWriter, r *http.Request) {
+		if s.initErr != nil {
+			w.WriteHeader(503)
+			return
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if r.Header.Get("Origin") != "" || s.busy || s.stopping {
 			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		owner, status := s.pairOwner(r)
+		if status != 200 {
+			w.WriteHeader(status)
 			return
 		}
 		b := make([]byte, 32)
@@ -77,10 +107,18 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		ticket := base64.RawURLEncoding.EncodeToString(b)
-		s.tickets = map[string]time.Time{ticket: time.Now().Add(120 * time.Second)}
-		respond(w, 200, map[string]any{"ticket": ticket})
+		s.tickets = map[string]ticketBinding{ticket: {time.Now().Add(120 * time.Second), owner}}
+		value := map[string]any{"ticket": ticket}
+		if owner.DeviceID != "" {
+			value["device_id"] = owner.DeviceID
+		}
+		respond(w, 200, value)
 	})
 	mux.HandleFunc("GET /live", func(w http.ResponseWriter, r *http.Request) {
+		if s.initErr != nil {
+			w.WriteHeader(503)
+			return
+		}
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		s.mu.Lock()
 		// Python short-circuits Origin/busy checks before consuming the ticket.
@@ -89,9 +127,9 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(403)
 			return
 		}
-		expiry, ok := s.tickets[token]
+		binding, ok := s.tickets[token]
 		delete(s.tickets, token)
-		if !ok || expiry.Before(time.Now()) {
+		if !ok || binding.expiry.Before(time.Now()) {
 			s.mu.Unlock()
 			w.WriteHeader(403)
 			return
@@ -115,8 +153,14 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Unlock()
 		defer func() { s.mu.Lock(); s.active = nil; s.mu.Unlock() }()
 		ws.SetReadLimit(8192)
-		dir := filepath.Join(s.root, time.Now().UTC().Format("20060102T150405")+"-"+randomID()[:8])
+		owner := binding.owner
+		owner.SessionID = randomID()
+		dir := filepath.Join(s.root, time.Now().UTC().Format("20060102T150405")+"-"+owner.SessionID)
 		if e = os.Mkdir(dir, 0700); e != nil {
+			return
+		}
+		info := SessionInfo{Ownership: owner, SchemaVersion: 1, Build: s.build, StartedAt: time.Now().UTC()}
+		if e = privateJSON(filepath.Join(dir, "session.json"), info); e != nil {
 			return
 		}
 		s.run(ws, dir)
