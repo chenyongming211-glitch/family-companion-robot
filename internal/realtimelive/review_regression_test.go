@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,6 +109,33 @@ func TestReviewConcurrentOldFailureLeavesNewQuestionActive(t *testing.T) {
 	client.SetReadDeadline(time.Now().Add(25 * time.Millisecond))
 	if _, b, err := client.ReadMessage(); err == nil {
 		t.Fatalf("stale client status: %s", b)
+	}
+}
+
+func TestReviewConditionalInterruptAndNewTurnOwnershipRace(t *testing.T) {
+	server, _ := testSocket(t)
+	s := NewSession(server, Config{}, t.TempDir(), nil)
+	defer s.cancel()
+	for range 128 {
+		old := s.addTurn()
+		start := make(chan struct{})
+		var workers sync.WaitGroup
+		workers.Add(2)
+		var next *liveTurn
+		var interruptErr error
+		go func() { defer workers.Done(); <-start; interruptErr = s.interruptExpected(old) }()
+		go func() { defer workers.Done(); <-start; next = s.addTurn() }()
+		close(start)
+		workers.Wait()
+		if interruptErr != nil {
+			t.Fatal(interruptErr)
+		}
+		s.mu.Lock()
+		cut, current := next.turn.Cut, s.output
+		s.mu.Unlock()
+		if cut || current != next {
+			t.Fatal("conditional old-turn interruption sealed a concurrently installed question")
+		}
 	}
 }
 

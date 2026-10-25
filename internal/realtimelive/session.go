@@ -202,13 +202,13 @@ func (s *Session) Run() (err error) {
 		return e
 	}
 	s.spawn(func() {
-		if s.microphone() != nil {
+		if e := s.microphone(); e != nil && s.ctx.Err() == nil {
 			s.record("input_failed", map[string]any{"error_type": "input_provider_failed"})
 			s.fail()
 		}
 	})
 	s.spawn(func() {
-		if s.listen() != nil {
+		if e := s.listen(); e != nil && s.ctx.Err() == nil {
 			s.record("input_failed", map[string]any{"error_type": "input_provider_failed"})
 			s.fail()
 		}
@@ -236,6 +236,9 @@ func (s *Session) Run() (err error) {
 		s.ws.SetReadDeadline(time.Time{})
 		kind, b, e := s.ws.ReadMessage()
 		if e != nil {
+			if websocket.IsCloseError(e, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				return nil
+			}
 			return e
 		}
 		if kind == websocket.BinaryMessage {

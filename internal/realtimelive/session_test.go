@@ -8,6 +8,8 @@ import (
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +177,59 @@ func TestLateOldFailureDoesNotInterruptNewReply(t *testing.T) {
 	defer s.mu.Unlock()
 	if next.turn.Cut || s.output != next {
 		t.Fatal("late error cancelled newer question")
+	}
+}
+func TestOrderlyClientExitDoesNotCreateProviderErrors(t *testing.T) {
+	for _, normalClose := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stop", true: "normal_close"}[normalClose], func(t *testing.T) {
+			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if e != nil {
+					return
+				}
+				defer c.Close()
+				c.WriteJSON(map[string]any{"type": "session.created"})
+				var request map[string]any
+				c.ReadJSON(&request)
+				c.WriteJSON(map[string]any{"type": "session.updated", "session": map[string]any{"enable_search": false}})
+				c.ReadJSON(&request)
+				c.WriteJSON(map[string]any{"type": "session.updated", "session": map[string]any{}})
+				for {
+					if _, _, e = c.ReadMessage(); e != nil {
+						return
+					}
+				}
+			}))
+			defer provider.Close()
+			server, client := testSocket(t)
+			dir := t.TempDir()
+			s := NewSession(server, Config{URL: "ws" + strings.TrimPrefix(provider.URL, "http")}, dir, nil)
+			result := make(chan error, 1)
+			go func() { result <- s.Run() }()
+			var ready map[string]any
+			if e := client.ReadJSON(&ready); e != nil {
+				t.Fatal(e)
+			}
+			if normalClose {
+				client.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(1000, ""), time.Now().Add(time.Second))
+			} else {
+				client.WriteJSON(map[string]any{"type": "stop"})
+			}
+			select {
+			case e := <-result:
+				if e != nil {
+					t.Errorf("orderly exit error: %v", e)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("cleanup blocked")
+			}
+			b, e := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			if strings.Contains(string(b), "input_failed") || strings.Contains(string(b), "session_error") {
+				t.Fatal("orderly close reported as provider failure:", string(b))
+			}
+		})
 	}
 }

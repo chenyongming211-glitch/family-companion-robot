@@ -1,5 +1,7 @@
 # 换电脑开发交接
 
+**Go迁移已开始（2026-10-25，独立验证中）：审核5417671方案后已实现`internal/realtimeaudio`、`internal/realtimestate`、`internal/realtimelive`和`cmd/realtime-output-live`，实现提交a0a743b/636ac95已推送main，云端新Go回环18040已启动。Python18032与原四服务保持，客户端默认仍18032，未切换/停旧。494组纯逻辑Python差异及音频字节/样本对照、受控流式/排空/取消/退出测试通过；真实模型/CoreAudio首轮数学和身份通过，32普通轮交替完成（Go/Python各16），其余排空/搜索/长测/真人验收继续。全库race有旧gateway清空会话测试不稳定，不能写为全绿；正常关窗误记提供方错误的Go日志修正已测通过，待空闲更新。详见[迁移验证](verification/2026-10-25-realtime-go-migration.md)和[冻结清单](verification/2026-10-25-realtime-go-baseline.json)。此段覆盖下方“尚未开始Go代码”的旧状态。**
+
 **Go迁移范围收敛（2026-10-25，仅完善方案）：用户已明确先把当前Realtime完整链路一比一迁成Go，不增删功能，不同时合入其他模块；对比测试通过再继续整合。已修订[迁移方案](superpowers/specs/2026-10-25-realtime-go-unification-design.md)：基线包含身份、内置搜索、流式、已播上下文、排空和全部有效配置；增加功能台账、确定性/受控传输/真实模型三层对照、已知问题清单与回退演练。日志异步化、内存回收、队列调优、旧Go设备工具及三段式内容模块合入均移到迁移验收后。当前没有开始Go迁移代码、模型调用或服务切换。**
 
 **18032内置联网搜索（2026-10-25，已部署）：代码dc3f28d已推送部署，生成连接enable_search＋enable_source，监听连接明确关闭；小满能力说明随同一开关联动，既有流式/自然反问/排空不变。云端49＋8项通过；真实模型及Mac两会话共5轮均验证，天气有count=1及来源，插话排空和重连正常，0报错。终端天气话尾至首包4643/2806ms、数学898ms，非真人声学时延。仍将预报范围说成“现在”，不宣称天气实况准确性通过。默认开启，可用OUTPUT_LIVE_ENABLE_SEARCH=0回退；凭据与原四服务不变，旧探针默认关闭。官方搜索与tools互斥，后续Go迁移/判题工具要保留配置证据并处理组合限制。见[搜索验证](verification/2026-10-25-realtime-search.md)及[全部配置清单](verification/2026-10-25-realtime-config-switches.md)。本段覆盖下方“18032不支持联网”的旧能力状态。**
