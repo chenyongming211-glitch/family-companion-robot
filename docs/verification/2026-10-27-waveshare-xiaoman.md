@@ -50,7 +50,13 @@ ESP-SR2.4.7组件页面指向commit `2f8c4b0459db5bbb39abd77adae27962d6d94bcb`�
 
 v3 manifest SHA256 `f97cb9904f5ecb9370c1d944cd458cfd82375b43518c7725b980e04d582a75c4`，32文件。根代理核对本机/云端全部哈希，较v2仅上述3路径变化。fresh prepare、最终103项host/51.997秒及110项上游/10.606秒，实际exit0。正常电源重开生产用例RED→GREEN，质量复现后置条件现为IN1/OUT1/reference1/appliedAEC1/realtime1，且尚未调用PlaybackStart；官方HW2及原规格探针也重编、运行通过。
 
-最终规格增量复审PASS，独立重跑9项/5.735秒、exit0，1771份重新准备源码一致；质量复审PASS，独立按真实HW2关闭的两种顺序各循环3次，18项故障/代次回归24.227秒、ASan/UBSan与实际exit0。Connect、same-enable、旧代次拒绝、当前AEC处理帧资格及fault锁存保持。审查报告和94份既有日志的hash核对均保存在云端。当前尚未目标编译或刷写。
+最终规格增量复审PASS，独立重跑9项/5.735秒、exit0，1771份重新准备源码一致；质量复审PASS，独立按真实HW2关闭的两种顺序各循环3次，18项故障/代次回归24.227秒、ASan/UBSan与实际exit0。Connect、same-enable、旧代次拒绝、当前AEC处理帧资格及fault锁存保持。审查报告和94份既有日志的hash核对均保存在云端。以上为源码阶段结论，随后进入实际目标编译，未刷写。
+
+## 实际目标编译
+
+固件提交`e2cab214479b9ae2757e948013f7a1b22501938b`已推送并核对远端main。[首次四目标构建40374961290](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/40374961290)中M5标准版成功，Waveshare job121755389629实际报错：共用display include调用`LvglFont::font()`，Waveshare编译单元只见类型前置声明，缺少完整字体头。主机替身测试未覆盖这一真实头依赖，不能把此前host通过当作目标编译通过。
+
+最小修复只在Waveshare小满条件块显式包含`display/lvgl_display/lvgl_font.h`；其余为补丁hunk行号调整。严格fresh prepare及独立规格重新准备1771文件一致，与v3相比仅该include和生成provenance变化，静态依赖检查RED1→GREEN0。此低影响编译修复不新增镜像实现的单元测试，以新的实际四目标重建验收；不关闭编译警告或放宽类型检查。修复后产物和尺寸仍待新构建结果。
 
 ## 备份与静默边界
 

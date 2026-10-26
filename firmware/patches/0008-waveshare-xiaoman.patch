@@ -615,19 +615,20 @@ diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json b/main
 diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
 --- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
 +++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
-@@ -3,6 +3,11 @@
+@@ -3,6 +3,12 @@
  #include "esp_lcd_co5300.h"
  
  #include "codecs/box_audio_codec.h"
 +#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
 +#include "xiaoman_box_codec.h"
 +#include "xiaoman_orb_view.h"
++#include "display/lvgl_display/lvgl_font.h"
 +#include <cstring>
 +#endif
  #include "application.h"
  #include "button.h"
  #include "led/single_led.h"
-@@ -80,6 +85,10 @@
+@@ -80,6 +86,10 @@
  
  // 在waveshare_amoled_1_75类之前添加新的显示类
  class CustomLcdDisplay : public SpiLcdDisplay {
@@ -638,7 +639,7 @@ diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amo
  public:
      static void rounder_event_cb(lv_event_t* e) {
          lv_area_t* area = (lv_area_t* )lv_event_get_param(e);
-@@ -120,6 +129,9 @@
+@@ -120,6 +130,9 @@
          lv_obj_set_style_pad_left(status_bar_, LV_HOR_RES*  0.1, 0);
          lv_obj_set_style_pad_right(status_bar_, LV_HOR_RES*  0.1, 0);
          lv_display_add_event_cb(display_, rounder_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
@@ -648,7 +649,7 @@ diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amo
      }
  };
  
-@@ -132,6 +144,9 @@
+@@ -132,6 +145,9 @@
  
      virtual void SetBrightnessImpl(uint8_t brightness) override {
          auto display = Board::GetInstance().GetDisplay();
@@ -658,7 +659,7 @@ diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amo
          DisplayLockGuard lock(display);
          uint8_t data[1] = {((uint8_t)((255*  brightness) / 100))};
          int lcd_cmd = 0x51;
-@@ -326,7 +341,11 @@
+@@ -326,7 +342,11 @@
      }
  
      virtual AudioCodec* GetAudioCodec() override {
