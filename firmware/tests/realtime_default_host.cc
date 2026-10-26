@@ -20,10 +20,12 @@ struct esp_timer_create_args_t {
 static int esp_timer_create(const esp_timer_create_args_t*, int* handle) { *handle = 1; return 0; }
 struct Codec {
     bool software = CONFIG_STOPWATCH_SOFTWARE_AEC;
-    bool valid = false, eligible = false;
+    bool valid = false, eligible = false, faulted = false;
     bool SoftwareReference() const { return software; }
+    bool ManagedCapture() const { return software || CONFIG_WAVESHARE_XIAOMAN_REALTIME; }
     bool RealtimeEligible() const { return eligible; }
     bool ReferenceValid() const { return valid; }
+    bool ReferenceFaulted() const { return faulted; }
 };
 struct Display { void ShowNotification(const char*) {} };
 struct Board {
@@ -73,7 +75,24 @@ struct Application {
 int main() {
     auto& codec = Board::GetInstance().codec;
     Application app;
-#if CONFIG_STOPWATCH_SOFTWARE_AEC
+#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
+    assert(!codec.SoftwareReference() && codec.ManagedCapture() && app.aec_mode_==kAecOnDeviceSide);
+    assert(app.GetDefaultListeningMode()==kListeningModeAutoStop);
+    codec.valid=codec.eligible=true;
+    assert(app.GetDefaultListeningMode()==kListeningModeRealtime);
+    app.SetAecMode(kAecOff);app.Drain();
+    assert(app.GetDefaultListeningMode()==kListeningModeAutoStop);
+    codec.valid=codec.eligible=false;app.SetAecMode(kAecOnDeviceSide);
+    assert(app.aec_mode_==kAecOff);
+    codec.valid=true;app.protocol.opened=true;
+    app.SetAecMode(kAecOnDeviceSide);app.Drain();
+    assert(app.aec_mode_==kAecOnDeviceSide && app.audio_service_.device_aec);
+    assert(!app.protocol.opened && app.protocol.closes==1);
+    assert(app.GetDefaultListeningMode()==kListeningModeAutoStop);
+    codec.eligible=true;assert(app.GetDefaultListeningMode()==kListeningModeRealtime);
+    app.SetAecMode(kAecOff);app.Drain();codec.faulted=true;
+    app.SetAecMode(kAecOnDeviceSide);assert(app.aec_mode_==kAecOff);
+#elif CONFIG_STOPWATCH_SOFTWARE_AEC
     assert(app.aec_mode_ == (CONFIG_STOPWATCH_DEFAULT_REALTIME ? kAecOnDeviceSide : kAecOff));
     codec.eligible = false;
     assert(app.GetDefaultListeningMode() == kListeningModeAutoStop);

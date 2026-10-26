@@ -123,6 +123,7 @@ public:
         hardware_ok_=false;
         for(auto& r:records_) if(r.id) r.valid=false;
     }
+    bool HardwareHealthy() const { return hardware_ok_; }
     // Read just-sent PCM for AEC BEFORE this call. Address is the descriptor
     // returned by the pinned SDK. The tag describes its *previous* refill.
     void Complete(int16_t* address, size_t n, int64_t stamp) {

@@ -88,7 +88,12 @@ class XiaomanWakeTests(unittest.TestCase):
                          'invalid-command-id', 'epoch-during-detect', 'tagged-valid',
                          'tagged-old-batch', 'tagged-old-generation',
                          'engine-store-capture-only', 'engine-store-capture-and-wake',
-                         'nonsoftware-stale-source']:
+                         'nonsoftware-stale-source', 'hardware-software-cache',
+                         'hardware-partial-reset', 'hardware-epoch-during-detect',
+                         'hardware-engine-cache-before-detect', 'hardware-engine-epoch-reset',
+                         'hardware-engine-store-capture-only', 'hardware-engine-store-capture-and-wake',
+                         'hardware-tagged-valid', 'hardware-tagged-old-batch',
+                         'hardware-tagged-old-generation']:
             with self.subTest(scenario=scenario):
                 result = subprocess.run([str(binary), scenario], capture_output=True,
                                         text=True, timeout=15, env=environment)

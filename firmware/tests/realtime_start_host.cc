@@ -12,10 +12,11 @@ enum DeviceState {kDeviceStateIdle, kDeviceStateListening, kDeviceStateSpeaking}
 static int64_t now_us = 1000;
 static int64_t esp_timer_get_time() { return now_us; }
 struct Codec {
-    bool software = true, eligible = false, valid = false, faulted = false;
+    bool software = !CONFIG_WAVESHARE_XIAOMAN_REALTIME, eligible = false, valid = false, faulted = false;
     uint32_t capture = 7;
     std::function<void()> after_eligible_check;
     bool SoftwareReference() const { return software; }
+    bool ManagedCapture() const { return software || CONFIG_WAVESHARE_XIAOMAN_REALTIME; }
     bool RealtimeEligible() const {
         const bool result=eligible && !faulted;
         if (after_eligible_check) after_eligible_check();
@@ -120,7 +121,7 @@ static void reset_codec(){Board::GetInstance().codec=Codec{}; now_us=1000;}
     app.ContinueRealtimeListeningStart();
 }
 int main(){
-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
+#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
     reset_codec();
     {Application app; arm(app);
      auto& codec=Board::GetInstance().codec;

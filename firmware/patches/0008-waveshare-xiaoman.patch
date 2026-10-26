@@ -1,0 +1,672 @@
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -44,6 +44,10 @@
+             )
+ 
+ set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
++if(CONFIG_XIAOMAN_ORB_UI AND NOT CONFIG_BOARD_TYPE_M5STACK_STOPWATCH)
++    list(APPEND SOURCES "boards/m5stack/stopwatch/xiaoman_orb_view.cc")
++    list(APPEND INCLUDE_DIRS "boards/m5stack/stopwatch")
++endif()
+ 
+ # Add board common files
+ list(APPEND SOURCES
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1003,9 +1003,9 @@
+         Requires the unique USB-console experiment variant. No acoustic acceptance.
+ 
+ config XIAOMAN_ORB_UI
+-    bool "Xiaoman StopWatch fluid orb conversation UI"
++    bool "Xiaoman fluid orb conversation UI"
+     default n
+-    depends on BOARD_TYPE_M5STACK_STOPWATCH && STOPWATCH_DEFAULT_REALTIME && USE_DEFAULT_MESSAGE_STYLE
++    depends on ((BOARD_TYPE_M5STACK_STOPWATCH && STOPWATCH_DEFAULT_REALTIME) || WAVESHARE_XIAOMAN_REALTIME) && USE_DEFAULT_MESSAGE_STYLE
+     help
+         Local low-rate RGB565 orb and short truthful state only. No transcripts.
+         USB orb_ui off/low/on selects static, 5fps, or target 15fps for comparison.
+@@ -1019,6 +1019,15 @@
+         Records the startup realtime intent for the Xiaoman variant only.
+         Runtime selection still requires the current capture's valid AEC reference.
+         Fault fallback and an explicit realtime-off request remain authoritative.
++
++config WAVESHARE_XIAOMAN_REALTIME
++    bool "Waveshare 2.16 Xiaoman hardware-MR realtime target"
++    default n
++    depends on BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16 && USE_DEVICE_AEC && USE_AUDIO_PROCESSOR && SPIRAM
++    depends on !I2S_ISR_IRAM_SAFE
++    help
++        Preserve hardware ES7210 MR input and use completed TX DMA receipts.
++        Current processed capture is required before realtime uplink.
+ 
+ config STOPWATCH_AEC_OFFSET_SAMPLES
+     int "Fixed playback reference lookback (physical 24k samples)"
+@@ -1039,7 +1048,7 @@
+         || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_3_4C || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_4C || BOARD_TYPE_ESP32_S3_LCD_EV_BOARD_2 || BOARD_TYPE_YUNLIAO_S3 \
+         || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_7 || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_8 || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_10_1 \
+         || BOARD_TYPE_ESP_VOCAT || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_3_49 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_3_49_V2 || BOARD_TYPE_WAVESHARE_ESP32_S3_RLCD_4_2 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_85B || BOARD_TYPE_ZHENGCHEN_CAM || BOARD_TYPE_ZHENGCHEN_CAM_ML307 \
+-        || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_4_3C || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_54 || BOARD_TYPE_WAVESHARE_ESP32_S3_LCD_0_85 || BOARD_TYPE_AI_VOX3 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_43C || BOARD_TYPE_ATK_DNESP32S3_BOX3 || STOPWATCH_SOFTWARE_AEC)
++        || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_4_3C || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_54 || BOARD_TYPE_WAVESHARE_ESP32_S3_LCD_0_85 || BOARD_TYPE_AI_VOX3 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_43C || BOARD_TYPE_ATK_DNESP32S3_BOX3 || STOPWATCH_SOFTWARE_AEC || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16)
+     help
+         To work properly, device-side AEC requires a clean output reference path from the speaker signal and physical acoustic isolation between the microphone and speaker.
+ 
+diff --git a/main/application.cc b/main/application.cc
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -61,7 +61,7 @@
+ bool Application::SetDeviceState(DeviceState state) {
+     if (!state_machine_.TransitionTo(state))
+         return false;
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+     if (state != kDeviceStateListening)
+         CancelPendingRealtimeStart();
+ #endif
+@@ -99,7 +99,7 @@
+     callbacks.on_vad_change = [this](bool speaking) {
+         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
+     };
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+     callbacks.on_capture_ready = [this](uint32_t generation) {
+         capture_ready_generation_.store(generation);
+         xEventGroupSetBits(event_group_, MAIN_EVENT_CAPTURE_READY);
+@@ -298,7 +298,7 @@
+             }
+         }
+ 
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+         // Process cancellation/scheduled channel changes before any ready hint.
+         if (bits & (MAIN_EVENT_CAPTURE_READY | MAIN_EVENT_CLOCK_TICK))
+             ContinueRealtimeListeningStart();
+@@ -848,7 +848,7 @@
+     } else if (state == kDeviceStateSpeaking) {
+         AbortSpeaking(kAbortReasonNone);
+     } else if (state == kDeviceStateListening) {
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+         CancelPendingRealtimeStart();
+ #endif
+         protocol_->CloseAudioChannel();
+@@ -1097,7 +1097,7 @@
+ 
+             // Make sure the audio processor is running
+             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
+-                (board.GetAudioCodec()->SoftwareReference() &&
++                (board.GetAudioCodec()->ManagedCapture() &&
+                  listening_mode_ != kListeningModeRealtime)) {
+                 // For auto mode, wait for the playback queue to drain before enabling
+                 // voice processing. This prevents audio truncation when STOP arrives
+@@ -1117,7 +1117,7 @@
+ 
+             if (listening_mode_ != kListeningModeRealtime) {
+                 audio_service_.SetExperimentUplink(false);
+-                if (!board.GetAudioCodec()->SoftwareReference())
++                if (!board.GetAudioCodec()->ManagedCapture())
+                     audio_service_.EnableVoiceProcessing(false);
+                 else
+                     audio_service_.EnableVoiceProcessing(true);
+@@ -1142,7 +1142,7 @@
+ }
+ 
+ void Application::RecoverListeningFailure() {
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+     CancelPendingRealtimeStart();
+ #endif
+     // Main-task recovery: prevent a deferred start or popup from surviving the
+@@ -1174,7 +1174,7 @@
+         return;
+     auto* codec = Board::GetInstance().GetAudioCodec();
+     if (GetDeviceState() != kDeviceStateListening || aec_mode_ != kAecOnDeviceSide ||
+-        !codec->SoftwareReference() || !protocol_ || !protocol_->IsAudioChannelOpened() ||
++        !codec->ManagedCapture() || !protocol_ || !protocol_->IsAudioChannelOpened() ||
+         protocol_->AudioChannelEpoch() != realtime_start_channel_epoch_) {
+         CancelPendingRealtimeStart();
+         return;
+@@ -1206,18 +1206,18 @@
+         return;
+     }
+ 
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+     if (pending_realtime_start_)
+         return;
+     const bool skip_wait = skip_realtime_wait_once_;
+     skip_realtime_wait_once_ = false;
+     auto* codec = Board::GetInstance().GetAudioCodec();
+     // A fault may have arrived after the ready hint was checked on this task.
+-    if (codec->SoftwareReference() && aec_mode_ != kAecOff && codec->ReferenceFaulted()) {
++    if (codec->ManagedCapture() && aec_mode_ != kAecOff && codec->ReferenceFaulted()) {
+         SetAecMode(kAecOff);
+         return;
+     }
+-    if (!skip_wait && codec->SoftwareReference() && aec_mode_ == kAecOnDeviceSide &&
++    if (!skip_wait && codec->ManagedCapture() && aec_mode_ == kAecOnDeviceSide &&
+         listening_mode_ != kListeningModeManualStop && !audio_service_.IsAudioProcessorRunning() &&
+         protocol_ && protocol_->IsAudioChannelOpened()) {
+         pending_realtime_start_ = true;
+@@ -1232,7 +1232,7 @@
+         audio_service_.EnableVoiceProcessing(true);
+         return;
+     }
+-    if (listening_mode_ == kListeningModeRealtime && codec->SoftwareReference() &&
++    if (listening_mode_ == kListeningModeRealtime && codec->ManagedCapture() &&
+         !codec->RealtimeEligible())
+         listening_mode_ = kListeningModeAutoStop;
+ #endif
+@@ -1346,9 +1346,9 @@
+ ListeningMode Application::GetDefaultListeningMode() const {
+     if (aec_mode_ == kAecOff)
+         return kListeningModeAutoStop;
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+     auto* codec = Board::GetInstance().GetAudioCodec();
+-    if (!codec->SoftwareReference() || !codec->RealtimeEligible())
++    if (!codec->ManagedCapture() || !codec->RealtimeEligible())
+         return kListeningModeAutoStop;
+ #endif
+     return kListeningModeRealtime;
+@@ -1499,9 +1499,14 @@
+ 
+ void Application::SetAecMode(AecMode mode) {
+     auto* codec = Board::GetInstance().GetAudioCodec();
+-    if (codec->SoftwareReference() && mode != kAecOff && !codec->RealtimeEligible())
+-        return;
+-#if CONFIG_STOPWATCH_DEFAULT_REALTIME
++    // Software observation keeps its established ready gate. Hardware MR can
++    // explicitly enable AEC from Off using a healthy physical reference; a fresh
++    // processed AEC frame is still required by the realtime listening selector.
++    if (codec->ManagedCapture() && mode != kAecOff &&
++        (codec->SoftwareReference() ? !codec->RealtimeEligible()
++                                   : codec->ReferenceFaulted() || !codec->ReferenceValid()))
++        return;
++#if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+     if (mode == kAecOff)
+         CancelPendingRealtimeStart();
+ #endif
+diff --git a/main/audio/audio_codec.h b/main/audio/audio_codec.h
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -54,6 +54,8 @@
+ 
+     // Optional software duplex experiment hooks. Ordinary codecs retain stock behavior.
+     virtual bool SoftwareReference() const { return false; }
++    // Epoch/quarantine support is independent of the physical MR source.
++    virtual bool ManagedCapture() const { return SoftwareReference(); }
+     virtual bool ReferenceValid() const { return true; }
+     virtual void ReportReferenceFailure() {}
+     virtual bool RealtimeEligible() const { return ReferenceValid(); }
+diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -198,7 +198,7 @@
+ }
+ 
+ void AudioService::SetExperimentUplink(bool enabled, bool observer_tail) {
+-    if (!codec_ || !codec_->SoftwareReference())
++    if (!codec_ || !codec_->ManagedCapture())
+         return;
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+     experiment_authorization_.Request(enabled, codec_->ReferenceIntegrity());
+@@ -207,7 +207,7 @@
+ }
+ 
+ void AudioService::UpdateExperimentGate() {
+-    if (!codec_->SoftwareReference())
++    if (!codec_->ManagedCapture())
+         return;
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+     UpdateExperimentGateLocked();
+@@ -263,7 +263,7 @@
+             UpdateExperimentGate();
+             return false;
+         }
+-        if (codec_->SoftwareReference() && (capture_generation_ != codec_->CaptureGeneration() ||
++        if (codec_->ManagedCapture() && (capture_generation_ != codec_->CaptureGeneration() ||
+                                             capture_faulted_ != codec_->ReferenceFaulted())) {
+             capture_generation_ = codec_->CaptureGeneration();
+             capture_faulted_ = codec_->ReferenceFaulted();
+@@ -277,7 +277,7 @@
+             UpdateExperimentGate();
+             return false;
+         }
+-        if (codec_->SoftwareReference() && input_resampler_ == nullptr)
++        if (codec_->ManagedCapture() && input_resampler_ == nullptr)
+             return false;
+         if (input_resampler_ != nullptr) {
+             std::lock_guard<std::mutex> lock(input_resampler_mutex_);
+@@ -290,12 +290,12 @@
+             const auto conversion_result = esp_ae_rate_cvt_process(
+                 input_resampler_, (esp_ae_sample_t)data.data(), in_sample_num,
+                 (esp_ae_sample_t)resampled.data(), &actual_output);
+-            if (codec_->SoftwareReference() &&
++            if (codec_->ManagedCapture() &&
+                 (conversion_result != 0 || actual_output > output_samples)) {
+                 codec_->ReportReferenceFailure();
+                 return false;
+             }
+-            if (codec_->SoftwareReference() && actual_output == 0)
++            if (codec_->ManagedCapture() && actual_output == 0)
+                 return false;
+             resampled.resize(actual_output * codec_->input_channels());
+             data = std::move(resampled);
+@@ -597,7 +597,7 @@
+                     if (task.type == kAudioTaskTypeEncodeToSendQueue) {
+                         {
+                             std::lock_guard<std::mutex> lock2(audio_queue_mutex_);
+-                            if (codec_->SoftwareReference() &&
++                            if (codec_->ManagedCapture() &&
+                                 (!experiment_gate_.Allows(task.uplink_epoch) ||
+                                  capture_generation_ != codec_->CaptureGeneration()))
+                                 continue;
+@@ -690,13 +690,13 @@
+         /* Push the task to the encode queue */
+         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+ 
+-        if (codec_->SoftwareReference() && type == kAudioTaskTypeEncodeToSendQueue) {
++        if (codec_->ManagedCapture() && type == kAudioTaskTypeEncodeToSendQueue) {
+             task.uplink_epoch = audio_engine_->OutputEpoch();
+             if (!experiment_gate_.Allows(task.uplink_epoch))
+                 return;
+         }
+ #if CONFIG_XIAOMAN_ORB_UI
+-        if(type==kAudioTaskTypeEncodeToSendQueue && codec_->SoftwareReference()) {
++        if(type==kAudioTaskTypeEncodeToSendQueue && codec_->ManagedCapture()) {
+             const auto capture=codec_->CaptureGeneration();
+             if(audio_engine_->OutputCaptureGeneration()==capture && capture_generation_.load()==capture)
+                 orb_input_activity_={capture,task.uplink_epoch,static_cast<uint8_t>(orb_level),esp_timer_get_time()};
+@@ -762,7 +762,7 @@
+ 
+ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+-    if (codec_->SoftwareReference() && (!experiment_gate_.Allows(experiment_gate_.epoch()) ||
++    if (codec_->ManagedCapture() && (!experiment_gate_.Allows(experiment_gate_.epoch()) ||
+                                         capture_generation_ != codec_->CaptureGeneration())) {
+         audio_send_queue_.clear();
+         return nullptr;
+@@ -845,7 +845,7 @@
+ }
+ 
+ void AudioService::EnableVoiceProcessing(bool enable) {
+-    if (codec_->SoftwareReference() && IsAudioProcessorRunning() == enable)
++    if (codec_->ManagedCapture() && IsAudioProcessorRunning() == enable)
+         return;
+     ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
+ 
+@@ -914,7 +914,7 @@
+ 
+ void AudioService::NotifyCaptureReady() {
+     if (!capture_ready_waiting_.load() || !callbacks_.on_capture_ready ||
+-        !codec_->SoftwareReference())
++        !codec_->ManagedCapture())
+         return;
+     const auto generation = audio_engine_->OutputCaptureGeneration();
+     if (generation == codec_->CaptureGeneration() && codec_->RealtimeEligible())
+diff --git a/main/audio/codecs/box_audio_codec.cc b/main/audio/codecs/box_audio_codec.cc
+--- a/main/audio/codecs/box_audio_codec.cc
++++ b/main/audio/codecs/box_audio_codec.cc
+@@ -10,7 +10,8 @@
+                              gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout,
+                              gpio_num_t din, gpio_num_t pa_pin, uint8_t es8311_addr,
+                              uint8_t es7210_addr, bool input_reference, float input_gain,
+-                             int reference_gain_channel, float reference_gain) {
++                             int reference_gain_channel, float reference_gain, bool callback_refill) {
++    callback_refill_ = callback_refill;
+     duplex_ = true;                              // 是否双工
+     input_reference_ = input_reference;          // 是否使用参考输入，实现回声消除
+     input_channels_ = input_reference_ ? 2 : 1;  // 输入通道数
+@@ -103,7 +104,7 @@
+         .role = I2S_ROLE_MASTER,
+         .dma_desc_num = AUDIO_CODEC_DMA_DESC_NUM,
+         .dma_frame_num = AUDIO_CODEC_DMA_FRAME_NUM,
+-        .auto_clear_after_cb = true,
++        .auto_clear_after_cb = !callback_refill_,
+         .auto_clear_before_cb = false,
+         .intr_priority = 0,
+     };
+@@ -246,12 +247,15 @@
+ 
+ int BoxAudioCodec::Read(int16_t* dest, int samples) {
+     if (input_enabled_) {
+-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
++        const int result = esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t));
++        ESP_ERROR_CHECK_WITHOUT_ABORT(result);
++        if (callback_refill_ && result != ESP_CODEC_DEV_OK) return 0;
+     }
+     return samples;
+ }
+ 
+ int BoxAudioCodec::Write(const int16_t* data, int samples) {
++    if (callback_refill_) return 0; // ISR exclusively owns this target's DMA.
+     if (output_enabled_) {
+         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+     }
+diff --git a/main/audio/codecs/box_audio_codec.h b/main/audio/codecs/box_audio_codec.h
+--- a/main/audio/codecs/box_audio_codec.h
++++ b/main/audio/codecs/box_audio_codec.h
+@@ -22,6 +22,7 @@
+     std::mutex data_if_mutex_;
+     int reference_gain_channel_ = -1;
+     float reference_gain_ = 0.0f;
++    bool callback_refill_ = false;
+ 
+     void CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout,
+                               gpio_num_t din);
+@@ -34,7 +35,7 @@
+                   gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din,
+                   gpio_num_t pa_pin, uint8_t es8311_addr, uint8_t es7210_addr, bool input_reference,
+                   float input_gain = 30.0f, int reference_gain_channel = -1,
+-                  float reference_gain = 0.0f);
++                  float reference_gain = 0.0f, bool callback_refill = false);
+     virtual ~BoxAudioCodec();
+ 
+     virtual void SetOutputVolume(int volume) override;
+diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_audio_engine.cc
+--- a/main/audio/engines/afe_audio_engine.cc
++++ b/main/audio/engines/afe_audio_engine.cc
+@@ -119,10 +119,10 @@
+     }
+ #if CONFIG_SEND_WAKE_WORD_DATA
+     if (wake_detector_ == WakeDetector::kWakeNet ||
+-        (codec_->SoftwareReference() && wake_detector_ == WakeDetector::kMultiNet)) {
++        (codec_->ManagedCapture() && wake_detector_ == WakeDetector::kMultiNet)) {
+         if (!wake_word_audio_cache_.Initialize(16000 * 2)) {
+             ESP_LOGW(TAG, "Wake-word audio upload disabled: PSRAM cache allocation failed");
+-            if (codec_->SoftwareReference())
++            if (codec_->ManagedCapture())
+                 return false;
+         }
+     }
+@@ -283,7 +283,7 @@
+     if ((xEventGroupGetBits(event_group_) & kAfeActive) == 0) {
+         return;
+     }
+-    if (codec_->SoftwareReference() &&
++    if (codec_->ManagedCapture() &&
+         (capture_generation != codec_->CaptureGeneration() || capture_reset_pending_.load() ||
+          applied_reference_valid_.load() != codec_->ReferenceValid())) {
+         capture_reset_pending_ = true;
+@@ -414,8 +414,12 @@
+             reference_valid && (codec_->SoftwareReference() || (bits & kWakeWordEnabled) ||
+                                 (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled)));
+         if (enable_aec) {
+-            afe_iface_->enable_aec(afe_data_);
++            // ESP-SR2.4.7 returns1 enabled,0 disabled,-1 failure (not ESP_OK).
++            applied_aec_enabled_ = afe_iface_->enable_aec(afe_data_) == 1;
++            if (!codec_->SoftwareReference() && !applied_aec_enabled_.load())
++                codec_->NotifyAecReady(false);
+         } else {
++            applied_aec_enabled_ = false;
+             codec_->NotifyAecReady(false);
+             afe_iface_->disable_aec(afe_data_);
+         }
+@@ -423,8 +427,15 @@
+     }
+ }
+ 
++void AfeAudioEngine::NotifyProcessedCaptureReady(uint32_t capture) {
++    if (codec_->ManagedCapture())
++        codec_->NotifyAecReady(applied_reference_valid_.load() &&
++                                  (codec_->SoftwareReference() || applied_aec_enabled_.load()),
++                              capture);
++}
++
+ void AfeAudioEngine::ResetWakeWordCapture() {
+-    if (!codec_ || !codec_->SoftwareReference())
++    if (!codec_ || !codec_->ManagedCapture())
+         return;
+     if (custom_wake_word_)
+         custom_wake_word_->ResetCapture();
+@@ -451,7 +462,7 @@
+ void AfeAudioEngine::ProcessingTask() {
+     while (true) {
+         xEventGroupWaitBits(event_group_, kAfeActive, pdFALSE, pdTRUE, portMAX_DELAY);
+-        if (codec_->SoftwareReference() &&
++        if (codec_->ManagedCapture() &&
+             (applied_capture_generation_ != codec_->CaptureGeneration() ||
+              applied_reference_valid_.load() != codec_->ReferenceValid()))
+             capture_reset_pending_ = true;
+@@ -480,7 +491,7 @@
+             // WakeNet/AEC toggles are not safe against a concurrent fetch,
+             // so they are applied here, in the task that owns the fetch side.
+             std::unique_lock<std::mutex> lock(input_buffer_mutex_, std::defer_lock);
+-            if (codec_->SoftwareReference() && !lock.try_lock()) {
++            if (codec_->ManagedCapture() && !lock.try_lock()) {
+                 afe_control_dirty_ = true;
+                 afe_iface_->fetch_with_delay(afe_data_, pdMS_TO_TICKS(20));
+                 continue;
+@@ -492,11 +503,11 @@
+         const uint32_t capture = codec_->CaptureGeneration();
+         const uint32_t wake_capture = codec_->WakeAudioGeneration();
+         auto* result = afe_iface_->fetch_with_delay(
+-            afe_data_, codec_->SoftwareReference() ? pdMS_TO_TICKS(20) : portMAX_DELAY);
++            afe_data_, codec_->ManagedCapture() ? pdMS_TO_TICKS(20) : portMAX_DELAY);
+         if (generation != control_generation_.load() || epoch != output_epoch_.load() ||
+             capture != codec_->CaptureGeneration() ||
+             wake_capture != codec_->WakeAudioGeneration() || capture_reset_pending_.load() ||
+-            (codec_->SoftwareReference() &&
++            (codec_->ManagedCapture() &&
+              applied_reference_valid_.load() != codec_->ReferenceValid()) ||
+             (xEventGroupGetBits(event_group_) & kAfeActive) == 0) {
+             // A disable/re-enable may make an old blocked fetch return after the
+@@ -511,14 +522,13 @@
+             continue;
+         }
+ 
+-        if (codec_->SoftwareReference() && (!result->data || result->data_size <= 0))
++        if (codec_->ManagedCapture() && (!result->data || result->data_size <= 0))
+             continue;
+-        if (codec_->SoftwareReference() && result->data_size % sizeof(int16_t) != 0) {
++        if (codec_->ManagedCapture() && result->data_size % sizeof(int16_t) != 0) {
+             codec_->ReportReferenceFailure();
+             continue;
+         }
+-        if (codec_->SoftwareReference())
+-            codec_->NotifyAecReady(applied_reference_valid_.load(), capture);
++        NotifyProcessedCaptureReady(capture);
+         emitted_epoch_ = epoch;
+         emitted_wake_generation_ = wake_capture;
+         emitted_capture_generation_ = capture;
+@@ -538,7 +548,7 @@
+ 
+ void AfeAudioEngine::HandleWakeWordResult(const afe_fetch_result_t* result, uint32_t capture_generation) {
+ #if CONFIG_SEND_WAKE_WORD_DATA
+-    if (codec_->SoftwareReference()) {
++    if (codec_->ManagedCapture()) {
+         std::lock_guard<std::mutex> lock(wake_word_mutex_);
+         if (emitted_wake_generation_ != codec_->WakeAudioGeneration())
+             return;
+@@ -554,7 +564,7 @@
+         return;
+     }
+ #if CONFIG_SEND_WAKE_WORD_DATA
+-    if (!codec_->SoftwareReference())
++    if (!codec_->ManagedCapture())
+         wake_word_audio_cache_.Store(result->data, result->data_size / sizeof(int16_t));
+ #endif
+     if (result->wakeup_state != WAKENET_DETECTED) {
+@@ -632,7 +642,7 @@
+ }
+ 
+ void AfeAudioEngine::EncodeWakeWordData() {
+-    if (codec_ && codec_->SoftwareReference()) {
++    if (codec_ && codec_->ManagedCapture()) {
+         EncodeExperimentWakeWordData();
+         return;
+     }
+@@ -727,7 +737,7 @@
+ }
+ 
+ bool AfeAudioEngine::GetWakeWordOpus(std::vector<uint8_t>& opus) {
+-    if (codec_ && codec_->SoftwareReference())
++    if (codec_ && codec_->ManagedCapture())
+         return GetExperimentWakeWordOpus(opus);
+     if (wake_detector_ == WakeDetector::kMultiNet) {
+         return custom_wake_word_->GetWakeWordOpus(opus);
+diff --git a/main/audio/engines/afe_audio_engine.h b/main/audio/engines/afe_audio_engine.h
+--- a/main/audio/engines/afe_audio_engine.h
++++ b/main/audio/engines/afe_audio_engine.h
+@@ -49,7 +49,7 @@
+     void OnVadStateChange(std::function<void(bool speaking)> callback) override;
+ 
+     bool WakeAudioBatchValid() const override {
+-        return !codec_ || !codec_->SoftwareReference() ||
++        return !codec_ || !codec_->ManagedCapture() ||
+                family_robot::WakeBatchValid(wake_batch_.load(), wake_batch_.load(),
+                                             wake_batch_generation_.load(),
+                                             codec_->WakeAudioGeneration());
+@@ -77,6 +77,8 @@
+     uint32_t applied_capture_generation_ = 0;
+     std::atomic<bool> capture_reset_pending_{false};
+     std::atomic<bool> applied_reference_valid_{false};
++    // ProcessingTask owns control application; physical MR validity is separate.
++    std::atomic<bool> applied_aec_enabled_{false};
+     AudioCodec* codec_ = nullptr;
+     srmodel_list_t* models_ = nullptr;
+     bool owns_models_ = false;
+@@ -134,6 +136,7 @@
+     void UpdateActiveState();
+     void UpdateAecState();
+     void ApplyAfeControls();
++    void NotifyProcessedCaptureReady(uint32_t capture);
+     void ApplyPendingReset();
+     void ResetWakeWordCapture();
+     void OutputRawAudio(const std::vector<int16_t>& data);
+diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
+--- a/main/audio/wake_words/custom_wake_word.cc
++++ b/main/audio/wake_words/custom_wake_word.cc
+@@ -143,7 +143,7 @@
+     
+     multinet_->print_active_speech_commands(multinet_model_data_);
+ #if CONFIG_SEND_WAKE_WORD_DATA
+-    if (!codec_->SoftwareReference() && !wake_word_audio_cache_.Initialize(16000 * 2)) {
++    if (!codec_->ManagedCapture() && !wake_word_audio_cache_.Initialize(16000 * 2)) {
+         ESP_LOGW(TAG, "Wake-word audio upload disabled: PSRAM cache allocation failed");
+     }
+ #endif
+@@ -196,7 +196,7 @@
+     // The AFE fetch owner supplies the source frame's capture generation. A newer
+     // codec generation must never relabel PCM fetched before a pause or fault.
+     auto capture_valid = [&] {
+-        if (!codec_->SoftwareReference() || capture_generation == codec_->CaptureGeneration())
++        if (!codec_->ManagedCapture() || capture_generation == codec_->CaptureGeneration())
+             return true;
+         input_buffer_.clear();
+         multinet_->clean(multinet_model_data_);
+@@ -218,7 +218,7 @@
+         if (!capture_valid())
+             return;
+ #if CONFIG_SEND_WAKE_WORD_DATA
+-        if (!codec_->SoftwareReference())
++        if (!codec_->ManagedCapture())
+             wake_word_audio_cache_.Store(input_buffer_.data(), chunksize);
+ #endif
+ 
+diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
+@@ -10,6 +10,40 @@
+                 "CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16=y",
+                 "CONFIG_USE_DEVICE_AEC=y"
+             ]
++        },
++        {
++            "name": "esp32-s3-touch-amoled-2.16-xiaoman",
++            "sdkconfig_append": [
++                "CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16=y",
++                "CONFIG_SPIRAM=y",
++                "CONFIG_SPIRAM_MODE_OCT=y",
++                "CONFIG_SPIRAM_SPEED_80M=y",
++                "CONFIG_USE_AUDIO_PROCESSOR=y",
++                "CONFIG_STOPWATCH_SOFTWARE_AEC=n",
++                "CONFIG_STOPWATCH_DEFAULT_REALTIME=n",
++                "CONFIG_USE_DEVICE_AEC=y",
++                "CONFIG_WAVESHARE_XIAOMAN_REALTIME=y",
++                "CONFIG_USE_SERVER_AEC=n",
++                "CONFIG_USE_AUDIO_DEBUGGER=n",
++                "CONFIG_I2S_ISR_IRAM_SAFE=n",
++                "CONFIG_ESP_CONSOLE_UART_DEFAULT=n",
++                "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y",
++                "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n",
++                "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y",
++                "CONFIG_USE_DEFAULT_MESSAGE_STYLE=y",
++                "CONFIG_USE_WECHAT_MESSAGE_STYLE=n",
++                "CONFIG_USE_AFE_WAKE_WORD=n",
++                "CONFIG_USE_CUSTOM_WAKE_WORD=y",
++                "CONFIG_SR_MN_CN_MULTINET7_QUANT=y",
++                "CONFIG_CUSTOM_WAKE_WORD=\"xiao man\"",
++                "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"小满\"",
++                "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
++                "CONFIG_SEND_WAKE_WORD_DATA=y",
++                "CONFIG_XIAOMAN_ORB_UI=y",
++                "CONFIG_PARTITION_TABLE_CUSTOM=y",
++                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/waveshare-xiaoman-16m.csv\"",
++                "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y"
++            ]
+         }
+     ]
+-}
+\ No newline at end of file
++}
+diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+@@ -3,6 +3,11 @@
+ #include "esp_lcd_co5300.h"
+ 
+ #include "codecs/box_audio_codec.h"
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++#include "xiaoman_box_codec.h"
++#include "xiaoman_orb_view.h"
++#include <cstring>
++#endif
+ #include "application.h"
+ #include "button.h"
+ #include "led/single_led.h"
+@@ -80,6 +85,10 @@
+ 
+ // 在waveshare_amoled_1_75类之前添加新的显示类
+ class CustomLcdDisplay : public SpiLcdDisplay {
++#if CONFIG_XIAOMAN_ORB_UI
++    using OrbDisplayOwner=CustomLcdDisplay;
++    #include "xiaoman_orb_display.inc"
++#endif
+ public:
+     static void rounder_event_cb(lv_event_t* e) {
+         lv_area_t* area = (lv_area_t* )lv_event_get_param(e);
+@@ -120,6 +129,9 @@
+         lv_obj_set_style_pad_left(status_bar_, LV_HOR_RES*  0.1, 0);
+         lv_obj_set_style_pad_right(status_bar_, LV_HOR_RES*  0.1, 0);
+         lv_display_add_event_cb(display_, rounder_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
++#if CONFIG_XIAOMAN_ORB_UI
++        SetupOrbUI();
++#endif
+     }
+ };
+ 
+@@ -132,6 +144,9 @@
+ 
+     virtual void SetBrightnessImpl(uint8_t brightness) override {
+         auto display = Board::GetInstance().GetDisplay();
++#if CONFIG_XIAOMAN_ORB_UI
++        static_cast<CustomLcdDisplay*>(display)->SetOrbScreenOn(brightness>0);
++#endif
+         DisplayLockGuard lock(display);
+         uint8_t data[1] = {((uint8_t)((255*  brightness) / 100))};
+         int lcd_cmd = 0x51;
+@@ -326,7 +341,11 @@
+     }
+ 
+     virtual AudioCodec* GetAudioCodec() override {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++        static XiaomanBoxCodec audio_codec(
++#else
+         static BoxAudioCodec audio_codec(
++#endif
+             i2c_bus_, 
+             AUDIO_INPUT_SAMPLE_RATE, 
+             AUDIO_OUTPUT_SAMPLE_RATE,

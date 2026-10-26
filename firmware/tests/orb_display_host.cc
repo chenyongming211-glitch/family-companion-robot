@@ -115,10 +115,12 @@ public:
 
 class Codec {
 public:
-    uint32_t capture=4;bool fault=false,software=true;
+    uint32_t capture=4;bool fault=false,software=true,hardware=false,eligible=false;
     family_robot::OrbOutputActivity output{};
     uint32_t CaptureGeneration(){return capture;}
     bool SoftwareReference(){return software;}
+    bool ManagedCapture(){return software || hardware;}
+    bool RealtimeEligible(){return eligible && !fault;}
     bool ReferenceFaulted(){return fault;}
     uint32_t ReferenceIntegrity(){return 7;}
     family_robot::OrbOutputActivity GetOrbOutputActivity(){return output;}
@@ -208,5 +210,12 @@ int main(){
     assert(unavailable.output.connection==7); // current playback is read independently
     release.set_value();holder.join();
     assert(SnapshotAvailable(service.GetOrbAudioActivity()));
+    // Hardware MR's actual processed-capture readiness is an extra prerequisite
+    // for Listening. It never pretends to be a software reference.
+    codec.software=false;codec.hardware=true;
+    assert(!service.GetOrbAudioActivity().gate_open);
+    codec.eligible=true;assert(service.GetOrbAudioActivity().gate_open);
+    ++codec.capture;codec.eligible=false;
+    assert(!service.GetOrbAudioActivity().gate_open);
     puts("production orb boot/visibility/system priority/power/caption/gate integration passed");
 }

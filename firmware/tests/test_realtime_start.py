@@ -29,13 +29,14 @@ class RealtimeStartTests(unittest.TestCase):
             '// PRODUCTION_METHODS', '\n'.join(methods))
         source = self.work/'realtime-start.cc'
         source.write_text(program)
-        for enabled in (0, 1):
-            binary = self.work/f'realtime-start-{enabled}'
+        for enabled, hardware in ((0, 0), (1, 0), (0, 1)):
+            binary = self.work/f'realtime-start-{enabled}-{hardware}'
             result = subprocess.run([
                 'c++', '-std=c++20', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
                 '-Wno-unused-parameter', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                 '-DCONFIG_STOPWATCH_SOFTWARE_AEC=1',
-                f'-DCONFIG_STOPWATCH_DEFAULT_REALTIME={enabled}', str(source), '-o', str(binary)],
+                f'-DCONFIG_STOPWATCH_DEFAULT_REALTIME={enabled}',
+                f'-DCONFIG_WAVESHARE_XIAOMAN_REALTIME={hardware}', str(source), '-o', str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             environment = dict(os.environ, ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',

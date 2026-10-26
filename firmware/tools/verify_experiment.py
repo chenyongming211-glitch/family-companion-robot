@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Verify and package allowlisted evidence from one isolated experimental CI job.
 
-No device operations. Does not validate ESP image CRCs/partition fit/acoustics;
+No device operations. Does not validate ESP image CRCs or acoustics;
 those remain downloaded-artifact inspection and notified field gates.
 """
 import argparse
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -14,7 +15,10 @@ import struct
 import subprocess
 
 FIRMWARE = Path(__file__).resolve().parents[1]
-VARIANTS = ('m5stack-stopwatch', 'm5stack-stopwatch-software-aec', 'm5stack-stopwatch-xiaoman')
+WAVESHARE_VARIANT = 'esp32-s3-touch-amoled-2.16-xiaoman'
+VARIANTS = ('m5stack-stopwatch', 'm5stack-stopwatch-software-aec', 'm5stack-stopwatch-xiaoman', WAVESHARE_VARIANT)
+VARIANT_BOARDS = {variant: 'm5stack/stopwatch' for variant in VARIANTS[:3]}
+VARIANT_BOARDS[WAVESHARE_VARIANT] = 'waveshare/esp32-s3-touch-amoled-2.16'
 BUILD_FILES = ('build/xiaozhi.bin', 'build/merged-binary.bin', 'build/generated_assets.bin',
                'build/bootloader/bootloader.bin', 'build/partition_table/partition-table.bin',
                'build/flasher_args.json')
@@ -84,6 +88,81 @@ def verify_xiaoman_assets(path):
                 duration_ms=3000, models=sorted(names), assets_sha256=digest(path))
 
 
+def verify_waveshare_layout(tree):
+    """Bind the dedicated CSV, native binary table and flashed artifact ranges."""
+    expected = [('nvs', 1, 2, 0x9000, 0x6000), ('otadata', 1, 0, 0xf000, 0x2000),
+                ('phy_init', 1, 1, 0x11000, 0x1000), ('ota_0', 0, 0x10, 0x20000, 0x300000),
+                ('ota_1', 0, 0x11, 0x320000, 0x300000), ('assets', 1, 0x82, 0x620000, 0x600000),
+                ('storage', 1, 0x82, 0xc20000, 0x300000)]
+    table = tree/'build/partition_table/partition-table.bin'
+    data = table.read_bytes()
+    if not 32 <= len(data) <= 0x1000 or len(data) % 32:
+        raise ValueError('invalid Waveshare partition table size')
+    entries, md5_seen = [], False
+    for position in range(0, len(data), 32):
+        entry = data[position:position+32]
+        if entry[:2] == b'\xeb\xeb':
+            if (md5_seen or entry[2:16] != b'\xff'*14
+                    or entry[16:] != hashlib.md5(data[:position]).digest()
+                    or data[position+32:] != b'\xff'*(len(data)-position-32)):
+                raise ValueError('invalid Waveshare partition table checksum/trailer')
+            md5_seen = True
+            break
+        magic, type_, subtype, offset, size, label, flags = struct.unpack('<HBBII16sI', entry)
+        if magic != 0x50aa or flags or size == 0 or offset+size > 0x1000000:
+            raise ValueError('invalid Waveshare partition entry')
+        try:
+            name = label.rstrip(b'\0').decode('ascii')
+        except UnicodeDecodeError as exc:
+            raise ValueError('invalid Waveshare partition name') from exc
+        entries.append((name, type_, subtype, offset, size))
+    if not md5_seen or entries != expected:
+        raise ValueError('Waveshare partition layout differs from dedicated 16MB contract')
+    previous_end = 0x9000
+    for _, _, _, offset, size in entries:
+        if offset < previous_end:
+            raise ValueError('overlapping Waveshare partitions')
+        previous_end = offset+size
+    csv_rows = []
+    types = {'app': 0, 'data': 1}
+    subtypes = {'nvs': 2, 'ota': 0, 'phy': 1, 'ota_0': 0x10, 'ota_1': 0x11, 'spiffs': 0x82}
+    for row in csv.reader((tree/'partitions/waveshare-xiaoman-16m.csv').read_text().splitlines()):
+        if not row or row[0].lstrip().startswith('#'):
+            continue
+        if len(row) != 5:
+            raise ValueError('invalid Waveshare partition CSV')
+        name, type_, subtype, offset, size = [value.strip() for value in row]
+        try:
+            csv_rows.append((name, types[type_], subtypes[subtype], int(offset, 0), int(size, 0)))
+        except (KeyError, ValueError) as exc:
+            raise ValueError('invalid Waveshare partition CSV value') from exc
+    if csv_rows != expected:
+        raise ValueError('Waveshare partition CSV differs from binary contract')
+    sizes = {}
+    for name, limit in [('xiaozhi.bin', 0x300000), ('generated_assets.bin', 0x600000)]:
+        size = (tree/'build'/name).stat().st_size
+        if not 0 < size <= limit:
+            raise ValueError('Waveshare artifact exceeds dedicated partition: '+name)
+        sizes[name] = size
+    try:
+        flash_files = json.loads((tree/'build/flasher_args.json').read_text())['flash_files']
+        locations = {}
+        for offset, name in flash_files.items():
+            basename = Path(name).name
+            if basename in ('xiaozhi.bin', 'generated_assets.bin'):
+                if basename in locations:
+                    raise ValueError('duplicate flashed artifact')
+                locations[basename] = int(offset, 0)
+        if locations != {'xiaozhi.bin': 0x20000, 'generated_assets.bin': 0x620000}:
+            raise ValueError('wrong flashed artifact address')
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError('Waveshare flasher addresses differ from partition contract') from exc
+    return dict(partition_table_sha256=digest(table), partitions=[dict(
+        name=name, type=type_, subtype=subtype, offset=offset, size=size)
+        for name, type_, subtype, offset, size in entries], app_bytes=sizes['xiaozhi.bin'],
+        assets_bytes=sizes['generated_assets.bin'], app_limit=0x300000, assets_limit=0x600000)
+
+
 def verify(firmware, tree, variant, idf_commit):
     if variant not in VARIANTS:
         raise ValueError('unknown variant')
@@ -121,25 +200,34 @@ def verify(firmware, tree, variant, idf_commit):
         if key in effective and effective[key] != value:
             raise ValueError('conflicting SDK config key: '+key)
         effective[key] = value
-    experiment = variant in VARIANTS[1:]
-    required = {'CONFIG_IDF_TARGET': '"esp32s3"', 'CONFIG_BOARD_TYPE_M5STACK_STOPWATCH': 'y',
+    waveshare = variant == WAVESHARE_VARIANT
+    experiment = variant == 'm5stack-stopwatch-software-aec' or variant == 'm5stack-stopwatch-xiaoman'
+    xiaoman = variant == 'm5stack-stopwatch-xiaoman' or waveshare
+    usb_console = experiment or waveshare
+    required = {'CONFIG_IDF_TARGET': '"esp32s3"',
+                'CONFIG_BOARD_TYPE_M5STACK_STOPWATCH': 'n' if waveshare else 'y',
+                'CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16': 'y' if waveshare else 'n',
+                'CONFIG_WAVESHARE_XIAOMAN_REALTIME': 'y' if waveshare else 'n',
                 'CONFIG_SPIRAM': 'y', 'CONFIG_USE_AUDIO_PROCESSOR': 'y',
                 'CONFIG_I2S_ISR_IRAM_SAFE': 'n', 'CONFIG_USE_AUDIO_DEBUGGER': 'n',
                 'CONFIG_USE_SERVER_AEC': 'n', 'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE': 'y',
                 'CONFIG_PARTITION_TABLE_OFFSET': '0x8000',
-                'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME': '"partitions/v2/16m.csv"',
+                'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME': '"partitions/waveshare-xiaoman-16m.csv"' if waveshare else '"partitions/v2/16m.csv"',
                 'CONFIG_STOPWATCH_SOFTWARE_AEC': 'y' if experiment else 'n',
                 'CONFIG_STOPWATCH_DEFAULT_REALTIME': 'y' if variant == 'm5stack-stopwatch-xiaoman' else 'n',
-                'CONFIG_XIAOMAN_ORB_UI': 'y' if variant == 'm5stack-stopwatch-xiaoman' else 'n',
-                'CONFIG_USE_DEVICE_AEC': 'y' if experiment else 'n',
-                'CONFIG_ESP_CONSOLE_UART_DEFAULT': 'n' if experiment else 'y',
-                'CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG': 'y' if experiment else 'n'}
-    if experiment:
+                'CONFIG_XIAOMAN_ORB_UI': 'y' if xiaoman else 'n',
+                'CONFIG_USE_DEVICE_AEC': 'y' if usb_console else 'n',
+                'CONFIG_ESP_CONSOLE_UART_DEFAULT': 'n' if usb_console else 'y',
+                'CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG': 'y' if usb_console else 'n'}
+    if usb_console:
         required.update(CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG='n',
                         CONFIG_ESP_CONSOLE_SECONDARY_NONE='y')
         # SDK esp_stdio/Kconfig makes secondary USB depend on !primary USB.
         # When primary USB is selected Kconfig may omit the disabled symbol.
         effective.setdefault('CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG', 'n')
+    if waveshare:
+        required.update(CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y')
+    if experiment:
         try:
             offset = int(effective['CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES'])
         except (KeyError, ValueError) as exc:
@@ -147,7 +235,7 @@ def verify(firmware, tree, variant, idf_commit):
         if not -2400 <= offset <= 2400:
             raise ValueError('calibration offset out of range')
         required['CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES'] = str(offset)
-    if variant == 'm5stack-stopwatch-xiaoman':
+    if xiaoman:
         required.update(CONFIG_USE_CUSTOM_WAKE_WORD='y', CONFIG_USE_AFE_WAKE_WORD='n',
                         CONFIG_USE_DEFAULT_MESSAGE_STYLE='y',
                         CONFIG_SR_MN_CN_MULTINET7_QUANT='y',
@@ -155,6 +243,10 @@ def verify(firmware, tree, variant, idf_commit):
                         CONFIG_CUSTOM_WAKE_WORD_DISPLAY='"小满"',
                         CONFIG_CUSTOM_WAKE_WORD_THRESHOLD='20', CONFIG_SEND_WAKE_WORD_DATA='y')
     # The default-realtime option is absent when software AEC is not selected.
+    effective.setdefault('CONFIG_BOARD_TYPE_M5STACK_STOPWATCH', 'n')
+    effective.setdefault('CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16', 'n')
+    effective.setdefault('CONFIG_WAVESHARE_XIAOMAN_REALTIME', 'n')
+    effective.setdefault('CONFIG_STOPWATCH_SOFTWARE_AEC', 'n')
     effective.setdefault('CONFIG_STOPWATCH_DEFAULT_REALTIME', 'n')
     effective.setdefault('CONFIG_XIAOMAN_ORB_UI', 'n')
     # Kconfig omits the device-AEC symbol when this stock board's dependency
@@ -164,10 +256,12 @@ def verify(firmware, tree, variant, idf_commit):
     for key, value in required.items():
         if effective.get(key) != value:
             raise ValueError('effective configuration mismatch: '+key)
-    evidence = dict(variant=variant, idf_commit=idf_commit, critical_versions=versions,
+    evidence = dict(variant=variant, board=VARIANT_BOARDS[variant], idf_commit=idf_commit, critical_versions=versions,
                     dependencies_sha256=expected_hash, effective_config=required,
                     acoustic_acceptance='pending')
-    if variant == 'm5stack-stopwatch-xiaoman':
+    if waveshare:
+        evidence['partition_layout'] = verify_waveshare_layout(tree)
+    if xiaoman:
         evidence['wake_word'] = verify_xiaoman_assets(tree/'build/generated_assets.bin')
     return evidence
 

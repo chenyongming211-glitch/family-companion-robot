@@ -17,7 +17,7 @@ private:
     void SetupOrbUI() {
         auto font=current_theme_->GetTextFont();
         orb_.Initialize(font->font(),[](void* context) {
-            static_cast<RoundLcdDisplay*>(context)->RefreshOrb();
+            static_cast<decltype(this)>(context)->RefreshOrb();
         },this);
         const lv_style_selector_t selector=static_cast<lv_style_selector_t>(LV_PART_MAIN)|
             static_cast<lv_style_selector_t>(kOrbChromeState);

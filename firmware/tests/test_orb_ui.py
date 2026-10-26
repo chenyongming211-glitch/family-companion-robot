@@ -86,6 +86,12 @@ class OrbUiTests(unittest.TestCase):
                     self.assertIn('psram=32768 requested=2', result.stdout)
 
     def test_production_layout_reserves_real_font_bounds(self):
+        self.run_layout(0)
+
+    def test_waveshare_480_layout_shares_renderer_and_reserves_real_font_bounds(self):
+        self.run_layout(1)
+
+    def run_layout(self, waveshare):
         with tempfile.TemporaryDirectory() as directory:
             for header in ['sdkconfig.h', 'lvgl.h']:
                 (Path(directory) / header).write_text('')
@@ -102,6 +108,7 @@ class OrbUiTests(unittest.TestCase):
                 '-Werror=deprecated-enum-enum-conversion',
                 '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                 '-DCONFIG_XIAOMAN_ORB_UI=1', '-I', directory,
+                f'-DCONFIG_WAVESHARE_XIAOMAN_REALTIME={waveshare}',
                 '-I', str(FIRMWARE / 'overlays/main/audio'),
                 '-I', str(FIRMWARE / 'overlays/main/boards/m5stack/stopwatch'),
                 str(program), '-o', str(binary)], capture_output=True, text=True)

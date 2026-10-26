@@ -19,6 +19,11 @@ public:
     void SetScreenOn(bool on) { screen_on_=on; }
     void SetPowerSave(bool on) { power_save_=on; }
 private:
+#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
+    static constexpr int kScreenSide=480;
+#else
+    static constexpr int kScreenSide=466;
+#endif
     OrbModel model_;
     OrbRefreshPolicy refresh_policy_;
     uint32_t applied_request_=UINT32_MAX;

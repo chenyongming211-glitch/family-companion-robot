@@ -30,10 +30,11 @@ struct srmodel_list_t { int num = 1; };
 struct esp_mn_error_t { int num = 1; };
 struct esp_mn_results_t { int num = 1; int command_id[1] = {1}; const char* string = "xiao man"; float prob[1] = {0.9f}; };
 struct AudioCodec {
-    bool software = true;
+    bool software = true,hardware = false;
     uint32_t generation = 7;
     uint32_t capture_generation = 7;
     bool SoftwareReference() const { return software; }
+    bool ManagedCapture() const { return software || hardware; }
     int input_channels() const { return 2; }
     uint32_t WakeAudioGeneration() const { return generation; }
     uint32_t CaptureGeneration() const { return capture_generation; }
@@ -168,8 +169,12 @@ auto FeedWakeFrame(Engine& engine, const afe_fetch_result_t* frame, uint32_t, lo
 
 int main(int argc, char** argv) {
     assert(argc == 2);
-    const std::string scenario = argv[1];
+    std::string scenario = argv[1];
     AudioCodec codec;
+    if(scenario.rfind("hardware-",0)==0) {
+        scenario.erase(0,9);codec.software=false;codec.hardware=true;
+        assert(!codec.SoftwareReference() && codec.ManagedCapture());
+    }
     CustomWakeWord custom;
     create_failed = scenario == "create-failure";
     add_failed = scenario == "add-failure";
@@ -203,8 +208,8 @@ int main(int argc, char** argv) {
     } else if (scenario == "software-cache" || scenario == "ordinary-cache") {
         FeedMonoFrame(custom, samples, 4, codec.CaptureGeneration(), 0);
         assert(detects == 1);
-        assert(custom.wake_word_audio_cache_.initializes == (codec.software ? 0 : 1));
-        assert(custom.wake_word_audio_cache_.stores == (codec.software ? 0 : 1));
+        assert(custom.wake_word_audio_cache_.initializes == (codec.ManagedCapture() ? 0 : 1));
+        assert(custom.wake_word_audio_cache_.stores == (codec.ManagedCapture() ? 0 : 1));
     } else if (scenario == "invalid-command-id") {
         detection = ESP_MN_STATE_DETECTED;
         results.command_id[0] = 0;

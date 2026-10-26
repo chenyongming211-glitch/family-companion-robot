@@ -79,6 +79,8 @@ class WakeRecoveryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         environment = dict(os.environ, ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',
                            UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
+        if os.environ.get('FIRMWARE_HOST_ASAN_PRELOAD'):
+            environment['LD_PRELOAD'] = os.environ['FIRMWARE_HOST_ASAN_PRELOAD']
         for scenario in [[], ['close-order']]:
             with self.subTest(scenario=scenario):
                 result = subprocess.run([str(binary)] + scenario, env=environment, capture_output=True, text=True, timeout=20)

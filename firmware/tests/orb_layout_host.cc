@@ -133,18 +133,19 @@ static void StaticFontFitTruth() {
     family_robot::motion_request.store(2);
 }
 int main(){
-    screen.w=466;screen.h=466;
+    screen.w=family_robot::XiaomanOrbView::kScreenSide;screen.h=screen.w;
     StaticFontFitTruth();
     for(int height:{24,27,32,35,40,44}) {
         lv_font_t font{height};family_robot::XiaomanOrbView view;
         view.Initialize(&font,[](void*){},nullptr);
+        assert(view.root_->w==screen.w && view.root_->h==screen.h);
         assert(IsAbove(view.image_,view.caption_)); // opaque bitmap must not cover labels
         auto* graphic=view.image_->parent;
         assert(graphic!=view.root_ && !(graphic->flags&LV_OBJ_FLAG_OVERFLOW_VISIBLE));
         assert(GlobalY(graphic)>=GlobalY(view.name_)+height+4);
         assert(GlobalY(graphic)+graphic->h+4<=GlobalY(view.caption_));
         assert(GlobalY(view.hint_)>=GlobalY(view.caption_)+height+4);
-        assert(GlobalY(view.hint_)+height<=452);
+        assert(GlobalY(view.hint_)+height<=screen.h-14);
         // Entrance and maximum image transform remain clipped inside this area.
         family_robot::OrbFacts f{};f.session=true;f.audio.gate_open=true;
         for(int64_t age:{0,67000,150000,300000,3000000}) {

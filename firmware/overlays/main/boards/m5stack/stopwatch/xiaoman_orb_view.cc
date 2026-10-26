@@ -49,7 +49,7 @@ XiaomanOrbView::~XiaomanOrbView() {
 void XiaomanOrbView::Initialize(const lv_font_t* font,void (*refresh)(void*),void* context) {
     if(root_) return;
     root_=lv_obj_create(lv_screen_active());
-    lv_obj_set_size(root_,466,466);
+    lv_obj_set_size(root_,kScreenSide,kScreenSide);
     lv_obj_set_pos(root_,0,0);
     lv_obj_set_style_radius(root_,0,0);
     lv_obj_set_style_border_width(root_,0,0);
@@ -119,14 +119,15 @@ void XiaomanOrbView::Initialize(const lv_font_t* font,void (*refresh)(void*),voi
 void XiaomanOrbView::SetFont(const lv_font_t* font) {
     if(!root_ || !font) return;
     for(auto* label:{name_,caption_,hint_}) lv_obj_set_style_text_font(label,font,0);
-    lv_obj_align(name_,LV_ALIGN_TOP_MID,0,94-font->line_height/2);
-    lv_obj_align(caption_,LV_ALIGN_TOP_MID,0,381-font->line_height/2);
+    const int name_y=94*kScreenSide/466,caption_y=381*kScreenSide/466;
+    lv_obj_align(name_,LV_ALIGN_TOP_MID,0,name_y-font->line_height/2);
+    lv_obj_align(caption_,LV_ALIGN_TOP_MID,0,caption_y-font->line_height/2);
     // Caption top rounds its half-height down; its bottom rounds up for odd
     // native font heights, so keep the full four-pixel hint gap in that case.
-    lv_obj_align(hint_,LV_ALIGN_TOP_MID,0,381+(font->line_height+1)/2+4);
-    const int top=94+font->line_height/2+8;
-    const int height=381-font->line_height/2-8-top;
-    lv_obj_set_pos(graphic_,93,top);
+    lv_obj_align(hint_,LV_ALIGN_TOP_MID,0,caption_y+(font->line_height+1)/2+4);
+    const int top=name_y+font->line_height/2+8;
+    const int height=caption_y-font->line_height/2-8-top;
+    lv_obj_set_pos(graphic_,(kScreenSide-280)/2,top);
     lv_obj_set_size(graphic_,280,height);
     // Fit the complete painted artwork, including glow, drift and maximum
     // sound expansion; the stronger contour must not be cropped by this clip.

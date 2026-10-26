@@ -1,10 +1,17 @@
-# StopWatch stock firmware baseline
+# Locked firmware source and board targets
 
 This directory pins the unmodified Xiaozhi ESP32 v2.5.2 source at
 `49b4380b3faa0ceadd28a3e78aaf0f311c46c57e`, ESP-IDF v6.1 at
 `fff9895c82d744c7237be8847347bdd1b07c6643`, and ESP-SR 2.4.7 for the
 `m5stack/stopwatch` board directory and `m5stack-stopwatch` variant (`esp32s3`). The source URL, archive SHA256,
 archive root and SDK identity are recorded in `upstream.lock.json`.
+
+The patched source also has a dedicated Waveshare 2.16 Xiaoman target. The boards
+share the locked source, protocol, capture guards and A orb renderer/view; each
+has its own codec, display drivers, configuration and firmware image. M5 and
+Waveshare binaries and partition layouts are not interchangeable. Runtime
+dependencies, host tests and target builds run on the cloud host/Actions; the
+Mac is for code/Git and a separately authorized test client.
 
 From the repository root, with Python 3.12 or later:
 
@@ -116,6 +123,63 @@ output fallback without a software reference also stays in auto mode.
 The complete upstream MIT license is in `third_party/xiaozhi-LICENSE`; see the
 repository's `THIRD_PARTY_NOTICES.txt` for attribution. Dependencies retain their
 own licenses.
+
+### Waveshare 2.16 Xiaoman candidate
+
+Patch `0008-waveshare-xiaoman.patch` adds variant
+`esp32-s3-touch-amoled-2.16-xiaoman` under board directory
+`waveshare/esp32-s3-touch-amoled-2.16`. In a fresh prepared tree on the cloud host
+with the exact locked SDK, build it with:
+
+```sh
+python3 scripts/build.py waveshare/esp32-s3-touch-amoled-2.16 --name esp32-s3-touch-amoled-2.16-xiaoman --language zh-CN --zip
+```
+
+This target preserves the ES8311 DAC, ES7210 hardware MR input, 24k input/output,
+panel, touch, PMU and charging settings. `SoftwareReference()` stays false; the
+separate `ManagedCapture()` capability enables current-generation AFE readiness,
+MultiNet/wake-audio caching and uplink quarantine without constructing a software
+reference. The original three M5 variants keep their selection and AEC policies.
+Only this target selects `CONFIG_WAVESHARE_XIAOMAN_REALTIME`; its wake configuration
+is the same `xiao man` / `小满`, `mn7_cn`, threshold 20 and wake-data upload.
+
+The dedicated codec owns TX DMA through completed-descriptor callbacks. It opens
+input before output, validates IDF6.1 public driver state/configuration and
+calculated clocks, then creates playback records. Six 240-frame TX descriptors
+carry mono PCM16, 480 bytes per nominal 10ms callback; slot32 while hardware RX
+is active does not double the PCM sample count. Completion of the descriptor's
+previous tag is the only source of played-sample receipts. Real hardware changes
+invalidate old evidence, allocation/registration/read/format faults fail closed,
+and ordinary codec writes cannot access callback-owned DMA. These checks do not
+establish physical BCLK, acoustic output, hardware-reference quality or actual
+on-device scheduling. There is no automatic audio-fault recovery.
+
+The same A renderer/view uses a 480×480 layout and its existing 128×128/32KiB
+buffer, static/5fps/target15fps policy and screen-off/idle frame stop. Conversation
+subtitles stay hidden while system/setup pages keep priority. Listening requires
+a current processed AFE frame; Speaking requires actual tagged DMA completion.
+No target15fps or battery-power result is claimed from host tests.
+
+The dedicated 16MB table is `partitions/waveshare-xiaoman-16m.csv`:
+
+| Partition | Offset | Size |
+| --- | --- | --- |
+| nvs | 0x9000 | 0x6000 |
+| otadata | 0xf000 | 0x2000 |
+| phy_init | 0x11000 | 0x1000 |
+| ota_0 | 0x20000 | 0x300000 |
+| ota_1 | 0x320000 | 0x300000 |
+| assets | 0x620000 | 0x600000 |
+| storage | 0xc20000 | 0x300000 |
+
+The verifier checks the binary partition table/MD5, exact CSV, nonoverlap,
+application/assets addresses and actual sizes. App above 3MiB or assets above
+6MiB stops publication; do not truncate an artifact or substitute the M5 table.
+NVS, phy and storage addresses are retained. The 2026-10-27 silent-development
+phase authorizes code, cloud tests and builds only: no USB access, wake, playback,
+device restart or flashing. A successful build is not installation or hardware
+acceptance. Device backup, OTA selection, write scope and readback must be checked
+again when the user returns before any separately authorized installation.
 
 ## Experimental source preparation
 
@@ -434,9 +498,9 @@ permissions, rejection, segmentation, disk bounds, timeout and stopping.
 
 ## Experimental target CI and field gate
 
-**Actions → StopWatch software AEC experiment** builds three isolated matrix jobs
+**Actions → StopWatch software AEC experiment** builds four isolated matrix jobs
 in the official `espressif/idf:v6.1` container, asserts the exact locked SDK
-commit, and runs host tests plus the canonical source preparation/build. Both
+commit, and runs host tests plus the canonical source preparation/build. All
 jobs prepare the same tracked patch/overlay inputs in a fresh tree:
 
 ```sh
@@ -445,6 +509,7 @@ cd firmware/.cache/experiment
 python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch-software-aec --language zh-CN --zip
 # In the other isolated job: --name m5stack-stopwatch
 # Xiaoman job: --name m5stack-stopwatch-xiaoman
+# Fourth isolated job uses the Waveshare board/variant command above.
 ```
 
 `tools/verify_experiment.py` rejects resolved native dependency-byte drift,

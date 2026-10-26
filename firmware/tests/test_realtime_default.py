@@ -52,7 +52,7 @@ class RealtimeDefaultTests(unittest.TestCase):
         cls.program = (FIRMWARE / 'tests/realtime_default_host.cc').read_text().replace(
             '// PRODUCTION_METHODS', '\n'.join(methods))
 
-    def run_config(self, software, device, server, default_realtime):
+    def run_config(self, software, device, server, default_realtime, waveshare=0):
         source = self.work / f'realtime-{software}-{device}-{server}-{default_realtime}.cc'
         source.write_text(self.program)
         binary = source.with_suffix('')
@@ -61,6 +61,7 @@ class RealtimeDefaultTests(unittest.TestCase):
             '-Wno-unused-parameter', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
             f'-DCONFIG_STOPWATCH_SOFTWARE_AEC={software}', f'-DCONFIG_USE_DEVICE_AEC={device}',
             f'-DCONFIG_USE_SERVER_AEC={server}', f'-DCONFIG_STOPWATCH_DEFAULT_REALTIME={default_realtime}',
+            f'-DCONFIG_WAVESHARE_XIAOMAN_REALTIME={waveshare}',
             str(source), '-o', str(binary)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         environment = dict(os.environ, ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',
@@ -73,6 +74,9 @@ class RealtimeDefaultTests(unittest.TestCase):
 
     def test_xiaoman_realtime_intent_waits_for_eligible_reference_and_respects_off(self):
         self.run_config(1, 1, 0, 1)
+
+    def test_waveshare_hardware_reference_waits_for_eligible_capture_and_respects_off(self):
+        self.run_config(0, 1, 0, 0, waveshare=1)
 
     def test_old_software_aec_variant_starts_off_and_keeps_explicit_on_across_pause(self):
         self.run_config(1, 1, 0, 0)
