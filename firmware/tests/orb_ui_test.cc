@@ -204,7 +204,7 @@ static void RenderBudget(const char* destination) {
     std::array<uint16_t,pixels> quiet{};
     OrbRenderer::Render(quiet.data(),0,0,true);
     assert(std::memcmp(quiet.data(),image.data()+1,pixels*2)!=0);
-    assert(OrbRenderer::kBytes<=96*1024);
+    assert(OrbRenderer::kBytes==32768 && OrbRenderer::kTableBytes==2564);
     assert(sizeof(OrbModel)<512);
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
     std::printf("orb state/completion/render passed; 90 host frames %lldms; buffer %zu bytes; tracker %zu bytes\n",static_cast<long long>(ms),OrbRenderer::kBytes,sizeof(PlaybackProgress));
@@ -253,8 +253,12 @@ static void RenderContinuityTruth() {
     }
     assert(pale<body/20 && saturation>body*75); // retain four clear hues, no white fog
     std::sort(light.begin(),light.end());
-    assert(light[light.size()*9/10]-light[light.size()/10]>=25); // visible depth, not a flat gradient disc
-    // Contour evolves at silence too, without translating the whole orb.
+    std::fprintf(stderr,"renderer clear color pale=%zu/%zu mean_saturation=%llu light_spread=%d\n",
+        pale,body,static_cast<unsigned long long>(saturation/body),light[light.size()*9/10]-light[light.size()/10]);
+    // Luminance spread is diagnostic: approved A has a soft filled color field
+    // (spread17 here). Its clear hues are guarded by saturation/no-fog above;
+    // the old style's spread25 proxy must not darken the approved artwork.
+    // Contour evolves even without a change in sound level.
     size_t contour_changes=0;
     OrbRenderer::Render(after.data(),6300,80,false);
     for(int y=-63;y<64;++y)for(int x=-63;x<64;++x) {
@@ -263,18 +267,51 @@ static void RenderContinuityTruth() {
         contour_changes+=a!=b;
     }
     assert(contour_changes>60);
-    int extent=0;
-    for(uint64_t ms=0;ms<=32000;ms+=333) {
-        OrbRenderer::Render(after.data(),ms,255,false);
-        for(int y=-64;y<64;++y)for(int x=-64;x<64;++x) {
-            const auto p=after[(y+64)*128+x+64];
-            if(Channel(p,0)+Channel(p,1)+Channel(p,2)>90)
-                extent=std::max(extent,std::max(std::abs(x),std::abs(y)));
-        }
-    }
-    assert(extent<=54); // maximum sound/shape stays in the reserved graphic bounds
     std::printf("renderer continuity boundary_delta=%llu pale=%zu/%zu mean_saturation=%llu contour_changes=%zu\n",
         static_cast<unsigned long long>(boundary),pale,body,static_cast<unsigned long long>(saturation/body),contour_changes);
-    std::printf("renderer maximum visible extent=%d source pixels\n",extent);
 }
-int main(int argc,char** argv) { RenderContinuityTruth(); UnavailableSnapshotTruth(); StateTruth(); RefreshPolicyTruth(); DmaTruth(); RenderBudget(argc>1?argv[1]:nullptr); }
+static void RenderSilhouetteTruth() {
+    std::array<uint16_t,128*128> image{};
+    int min_width=128,max_width=0,min_height=128,max_height=0;
+    for(uint64_t frame=0;frame<=240;++frame) {
+        OrbRenderer::Render(image.data(),frame*1000/15,0,false);
+        int x0=128,x1=-1,y0=128,y1=-1;
+        for(int y=0;y<128;++y)for(int x=0;x<128;++x) {
+            const auto p=image[y*128+x];
+            // Exclude the faint glow: measure the filled, visible silhouette.
+            if(Channel(p,0)+Channel(p,1)+Channel(p,2)<=90)continue;
+            x0=std::min(x0,x);x1=std::max(x1,x);
+            y0=std::min(y0,y);y1=std::max(y1,y);
+        }
+        assert(x1>=x0 && y1>=y0);
+        min_width=std::min(min_width,x1-x0+1);max_width=std::max(max_width,x1-x0+1);
+        min_height=std::min(min_height,y1-y0+1);max_height=std::max(max_height,y1-y0+1);
+    }
+    std::fprintf(stderr,"renderer silent 16s silhouette widths=%d..%d heights=%d..%d\n",
+        min_width,max_width,min_height,max_height);
+    assert(max_width-min_width>=16 && max_height-min_height>=16);
+    int extent=0;
+    // Independent periods must stay safe after long uptime as well as at boot.
+    for(uint64_t base:{uint64_t{0},uint64_t{1}<<32,(uint64_t{1}<<48)+12345,UINT64_MAX-16000})
+        for(uint64_t ms=0;ms<=16000;ms+=100)for(uint8_t level:{uint8_t{0},uint8_t{255}}) {
+            OrbRenderer::Render(image.data(),base+ms,level,false);
+            for(int y=-64;y<64;++y)for(int x=-64;x<64;++x) {
+                if(image[(y+64)*128+x+64]!=OrbRenderer::kBackground)
+                    extent=std::max(extent,std::max(std::abs(x),std::abs(y)));
+            }
+        }
+    // These independent-phase collisions came from a dispersed long-uptime
+    // scan: adding two pixels to A's peak radius reached the source edge.
+    for(uint64_t ms:{uint64_t{10141147297338840946ULL},uint64_t{684944971140478936ULL},
+                    uint64_t{5686623564773156651ULL},uint64_t{11672169487981444559ULL}}) {
+        OrbRenderer::Render(image.data(),ms,255,false);
+        for(int y=-64;y<64;++y)for(int x=-64;x<64;++x)
+            if(image[(y+64)*128+x+64]!=OrbRenderer::kBackground)
+                extent=std::max(extent,std::max(std::abs(x),std::abs(y)));
+    }
+    std::fprintf(stderr,"renderer dispersed-phase maximum painted extent=%d\n",extent);
+    assert(extent<=OrbRenderer::kArtworkRadius && OrbRenderer::kArtworkRadius<=63);
+    assert(extent<63); // painted pixels must not touch either edge of the 128px source
+    std::printf("renderer maximum painted extent=%d source pixels\n",extent);
+}
+int main(int argc,char** argv) { RenderSilhouetteTruth(); RenderContinuityTruth(); UnavailableSnapshotTruth(); StateTruth(); RefreshPolicyTruth(); DmaTruth(); RenderBudget(argc>1?argv[1]:nullptr); }

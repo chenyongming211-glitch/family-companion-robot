@@ -29,45 +29,56 @@ class OrbRenderer {
 public:
     static constexpr size_t kSide=128,kBytes=kSide*kSide*sizeof(uint16_t);
     static constexpr size_t kTableBytes=sizeof(orb_detail::kSines)+sizeof(orb_detail::kReciprocals);
+    // Includes the soft glow, smooth drift and maximum Q8 audio expansion.
+    // The view uses this painted bound when fitting the native text viewport.
+    static constexpr int kArtworkRadius=63;
     static constexpr uint16_t kBackground=0x0000;
     static void Render(uint16_t* pixels,uint64_t time_ms,uint8_t envelope,bool dim) {
         if(!pixels) return;
-        // Exactly48..50px, with subpixel audio response instead of jumps at
-        // envelope100/200. Squaring happens once per frame, not per pixel.
-        const int radius_q8=48*256+int(envelope)*512/255;
+        // A continuously turning ellipse and cubic contour provide visible
+        // silent motion. Audio adds only a small, continuous Q8 expansion.
+        const int angle=Phase(time_ms,8100);
+        const int deform1=Sin(angle),deform2=Sin(angle+16384);
+        const int deform3=Sin(Phase(time_ms,6900)+21000);
+        const int center_x=Sin(Phase(time_ms,9700))*3/16;
+        const int center_y=Sin(Phase(time_ms,11300)+16384)*3/16;
+        const int breathing_q8=44*256+Sin(Phase(time_ms,6300))*2;
+        // Sound approaches A's existing 46px peak instead of adding beyond it.
+        // At full level the Q8 radius moves halfway toward that bound; silence
+        // retains the approved contour exactly, with no envelope thresholds.
+        const int radius_q8=breathing_q8+(46*256-breathing_q8)*int(envelope)/(255*2);
         const int radius2=(radius_q8*radius_q8+32768)>>16;
-        const int deform1=Sin(Phase(time_ms,8700));
-        const int deform2=Sin(Phase(time_ms,11300)+20224);
-        const int deform3=Sin(Phase(time_ms,15700)+39168);
-        const int flow=Phase(time_ms,14900),cross=Phase(time_ms,19300);
-        const int ribbon_phase=Phase(time_ms,12700);
+        const int flow=Phase(time_ms,8300),cross=Phase(time_ms,10700);
+        const int ribbon_phase=Phase(time_ms,6100);
         int16_t row_warp[128],column_warp[128];
         for(int i=0;i<128;++i) {
             // Q4 positions keep slow flow below one source pixel continuous.
-            row_warp[i]=static_cast<int16_t>(Sin(flow+i*448)*9/16);
-            column_warp[i]=static_cast<int16_t>(Sin(cross+i*384)*9/16);
+            row_warp[i]=static_cast<int16_t>(Sin(flow+i*448)*12/16);
+            column_warp[i]=static_cast<int16_t>(Sin(cross+i*384)*11/16);
         }
         int bx[4],by[4];
         for(int i=0;i<4;++i) {
-            bx[i]=Sin(Phase(time_ms,15100+i*1300)+i*16384)*26/16;
-            by[i]=Sin(Phase(time_ms,17300+i*1700)+i*16384+16384)*25/16;
+            bx[i]=Sin(Phase(time_ms,7300+i*900)+i*16384)*28/16;
+            by[i]=Sin(Phase(time_ms,9100+i*1100)+i*16384+16384)*28/16;
         }
-        constexpr int color[4][3]{{34,166,240},{136,81,237},{237,116,193},{69,232,225}};
-        for(int y=-64;y<64;++y) for(int x=-64;x<64;++x) {
-            const int rr=x*x+y*y;
-            const int contour=radius2+(deform1*(x*x-y*y)+deform2*2*x*y)/3600+
-                deform3*(x*x*x-3*x*y*y)/200000;
+        constexpr int color[4][3]{{12,178,250},{128,50,244},{239,64,165},{20,232,222}};
+        for(int py=0;py<128;++py) for(int px=0;px<128;++px) {
+            const int xq=(px-64)*16-center_x,yq=(py-64)*16-center_y;
+            const int xx=(xq*xq)>>8,yy=(yq*yq)>>8,xy=(xq*yq)>>8;
+            const int rr=xx+yy,cubic=xq*(xx-3*yy)/16;
+            const int contour=radius2+(deform1*(xx-yy)+deform2*2*xy)/1350+
+                deform3*cubic/90000;
             const int edge=contour-rr;
             int r=2,g=3,b=5;
             if(edge>=-64) {
-                const int wx=x*16+row_warp[y+64],wy=y*16+column_warp[x+64];
+                const int wx=xq+row_warp[py],wy=yq+column_warp[px];
                 // A softly curved moving ribbon bends the hue field. There is
                 // one interpolated lookup per painted pixel, no pixel trig.
-                const int ribbon=Sin(ribbon_phase+wx*24+wy*16)/2;
+                const int ribbon=Sin(ribbon_phase+wx*27+wy*18)/2;
                 int sum=0,red=0,green=0,blue=0;
                 for(int i=0;i<4;++i) {
                     const int dx=wx-bx[i],dy=wy-by[i];
-                    int w=3072-((dx*dx+dy*dy)>>8);
+                    int w=2500-((dx*dx+dy*dy)>>8);
                     if(w<=0) continue;
                     w>>=4;w=(w*w)>>8;
                     if(i==0)w=w*(256+ribbon)>>8;
@@ -77,17 +88,17 @@ public:
                 if(sum) {
                     const int reciprocal=orb_detail::kReciprocals[sum];
                     r=(red*reciprocal)>>16;g=(green*reciprocal)>>16;b=(blue*reciprocal)>>16;
-                } else {r=12;g=30;b=69;}
+                } else {r=9;g=24;b=68;}
                 // Normalized hue blending never accumulates toward white.
-                int shade=238-y/5-rr/55+ribbon/5;if(shade>255)shade=255;
+                int shade=245-(yq/16)/7-rr/85+ribbon/7;if(shade>255)shade=255;
                 r=r*shade/255;g=g*shade/255;b=b*shade/255;
                 int mask=(edge+64)*255/128;if(mask>255)mask=255;
                 r=2+(r-2)*mask/255;g=3+(g-3)*mask/255;b=5+(b-5)*mask/255;
-            } else if(edge> -260) {
-                const int glow=(edge+260)/32;r+=glow/3;g+=glow/2;b+=glow;
+            } else if(edge> -200) {
+                const int glow=(edge+200)/40;r+=glow/3;g+=glow/2;b+=glow;
             }
             if(dim) {r/=3;g/=3;b/=3;}
-            pixels[(y+64)*kSide+x+64]=Rgb(r,g,b);
+            pixels[py*kSide+px]=Rgb(r,g,b);
         }
     }
 private:

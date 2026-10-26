@@ -121,15 +121,21 @@ void XiaomanOrbView::SetFont(const lv_font_t* font) {
     for(auto* label:{name_,caption_,hint_}) lv_obj_set_style_text_font(label,font,0);
     lv_obj_align(name_,LV_ALIGN_TOP_MID,0,94-font->line_height/2);
     lv_obj_align(caption_,LV_ALIGN_TOP_MID,0,381-font->line_height/2);
-    lv_obj_align(hint_,LV_ALIGN_TOP_MID,0,381+font->line_height/2+4);
+    // Caption top rounds its half-height down; its bottom rounds up for odd
+    // native font heights, so keep the full four-pixel hint gap in that case.
+    lv_obj_align(hint_,LV_ALIGN_TOP_MID,0,381+(font->line_height+1)/2+4);
     const int top=94+font->line_height/2+8;
     const int height=381-font->line_height/2-8-top;
     lv_obj_set_pos(graphic_,93,top);
     lv_obj_set_size(graphic_,280,height);
-    // Visible artwork fits within a source radius of54; larger fonts reserve
-    // their real height without stretching a black image rectangle over text.
-    const auto fitting=static_cast<uint32_t>((height-4)*256/108);
-    max_scale_=fitting<544?fitting:544;
+    // Fit the complete painted artwork, including glow, drift and maximum
+    // sound expansion; the stronger contour must not be cropped by this clip.
+    const auto fitting=static_cast<uint32_t>((height-4)*256/(2*OrbRenderer::kArtworkRadius));
+    const auto max_scale=fitting<544?fitting:544;
+    // A changed viewport fit needs one new transform even in static mode.
+    // Identical geometry retains the cached frame and its no-redraw behavior.
+    if(max_scale_!=max_scale) painted_=false;
+    max_scale_=max_scale;
     lv_obj_align(image_,LV_ALIGN_CENTER,0,0);
 }
 bool XiaomanOrbView::Update(OrbFacts facts) {

@@ -1,6 +1,7 @@
 // Real Initialize/SetFont/Update methods with deterministic LVGL geometry.
 // Distinct LVGL enums deliberately retain the target C++20 warning surface.
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstdio>
@@ -61,7 +62,8 @@ static void lv_timer_delete(lv_timer_t* p){delete p;}
 static void lv_timer_pause(lv_timer_t* p){p->paused=true;}
 static void lv_timer_resume(lv_timer_t* p){p->paused=false;}
 static void lv_timer_set_period(lv_timer_t* p,uint32_t v){p->period=v;}
-static void* heap_caps_malloc(size_t n,int){return std::malloc(n);}
+static bool allocation_fails=false;
+static void* heap_caps_malloc(size_t n,int){return allocation_fails?nullptr:std::malloc(n);}
 static void heap_caps_free(void* p){std::free(p);}
 static int64_t esp_timer_get_time(){static int64_t now=1000000;return now+=1000;}
 #define ESP_LOGW(...) ((void)0)
@@ -84,9 +86,56 @@ static bool IsAbove(lv_obj_t* image,lv_obj_t* text){
     auto position=[&](lv_obj_t* p){size_t i=0;while(i<c.size()&&c[i]!=p)++i;return i;};
     return position(text)>position(branch);
 }
+static void PaintedArtworkFits(family_robot::XiaomanOrbView& view) {
+    auto* graphic=view.image_->parent;
+    int left=graphic->w,right=0,top=graphic->h,bottom=0;
+    for(uint64_t base:{uint64_t{0},uint64_t{1}<<32})
+        for(uint64_t ms=0;ms<=16000;ms+=133)for(uint8_t level:{uint8_t{0},uint8_t{255}}) {
+            family_robot::OrbRenderer::Render(view.pixels_,base+ms,level,false);
+            for(int y=0;y<128;++y)for(int x=0;x<128;++x) {
+                if(view.pixels_[y*128+x]==family_robot::OrbRenderer::kBackground)continue;
+                // LVGL scales about the centered image pivot; reserve a pixel
+                // for integer alignment/nearest-neighbour rounding on either side.
+                const int px=graphic->w/2+(x-64)*int(view.image_->scale)/256;
+                const int py=graphic->h/2+(y-64)*int(view.image_->scale)/256;
+                left=std::min(left,px);right=std::max(right,px);
+                top=std::min(top,py);bottom=std::max(bottom,py);
+            }
+        }
+    std::fprintf(stderr,"font=%d painted bounds=%d,%d..%d,%d viewport=%d,%d scale=%u\n",
+        view.name_->font->line_height,left,top,right,bottom,graphic->w,graphic->h,view.image_->scale);
+    assert(left>=1 && top>=1 && right<graphic->w-1 && bottom<graphic->h-1);
+}
+static void StaticFontFitTruth() {
+    family_robot::motion_request.store(0);
+    lv_font_t small{27},large{44},same_geometry{44};
+    family_robot::XiaomanOrbView view;
+    view.Initialize(&small,[](void*){},nullptr);
+    family_robot::OrbFacts f{};f.session=true;f.audio.gate_open=true;f.now_us=1000000;
+    assert(view.Update(f));
+    const auto small_scale=view.image_scale_;
+    const auto initial_frames=family_robot::frame_count.load();
+    assert(small_scale==view.max_scale_);
+    view.SetFont(&small);f.now_us+=1000000;assert(view.Update(f));
+    assert(family_robot::frame_count.load()==initial_frames);
+    view.SetFont(&large);f.now_us+=1000000;assert(view.Update(f));
+    std::fprintf(stderr,"static font27->44 applied_scale=%u fitting_scale=%u frames=%u->%u\n",
+        view.image_scale_,view.max_scale_,initial_frames,family_robot::frame_count.load());
+    assert(view.image_scale_==view.max_scale_ && view.image_->scale==view.max_scale_);
+    assert(view.image_scale_<small_scale);
+    assert(family_robot::frame_count.load()==initial_frames+1);
+    // Both the same font and another font with identical geometry keep the
+    // static frame cached, even when Update is called well after its deadline.
+    for(const auto* font:{&large,&same_geometry}) {
+        view.SetFont(font);f.now_us+=1000000;assert(view.Update(f));
+        assert(family_robot::frame_count.load()==initial_frames+1);
+    }
+    family_robot::motion_request.store(2);
+}
 int main(){
     screen.w=466;screen.h=466;
-    for(int height:{24,32,40,44}) {
+    StaticFontFitTruth();
+    for(int height:{24,27,32,35,40,44}) {
         lv_font_t font{height};family_robot::XiaomanOrbView view;
         view.Initialize(&font,[](void*){},nullptr);
         assert(IsAbove(view.image_,view.caption_)); // opaque bitmap must not cover labels
@@ -102,10 +151,32 @@ int main(){
             f.now_us=1000000+age;assert(view.Update(f));
             assert(IsAbove(view.image_,view.caption_));
         }
+        PaintedArtworkFits(view);
+        f.screen_on=false;f.now_us+=67000;
+        assert(!view.Update(f) && view.timer_->paused);
+        assert(view.root_->flags&LV_OBJ_FLAG_HIDDEN);
         lv_font_t larger{40};view.SetFont(&larger);
         assert(GlobalY(graphic)>=GlobalY(view.name_)+40+4);
         assert(GlobalY(graphic)+graphic->h+4<=GlobalY(view.caption_));
         assert(GlobalY(view.hint_)>=GlobalY(view.caption_)+40+4);
     }
-    puts("production layout text layering, graphic clip, real font heights and entrance passed");
+    allocation_fails=true;
+    {
+        family_robot::motion_request.store(0);
+        lv_font_t font{44};family_robot::XiaomanOrbView view;
+        view.Initialize(&font,[](void*){},nullptr);
+        assert(!view.pixels_ && view.image_ && IsAbove(view.image_,view.caption_));
+        assert(view.image_->h<=view.graphic_->h && view.image_->w<=view.graphic_->w);
+        family_robot::OrbFacts f{};f.session=true;f.audio.gate_open=true;f.now_us=1000000;
+        assert(view.Update(f) && !view.timer_->paused);
+        assert(std::strcmp(view.caption_->text,"正在聆听")==0);
+        const auto frames=family_robot::frame_count.load();
+        lv_font_t smaller{27};view.SetFont(&smaller);f.now_us+=1000000;
+        assert(view.Update(f) && !view.pixels_ && family_robot::frame_count.load()==frames);
+        view.SetFont(&font);f.now_us+=1000000;
+        assert(view.Update(f) && !view.pixels_ && family_robot::frame_count.load()==frames);
+        f.screen_on=false;assert(!view.Update(f) && view.timer_->paused);
+        family_robot::motion_request.store(2);
+    }
+    puts("production layout painted bounds, text layering, fonts, entrance, screen-off and low-memory passed");
 }
