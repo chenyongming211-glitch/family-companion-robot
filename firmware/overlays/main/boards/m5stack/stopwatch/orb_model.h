@@ -28,22 +28,35 @@ struct OrbPresentation {
 class OrbModel {
 public:
     static constexpr int64_t kFreshUs=350000;
+    static constexpr int64_t kUnavailableHoldUs=200000;
     OrbPresentation Update(const OrbFacts& f) {
         if (!f.session || f.system_page || !f.screen_on) {
-            active_=false; return {};
+            active_=false; gate_confirmed_=false; return {};
         }
         if (!active_) { active_=true; since_=f.now_us; }
-        if (f.error) return {OrbPhase::Error,0,false};
-        if (f.connecting) return {OrbPhase::Connecting,0,false};
+        if (f.error || f.connecting) {
+            gate_confirmed_=false;since_=f.now_us;
+            return {f.error?OrbPhase::Error:OrbPhase::Connecting,0,false};
+        }
         const auto& a=f.audio;
         const auto& o=a.output;
         const bool draining=o.draining;
+        bool gate_open=a.gate_open;
+        if(a.snapshot_available) {
+            gate_confirmed_=a.gate_open;gate_us_=f.now_us;
+            capture_=a.capture;epoch_=a.epoch;connection_=o.connection;
+        } else {
+            gate_open=gate_confirmed_ && a.capture==capture_ && a.epoch==epoch_ &&
+                o.connection==connection_ && f.now_us>=gate_us_ &&
+                f.now_us-gate_us_<=kUnavailableHoldUs;
+            if(!gate_open) gate_confirmed_=false;
+        }
         if (!draining && o.active && o.valid && o.identity.playback &&
             o.connection==o.identity.connection && Fresh(o.stamp_us,f.now_us))
             return {OrbPhase::Speaking,o.level,false};
-        if (!a.gate_open) return {OrbPhase::Preparing,0,draining};
+        if (!gate_open) return {OrbPhase::Preparing,0,draining};
         const auto& i=a.input;
-        const bool fresh=i.capture==a.capture && i.epoch==a.epoch && Fresh(i.stamp_us,f.now_us);
+        const bool fresh=a.snapshot_available && i.capture==a.capture && i.epoch==a.epoch && Fresh(i.stamp_us,f.now_us);
         return {OrbPhase::Listening,static_cast<uint8_t>(fresh?i.level:0),draining};
     }
 private:
@@ -51,6 +64,8 @@ private:
         return stamp>0 && stamp>=since_ && stamp<=now && now-stamp<=kFreshUs;
     }
     int64_t since_=0;
-    bool active_=false;
+    int64_t gate_us_=0;
+    uint32_t capture_=0,epoch_=0,connection_=0;
+    bool active_=false,gate_confirmed_=false;
 };
 } // namespace family_robot

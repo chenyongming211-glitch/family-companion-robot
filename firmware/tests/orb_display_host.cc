@@ -5,6 +5,8 @@
 #include <string>
 #include <mutex>
 #include <atomic>
+#include <thread>
+#include <future>
 #include "experiment_gate.h"
 
 static int mutations=0,audio_reads=0;
@@ -114,21 +116,27 @@ public:
 class Codec {
 public:
     uint32_t capture=4;bool fault=false,software=true;
+    family_robot::OrbOutputActivity output{};
     uint32_t CaptureGeneration(){return capture;}
     bool SoftwareReference(){return software;}
     bool ReferenceFaulted(){return fault;}
     uint32_t ReferenceIntegrity(){return 7;}
-    family_robot::OrbOutputActivity GetOrbOutputActivity(){return {};}
+    family_robot::OrbOutputActivity GetOrbOutputActivity(){return output;}
 };
 class AudioService {
 public:
     std::mutex audio_queue_mutex_;Codec* codec_=nullptr;family_robot::ExperimentGate experiment_gate_;
     family_robot::UplinkAuthorization experiment_authorization_;
     std::atomic<uint32_t> capture_generation_{4};family_robot::OrbInputActivity orb_input_activity_{};
+    std::atomic<uint32_t> orb_gate_epoch_{0};
     bool processor=false;bool IsAudioProcessorRunning(){return processor;}
     family_robot::OrbAudioActivity GetOrbAudioActivity();
 };
 #include "orb_audio_service.inc"
+template<class T> static bool SnapshotAvailable(const T& audio) {
+    if constexpr(requires {audio.snapshot_available;}) return audio.snapshot_available;
+    return true;
+}
 int main(){
     RoundLcdDisplay display;
     // Board RestoreBrightness invokes this before SetupUI or audio Initialize.
@@ -188,5 +196,17 @@ int main(){
     service.capture_generation_=3;assert(!service.GetOrbAudioActivity().gate_open);
     service.capture_generation_=4;service.processor=false;assert(!service.GetOrbAudioActivity().gate_open);
     service.processor=true;service.experiment_gate_.Set(false,4);assert(!service.GetOrbAudioActivity().gate_open);
+    service.processor=true;service.experiment_gate_.Set(true,4);
+    service.orb_gate_epoch_=service.experiment_gate_.epoch();
+    codec.output.connection=7;codec.output.identity={7,2};codec.output.valid=true;
+    std::promise<void> held,release;auto released=release.get_future();
+    std::thread holder([&]{std::lock_guard<std::mutex> lock(service.audio_queue_mutex_);held.set_value();released.wait();});
+    held.get_future().wait();
+    const auto unavailable=service.GetOrbAudioActivity();
+    assert(!SnapshotAvailable(unavailable));
+    assert(unavailable.capture==4 && unavailable.epoch==service.orb_gate_epoch_.load());
+    assert(unavailable.output.connection==7); // current playback is read independently
+    release.set_value();holder.join();
+    assert(SnapshotAvailable(service.GetOrbAudioActivity()));
     puts("production orb boot/visibility/system priority/power/caption/gate integration passed");
 }

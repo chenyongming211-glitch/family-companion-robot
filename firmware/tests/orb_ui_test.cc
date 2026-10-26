@@ -8,8 +8,55 @@
 #include <cstdio>
 #include <cstring>
 #include <chrono>
+#include <algorithm>
+#include <vector>
 
 using namespace family_robot;
+
+template<class T> static void SnapshotAvailable(T& audio,bool available) {
+    if constexpr (requires { audio.snapshot_available; }) audio.snapshot_available=available;
+}
+static void UnavailableSnapshotTruth() {
+    OrbModel model;
+    OrbFacts f{};f.session=true;f.now_us=1000000;
+    f.audio.capture=4;f.audio.epoch=9;f.audio.gate_open=true;
+    f.audio.output.connection=2;
+    f.audio.input={4,9,200,f.now_us};
+    assert(model.Update(f).phase==OrbPhase::Listening);
+    // Queue contention is missing evidence, not proof that the mic closed.
+    // Only the caption is held briefly; unavailable amplitude is always zero.
+    f.now_us+=67000;SnapshotAvailable(f.audio,false);f.audio.gate_open=false;
+    assert(model.Update(f).phase==OrbPhase::Listening);
+    assert(model.Update(f).level==0);
+    f.now_us+=200000;
+    assert(model.Update(f).phase==OrbPhase::Preparing);
+    SnapshotAvailable(f.audio,true);f.audio.gate_open=true;
+    assert(model.Update(f).phase==OrbPhase::Listening);
+    // Authoritative closure and lifecycle revisions invalidate immediately.
+    f.audio.gate_open=false;
+    assert(model.Update(f).phase==OrbPhase::Preparing);
+    f.audio.gate_open=true;assert(model.Update(f).phase==OrbPhase::Listening);
+    SnapshotAvailable(f.audio,false);f.audio.gate_open=false;++f.audio.epoch;
+    assert(model.Update(f).phase==OrbPhase::Preparing);
+    SnapshotAvailable(f.audio,true);f.audio.gate_open=true;
+    assert(model.Update(f).phase==OrbPhase::Listening);
+    SnapshotAvailable(f.audio,false);f.audio.gate_open=false;++f.audio.capture;
+    assert(model.Update(f).phase==OrbPhase::Preparing);
+    SnapshotAvailable(f.audio,true);f.audio.gate_open=true;
+    assert(model.Update(f).phase==OrbPhase::Listening);
+    SnapshotAvailable(f.audio,false);f.audio.gate_open=false;++f.audio.output.connection;
+    assert(model.Update(f).phase==OrbPhase::Preparing);
+    // Speaking is never cached: current completion evidence is still required.
+    SnapshotAvailable(f.audio,true);f.audio.gate_open=true;
+    f.audio.output.identity={3,1};f.audio.output.valid=true;f.audio.output.active=true;
+    f.audio.output.stamp_us=f.now_us;f.audio.output.level=180;
+    assert(model.Update(f).phase==OrbPhase::Speaking);
+    SnapshotAvailable(f.audio,false);f.audio.output={};
+    assert(model.Update(f).phase!=OrbPhase::Speaking);
+    f.error=true;assert(model.Update(f).phase==OrbPhase::Error);
+    f.error=false;f.screen_on=false;assert(model.Update(f).phase==OrbPhase::Hidden);
+    f.screen_on=true;assert(model.Update(f).phase==OrbPhase::Preparing);
+}
 
 static void StateTruth() {
     OrbModel model;
@@ -172,4 +219,62 @@ static void RenderBudget(const char* destination) {
         std::fclose(out);
     }
 }
-int main(int argc,char** argv) { StateTruth(); RefreshPolicyTruth(); DmaTruth(); RenderBudget(argc>1?argv[1]:nullptr); }
+static int Channel(uint16_t pixel,int channel) {
+    if(channel==0)return ((pixel>>11)&31)*255/31;
+    if(channel==1)return ((pixel>>5)&63)*255/63;
+    return (pixel&31)*255/31;
+}
+static void RenderContinuityTruth() {
+    constexpr size_t count=OrbRenderer::kSide*OrbRenderer::kSide;
+    std::array<uint16_t,count> before{},after{};
+    OrbRenderer::Render(before.data(),12287,0,false);
+    OrbRenderer::Render(after.data(),12288,0,false);
+    uint64_t boundary=0;
+    for(size_t i=0;i<count;++i)for(int c=0;c<3;++c)
+        boundary+=static_cast<unsigned>(std::abs(Channel(before[i],c)-Channel(after[i],c)));
+    assert(boundary<count*2); // one millisecond cannot jump the entire field
+    for(int threshold:{100,200}) {
+        OrbRenderer::Render(before.data(),3000,static_cast<uint8_t>(threshold-1),false);
+        OrbRenderer::Render(after.data(),3000,static_cast<uint8_t>(threshold),false);
+        uint64_t envelope_delta=0;
+        for(size_t i=0;i<count;++i)for(int c=0;c<3;++c)
+            envelope_delta+=static_cast<unsigned>(std::abs(Channel(before[i],c)-Channel(after[i],c)));
+        assert(envelope_delta<count/2); // adjacent sound levels cannot jump one source pixel
+        std::printf("renderer adjacent envelope %d->%d delta=%llu\n",threshold-1,threshold,static_cast<unsigned long long>(envelope_delta));
+    }
+    size_t pale=0,body=0;uint64_t saturation=0;std::vector<int> light;
+    OrbRenderer::Render(before.data(),3000,80,false);
+    for(int y=-38;y<=38;++y)for(int x=-38;x<=38;++x)if(x*x+y*y<38*38) {
+        const auto pixel=before[(y+64)*128+x+64];
+        const int r=Channel(pixel,0),g=Channel(pixel,1),b=Channel(pixel,2);
+        const int high=std::max(r,std::max(g,b)),low=std::min(r,std::min(g,b));
+        saturation+=high-low;++body;pale+=low>128 && high-low<55;
+        light.push_back((r+g+b)/3);
+    }
+    assert(pale<body/20 && saturation>body*75); // retain four clear hues, no white fog
+    std::sort(light.begin(),light.end());
+    assert(light[light.size()*9/10]-light[light.size()/10]>=25); // visible depth, not a flat gradient disc
+    // Contour evolves at silence too, without translating the whole orb.
+    size_t contour_changes=0;
+    OrbRenderer::Render(after.data(),6300,80,false);
+    for(int y=-63;y<64;++y)for(int x=-63;x<64;++x) {
+        const size_t i=(y+64)*128+x+64;
+        const bool a=Channel(before[i],2)>60,b=Channel(after[i],2)>60;
+        contour_changes+=a!=b;
+    }
+    assert(contour_changes>60);
+    int extent=0;
+    for(uint64_t ms=0;ms<=32000;ms+=333) {
+        OrbRenderer::Render(after.data(),ms,255,false);
+        for(int y=-64;y<64;++y)for(int x=-64;x<64;++x) {
+            const auto p=after[(y+64)*128+x+64];
+            if(Channel(p,0)+Channel(p,1)+Channel(p,2)>90)
+                extent=std::max(extent,std::max(std::abs(x),std::abs(y)));
+        }
+    }
+    assert(extent<=54); // maximum sound/shape stays in the reserved graphic bounds
+    std::printf("renderer continuity boundary_delta=%llu pale=%zu/%zu mean_saturation=%llu contour_changes=%zu\n",
+        static_cast<unsigned long long>(boundary),pale,body,static_cast<unsigned long long>(saturation/body),contour_changes);
+    std::printf("renderer maximum visible extent=%d source pixels\n",extent);
+}
+int main(int argc,char** argv) { RenderContinuityTruth(); UnavailableSnapshotTruth(); StateTruth(); RefreshPolicyTruth(); DmaTruth(); RenderBudget(argc>1?argv[1]:nullptr); }

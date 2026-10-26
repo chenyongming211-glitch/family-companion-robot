@@ -24,7 +24,7 @@ private:
     uint32_t applied_request_=UINT32_MAX;
     void (*refresh_)(void*)=nullptr;
     void* context_=nullptr;
-    lv_obj_t *root_=nullptr,*name_=nullptr,*image_=nullptr,*caption_=nullptr,*hint_=nullptr;
+    lv_obj_t *root_=nullptr,*graphic_=nullptr,*name_=nullptr,*image_=nullptr,*caption_=nullptr,*hint_=nullptr;
     lv_timer_t* timer_=nullptr;
     uint16_t* pixels_=nullptr;
     lv_image_dsc_t descriptor_{};
@@ -33,7 +33,10 @@ private:
     OrbPhase phase_=OrbPhase::Hidden;
     bool draining_=false;
     int mode_=-1;
-    uint32_t motion_ms_=0;
+    uint64_t motion_ms_=0;
+    uint32_t max_scale_=544;
+    uint32_t image_scale_=UINT32_MAX,timer_period_=67;
+    bool timer_running_=false;
     int64_t last_frame_us_=0,entrance_us_=0;
 };
 } // namespace family_robot

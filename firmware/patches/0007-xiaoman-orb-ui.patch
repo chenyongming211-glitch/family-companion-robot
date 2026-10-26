@@ -53,18 +53,28 @@
      void WaitForCaptureReady(bool enabled) { capture_ready_waiting_.store(enabled); }
      void SetCallbacks(AudioServiceCallbacks& callbacks);
  
-@@ -167,6 +170,9 @@
+@@ -167,6 +170,10 @@
      std::atomic<bool> preserve_server_playback_{false};
      std::atomic<bool> capture_ready_waiting_{false};
      void NotifyCaptureReady();
 +#if CONFIG_XIAOMAN_ORB_UI
 +    family_robot::OrbInputActivity orb_input_activity_{};
++    std::atomic<uint32_t> orb_gate_epoch_{0}; // UI-only lifecycle publication
 +#endif
      family_robot::ExperimentGate experiment_gate_;
      family_robot::UplinkAuthorization experiment_authorization_;
      family_robot::CaptureActivation capture_activation_;
 --- a/main/audio/audio_service.cc
 +++ b/main/audio/audio_service.cc
+@@ -230,5 +230,8 @@
+         audio_encode_queue_.clear();
+         audio_send_queue_.clear();
+         audio_engine_->SetOutputEpoch(experiment_gate_.epoch());
++#if CONFIG_XIAOMAN_ORB_UI
++        orb_gate_epoch_.store(experiment_gate_.epoch());
++#endif
+     }
+ }
 @@ -678,6 +678,10 @@
      task.type = type;
      task.pcm = std::move(pcm);

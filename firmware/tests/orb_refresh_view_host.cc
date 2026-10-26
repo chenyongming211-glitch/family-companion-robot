@@ -6,18 +6,18 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
-struct lv_obj_t {bool hidden=false;const char* text="";uint32_t scale=256,invalidations=0;};
-struct lv_timer_t {bool paused=true;uint32_t period=67;};
+struct lv_obj_t {bool hidden=false;const char* text="";uint32_t scale=256,invalidations=0,scales=0;};
+struct lv_timer_t {bool paused=true;uint32_t period=67,resumes=0,period_changes=0;};
 struct lv_font_t {uint32_t line_height=24;};
 struct lv_image_dsc_t {};
 constexpr int LV_OBJ_FLAG_HIDDEN=1;
 static void lv_obj_add_flag(lv_obj_t* p,int){p->hidden=true;}
 static void lv_obj_remove_flag(lv_obj_t* p,int){p->hidden=false;}
 static void lv_timer_pause(lv_timer_t* p){p->paused=true;}
-static void lv_timer_resume(lv_timer_t* p){p->paused=false;}
-static void lv_timer_set_period(lv_timer_t* p,uint32_t period){p->period=period;}
+static void lv_timer_resume(lv_timer_t* p){p->paused=false;++p->resumes;}
+static void lv_timer_set_period(lv_timer_t* p,uint32_t period){p->period=period;++p->period_changes;}
 static void lv_label_set_text_static(lv_obj_t* p,const char* text){p->text=text;}
-static void lv_image_set_scale(lv_obj_t* p,uint32_t scale){p->scale=scale;}
+static void lv_image_set_scale(lv_obj_t* p,uint32_t scale){p->scale=scale;++p->scales;}
 static void lv_obj_invalidate(lv_obj_t* p){++p->invalidations;}
 static int64_t clock_us=1000000;
 static uint32_t draw_us=10000;
@@ -30,6 +30,7 @@ namespace {
 std::atomic<uint32_t> motion_request{2};
 std::atomic<int> effective_mode{2};
 std::atomic<uint32_t> frame_count{0},max_draw_us{0},buffer_bytes{32768},slow_frames{0};
+std::atomic<uint32_t> unavailable_reads{0},preparing_transitions{0},closed_reads{0};
 void Hidden(lv_obj_t* p,bool hidden){if(hidden)lv_obj_add_flag(p,1);else lv_obj_remove_flag(p,1);}
 }
 XiaomanOrbView::~XiaomanOrbView()=default; // stack-owned fake platform objects
@@ -77,5 +78,20 @@ int main(){
     facts.session=true;view.SetScreenOn(false);
     for(int i=0;i<20;++i) assert(!update(5000));
     assert(timer.paused && frame_count.load()==inactive_frames);
+    view.SetScreenOn(true);assert(update(5000));
+    facts.now_us+=1000000;assert(view.Update(facts)); // entrance has finished
+    const auto frames=frame_count.load(),resumes=timer.resumes,periods=timer.period_changes;
+    const auto scales=image.scales,invalidations=image.invalidations;
+    // Duplicate status refreshes cannot redraw an identical frame or wake the
+    // timer handler. The production periodic timer supplies the next frame.
+    for(int i=0;i<8;++i)assert(view.Update(facts));
+    assert(frame_count.load()==frames && image.invalidations==invalidations);
+    assert(timer.resumes==resumes && timer.period_changes==periods && image.scales==scales);
+    facts.now_us+=67000;assert(view.Update(facts));assert(frame_count.load()==frames+1);
+    assert(timer.resumes==resumes && timer.period_changes==periods && image.scales==scales);
+    facts.session=false;assert(!view.Update(facts));facts.session=true;assert(view.Update(facts));
+    const auto entrance_scales=image.scales,entrance_invalidations=image.invalidations;
+    facts.now_us+=10000;assert(view.Update(facts));
+    assert(image.scales==entrance_scales && image.invalidations==entrance_invalidations);
     puts("production view adaptive timer, request retry, static and inactive paths passed");
 }

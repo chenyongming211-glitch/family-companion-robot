@@ -39,6 +39,9 @@ struct OrbOutputActivity {
 };
 struct OrbAudioActivity {
     uint32_t capture=0,epoch=0;
+    // A failed nonblocking queue read is absence of evidence, not a closed mic.
+    // Capture/epoch and the independent physical-output snapshot remain current.
+    bool snapshot_available=true;
     bool gate_open=false;
     OrbInputActivity input{};
     OrbOutputActivity output{};
