@@ -50,3 +50,13 @@
 实际启动ELF前缀89d3ca4c4、SKU m5stack-stopwatch-xiaoman、mn7_cn及xiao man→小满注册，activating→idle通过。初始启动观察器因stdin继承脚本输入流而不能发送诊断命令，已停止并以不复位被动观察器接续；不是设备不响应的证据。约173秒时orb_stats为mode/requested2、frames0、max_draw0、PSRAM32768、unavailable/preparing/closed均0。此短窗口最小内部SRAM12376，仅为观察值，不代表全语音峰值/栈或续航通过。
 
 云端原服务仍build2c234f0/PID1467322、active/NRestarts0、ready=true/busy=false，未重启或改变后端。已请用户唤醒检查A拉伸/收拢/漂移、文字及基本问答，当前反馈待答；没有新版本的真人语音、活跃绘制/呈现帧率或电流测量。用户另已确认第二设备属于其他型号，未对它刷写。
+
+## 安装后的活跃窗口观察
+
+新固件已出现真实小满检测、connecting→listening、`realtime_start ready capture4/channel1`及多轮speaking/listening活动。被动观察器接续后发送只读诊断，没有播放合成声源、切换动效模式或改动会话。用户正在测试，结果问题仍待回答；这些状态事件不是正确问答听感或AEC验收的替代。
+
+两个实际Render计数1801→2915，88.794秒窗口增加1114次，即约12.55次/秒；以命令发送到回报区间计算的保守范围约12.39–12.70。窗口未观察到转入Idle事件，模式始终为2，读数反映生产绘制调用，不能写为面板呈现fps或15fps目标达成，也不能在条件不同的旧版本间直接宣称提速。
+
+该窗口最大绘制统计仍78871微秒，slow仍1（包括窗口前已有的一次慢帧），不是每帧耗时；统计不含全部LVGL缩放/传输和调度。PSRAM32768，unavailable从51到67、preparing1/closed8保持；这些为UI诊断而非额外音频授权。一次只读AEC统计为eligible1/fault0/faults0/rx_overruns0，最小内部SRAM12376。只能报告该短窗口观察，不能据此宣称音频长稳、无闪跳或低功耗验收。
+
+当前唯一USB观察器保持被动接续，不重复复位。原始诊断和采样JSON仅在忽略目录；尚无电流/续航测量，用户A观感反馈仍待答。
