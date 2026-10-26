@@ -12,7 +12,7 @@
 | 界面 | 保留已安装A/e61f079 | 共用A绘图/视图，单独接屏幕和电源钩子 |
 | 分区 | 原M5布局不变 | 原NVS为24KiB，assets仅3MiB，需专用资源布局 |
 
-18040/18041已支持两路独立会话，见[服务端验证](2026-10-27-realtime-multi-device.md)。Waveshare专用源码v3已完成实现、云端回归与独立规格/质量复审，均PASS；目标构建尚未完成，不能把服务端可鉴权或host通过当作实体接入通过。
+18040/18041已支持两路独立会话，见[服务端验证](2026-10-27-realtime-multi-device.md)。**当前静默阶段已完成：固件源码`411c26d`已推送，四目标编译、独立产物校验全部通过。Waveshare专用包已保存到本机私有目录，尚未安装。两个实体均保持原固件，语音、显示、插话及并发的实机验收等用户回来后执行。** 下方保留开发和失败修复证据，最终结果以“最终四目标与产物核验”为准。
 
 ## 已核实的驱动契约
 
@@ -63,6 +63,27 @@ v3 manifest SHA256 `f97cb9904f5ecb9370c1d944cd458cfd82375b43518c7725b980e04d582a
 打包预核另独立调用锁定上游命名helper，确认Wave ZIP名会加`waveshare-`厂商前缀；原裸variant模式匹配0且会接受错误裸名。校验器改用显式四variant canonical映射，保持唯一文件、错误前缀/裸名/多版本拒绝，wire身份不变。此项在实际打包前确认，不能记为第二轮已进入打包或已生成Wave产物。
 
 合并5路径修正的manifest SHA256 `68b7207af865a1e3648eea0c8001bcc0d430649494d2e90b534c8c935cd3af76`。fresh prepare及源码比对只有SDK头这一行和provenance变化；20项codec/AFE/M5+Wave打包相关回归3.638秒、exit0。增量规格复审PASS，独立20项3.679秒；质量复审PASS，独立4项1.618秒，均实际exit0。下一次实际四目标构建及最终镜像/分区/大小核验尚待完成。
+
+## 最终四目标与产物核验
+
+最终固件提交`411c26db7dfa0d04f780f6cbd2d9493ddd6fdcef`已推送并核对远端main。[Actions40380042158](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/40380042158)四个variant全部成功，另一个未修改上游的[stock workflow40380042542](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/40380042542)也成功。每个目标均实际通过107项host、110项上游测试，再完成ESP32-S3编译、链接、严格配置/来源校验及打包。此前一轮software-aec任务的两个布局测试曾在慢运行器超过20秒，失败日志保留；最终四目标相同覆盖全部通过，没有放宽超时、关闭sanitizer或删除断言。
+
+| variant | host / 上游秒数 | 应用字节 | artifact ID |
+| --- | --- | ---: | ---: |
+| m5stack-stopwatch | 31.962 / 4.305 | 2900976 | 12679121811 |
+| m5stack-stopwatch-software-aec | 47.967 / 6.968 | 2908112 | 12678982307 |
+| m5stack-stopwatch-xiaoman | 50.183 / 7.198 | 2919248 | 12679590042 |
+| esp32-s3-touch-amoled-2.16-xiaoman | 46.128 / 5.941 | 2903024 | 12678597234 |
+
+全部四份下载ZIP的SHA256与GitHub digest一致，ZIP CRC通过；每份52文件校验和与清单完整性通过，共208文件。云端独立核对包内补丁/overlay、锁定上游/SDK/依赖、source SHA和有效配置，重新解析小满索引及mn7_cn/fst模型。最终32源码输入清单SHA256为`eaffeaedebc6e79ae2268fdd70a8ffffc7db54d7823b228c1f963c7822364c29`。
+
+四套应用和bootloader共8份镜像均经云端esptool5.3.1离线检查，chip ID9/ESP32-S3，checksum和validation hash各自valid，无invalid/error。应用均为IDFv6.1、secure version0。canonical release ZIP中的merged镜像与独立merged文件逐字节相同，merged内bootloader、分区、应用、资源四段与独立产物一致。M5三个分区表与原锁定16MB布局一致；Wave分区二进制MD5、专用CSV、边界及写入地址均独立核验。
+
+Waveshare应用`2903024`字节，SHA256 `0db48239f931646d278ff9fb0782504e2de369ac07340c6985173cbfa8e959fb`；3MiB槽仍余242704字节。ELF SHA256 `ba385c37bc70c38a8c04b186b3daa04e73855a37d15fcba04543499f629dadc8`。资源5376385字节，SHA256 `e5010f4259498b29ccd6147bd9b2c3800faea3766b1ee8c591cf90365c9dbee4`，小于6MiB，且与原M5小满资源一致。分区表SHA256 `c065c05db78105e292cfd08e55be5a2fe1d2036a4e488d5f9d487d66ab40668c`。
+
+分区定义保留Wave原NVS `0x9000+0x6000`、phy `0x11000+0x1000`和storage `0xc20000+0x300000`；ota_0为`0x20000+0x300000`、ota_1为`0x320000+0x300000`、assets为`0x620000+0x600000`。**没有写入设备。未来安装需逐区迁移并保留NVS/storage，不能直接写整个merged镜像。**
+
+云端完整证据：`/tmp/xiaoman-waveshare-20261027/artifacts-411c26d/`，含下载digest、inspection-summary和final-integrity-proof。本机待验包：`.superpowers/waveshare-20261027/artifacts-411c26d/esp32-s3-touch-amoled-2.16-xiaoman/`，复制后52文件再次逐项哈希通过；所有生成物均已被Git忽略。静默阶段未使用USB、唤醒、重启、刷写或播放测试音，实机AEC/收音、真正I2S回报、两机隔离/并发、画面呈现/帧率和功耗仍未验收。
 
 ## 备份与静默边界
 

@@ -1,6 +1,6 @@
 # 换电脑开发交接
 
-**Waveshare静默软件阶段（2026-10-27）：专用variant/硬件MR/共用A及480布局已实现，基线云端103 host＋110上游、后续20相关回归及独立规格/质量均通过。实际构建e2cab21发现字体头遗漏，50f21a2修复后三个M5全部成功；Wave再暴露SDK配置头未在guard前读取导致独立TU为空。已补头及实际独立编译链接回归，并对齐Wave厂商前缀ZIP严格匹配，5路径增量复审PASS，准备新四目标构建；尚无已核验可刷Wave包。此前AEC-ready/wake批次及正常输入重开缺OUT均已修，原M5和故障锁存不变。详见[Waveshare记录](verification/2026-10-27-waveshare-xiaoman.md)。用户静默约束仍生效，实体不刷、不重启、不唤醒、不播音。**
+**静默开发已完成至已核验产物（2026-10-27）：Go双设备服务6dc191a已部署18040/18041与OTA8000，独立鉴权/会话/记录云端通过，原token不变。最终固件411c26d已推送main，Actions40380042158四variant全部成功，每个107 host＋110上游通过；四ZIP digest、208文件、源码/SDK/语音/模型/分区及8镜像checksum/hash全部独立核验。Wave app2903024B，适配3MiB槽，assets5376385B适配6MiB；专用包已保存本机.superpowers/waveshare-20261027/artifacts-411c26d/，尚未安装。原M5仍A/e61f079，Wave仍原固件。用户休息期间未USB/唤醒/播音/刷写/重启，实机及双设备验收等用户回来；不能将target通过当作硬件或功耗通过。完整失败→修复记录、产物/安装边界见[Wave验证](verification/2026-10-27-waveshare-xiaoman.md)及[服务端验证](verification/2026-10-27-realtime-multi-device.md)。后续须重新核对备份、逐区迁移保留NVS/phy/storage，不直接整刷merged。多人/声纹、判题提醒、长期记忆、旧链路与暂停的M5音频自动恢复仍不加入。**
 
 **静默开发约束与服务端进展（2026-10-27）：用户要睡觉，明确只继续不影响休息的内容；禁止播音、唤醒、刷机和设备重启，实机步骤等用户回来。服务端16文件完成规格/质量PASS，云端663 pass/2既有skip、race/vet/build exit0；真实模型双会话15.989秒，A关闭后B独立回答5→6并保留自己的上下文，最终计数0，软件模拟播放不代表声学验收。6dc191a已推送核对远端，空闲时静默部署18040/18041及OTA8000；max_sessions=2、各自鉴权/OTA和交叉凭据拒绝通过，原token不变，云端完整回退已保存，未连接实体或发声。第二台16MB完整备份已核验，仍原固件未刷；Waveshare硬件参考与真实DMA回报适配进行中。详见[服务端验证](verification/2026-10-27-realtime-multi-device.md)。本段更新下方正在实现/备份中的状态。**
 

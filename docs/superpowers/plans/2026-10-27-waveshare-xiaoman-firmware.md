@@ -60,7 +60,7 @@ storage,data,spiffs,0xc20000,0x300000
 ```
 
 - [x] 验证器按variant分别核对board/AEC/默认实时/console/小满/分区文件与模型资源；共享SDK、依赖字节、provenance、包内产物校验继续严格，不为新variant放宽旧项。
-- [ ] 实际解析partition-table.bin及应用、assets大小/地址、不重叠；生产构建证据必须绑定精确Git SHA。完整备份与原分区哈希已存在私有目录，不能提交Git。
+- [x] 实际解析partition-table.bin及应用、assets大小/地址、不重叠；生产构建证据必须绑定精确Git SHA。完整备份与原分区哈希已存在私有目录，不能提交Git。
 
 ## 4. 静默验证与提交
 
@@ -72,5 +72,7 @@ python3 -m unittest discover -s scripts/tests -v
 ```
 
 - [x] 保存新增RED→GREEN与全套实际exit code；独立规格PASS后做独立质量审查，发现问题修复再复查。
-- [ ] 提交推送main，核对远端；Actions构建原3个M5及新Waveshare，下载/核对来源、SDK、分区、资源及应用大小。Actions及host不操作实体设备。
-- [ ] 更新交接、版本/产物/限制与精确未完成项。**本轮静默停在已核验产物，不刷机。** 用户回来后重新核验备份、写入范围、otadata目标与回读方案，保留NVS/phy/storage，再做单台及双台实测。
+- [x] 提交推送main，核对远端；Actions构建原3个M5及新Waveshare，下载/核对来源、SDK、分区、资源及应用大小。Actions及host不操作实体设备。
+- [x] 更新交接、版本/产物/限制与精确未完成项。**本轮静默停在已核验产物，不刷机。** 用户回来后重新核验备份、写入范围、otadata目标与回读方案，保留NVS/phy/storage，再做单台及双台实测。
+
+2026-10-27静默阶段完成：最终固件411c26d四目标及107/110通过，独立产物核验已完成，见[最终证据](../../verification/2026-10-27-waveshare-xiaoman.md#最终四目标与产物核验)。本计划勾选表示无声代码/构建/核验完成；设备安装与实际收音/播放/插话/重连/双机并发、帧率和功耗仍须用户回来后验收。
