@@ -35,11 +35,12 @@ class WaveshareAfeTests(unittest.TestCase):
             '// PRODUCTION_BATCH_GUARD', batch))
         (self.work/'codecs').mkdir()
         (self.work/'codecs/box_audio_codec.h').write_text('// Platform declared by the harness.\n')
+        (self.work/'sdkconfig.h').write_text('#define CONFIG_WAVESHARE_XIAOMAN_REALTIME 1\n')
         binary = source.with_suffix('')
         board = defaults.FIRMWARE/'overlays/main/boards/waveshare/esp32-s3-touch-amoled-2.16'
         result = subprocess.run(['c++', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
             '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-            '-DCONFIG_WAVESHARE_XIAOMAN_REALTIME=1', '-DCONFIG_XIAOMAN_ORB_UI=1',
+            '-DCONFIG_XIAOMAN_ORB_UI=1',
             '-I', str(self.work), '-I', str(board), '-I', str(defaults.FIRMWARE/'overlays/main/audio'),
             str(source), '-o', str(binary)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

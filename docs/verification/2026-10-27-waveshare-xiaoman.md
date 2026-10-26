@@ -58,6 +58,12 @@ v3 manifest SHA256 `f97cb9904f5ecb9370c1d944cd458cfd82375b43518c7725b980e04d582a
 
 最小修复只在Waveshare小满条件块显式包含`display/lvgl_display/lvgl_font.h`；其余为补丁hunk行号调整。严格fresh prepare及独立规格重新准备1771文件一致，与v3相比仅该include和生成provenance变化，静态依赖检查RED1→GREEN0。此低影响编译修复不新增镜像实现的单元测试，以新的实际四目标重建验收；不关闭编译警告或放宽类型检查。修复后产物和尺寸仍待新构建结果。
 
+字体修复`50f21a27552e510a874c26e9f239af92563c7a19`已推送，[第二轮40376949650](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/40376949650)三个M5目标全部成功；Wave job121762488626通过字体编译后，实际在链接时报专用codec构造/析构未定义。日志证明该`.cc`已编译，但其头在读`sdkconfig.h`前就检查配置宏，导致独立编译单元的实现为空。已在条件前补SDK头，并将现有host runner的Wave宏改由生成的SDK配置提供；新增直接编译真实生产`.cc`再链接调用者的RED→GREEN、宏关闭对象无专用符号检查。
+
+打包预核另独立调用锁定上游命名helper，确认Wave ZIP名会加`waveshare-`厂商前缀；原裸variant模式匹配0且会接受错误裸名。校验器改用显式四variant canonical映射，保持唯一文件、错误前缀/裸名/多版本拒绝，wire身份不变。此项在实际打包前确认，不能记为第二轮已进入打包或已生成Wave产物。
+
+合并5路径修正的manifest SHA256 `68b7207af865a1e3648eea0c8001bcc0d430649494d2e90b534c8c935cd3af76`。fresh prepare及源码比对只有SDK头这一行和provenance变化；20项codec/AFE/M5+Wave打包相关回归3.638秒、exit0。增量规格复审PASS，独立20项3.679秒；质量复审PASS，独立4项1.618秒，均实际exit0。下一次实际四目标构建及最终镜像/分区/大小核验尚待完成。
+
 ## 备份与静默边界
 
 第二台原16MB完整Flash备份16777216字节，SHA256 `ff002860300f98b805e2c2b2046a8a73b16fc433d45dfb54dc06abf8986e3aa0`；备份后原固件已恢复启动。原NVS0x9000+0x6000、phy0x11000+0x1000、storage0xc20000+0x300000需保留。备份、设备凭据和产物均不进Git。

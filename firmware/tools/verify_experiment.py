@@ -19,6 +19,12 @@ WAVESHARE_VARIANT = 'esp32-s3-touch-amoled-2.16-xiaoman'
 VARIANTS = ('m5stack-stopwatch', 'm5stack-stopwatch-software-aec', 'm5stack-stopwatch-xiaoman', WAVESHARE_VARIANT)
 VARIANT_BOARDS = {variant: 'm5stack/stopwatch' for variant in VARIANTS[:3]}
 VARIANT_BOARDS[WAVESHARE_VARIANT] = 'waveshare/esp32-s3-touch-amoled-2.16'
+CANONICAL_RELEASE_NAMES = {
+    'm5stack-stopwatch': 'm5stack-stopwatch',
+    'm5stack-stopwatch-software-aec': 'm5stack-stopwatch-software-aec',
+    'm5stack-stopwatch-xiaoman': 'm5stack-stopwatch-xiaoman',
+    WAVESHARE_VARIANT: 'waveshare-'+WAVESHARE_VARIANT,
+}
 BUILD_FILES = ('build/xiaozhi.bin', 'build/merged-binary.bin', 'build/generated_assets.bin',
                'build/bootloader/bootloader.bin', 'build/partition_table/partition-table.bin',
                'build/flasher_args.json')
@@ -270,7 +276,10 @@ def bundle(firmware, tree, output, source_sha, evidence):
     if not re.fullmatch('[0-9a-f]{40}', source_sha):
         raise ValueError('invalid source SHA')
     required = ['dependencies.lock', 'sdkconfig', '.family-robot-source.json', *BUILD_FILES]
-    releases = list((tree/'releases').glob('*_'+evidence['variant']+'.zip'))
+    release_name = CANONICAL_RELEASE_NAMES.get(evidence['variant'])
+    if release_name is None:
+        raise ValueError('unknown canonical release variant')
+    releases = list((tree/'releases').glob('*_'+release_name+'.zip'))
     if len(releases) != 1:
         raise ValueError('expected exactly one canonical release ZIP')
     required.append(releases[0].relative_to(tree).as_posix())

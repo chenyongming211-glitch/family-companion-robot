@@ -1,4 +1,5 @@
 #pragma once
+#include "sdkconfig.h"
 #if CONFIG_WAVESHARE_XIAOMAN_REALTIME
 #include "codecs/box_audio_codec.h"
 #include "experiment_gate.h"

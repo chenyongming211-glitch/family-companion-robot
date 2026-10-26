@@ -94,3 +94,39 @@ class WaveshareEvidenceTests(unittest.TestCase):
         path.write_text(json.dumps(dict(flash_files={'0x20000': 'xiaozhi.bin',
                                                     '0x400000': 'generated_assets.bin'})))
         with self.assertRaises(ValueError): self.verify()
+
+    def bundle_fixture(self, release_names):
+        for relative in self.module.BUILD_FILES:
+            path = self.tree/relative
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'synthetic '+relative.encode())
+        releases = self.tree/'releases'
+        releases.mkdir(exist_ok=True)
+        for path in releases.iterdir():
+            path.unlink()
+        for name in release_names:
+            (releases/name).write_bytes(b'synthetic release ZIP fixture')
+        output = self.root/'evidence'
+        self.module.bundle(self.firmware, self.tree, output, 'a'*40, self.verify())
+        return output
+
+    def test_bundle_uses_actual_manufacturer_prefixed_waveshare_release_name(self):
+        name = 'v2.5.2_waveshare-'+VARIANT+'.zip'
+        output = self.bundle_fixture([name])
+        self.assertEqual((output/'releases'/name).read_bytes(), b'synthetic release ZIP fixture')
+        evidence = json.loads((output/'build-evidence.json').read_text())
+        self.assertEqual(evidence['variant'], VARIANT)  # wire identity is unchanged
+
+    def test_bundle_rejects_wrong_or_missing_manufacturer_release_name(self):
+        for name in ['v2.5.2_'+VARIANT+'.zip', 'v2.5.2_other-'+VARIANT+'.zip',
+                     'v2.5.2_waveshare-'+VARIANT+'.zip.bak']:
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'exactly one canonical release ZIP'):
+                self.bundle_fixture([name])
+            self.assertFalse((self.root/'evidence').exists())
+
+    def test_bundle_rejects_multiple_canonical_release_versions(self):
+        names = ['v2.5.2_waveshare-'+VARIANT+'.zip', 'v2.5.3_waveshare-'+VARIANT+'.zip']
+        with self.assertRaisesRegex(ValueError, 'exactly one canonical release ZIP'):
+            self.bundle_fixture(names)
+        self.assertFalse((self.root/'evidence').exists())
