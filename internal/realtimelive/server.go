@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"familyrobot/internal/realtimestate"
 	"familyrobot/internal/voiceidentity"
 	"github.com/gorilla/websocket"
@@ -18,13 +19,11 @@ import (
 
 type Server struct {
 	stopping    bool
-	activeDone  chan struct{}
 	mu          sync.Mutex
 	tickets     map[string]ticketBinding
 	devices     *voiceidentity.Store
 	initErr     error
-	busy        bool
-	active      *websocket.Conn
+	leases      map[string]*sessionLease
 	cfg         Config
 	product     *realtimestate.Product
 	root, build string
@@ -33,8 +32,15 @@ type Server struct {
 }
 
 func NewServer(cfg Config, product *realtimestate.Product, root, build string) *Server {
+	if cfg.MaxSessions == 0 {
+		cfg.MaxSessions = 1
+	}
+	cfg = cfg.snapshot()
 	devices, initErr := voiceidentity.Open(filepath.Join(root, "devices.json"))
-	s := &Server{tickets: map[string]ticketBinding{}, devices: devices, initErr: initErr, cfg: cfg, product: product, root: root, build: build}
+	if cfg.MaxSessions < 1 || cfg.MaxSessions > 8 {
+		initErr = errors.New("invalid_max_sessions")
+	}
+	s := &Server{leases: map[string]*sessionLease{}, tickets: map[string]ticketBinding{}, devices: devices, initErr: initErr, cfg: cfg, product: product, root: root, build: build}
 	s.run = func(ws *websocket.Conn, dir string) {
 		session := NewSession(ws, cfg, dir, product)
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
@@ -56,18 +62,66 @@ func respond(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
+
+// A lease belongs to one authenticated terminal (or the separate legacy scope).
+// Pointer identity prevents an old cleanup from releasing any newer lease.
+type sessionLease struct {
+	key  string
+	conn *websocket.Conn
+	done chan struct{}
+}
+
+func ownerKey(owner Ownership) string {
+	if owner.DeviceID != "" {
+		return owner.DeviceID
+	}
+	return "legacy_unattributed"
+}
+
+// Caller holds s.mu. No network operation is performed under this lock.
+func (s *Server) reserveLocked(key string) *sessionLease {
+	if s.stopping || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
+		return nil
+	}
+	lease := &sessionLease{key: key, done: make(chan struct{})}
+	s.leases[key] = lease
+	return lease
+}
+func (s *Server) releaseLease(lease *sessionLease) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.leases[lease.key] == lease {
+		delete(s.leases, lease.key)
+		close(lease.done)
+	}
+}
+func (s *Server) attachLease(lease *sessionLease, conn *websocket.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping || s.leases[lease.key] != lease {
+		return false
+	}
+	lease.conn = conn
+	return true
+}
 func (s *Server) CloseActive(ctx context.Context) error {
 	s.mu.Lock()
 	s.stopping = true
-	c, done := s.active, s.activeDone
-	s.mu.Unlock()
-	if c != nil {
-		c.Close()
+	leases := make([]*sessionLease, 0, len(s.leases))
+	conns := make([]*websocket.Conn, 0, len(s.leases))
+	for _, lease := range s.leases {
+		leases = append(leases, lease)
+		if lease.conn != nil {
+			conns = append(conns, lease.conn)
+		}
 	}
-	if done != nil {
+	s.mu.Unlock()
+	for _, conn := range conns {
+		conn.Close()
+	}
+	for _, lease := range leases {
 		select {
-		case <-done:
-			return nil
+		case <-lease.done:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -78,13 +132,13 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
-		busy := s.busy
+		active := len(s.leases)
 		s.mu.Unlock()
 		status := 200
 		if s.initErr != nil {
 			status = 503
 		}
-		respond(w, status, map[string]any{"device_identity": 1, "ready": s.initErr == nil, "busy": busy, "experiment": "output-asr-live", "backend": "go", "build": s.build})
+		respond(w, status, map[string]any{"device_identity": 1, "ready": s.initErr == nil, "busy": active > 0, "active_sessions": active, "max_sessions": s.cfg.MaxSessions, "capacity_full": active >= s.cfg.MaxSessions, "experiment": "output-asr-live", "backend": "go", "build": s.build})
 	})
 	mux.HandleFunc("POST /devices", s.enrollDevice)
 	mux.HandleFunc("POST /pair", func(w http.ResponseWriter, r *http.Request) {
@@ -92,9 +146,7 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(503)
 			return
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if r.Header.Get("Origin") != "" || s.busy || s.stopping {
+		if r.Header.Get("Origin") != "" {
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
@@ -103,13 +155,11 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(status)
 			return
 		}
-		b := make([]byte, 32)
-		if _, e := rand.Read(b); e != nil {
-			w.WriteHeader(500)
+		ticket, status := s.issueTicket(owner)
+		if status != 200 {
+			w.WriteHeader(status)
 			return
 		}
-		ticket := base64.RawURLEncoding.EncodeToString(b)
-		s.tickets = map[string]ticketBinding{ticket: {time.Now().Add(120 * time.Second), owner}}
 		value := map[string]any{"ticket": ticket}
 		if owner.DeviceID != "" {
 			value["device_id"] = owner.DeviceID
@@ -124,36 +174,35 @@ func (s *Server) Handler() http.Handler {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		s.mu.Lock()
 		// Python short-circuits Origin/busy checks before consuming the ticket.
-		if r.Header.Get("Origin") != "" || s.busy || s.stopping {
+		if r.Header.Get("Origin") != "" || len(s.leases) >= s.cfg.MaxSessions || s.stopping {
 			s.mu.Unlock()
 			w.WriteHeader(403)
 			return
 		}
 		binding, ok := s.tickets[token]
-		delete(s.tickets, token)
-		if !ok || binding.expiry.Before(time.Now()) {
+		if !ok || !binding.expiry.After(time.Now()) {
+			delete(s.tickets, token)
 			s.mu.Unlock()
 			w.WriteHeader(403)
 			return
 		}
-		s.busy = true
-		done := make(chan struct{})
-		s.activeDone = done
+		lease := s.reserveLocked(ownerKey(binding.owner))
+		if lease == nil {
+			s.mu.Unlock()
+			w.WriteHeader(403)
+			return
+		}
+		delete(s.tickets, token)
 		s.mu.Unlock()
-		defer func() { s.mu.Lock(); s.busy = false; s.activeDone = nil; close(done); s.mu.Unlock() }()
+		defer s.releaseLease(lease)
 		ws, e := (&websocket.Upgrader{ReadBufferSize: 8192, WriteBufferSize: 8192, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}).Upgrade(w, r, nil)
 		if e != nil {
 			return
 		}
 		defer ws.Close()
-		s.mu.Lock()
-		if s.stopping {
-			s.mu.Unlock()
+		if !s.attachLease(lease, ws) {
 			return
 		}
-		s.active = ws
-		s.mu.Unlock()
-		defer func() { s.mu.Lock(); s.active = nil; s.mu.Unlock() }()
 		ws.SetReadLimit(8192)
 		dir, e := s.sessionDirectory(binding.owner)
 		if e != nil {
@@ -175,4 +224,29 @@ func (s *Server) sessionDirectory(owner Ownership) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func (s *Server) issueTicket(owner Ownership) (string, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := ownerKey(owner)
+	if s.stopping || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
+		return "", http.StatusConflict
+	}
+	now := time.Now()
+	for ticket, binding := range s.tickets {
+		if !binding.expiry.After(now) || ownerKey(binding.owner) == key {
+			delete(s.tickets, ticket)
+		}
+	}
+	if len(s.tickets) >= 64 {
+		return "", http.StatusConflict
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", http.StatusInternalServerError
+	}
+	ticket := base64.RawURLEncoding.EncodeToString(b)
+	s.tickets[ticket] = ticketBinding{time.Now().Add(120 * time.Second), owner}
+	return ticket, http.StatusOK
 }

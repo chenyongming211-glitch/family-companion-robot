@@ -100,9 +100,7 @@ func TestDeviceHandlerAuthenticationOwnershipAndSharedAdmission(t *testing.T) {
 	}
 	closeAndWait := func(c *websocket.Conn) {
 		c.Close()
-		s.mu.Lock()
-		done := s.activeDone
-		s.mu.Unlock()
+		done := singleActiveDone(s)
 		if done != nil {
 			select {
 			case <-done:
@@ -362,9 +360,7 @@ func TestDeviceSessionWakeIsolationStopAndLifecycleWithoutModelCalls(t *testing.
 		t.Fatal("business input missing")
 	}
 	c.WriteJSON(map[string]any{"type": "listen", "state": "stop", "session_id": hello.SessionID})
-	s.mu.Lock()
-	done := s.activeDone
-	s.mu.Unlock()
+	done := singleActiveDone(s)
 	if done != nil {
 		select {
 		case <-done:

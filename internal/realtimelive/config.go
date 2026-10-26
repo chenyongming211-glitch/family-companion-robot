@@ -13,6 +13,7 @@ type Config struct {
 	Search                         *bool
 	Tools                          []any
 	Synthetic                      bool
+	MaxSessions                    int
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -86,4 +87,15 @@ func object(v any) map[string]any {
 		return map[string]any{}
 	}
 	return m
+}
+
+// The server and each session own their optional mutable configuration values.
+// Tools are used only as a presence flag; no code mutates or reads their content.
+func (c Config) snapshot() Config {
+	if c.Search != nil {
+		value := *c.Search
+		c.Search = &value
+	}
+	c.Tools = append([]any(nil), c.Tools...)
+	return c
 }

@@ -102,9 +102,7 @@ func TestOwnedEnrollmentTicketBindingReconnectAndRecords(t *testing.T) {
 		}
 		ws.Close()
 		<-released
-		s.mu.Lock()
-		done := s.activeDone
-		s.mu.Unlock()
+		done := singleActiveDone(s)
 		if done != nil {
 			select {
 			case <-done:

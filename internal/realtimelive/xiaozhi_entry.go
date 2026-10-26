@@ -1,8 +1,8 @@
 package realtimelive
 
 import (
-	"crypto/subtle"
 	"errors"
+	"familyrobot/internal/deviceauth"
 	"familyrobot/internal/protocol"
 	"familyrobot/internal/voiceidentity"
 	"net"
@@ -14,9 +14,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type DeviceConfig struct{ Token, AllowedDevice string }
+type DeviceConfig struct {
+	Token, AllowedDevice string
+	RegistryPath         string
+	registry             *deviceauth.Registry
+}
 
-// LoadDeviceConfig reads only the two existing device-auth keys. In particular,
+// LoadDeviceConfig reads only the device-auth keys and optional registry path. In particular,
 // OTA bootstrap URLs and provider credentials never enter this adapter.
 func LoadDeviceConfig(path string) (DeviceConfig, error) {
 	raw, err := os.ReadFile(path)
@@ -26,7 +30,7 @@ func LoadDeviceConfig(path string) (DeviceConfig, error) {
 	c := DeviceConfig{}
 	for _, line := range strings.Split(string(raw), "\n") {
 		key, value, ok := strings.Cut(line, "=")
-		if !ok || (key != "ROBOT_DEVICE_TOKEN" && key != "ROBOT_ALLOWED_DEVICE") {
+		if !ok || (key != "ROBOT_DEVICE_TOKEN" && key != "ROBOT_ALLOWED_DEVICE" && key != "ROBOT_DEVICE_REGISTRY") {
 			continue
 		}
 		value = strings.TrimSpace(value)
@@ -41,8 +45,10 @@ func LoadDeviceConfig(path string) (DeviceConfig, error) {
 		}
 		if key == "ROBOT_DEVICE_TOKEN" {
 			c.Token = value
-		} else {
+		} else if key == "ROBOT_ALLOWED_DEVICE" {
 			c.AllowedDevice = value
+		} else {
+			c.RegistryPath = value
 		}
 	}
 	return validateDeviceConfig(c)
@@ -53,6 +59,17 @@ func validateDeviceConfig(c DeviceConfig) (DeviceConfig, error) {
 		return DeviceConfig{}, errors.New("device_config_invalid")
 	}
 	c.AllowedDevice = mac.String()
+	if c.registry == nil {
+		var err error
+		if c.RegistryPath != "" {
+			c.registry, err = deviceauth.Load(c.RegistryPath, c.AllowedDevice, c.Token)
+		} else {
+			c.registry, err = deviceauth.Single(c.AllowedDevice, c.Token)
+		}
+		if err != nil {
+			return DeviceConfig{}, errors.New("device_config_invalid")
+		}
+	}
 	return c, nil
 }
 
@@ -74,13 +91,18 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 			w.WriteHeader(403)
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+cfg.Token)) != 1 {
-			w.WriteHeader(401)
+		mac, err := net.ParseMAC(r.Header.Get("Device-Id"))
+		if err != nil || len(mac) != 6 {
+			w.WriteHeader(403)
 			return
 		}
-		mac, err := net.ParseMAC(r.Header.Get("Device-Id"))
-		if err != nil || len(mac) != 6 || mac.String() != cfg.AllowedDevice {
+		entry, registered := cfg.registry.Lookup(mac.String())
+		if !registered {
 			w.WriteHeader(403)
+			return
+		}
+		if _, ok := cfg.registry.Authenticate(mac.String(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); !ok || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			w.WriteHeader(401)
 			return
 		}
 		version := r.Header.Get("Protocol-Version")
@@ -91,35 +113,27 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 			w.WriteHeader(400)
 			return
 		}
-		s.mu.Lock()
-		if s.busy || s.stopping {
-			s.mu.Unlock()
-			w.WriteHeader(409)
-			return
-		}
-		s.busy = true
-		done := make(chan struct{})
-		s.activeDone = done
-		s.mu.Unlock()
-		defer func() { s.mu.Lock(); s.busy = false; s.activeDone = nil; close(done); s.mu.Unlock() }()
-		device, err := s.devices.BindXiaozhi(mac.String(), cfg.Token)
+		device, err := s.devices.BindXiaozhi(mac.String(), entry.Token)
 		if err != nil {
 			w.WriteHeader(503)
 			return
 		}
+		s.mu.Lock()
+		lease := s.reserveLocked(device.ID)
+		s.mu.Unlock()
+		if lease == nil {
+			w.WriteHeader(409)
+			return
+		}
+		defer s.releaseLease(lease)
 		ws, err := (&websocket.Upgrader{HandshakeTimeout: 5 * time.Second, ReadBufferSize: 8192, WriteBufferSize: 8192, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}).Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer ws.Close()
-		s.mu.Lock()
-		if s.stopping {
-			s.mu.Unlock()
+		if !s.attachLease(lease, ws) {
 			return
 		}
-		s.active = ws
-		s.mu.Unlock()
-		defer func() { s.mu.Lock(); s.active = nil; s.mu.Unlock() }()
 		ws.SetReadLimit(16384)
 		ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 		kind, b, err := ws.ReadMessage()

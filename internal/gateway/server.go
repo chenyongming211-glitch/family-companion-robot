@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"familyrobot/internal/deviceauth"
 	"familyrobot/internal/qwen"
 	"familyrobot/internal/recordstore"
 	"github.com/gorilla/websocket"
@@ -21,6 +23,7 @@ import (
 
 type Config struct {
 	DeviceToken, BootstrapSecret, PublicWSURL, AllowedDevice string
+	DeviceRegistryPath                                       string
 	Qwen                                                     qwen.Config
 	MaxSessions                                              int
 	IdleTimeout, SessionTimeout                              time.Duration
@@ -28,19 +31,20 @@ type Config struct {
 	RecordRetention                                          time.Duration
 }
 type Server struct {
-	cfg       Config
-	slots     chan struct{}
-	mu        sync.Mutex
-	conns     map[*websocket.Conn]struct{}
-	ctx       context.Context
-	cancel    context.CancelFunc
-	records   ownedRecordStore
-	devices   map[string]bool
-	sessions  sync.WaitGroup
-	closing   bool
-	closeOnce sync.Once
-	closeDone chan struct{}
-	closeCtx  context.Context
+	deviceAuth *deviceauth.Registry
+	cfg        Config
+	slots      chan struct{}
+	mu         sync.Mutex
+	conns      map[*websocket.Conn]struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
+	records    ownedRecordStore
+	devices    map[string]bool
+	sessions   sync.WaitGroup
+	closing    bool
+	closeOnce  sync.Once
+	closeDone  chan struct{}
+	closeCtx   context.Context
 }
 
 func New(cfg Config) (*Server, error) {
@@ -62,6 +66,13 @@ func New(cfg Config) (*Server, error) {
 		}
 		cfg.AllowedDevice = strings.ToLower(m.String())
 	}
+	var deviceAuth *deviceauth.Registry
+	if cfg.DeviceRegistryPath != "" {
+		deviceAuth, err = deviceauth.Load(cfg.DeviceRegistryPath, cfg.AllowedDevice, cfg.DeviceToken)
+		if err != nil {
+			return nil, errors.New("device_auth_registry_invalid")
+		}
+	}
 	if cfg.MaxSessions < 1 || cfg.MaxSessions > 8 {
 		return nil, errors.New("max sessions must be 1-8")
 	}
@@ -82,7 +93,7 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{cfg: cfg, slots: make(chan struct{}, cfg.MaxSessions), conns: make(map[*websocket.Conn]struct{}), ctx: ctx, cancel: cancel, records: records, devices: make(map[string]bool), closeDone: make(chan struct{})}, nil
+	return &Server{deviceAuth: deviceAuth, cfg: cfg, slots: make(chan struct{}, cfg.MaxSessions), conns: make(map[*websocket.Conn]struct{}), ctx: ctx, cancel: cancel, records: records, devices: make(map[string]bool), closeDone: make(chan struct{})}, nil
 }
 func (s *Server) Active() int { return len(s.slots) }
 func (s *Server) Close() {
@@ -145,7 +156,19 @@ func (s *Server) ota(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.deviceAllowed(r) {
+	if r.Header.Get("Origin") != "" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	token := s.cfg.DeviceToken
+	if s.deviceAuth != nil {
+		entry, ok := s.deviceAuth.Lookup(r.Header.Get("Device-Id"))
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		token = entry.Token
+	} else if !s.deviceAllowed(r) {
 		http.Error(w, "device not allowed", http.StatusForbidden)
 		return
 	}
@@ -155,7 +178,8 @@ func (s *Server) ota(w http.ResponseWriter, r *http.Request) {
 		} `json:"application"`
 	}
 	if r.Method == "POST" {
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&body) != nil {
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32768))
+		if err != nil || json.Unmarshal(raw, &body) != nil {
 			http.Error(w, "invalid device metadata", 400)
 			return
 		}
@@ -169,7 +193,7 @@ func (s *Server) ota(w http.ResponseWriter, r *http.Request) {
 		version = "0.0.0"
 	}
 	writeJSON(w, map[string]any{
-		"websocket":   map[string]any{"url": s.cfg.PublicWSURL, "token": s.cfg.DeviceToken, "version": 1},
+		"websocket":   map[string]any{"url": s.cfg.PublicWSURL, "token": token, "version": 1},
 		"firmware":    map[string]any{"version": version},
 		"server_time": map[string]any{"timestamp": time.Now().UnixMilli(), "timezone_offset": 480},
 	})

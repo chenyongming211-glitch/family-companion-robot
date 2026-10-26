@@ -53,6 +53,7 @@ type Session struct {
 
 func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimestate.Product) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
+	cfg = cfg.snapshot()
 	lc := cfg
 	off := false
 	lc.Search = &off

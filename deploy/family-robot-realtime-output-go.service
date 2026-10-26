@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/family-robot-livekit-dev
-ExecStart=/opt/family-robot-livekit-runtime/bin/realtime-output-live --identity /opt/family-robot-livekit-dev/config/product-identity.json --device-listen 0.0.0.0:18041 --device-config /etc/family-robot/server.env
+ExecStart=/opt/family-robot-livekit-runtime/bin/realtime-output-live --identity /opt/family-robot-livekit-dev/config/product-identity.json --device-listen 0.0.0.0:18041 --device-config /etc/family-robot/server.env --max-sessions 2
 Environment=OUTPUT_LIVE_ENABLE_SEARCH=1
 UMask=0077
 TimeoutStopSec=10

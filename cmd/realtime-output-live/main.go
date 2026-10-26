@@ -25,7 +25,11 @@ func main() {
 	root := flag.String("records", "/var/lib/family-robot-realtime-test/verification/output-live-go", "private per-session text directory")
 	deviceListen := flag.String("device-listen", "", "optional device-only listener: 0.0.0.0:18041")
 	deviceConfig := flag.String("device-config", "/etc/family-robot/server.env", "protected server-only device authentication configuration")
+	maxSessions := flag.Int("max-sessions", 1, "maximum simultaneous terminal sessions (1-8)")
 	flag.Parse()
+	if *maxSessions < 1 || *maxSessions > 8 {
+		log.Fatal("invalid_max_sessions")
+	}
 	if *port != "127.0.0.1:18040" {
 		log.Fatal("unsupported_listen_address")
 	}
@@ -36,6 +40,7 @@ func main() {
 	if e != nil {
 		log.Fatal("protected_config_invalid")
 	}
+	cfg.MaxSessions = *maxSessions
 	product, e := realtimestate.LoadProduct(*identity)
 	if e != nil {
 		log.Fatal("identity_invalid")

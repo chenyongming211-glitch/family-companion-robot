@@ -379,7 +379,7 @@ func TestReviewShutdownWaitsForSessionCleanupAndRejectsAdmission(t *testing.T) {
 	}
 	app.mu.Lock()
 	defer app.mu.Unlock()
-	if app.busy || app.active != nil {
+	if len(app.leases) != 0 {
 		t.Fatal("shutdown left stale session ownership")
 	}
 }

@@ -19,7 +19,8 @@ var version = "dev"
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	cfg := gateway.Config{
-		DeviceToken: os.Getenv("ROBOT_DEVICE_TOKEN"), BootstrapSecret: os.Getenv("ROBOT_OTA_SECRET"), PublicWSURL: os.Getenv("ROBOT_PUBLIC_WS_URL"), AllowedDevice: os.Getenv("ROBOT_ALLOWED_DEVICE"),
+		DeviceRegistryPath: os.Getenv("ROBOT_DEVICE_REGISTRY"),
+		DeviceToken:        os.Getenv("ROBOT_DEVICE_TOKEN"), BootstrapSecret: os.Getenv("ROBOT_OTA_SECRET"), PublicWSURL: os.Getenv("ROBOT_PUBLIC_WS_URL"), AllowedDevice: os.Getenv("ROBOT_ALLOWED_DEVICE"),
 		RecordDirectory: os.Getenv("ROBOT_RECORD_DIR"), RecordRetention: duration("ROBOT_RECORD_RETENTION", 168*time.Hour),
 		MaxSessions: integer("ROBOT_MAX_SESSIONS", 1), IdleTimeout: duration("ROBOT_IDLE_TIMEOUT", 2*time.Minute), SessionTimeout: duration("ROBOT_SESSION_TIMEOUT", 30*time.Minute),
 		Qwen: qwen.Config{URL: os.Getenv("QWEN_REALTIME_URL"), APIKey: os.Getenv("DASHSCOPE_API_KEY"), Voice: env("QWEN_VOICE", "Tina"), VAD: env("QWEN_VAD", "semantic_vad"), Instructions: env("ROBOT_INSTRUCTIONS", "你是友善、耐心的中文家庭语音助手。自然简洁地交流，每次先用一到三句话回答。用户插话时立即让出话轮，根据新的问题继续交流。不要声称完成了你没有执行的操作。")},
