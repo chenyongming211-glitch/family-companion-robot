@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-用户已确认3ddbbb5的状态文字完整，并选择增强预览A「柔软流体」。A生产实现、云端宿主回归及独立真实LVGL检查已完成；规格与质量两阶段独立审查均通过，无未解决P1/P2/P3。目标构建、产物核验与安装尚未进行，当前手表仍为3ddbbb5。设计选择不能当作新版实机、功耗或续航验收。
+用户已确认3ddbbb5的状态文字完整，并选择增强预览A「柔软流体」。A代码e61f079已推送main，最终90/110、真实LVGL及规格/质量复核通过；三个variant目标构建、45文件产物核验、原M5应用安装及完整补充回读均完成。设备已启动新ELF、小满注册和Idle，约173秒时光球frames0/PSRAM32768。当前A实机观感、真实语音/活跃帧率及功耗仍待验收，不以设计认可或安装成功替代。第二台Waveshare仍保留原固件。
 
 ## 改动与资源边界
 
@@ -34,3 +34,19 @@
 ## 第二个终端
 
 新插入的设备实际为Waveshare `esp32-s3-touch-amoled-2.16`，不是M5StopWatch。已恢复原2.2.4固件，未刷入本版。不同分区/资源及当前后端单MAC/单会话限制见[两终端兼容性核对](2026-10-26-esp32-two-device-compatibility.md)。
+
+## 精确目标构建与应用安装
+
+[Actions40344575984](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/40344575984)三个variant全部成功，head为main/e61f079a413d9963a9b01655b9721c6dc58d3341。小满job121647963869中的90项/110项分别29.518/5.644秒通过。artifact12661335823，ZIP15440666字节，SHA256与GitHub digest一致：`d8a07da1214b11f516c99c1b15d2f93459ecf46ad7acfc791ac5445f865fdea1`。
+
+45个文件逐项SHA256及清单完整性、源补丁/overlay、SDK/依赖、语音有效配置、分区和既有资源均核验通过。应用2919024字节，比3ddbbb5增加176字节，适配ota_0容量0x3f0000；SHA256为`63cecf82e7d5ee9dd7f608a4112744362729711b4fae5b6027a58f6a4de57990`。离线image-info确认ESP32-S3/IDF6.1/secure version0，checksum和image hash有效；ELF为`89d3ca4c4f8b99199f881e87f4ebfd3077b6d68c29a0a2e371fd79217191e603`。模型资源仍5376385字节、SHA256 `e5010f4259498b29ccd6147bd9b2c3800faea3766b1ee8c591cf90365c9dbee4`。
+
+先正常退出旧唯一USB监视，再确认端口与原手表硬件标识对应。第一轮工具脚本错误地resolve虚拟环境Python链接，导致子进程找不到esptool，在设备命令启动前即以非零退出；未继续任何写入，错误日志保留。使用sys.executable修正后在独立device-first-v2目录重新执行。
+
+按五块读取0..0x410000，保存4259840字节当前应用/配置备份；确认当前3ddbbb5应用逐字节相同、分区匹配、OTA序号1。再读六块当前资源，每块与新产物相应字节一致；全部退出码与字节比对通过后，才保存事前verified-install-intent。其后只写0x20000新应用，CLI退出0且芯片hash通过，没有写NVS、otadata、分区表或资源。
+
+写后逐项受退出码保护：三块应用回读与新产物完全相同，0..0x20000启动/配置前缀与本次刷前备份完全相同，六块资源全部与新产物一致；这些检查全部在首次启动新应用前完成。原始backup/日志/intent/write-result/post-verified仅在本机忽略目录，不入Git或云端。
+
+实际启动ELF前缀89d3ca4c4、SKU m5stack-stopwatch-xiaoman、mn7_cn及xiao man→小满注册，activating→idle通过。初始启动观察器因stdin继承脚本输入流而不能发送诊断命令，已停止并以不复位被动观察器接续；不是设备不响应的证据。约173秒时orb_stats为mode/requested2、frames0、max_draw0、PSRAM32768、unavailable/preparing/closed均0。此短窗口最小内部SRAM12376，仅为观察值，不代表全语音峰值/栈或续航通过。
+
+云端原服务仍build2c234f0/PID1467322、active/NRestarts0、ready=true/busy=false，未重启或改变后端。已请用户唤醒检查A拉伸/收拢/漂移、文字及基本问答，当前反馈待答；没有新版本的真人语音、活跃绘制/呈现帧率或电流测量。用户另已确认第二设备属于其他型号，未对它刷写。
