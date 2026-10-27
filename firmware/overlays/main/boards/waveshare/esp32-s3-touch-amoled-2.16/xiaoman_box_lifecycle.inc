@@ -136,7 +136,25 @@ bool XiaomanBoxCodec::InputData(std::vector<int16_t>& data) {
 #endif
     if(!input_enabled_ || ReferenceFaulted()) return false;
     // callback_refill's checked Box Read returns zero on codec-device failure.
+#ifdef ESP_PLATFORM
+    const bool probe=!read_probe_done_;
+    read_probe_done_=true;
+    if(probe) {
+        portENTER_CRITICAL(&mux_);
+        const auto bytes=last_dma_bytes_;
+        const auto gap=last_dma_gap_us_;
+        const auto stamp=last_dma_us_;
+        portEXIT_CRITICAL(&mux_);
+        ESP_LOGI("XiaomanBox", "first input read begin samples=%u capture=%u dma_bytes=%u gap_us=%lld age_us=%lld",
+            unsigned(data.size()),unsigned(generation),unsigned(bytes),static_cast<long long>(gap),
+            static_cast<long long>(stamp?esp_timer_get_time()-stamp:-1));
+    }
+#endif
     const bool read=BoxAudioCodec::InputData(data);
+#ifdef ESP_PLATFORM
+    if(probe)ESP_LOGI("XiaomanBox", "first input read end ok=%d capture=%u current=%u",
+        read,unsigned(generation),unsigned(CaptureGeneration()));
+#endif
     if(!read) ReportReferenceFailure();
     return read && generation==CaptureGeneration();
 }
@@ -148,7 +166,21 @@ bool XiaomanBoxCodec::PlaybackSupported() const {
 }
 bool XiaomanBoxCodec::ReferenceValid() const {
     portENTER_CRITICAL(&mux_);const bool ok=accepting_ && !faulted_;
-    portEXIT_CRITICAL(&mux_);return ok;
+#ifdef ESP_PLATFORM
+    // A blocked ADC read cannot report a later ISR fault. AFE calls this
+    // task-only snapshot independently, so preserve/report the first fault here.
+    const bool report=faulted_ && !fault_logged_;
+    const auto source=fault_source_;
+    const auto bytes=last_dma_bytes_;
+    const auto gap=last_dma_gap_us_;
+    if(report)fault_logged_=true;
+#endif
+    portEXIT_CRITICAL(&mux_);
+#ifdef ESP_PLATFORM
+    if(report)ESP_LOGE("XiaomanBox", "capture blocked source=%u dma_bytes=%u dma_gap_us=%lld",
+        unsigned(source),unsigned(bytes),static_cast<long long>(gap));
+#endif
+    return ok;
 }
 bool XiaomanBoxCodec::ReferenceFaulted() const {
     portENTER_CRITICAL(&mux_);const bool fault=faulted_;portEXIT_CRITICAL(&mux_);return fault;

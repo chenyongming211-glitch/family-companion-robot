@@ -122,3 +122,11 @@ Wave诊断应用2903792字节，较已安装411c26d增加768字节；SHA256 `f95
 后续步骤已准备在私有目录：`diag-backup.py`按目标序列号选择端口、完整备份当前16MB并检查只有配置/storage变化；`diag-install.py`复核52文件和正确source、分区/资源与当前备份相同、otadata CRC/选择，仅写app，再完整16MB回读，确认应用擦除范围外所有字节相同后才标记可首次启动。**尚未执行后续备份或安装，当前设备应用仍411c26d。** 重新连接后须先确认目标和无串口owner；诊断启动观察器需使用新的post-verified和实际枚举端口，不能盲用旧normal-boot脚本中写死的14201或旧安装proof。
 
 本轮最后云端18040为build6dc191a、ready=true、max_sessions2、active_sessions0；未部署或重启云端服务。原M5未访问或刷写。根因、收音/唤醒、播放、插话、显示、双设备声学验收及功耗继续未完成。
+
+## USB恢复后的首轮实机诊断
+
+用户确认重新连接并开机，现场再次匹配同一Wave USB序列号，只有根代理持有该串口。联网后的完整16MB新备份SHA256 `274f51fa2937e10033e08a7718d23e1b7db54e806f6154761cbe1466c1b7ec4e`；应用仍为411c26d，其余变化仅配置/storage区域。52文件、专用source、当前分区/资源、otadata CRC/选择及安全状态复核通过；预存intent后仅写20e9fcd app，实际exit0。启动前32个512KiB分片完整回读均exit0，app逐字节相同、末尾擦除填充值正确、应用擦除范围外所有字节与本次刷前相同。刷后整片SHA256 `7ed1ba1e213e4c27754d95c730ad3e845ab9553d1e866cea9d7ff2e9fd8d0049`。
+
+首次启动观察45秒，ELF `8d86062ee...`匹配、网络与8000激活正常，仍累计1801条AFE空缓冲/fetch警告。硬件readback为IN1/OUT1，TX STD/mono/data16/slot32/left、总DMA2880B；RX TDM/stereo/data16/slot16/mask3/total4、总DMA5760B；两端24k/BCLK1536000/MCLK6144000均符合。首轮未出现capture blocked日志，但该日志原来位于InputData内部，不能排除第一次ADC读取未返回而错过随后ISR故障，不能把“未打印”当作无故障。
+
+增加仅Wave任务侧的第一次底层输入read开始/结束（只记样本数/代次，不记PCM），并由AFE调用的ReferenceValid独立打印一次锁存故障；ISR仍不打印。两项生产codec及独立翻译单元回归2.560秒exit0，另ESP_PLATFORM真实日志分支严格格式编译/ASan/UBSan运行exit0，保护与阈值未变。新诊断目标构建与实机定位待完成。当前再次只读备份目录为本机`.superpowers/waveshare-20261027/diag2-input-20261027/`，尚未完成或写入新诊断；源设备20e9fcd，原M5/云端保持原状。
