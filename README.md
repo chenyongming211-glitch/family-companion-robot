@@ -4,6 +4,7 @@
 
 - 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
 - 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
+- 当前小智设备入口18041复用同一Go核心，按设备独立鉴权、会话和记录。新增[设备语音控制](docs/superpowers/specs/2026-10-27-realtime-device-controls-design.md)：发现设备实际支持的状态查询、音量和屏幕亮度工具，设置后回读核实；无声工具会话与保留联网搜索的语音会话分离。发布和实机边界见[验证记录](docs/verification/2026-10-27-realtime-device-controls.md)，Mac不提供实体设备控制。
 - 旧Python Realtime实现已弃用为产品路径，只保留临时18032回退、对照和Go差异测试参考。
 - 旧LiveKit ASR→LLM→TTS完整三段式、18020桥与旧浏览器入口退出后续产品主路径；源码保留参考，不继续作为常设第二语音后端。
 - 旧Go的设备协议、鉴权、工具和存储按模块盘点复用；判题、提醒和长期记忆没有因这次标记自动实现。
@@ -20,7 +21,7 @@
 
 ## 历史说明：旧Go网关与三段式实验
 
-以下保留此前阶段的说明及验证链接，涉及18010/18020/三段式的“当前方向”“主测试入口”均指当时状态。8000旧Go网关仍运行，下方设备工具/记录能力属于该旧入口，不代表新18040已经接入。新的运行与开发入口以上方链接为准。
+以下保留此前阶段的说明及验证链接，涉及18010/18020/三段式的“当前方向”“主测试入口”均指当时状态。8000旧Go网关仍运行，下方旧工具、任务与记录能力不能整包视为新18040已接入；当前设备控制的独立适配以上方新方案和验证为准。
 
 换电脑继续开发先读[开发交接说明](docs/DEVELOPMENT_HANDOFF.md)：环境恢复、服务器约定、已完成/未完成、新电脑麦克风接入的下一步，以及本机历史实验资料的归档位置。
 

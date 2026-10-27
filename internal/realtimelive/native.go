@@ -24,6 +24,11 @@ func sessionSettings(c Config, prompt string) map[string]any {
 			s["search_options"] = map[string]any{"enable_source": true}
 		}
 	}
+	if len(c.Tools) > 0 {
+		s["modalities"] = []string{"text"}
+		s["tools"] = c.Tools
+		delete(s, "audio")
+	}
 	return s
 }
 

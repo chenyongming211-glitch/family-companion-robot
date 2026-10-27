@@ -61,11 +61,11 @@ Go18040和Python18032默认开启`enable_search`，并请求`search_options.enab
 
 搜索次数、策略与返回来源保存在服务器私有intent及`events.jsonl`的`native_search`事件，普通日志不打印链接/正文。当前窗口不新增来源列表UI，模型可自然回答来源问题；元数据处理不阻断正常音频。没有返回计量不擅自记为已确认的0。
 
-服务环境可设置`OUTPUT_LIVE_ENABLE_SEARCH=0`关闭，默认值为1，重启对应入口后生效；无需修改模型Key配置。该开关不改变其他入口或旧探针默认行为。官方要求内置搜索与`tools`互斥，后续工具接入及Go迁移须处理此限制。
+服务环境可设置`OUTPUT_LIVE_ENABLE_SEARCH=0`关闭，默认值为1，重启对应入口后生效；无需修改模型Key配置。该开关不改变其他入口或旧探针默认行为。官方要求内置搜索与`tools`互斥；当前Go设备控制使用独立search=false/text-only工具会话，普通语音仍沿用原搜索配置。只有声明MCP的实际设备获得自己的工具，Mac不假装能够控制音量或亮度，见[设备控制方案](../../docs/superpowers/specs/2026-10-27-realtime-device-controls-design.md)及[验证](../../docs/verification/2026-10-27-realtime-device-controls.md)。
 
 搜索会增加等待，真实查询结果也可能混合预报/实况，不能仅因有来源就认为天气数据已核实为实时观测。其他选项及版本限制见[配置清单](../../docs/verification/2026-10-25-realtime-config-switches.md)，实测见[搜索验证](../../docs/verification/2026-10-25-realtime-search.md)。
 
-这是一项通用播放端策略，当前只有Mac适配和验证。微信小程序、App、ESP32固件都需分别实现封口、排空与可信完成回报；不是改服务器后它们就自动具备该行为。见[本轮实现计划](../../docs/superpowers/plans/2026-10-25-realtime-drain-test.md)。
+这是通用播放端策略。当前Mac、M5和微雪分别已有各自适配，实机结果与未验收边界以[开发交接](../../docs/DEVELOPMENT_HANDOFF.md)为准。新的微信小程序、App或其他ESP32板仍需分别实现封口、排空与可信完成回报，不能只改服务器就推定所有终端通过。原实验计划见[历史实施步骤](../../docs/superpowers/plans/2026-10-25-realtime-drain-test.md)。
 
 ## 云端运行与记录
 

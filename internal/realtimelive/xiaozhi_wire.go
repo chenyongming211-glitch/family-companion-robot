@@ -1,6 +1,7 @@
 package realtimelive
 
 import (
+	"encoding/json"
 	"errors"
 	"familyrobot/internal/protocol"
 	"familyrobot/internal/realtimeaudio"
@@ -20,6 +21,7 @@ type xiaozhiWire struct {
 	version, frameMS int
 	scope            string
 	listening        bool // Read-loop owned; writes never consult it.
+	mcp              bool // Negotiated once from the authenticated hello.
 	wakeSamples      int
 	startDeadline    time.Time
 	blocks           map[int64]*devicePlayback // Session mutex owns all playback access.
@@ -61,7 +63,19 @@ func (w *xiaozhiWire) control(b []byte) (map[string]any, error) {
 		return nil, err
 	}
 	switch e["type"] {
-	case "mcp", "iot", "status", "ping":
+	case "mcp":
+		if !w.mcp {
+			return nil, nil
+		}
+		if scope, exists := e["session_id"]; exists && scope != "" && scope != w.scope {
+			return nil, errors.New("wrong_session_scope")
+		}
+		payload, err := json.Marshal(e["payload"])
+		if err != nil || len(payload) > controlPayloadLimit || len(object(e["payload"])) == 0 {
+			return nil, errors.New("invalid_mcp_payload")
+		}
+		return map[string]any{"type": "mcp", "session_id": w.scope, "payload": json.RawMessage(payload)}, nil
+	case "iot", "status", "ping":
 		// Unnegotiated non-voice messages have no authority or model effects.
 		// Some stock initialization messages omit session_id; ignore them within
 		// the WebSocket's message-size bound rather than breaking voice startup.
@@ -107,7 +121,11 @@ func (w *xiaozhiWire) sendEvent(e map[string]any) error {
 	scope := map[string]any{"session_id": w.scope}
 	switch e["type"] {
 	case "ready":
-		return w.ws.WriteJSON(protocol.Hello{Type: "hello", Version: w.version, Transport: "websocket", SessionID: w.scope, AudioParams: protocol.AudioParams{Format: "opus", SampleRate: 24000, Channels: 1, FrameDuration: 60}, Features: map[string]bool{"playback_progress_v1": true, "playback_drain_v1": true}})
+		features := map[string]bool{"playback_progress_v1": true, "playback_drain_v1": true}
+		if w.mcp {
+			features["mcp"] = true
+		}
+		return w.ws.WriteJSON(protocol.Hello{Type: "hello", Version: w.version, Transport: "websocket", SessionID: w.scope, AudioParams: protocol.AudioParams{Format: "opus", SampleRate: 24000, Channels: 1, FrameDuration: 60}, Features: features})
 	case "begin":
 		id, ok := wireInteger(e["id"])
 		if !ok || id < 1 || id > math.MaxUint32 {

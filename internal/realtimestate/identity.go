@@ -167,6 +167,23 @@ func (p *Product) snapshot(cfg map[string]any, context string, connected bool) (
 		if pair[0] == "live_information" && cfg["enable_search"] == true {
 			value = capability{voiceStatus, "使用内置联网搜索查询天气、新闻等最新信息"}
 		}
+		if pair[0] == "device_control" {
+			names, _ := cfg["device_control_tools"].([]string)
+			available := map[string]bool{}
+			for _, name := range names {
+				available[name] = true
+			}
+			if available["device_get_status"] {
+				operations := []string{"查询当前设备状态"}
+				if available["device_set_volume"] {
+					operations = append(operations, "调节当前设备音量")
+				}
+				if available["device_set_brightness"] {
+					operations = append(operations, "调节当前设备屏幕亮度")
+				}
+				value = capability{voiceStatus, strings.Join(operations, "、") + "；仅限当前对话设备，不含其他设备或家电"}
+			}
+		}
 		caps = append(caps, namedCapability{pair[0], value})
 	}
 	return identitySnapshot{p.raw, "realtime-output-live", []string{"audio"}, modelSnapshot{model, provider}, caps, memorySnapshot{RecentTurnLimit, len(history.RecentTurns), history.OlderTurnsOmitted, "current_session_played_text", true, false, false}}, nil

@@ -90,7 +90,8 @@ func object(v any) map[string]any {
 }
 
 // The server and each session own their optional mutable configuration values.
-// Tools are used only as a presence flag; no code mutates or reads their content.
+// The baseline uses Tools only as a presence flag for the search guard. The
+// separate planner supplies immutable, server-defined Bridge tool schemas.
 func (c Config) snapshot() Config {
 	if c.Search != nil {
 		value := *c.Search

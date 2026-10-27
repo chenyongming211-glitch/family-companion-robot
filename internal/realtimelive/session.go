@@ -2,6 +2,7 @@ package realtimelive
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"familyrobot/internal/realtimeaudio"
 	"familyrobot/internal/realtimestate"
@@ -20,6 +21,8 @@ type liveTurn struct {
 	done                    chan struct{}
 	stoppedAt, drainStarted time.Time
 	asr                     *OutputASR
+	transcriptReady         chan struct{}
+	transcriptOnce          sync.Once
 }
 type Session struct {
 	ws                *websocket.Conn
@@ -33,6 +36,7 @@ type Session struct {
 	ring              *realtimestate.AudioRing
 	input             chan []byte
 	listener          *Native
+	controls          *deviceControls
 	speechStart       *int64
 	seq               int64
 	output, lastInput *liveTurn
@@ -142,7 +146,7 @@ func (s *Session) addTurn() *liveTurn {
 	defer s.mu.Unlock()
 	s.seq++
 	ctx, cancel := context.WithCancel(s.ctx)
-	rt := &liveTurn{turn: realtimestate.NewTurn(s.seq), ctx: ctx, cancel: cancel, done: make(chan struct{}), stoppedAt: time.Now()}
+	rt := &liveTurn{turn: realtimestate.NewTurn(s.seq), ctx: ctx, cancel: cancel, done: make(chan struct{}), transcriptReady: make(chan struct{}), stoppedAt: time.Now()}
 	s.history = append(s.history, rt)
 	s.output = rt
 	s.lastInput = rt
@@ -277,6 +281,9 @@ func (s *Session) Run() (err error) {
 	if e = s.listener.Open(s.ctx, "仅检测语音轮次，不自动生成回复。", true); e != nil {
 		return e
 	}
+	// Start discovery only once the client read loop can service replies;
+	// provider setup must not consume the Bridge's discovery timeout.
+	s.startDeviceControls()
 	if !device {
 		if e = s.send(ready); e != nil {
 			return e
@@ -362,6 +369,13 @@ func (s *Session) Run() (err error) {
 				return e
 			}
 			if event == nil {
+				continue
+			}
+			if event["type"] == "mcp" && s.controls != nil {
+				payload, _ := event["payload"].(json.RawMessage)
+				if e = s.controls.Receive(payload); e != nil {
+					return e
+				}
 				continue
 			}
 			if e = s.validateScope(event); e != nil {
@@ -555,6 +569,7 @@ func (s *Session) listen() error {
 			rt := s.items[id]
 			if rt != nil && valid && utf8.RuneCountInString(text) <= 4096 {
 				rt.turn.User = text
+				rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
 			}
 			s.mu.Unlock()
 			if rt != nil && valid && utf8.RuneCountInString(text) <= 4096 {
@@ -687,11 +702,16 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.fail()
 		return
 	}
-	prompt, e := s.product.InstructionsFor(s.cfg.facts(), contextText, true, time.Now())
+	controlContext, e := s.routeDeviceControls(rt, contextText)
+	if e != nil {
+		return
+	}
+	prompt, e := s.product.InstructionsFor(s.sessionFacts(), contextText, true, time.Now())
 	if e != nil {
 		s.turnError(rt)
 		return
 	}
+	prompt += controlContext
 	producerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	encoded := make(chan encodedPacket, 1002)

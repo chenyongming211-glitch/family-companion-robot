@@ -374,6 +374,13 @@ func errorOutput(tag string) string {
 	return jsonOutput(map[string]any{"ok": false, "verified": false, "error": tag})
 }
 
+// ValidateArguments lets a planner validate a complete batch before dispatching
+// any call, using the same strict validator as the device bridge.
+func ValidateArguments(name, arguments string) bool {
+	_, ok := parseArguments(name, arguments)
+	return ok
+}
+
 func parseArguments(name, arguments string) (map[string]int, bool) {
 	decoder := json.NewDecoder(strings.NewReader(arguments))
 	start, err := decoder.Token()
