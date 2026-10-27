@@ -3,6 +3,9 @@
 #include <driver/i2s_tdm.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+#ifdef ESP_PLATFORM
+#include <esp_log.h>
+#endif
 #include <algorithm>
 #include <cstring>
 #include <new>

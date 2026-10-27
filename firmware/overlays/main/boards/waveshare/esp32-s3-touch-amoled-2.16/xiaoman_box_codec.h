@@ -46,7 +46,7 @@ private:
     bool PreparePlaybackHardware(); // lifecycle_ held, before Start creates its record
     void Disarm();
     void Arm();
-    void FaultLocked(); // mux_ held, ISR-safe scalar state only
+    void FaultLocked(uint32_t source=5); // mux_ held, ISR-safe scalar state only
     static bool Sent(i2s_chan_handle_t, i2s_event_data_t*, void*);
     bool Complete(i2s_event_data_t* event);
     mutable portMUX_TYPE mux_=portMUX_INITIALIZER_UNLOCKED;
@@ -56,5 +56,9 @@ private:
     uint32_t output_generation_=0, aec_ready_=UINT32_MAX;
     bool callbacks_ok_=false, setup_failed_=false, accepting_=false;
     bool faulted_=false, capture_active_=false;
+    uint32_t fault_source_=0;
+    size_t last_dma_bytes_=0;
+    int64_t last_dma_us_=0, last_dma_gap_us_=0;
+    bool fault_logged_=false;
 };
 #endif
