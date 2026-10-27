@@ -1,0 +1,136 @@
+diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -250,7 +250,16 @@
+ }
+ 
+ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++    static unsigned diag_calls=0;
++    const unsigned diag_call=diag_calls<201?++diag_calls:diag_calls;
++    const bool diag_probe=diag_call<=4 || diag_call==200;
++    if(diag_probe)ESP_LOGI("WavePipeline", "read begin n=%u rate=%d channels=%d",diag_call,codec_->input_sample_rate(),codec_->input_channels());
++#endif
+     UpdateExperimentGate();
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++    if(diag_probe)ESP_LOGI("WavePipeline", "gate done n=%u",diag_call);
++#endif
+     if (!codec_->input_enabled()) {
+         esp_timer_stop(audio_power_timer_);
+         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+@@ -265,6 +274,9 @@
+         }
+         if (codec_->ManagedCapture() && (capture_generation_ != codec_->CaptureGeneration() ||
+                                             capture_faulted_ != codec_->ReferenceFaulted())) {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++            if(diag_probe)ESP_LOGI("WavePipeline", "capture reset begin n=%u old=%u new=%u",diag_call,unsigned(capture_generation_.load()),unsigned(codec_->CaptureGeneration()));
++#endif
+             capture_generation_ = codec_->CaptureGeneration();
+             capture_faulted_ = codec_->ReferenceFaulted();
+             {
+@@ -274,6 +286,9 @@
+             }
+             codec_->ResetDiagnosticStream(1);
+             audio_engine_->ResetCapture();
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++            if(diag_probe)ESP_LOGI("WavePipeline", "capture reset end n=%u",diag_call);
++#endif
+             UpdateExperimentGate();
+             return false;
+         }
+@@ -287,9 +302,15 @@
+                                                    &output_samples);
+             auto resampled = std::vector<int16_t>(output_samples * codec_->input_channels());
+             uint32_t actual_output = output_samples;
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++            if(diag_probe)ESP_LOGI("WavePipeline", "resample begin n=%u input=%u capacity=%u",diag_call,unsigned(in_sample_num),unsigned(output_samples));
++#endif
+             const auto conversion_result = esp_ae_rate_cvt_process(
+                 input_resampler_, (esp_ae_sample_t)data.data(), in_sample_num,
+                 (esp_ae_sample_t)resampled.data(), &actual_output);
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++            if(diag_probe)ESP_LOGI("WavePipeline", "resample end n=%u result=%d output=%u",diag_call,int(conversion_result),unsigned(actual_output));
++#endif
+             if (codec_->ManagedCapture() &&
+                 (conversion_result != 0 || actual_output > output_samples)) {
+                 codec_->ReportReferenceFailure();
+@@ -323,6 +344,9 @@
+     audio_debugger_->Feed(data);
+ #endif
+ 
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++    if(diag_probe)ESP_LOGI("WavePipeline", "read done n=%u samples=%u capture=%u",diag_call,unsigned(data.size()),unsigned(capture_generation_.load()));
++#endif
+     return true;
+ }
+ 
+diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_audio_engine.cc
+--- a/main/audio/engines/afe_audio_engine.cc
++++ b/main/audio/engines/afe_audio_engine.cc
+@@ -271,6 +271,12 @@
+ }
+ 
+ void AfeAudioEngine::FeedCaptured(std::vector<int16_t>&& data, uint32_t capture_generation) {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++    static unsigned diag_calls=0;
++    const unsigned diag_call=diag_calls<201?++diag_calls:diag_calls;
++    const bool diag_probe=diag_call<=4 || diag_call==200;
++    if(diag_probe)ESP_LOGI("WavePipeline", "feed enter n=%u samples=%u capture=%u current=%u pending=%d applied_ref=%d ref=%d",diag_call,unsigned(data.size()),unsigned(capture_generation),unsigned(codec_->CaptureGeneration()),capture_reset_pending_.load(),applied_reference_valid_.load(),codec_->ReferenceValid());
++#endif
+     EventBits_t bits = xEventGroupGetBits(event_group_);
+     if ((bits & kVoiceProcessingEnabled) && !kUseAfeForVoiceProcessing) {
+         OutputRawAudio(data);
+@@ -286,13 +292,25 @@
+     if (codec_->ManagedCapture() &&
+         (capture_generation != codec_->CaptureGeneration() || capture_reset_pending_.load() ||
+          applied_reference_valid_.load() != codec_->ReferenceValid())) {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++        if(diag_probe)ESP_LOGI("WavePipeline", "feed gated n=%u",diag_call);
++#endif
+         capture_reset_pending_ = true;
+         return;
+     }
+     input_buffer_.insert(input_buffer_.end(), data.begin(), data.end());
+     size_t chunk_size = afe_iface_->get_feed_chunksize(afe_data_) * codec_->input_channels();
+     while (input_buffer_.size() >= chunk_size) {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++        static bool diag_fed=false;
++        const bool diag_feed_probe=!diag_fed;
++        diag_fed=true;
++        if(diag_feed_probe)ESP_LOGI("WavePipeline", "AFE feed begin samples=%u",unsigned(chunk_size));
++#endif
+         afe_iface_->feed(afe_data_, input_buffer_.data());
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++        if(diag_feed_probe)ESP_LOGI("WavePipeline", "AFE feed end");
++#endif
+         input_buffer_.erase(input_buffer_.begin(), input_buffer_.begin() + chunk_size);
+     }
+ }
+@@ -467,8 +485,17 @@
+              applied_reference_valid_.load() != codec_->ReferenceValid()))
+             capture_reset_pending_ = true;
+         if (capture_reset_pending_.exchange(false)) {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++            static unsigned diag_resets=0;
++            const unsigned diag_reset=diag_resets<201?++diag_resets:diag_resets;
++            const bool diag_reset_probe=diag_reset<=4 || diag_reset==200;
++            if(diag_reset_probe)ESP_LOGI("WavePipeline", "AFE reset begin n=%u applied=%u capture=%u",diag_reset,unsigned(applied_capture_generation_),unsigned(codec_->CaptureGeneration()));
++#endif
+             std::unique_lock<std::mutex> lock(input_buffer_mutex_, std::try_to_lock);
+             if (!lock.owns_lock()) {
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++                if(diag_reset_probe)ESP_LOGI("WavePipeline", "AFE reset input locked n=%u",diag_reset);
++#endif
+                 // Feed may be backpressured by an old full AFE output ring.
+                 // Drain only into discard until the input lock can be reset.
+                 capture_reset_pending_ = true;
+@@ -482,6 +509,9 @@
+             afe_iface_->reset_buffer(afe_data_);
+             applied_capture_generation_ = codec_->CaptureGeneration();
+             ApplyAfeControls();
++#if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
++            if(diag_reset_probe)ESP_LOGI("WavePipeline", "AFE reset end n=%u applied_ref=%d",diag_reset,applied_reference_valid_.load());
++#endif
+         }
+         ApplyPendingReset();
+         if ((xEventGroupGetBits(event_group_) & kAfeActive) == 0) {

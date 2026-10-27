@@ -60,6 +60,6 @@ private:
     size_t last_dma_bytes_=0;
     int64_t last_dma_us_=0, last_dma_gap_us_=0;
     mutable bool fault_logged_=false;
-    bool read_probe_done_=false;
+    uint32_t read_probe_count_=0;
 };
 #endif

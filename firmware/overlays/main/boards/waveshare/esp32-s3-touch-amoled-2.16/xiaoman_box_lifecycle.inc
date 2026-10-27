@@ -137,23 +137,23 @@ bool XiaomanBoxCodec::InputData(std::vector<int16_t>& data) {
     if(!input_enabled_ || ReferenceFaulted()) return false;
     // callback_refill's checked Box Read returns zero on codec-device failure.
 #ifdef ESP_PLATFORM
-    const bool probe=!read_probe_done_;
-    read_probe_done_=true;
+    const bool probe=read_probe_count_<4;
+    if(probe)++read_probe_count_;
     if(probe) {
         portENTER_CRITICAL(&mux_);
         const auto bytes=last_dma_bytes_;
         const auto gap=last_dma_gap_us_;
         const auto stamp=last_dma_us_;
         portEXIT_CRITICAL(&mux_);
-        ESP_LOGI("XiaomanBox", "first input read begin samples=%u capture=%u dma_bytes=%u gap_us=%lld age_us=%lld",
-            unsigned(data.size()),unsigned(generation),unsigned(bytes),static_cast<long long>(gap),
+        ESP_LOGI("XiaomanBox", "input read begin n=%u samples=%u capture=%u dma_bytes=%u gap_us=%lld age_us=%lld",
+            unsigned(read_probe_count_),unsigned(data.size()),unsigned(generation),unsigned(bytes),static_cast<long long>(gap),
             static_cast<long long>(stamp?esp_timer_get_time()-stamp:-1));
     }
 #endif
     const bool read=BoxAudioCodec::InputData(data);
 #ifdef ESP_PLATFORM
-    if(probe)ESP_LOGI("XiaomanBox", "first input read end ok=%d capture=%u current=%u",
-        read,unsigned(generation),unsigned(CaptureGeneration()));
+    if(probe)ESP_LOGI("XiaomanBox", "input read end n=%u ok=%d capture=%u current=%u",
+        unsigned(read_probe_count_),read,unsigned(generation),unsigned(CaptureGeneration()));
 #endif
     if(!read) ReportReferenceFailure();
     return read && generation==CaptureGeneration();

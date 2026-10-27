@@ -130,3 +130,13 @@ Wave诊断应用2903792字节，较已安装411c26d增加768字节；SHA256 `f95
 首次启动观察45秒，ELF `8d86062ee...`匹配、网络与8000激活正常，仍累计1801条AFE空缓冲/fetch警告。硬件readback为IN1/OUT1，TX STD/mono/data16/slot32/left、总DMA2880B；RX TDM/stereo/data16/slot16/mask3/total4、总DMA5760B；两端24k/BCLK1536000/MCLK6144000均符合。首轮未出现capture blocked日志，但该日志原来位于InputData内部，不能排除第一次ADC读取未返回而错过随后ISR故障，不能把“未打印”当作无故障。
 
 增加仅Wave任务侧的第一次底层输入read开始/结束（只记样本数/代次，不记PCM），并由AFE调用的ReferenceValid独立打印一次锁存故障；ISR仍不打印。两项生产codec及独立翻译单元回归2.560秒exit0，另ESP_PLATFORM真实日志分支严格格式编译/ASan/UBSan运行exit0，保护与阈值未变。新诊断目标构建与实机定位待完成。当前再次只读备份目录为本机`.superpowers/waveshare-20261027/diag2-input-20261027/`，尚未完成或写入新诊断；源设备20e9fcd，原M5/云端保持原状。
+
+## 第二轮实机诊断与管线追踪
+
+补充提交`ee6e15ef05c1228cee56ad0a7ab39ef756a2f4ac`经[Actions40456296242](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/40456296242)四目标通过；四下载digest/CRC、208文件、源码/配置/资源/分区、8镜像checksum/hash及merged/四镜像段一致性全部通过。Wave app2904224B，SHA256 `57f5427af72b7f79e0d3c7539e0617ebf2b64b995cc412e5cbd6698a184665e3`，ELF SHA256 `c8173e88dede09be753b8d63ce757696781bb15f20c86f12dc4b0d71bb0bb5dd`。本机ZIP与GitHub digest相同，解包52文件逐项相同。assets和分区仍与已安装版本一致。
+
+刷前再完整备份，整片SHA与20e9刷后`7ed1ba1e...`完全相同。安全状态、otadata及intent核验后只写app，实际exit0；完整16MB回读、新app/尾部与应用擦除范围外全部字节核验通过后才启动。新整片SHA256 `cbd2191d473d76bfaced5b7c3d7687a50e321fb517614d0368cfa371a7dc0273`。45秒ELF正确、网络激活正常，1811条AFE空缓冲/fetch；首ADC读480样本返回ok1，capture2与返回时current2相同，读前TX DMA480B、间隔10039us、最近回调age602us。AFE独立读取首故障未打印，不能当作对整个读取生命周期或原始声音的证明，但足以确认首次读返回与当时回调存活。
+
+继续追踪后续读取、重采样、AFE FeedCaptured门控及reset/feed入口，新增0009补丁仅在Wave＋ESP_PLATFORM编译有限次数任务日志；不记录PCM、不在ISR打印，不改控制/故障策略。codec首读日志扩为前4次。当前新诊断的fresh prepare通过，107项host/51.241秒及ESP_PLATFORM日志分支严格编译/ASan/UBSan运行实际exit0，目标构建与安装待完成。设备已再完整只读备份至本机`pipeline-diag-20261027/`，与ee6刷后整片完全相同，现保持下载模式，避免等待期间原板关机；原M5未操作。
+
+本机HTTPS Git曾直连超时/HTTP2 framing错误，经远端head核对仍旧提交后才切换传输；临时本地SOCKS19087经既有云端SSH连接，Git最终用本机SSH443认证成功推送，GitHub API和fetch再次核对ee6 head。没有复制GitHub凭据到服务器，也未复制服务器Key到Mac；不是本地语音服务。原始传输失败日志与全部设备证据均在忽略目录，后续仍需实际定位并完成真人/声学验收。
