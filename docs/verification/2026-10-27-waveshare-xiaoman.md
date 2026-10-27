@@ -110,3 +110,15 @@ Waveshare应用`2903024`字节，SHA256 `0db48239f931646d278ff9fb0782504e2de369a
 诊断版在云端`/tmp/waveshare-install-diag-20261027/`完成fresh prepare、107项host（56.957秒）及110项上游（11.351秒），实际均exit0；另以ESP_PLATFORM分支编译运行生产codec harness，严格printf格式检查及ASan/UBSan通过。首次host执行在SSL下载等待时中断；改用已复核同一锁定SHA的缓存archive。第二次因scratch漏复制CI文件而1项FileNotFoundError，补齐原文件后完整107项通过；上游初次6项因系统无python命令而exit127，切回云端现有venv PATH后110项通过。未改测试、覆盖或保护阈值。诊断版实际目标构建与实机定位待完成。
 
 本机私有证据在`.superpowers/waveshare-20261027/install-20261027/`，备份、产物、网络口令和原始设备记录均不入Git。实机界面、AEC/收音、真正DMA回报、双设备语音/并发和功耗继续未验收。
+
+## 诊断版已构建，等待设备重新接入USB
+
+诊断提交`20e9fcd5181d999ea074e0dc24b5d8384e01dbf3`已推送并核对远端main；[Actions40432451449](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/40432451449)四个目标全部成功。四份下载ZIP的GitHub digest和CRC均通过，208文件逐项SHA、源码输入、SDK/配置/模型/分区再次核验。8份应用/bootloader的checksum及validation hash均valid；四套canonical release ZIP中的merged与独立merged相同，四个镜像段也逐字节相同。
+
+Wave诊断应用2903792字节，较已安装411c26d增加768字节；SHA256 `f9576e858c912b5269c7fb265000d1ea8dcb564a16b86978315cd0164cab571f`，ELF SHA256 `8d86062ee83b40035d8d397e8c541b73e2f295894db75940f66a6d0b165c9208`。assets与分区表SHA保持`e5010f42...`/`c065c05d...`，无需再次迁移布局。云端产物及核验在`/tmp/xiaoman-waveshare-20261027/artifacts-20e9fcd/`；本机专用包已复制至`.superpowers/waveshare-20261027/artifacts-20e9fcd/esp32-s3-touch-amoled-2.16-xiaoman/`，复制命令实际exit0，52文件重新计算全部一致。诊断只增加任务侧日志与ISR标量，不修改保护阈值，也不是故障修复或实机通过。
+
+准备保存联网后的完整备份时，USB枚举已没有Waveshare，脚本在串口打开前KeyError退出；仍仅原M5存在。已向用户请求重新插线并确认开机，未收到恢复确认，未再写入或重启任何设备。原板有60秒省电/300秒关机及初始启用的计时逻辑，但本次USB消失是否由自动关机引起尚未证实，不能写成用户拔线或确定根因。
+
+后续步骤已准备在私有目录：`diag-backup.py`按目标序列号选择端口、完整备份当前16MB并检查只有配置/storage变化；`diag-install.py`复核52文件和正确source、分区/资源与当前备份相同、otadata CRC/选择，仅写app，再完整16MB回读，确认应用擦除范围外所有字节相同后才标记可首次启动。**尚未执行后续备份或安装，当前设备应用仍411c26d。** 重新连接后须先确认目标和无串口owner；诊断启动观察器需使用新的post-verified和实际枚举端口，不能盲用旧normal-boot脚本中写死的14201或旧安装proof。
+
+本轮最后云端18040为build6dc191a、ready=true、max_sessions2、active_sessions0；未部署或重启云端服务。原M5未访问或刷写。根因、收音/唤醒、播放、插话、显示、双设备声学验收及功耗继续未完成。
