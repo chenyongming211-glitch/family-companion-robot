@@ -49,4 +49,8 @@
 
 ## 发布状态
 
-本文件首次提交时开发与云端验证完成，发布核对将追加本节；实体真人记忆/听感仍待用户逐台确认。固件、唤醒、电源、A动效、同房间接话仲裁和旧链路运行状态未改变。
+功能提交a669f806479540c9b39d6b4b0f782ee90e9be700已推送main，空闲部署到family-robot-realtime-output-go.service。build=a669f80，ready/device_memory/memory_ready均true，active_sessions=0/max_sessions=2；PID949915，NRestarts=0，服务active。线上二进制SHA256为28c1ff7ed30b37608c6526ab7bfe30f450407b010e6afe4320fc24a5980e3b1c，与云端构建产物一致。私有.memory目录权限700；18041云端及公网均可达，对不完整且未认证的请求返回403，没有启动对话。
+
+unit、模型配置、设备配置、产品身份、设备注册/凭据文件逐文件SHA在部署前后保持。回退二进制与发布证据位于/var/backups/family-robot/device-memory-20261028-a669f80，源码与测试证据位于/tmp/realtime-memory-20261028。后续发布记录提交只更改文档，不改变Go二进制。
+
+记忆从新版本收到的对话开始形成，不自动导入上线前日志。实体真人记忆/听感仍待用户逐台确认。固件、唤醒、电源、A动效、同房间接话仲裁和旧链路运行状态未改变。
