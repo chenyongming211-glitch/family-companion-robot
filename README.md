@@ -5,11 +5,11 @@
 - 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
 - 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
 - 当前小智设备入口18041复用同一Go核心，按设备独立鉴权、会话和记录。新增[设备语音控制](docs/superpowers/specs/2026-10-27-realtime-device-controls-design.md)：发现设备实际支持的状态查询、音量和屏幕亮度工具，设置后回读核实；无声工具会话与保留联网搜索的语音会话分离。发布和实机边界见[验证记录](docs/verification/2026-10-27-realtime-device-controls.md)，Mac不提供实体设备控制。
-- 旧Python Realtime实现已弃用为产品路径，只保留临时18032回退、对照和Go差异测试参考。
-- 旧LiveKit ASR→LLM→TTS完整三段式、18020桥与旧浏览器入口退出后续产品主路径；源码保留参考，不继续作为常设第二语音后端。
+- 旧Python Realtime实现已被Go替代，仍有测试引用；后续按[清理方案](docs/superpowers/plans/2026-10-27-legacy-voice-retirement.md)拆除依赖后清理，目前未删除。
+- **三段式完整保留为备用方案（2026-10-28）：** 保留Python/LiveKit ASR→LLM→TTS、18020桥、客户端、测试、依赖与部署说明，供以后不采用端到端时评估使用；当前产品不接入三段式，不自动切换或回退。
 - 旧Go的设备协议、鉴权、工具和存储按模块盘点复用；判题、提醒和长期记忆没有因这次标记自动实现。
 
-**代码弃用与服务停用是不同状态。** 旧18010/18020/18032服务目前仍在线，本次没有停服或删数据。共用的`tools/native-voice/Sources`、OpusBridge与Python测试参考仍在使用，不能整体删除。当前运行清单及后续退役边界见[代码生命周期](docs/CODE_LIFECYCLE.md)。
+**源码保留、产品接入和服务常驻分别处理。** 本次只修订保留策略，没有启停服务或删除数据，也未实时核对旧服务是否在线。共用的`tools/native-voice/Sources`、OpusBridge与Python测试参考仍在使用，不能整体删除。历史运行快照及最新清理/保留边界见[代码生命周期](docs/CODE_LIFECYCLE.md)。
 
 ```text
 终端 → Go接入与Realtime会话核心 → 千问原生Realtime

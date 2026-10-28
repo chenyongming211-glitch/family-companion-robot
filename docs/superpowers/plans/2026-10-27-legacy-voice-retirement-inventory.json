@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "recorded_date": "2026-10-27",
+  "recorded_date": "2026-10-28",
   "status": "planning_only_no_deletion_or_service_changes",
-  "baseline_commit": "2f8406477696ee298ddeafa392431af7cb744e0b",
+  "baseline_commit": "ff124ef1ce223bd34bf16f99914ba08f922686c9",
   "plan": "docs/superpowers/plans/2026-10-27-legacy-voice-retirement.md",
-  "refresh_rule": "Rebuild reference evidence and compare hashes after device-control handoff; changed or new files require review, never automatic deletion.",
+  "refresh_rule": "Revalidate references, hashes, device-control handoff and live service identities before execution. Cascade backup paths must never enter deletion or service-retirement lists under this plan.",
   "protected_scopes": [
     "firmware/",
     "internal/realtimelive/",
@@ -24,7 +24,15 @@
     ".github/workflows/",
     "config/product-identity.json",
     "go.mod",
-    "go.sum"
+    "go.sum",
+    "services/livekit-agent/",
+    "cmd/livekit-device-gateway/",
+    "internal/devicebridge/",
+    "tools/native-voice/",
+    "tools/mac-voice/",
+    "tools/livekit-audit/",
+    "deploy/family-robot-livekit-dev.service",
+    "deploy/family-robot-livekit-device.service"
   ],
   "shared_cloud_paths_do_not_remove": [
     "/opt/family-robot-livekit-dev",
@@ -32,29 +40,15 @@
     "/opt/family-robot-livekit-runtime/bin",
     "/etc/family-robot/server.env"
   ],
-  "worktree_status_at_inventory": [
-    " M docs/DEVELOPMENT_HANDOFF.md",
-    " M internal/devicetools/bridge.go",
-    " M internal/realtimelive/config.go",
-    " M internal/realtimelive/native.go",
-    " M internal/realtimelive/session.go",
-    " M internal/realtimelive/xiaozhi_entry.go",
-    " M internal/realtimelive/xiaozhi_wire.go",
-    " M internal/realtimestate/identity.go",
-    "?? docs/superpowers/plans/2026-10-27-realtime-device-controls.md",
-    "?? docs/superpowers/specs/2026-10-27-realtime-device-controls-design.md",
-    "?? docs/verification/2026-10-27-realtime-device-controls.md",
-    "?? internal/realtimelive/device_controls.go",
-    "?? internal/realtimelive/device_controls_test.go",
-    "?? internal/realtimelive/native_tools.go",
-    "?? internal/realtimelive/native_tools_test.go"
-  ],
+  "worktree_status_at_inventory": [],
   "summary": {
-    "rewrite_document": 9,
-    "delete_after_gates": 90,
+    "rewrite_document": 4,
+    "update_backup_document": 5,
+    "keep_cascade_backup": 66,
     "keep_active": 11,
     "update_after_handoff": 1,
     "replace_test_dependency": 3,
+    "delete_after_gates": 24,
     "keep_active_shared": 7,
     "defer_diagnostic": 1,
     "keep_common_test": 3,
@@ -65,34 +59,34 @@
       "path": "README.md",
       "decision": "rewrite_document",
       "condition": "Report observed retirement states; retain historical validation documents.",
-      "sha256_at_inventory": "99db575166ae32067ca3b4a4d7816953b02ffd4c78e18396a8563a233a875acb",
-      "head_blob": "9ee1ec750cfe7910faf0af6b9178f8bccb73d025"
+      "sha256_at_inventory": "26d228570937deabc425eb096f63f9746d1fa481f5d8d12a207840b1de0b616b",
+      "head_blob": "587684ca3d5b91e60dbc29275d514b5e79657684"
     },
     {
       "path": "cmd/livekit-device-gateway/README.md",
-      "decision": "rewrite_document",
-      "condition": "Keep a short historical entry and stable archive link/anchors; remove active old launch instructions.",
+      "decision": "update_backup_document",
+      "condition": "Keep restore/test/deployment instructions; mark the complete cascade as a retained alternative outside the current product.",
       "sha256_at_inventory": "7f76c70ef44ce24608896983dfc32e0b7ff76d74766a8479ed97b3de09dc6b48",
       "head_blob": "77109b4a822448b32cfa97949df8cb63c668c77b"
     },
     {
       "path": "cmd/livekit-device-gateway/main.go",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "c9f4077eaa22d39a34d8ed5871662f10d556498db93cf90c0b59dc0825b310ec",
       "head_blob": "5d244ed48377a586e07998ae58f2a893aeec91ab"
     },
     {
       "path": "deploy/family-robot-livekit-dev.service",
-      "decision": "delete_after_gates",
-      "condition": "Retire exact installed old service with rollback preserved; never remove shared parent paths.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "4a28f25f30b566677334ffd7bd7130bac64f3db40cf2f2a830d3b4e52db0990b",
       "head_blob": "d85e1499c4dd2d89cfb385baf3d5992e1da83854"
     },
     {
       "path": "deploy/family-robot-livekit-device.service",
-      "decision": "delete_after_gates",
-      "condition": "Retire exact installed old service with rollback preserved; never remove shared parent paths.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "a17c19e58a93eaea025bfb509f3beec1104dd2e294d1f90d39334a825985cd49",
       "head_blob": "bc5be258d580b470db794a4764c4a57c947cf07b"
     },
@@ -120,35 +114,35 @@
     {
       "path": "docs/CODE_LIFECYCLE.md",
       "decision": "rewrite_document",
-      "condition": "Report observed retirement states; retain historical validation documents.",
-      "sha256_at_inventory": "934d19f522a08427f96d9eb38cfd2cd9a85327e7a549432b839ac1551663f1dd",
-      "head_blob": "5451de58d301d61c4ca3a345962f969e89461c9d"
+      "condition": "Retire only obsolete Python Realtime; retain complete cascade as a future alternative outside the current product.",
+      "sha256_at_inventory": "073f3dc59777e0d978078b27b4bf38b7516bd2d8bf6d2fb56b4986baee084fb5",
+      "head_blob": "b1100933e6c36923ea657b75c109dd816ddc2483"
     },
     {
       "path": "docs/DEVELOPMENT_HANDOFF.md",
       "decision": "update_after_handoff",
-      "condition": "Currently modified by device-controls work; execution phase updates only after handoff.",
-      "sha256_at_inventory": "c597c2d3308350459d8c0ef2716ca9d5bb4309c7c78fe6436346006f83a01059",
-      "head_blob": "19d0cd3ee3cb5afec1694bd4896f412585cee3d0"
+      "condition": "Record the latest preservation decision and actual execution states; do not overwrite concurrent work.",
+      "sha256_at_inventory": "1c430ad27ab4304947c1fedf6ab4b62baa27ddbd26b1d78f0598497cb4600561",
+      "head_blob": "7e33b9026d0e1106bd42434f71de58dedf38f386"
     },
     {
       "path": "internal/devicebridge/server.go",
-      "decision": "delete_after_gates",
-      "condition": "Current observed Go consumer is cmd/livekit-device-gateway; remove consumer before this package.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "1bb345f599f53b53e44a6576421c72b93266656c8156a8863a705fee6b85711e",
       "head_blob": "54816e505406a41fc6cb2deb84e2e9417cad97e5"
     },
     {
       "path": "internal/devicebridge/server_test.go",
-      "decision": "delete_after_gates",
-      "condition": "Current observed Go consumer is cmd/livekit-device-gateway; remove consumer before this package.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "4956f0ace5c9c04288062922128e569ed29985fd059c36983bc81160333eb356",
       "head_blob": "2d98ebe0ae71f2416316821b61a38afecadae392"
     },
     {
       "path": "internal/devicebridge/session.go",
-      "decision": "delete_after_gates",
-      "condition": "Current observed Go consumer is cmd/livekit-device-gateway; remove consumer before this package.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "1c8c56c31c7be45dfb75ee54b48a6fb629111df6e8b5c1779f1dc5a02350f343",
       "head_blob": "3249f12918582f67d76dbbd18bf24e32ddc8d122"
     },
@@ -189,372 +183,372 @@
     },
     {
       "path": "services/livekit-agent/README.md",
-      "decision": "rewrite_document",
-      "condition": "Keep a short historical entry and stable archive link/anchors; remove active old launch instructions.",
+      "decision": "update_backup_document",
+      "condition": "Keep restore/test/deployment instructions; mark the complete cascade as a retained alternative outside the current product.",
       "sha256_at_inventory": "4a228921d105b2f6162c37f081d696f0ad128821da3b67ffc0035bf64fae8170",
       "head_blob": "de403cac900e093d889df96297138b43e817ac77"
     },
     {
       "path": "services/livekit-agent/family_voice/__init__.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "3fb34aa92446450281de49ccbf3250de0953faace2a8ec7b94745230efa6fd11",
       "head_blob": "95461de282a94f1c488dfe91543ae3931ae01bda"
     },
     {
       "path": "services/livekit-agent/family_voice/audio_io.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "a0644ac860ebc9a07f507ef18f4e767383b335dcafc81d22cc6f51e76e0b5815",
       "head_blob": "46d60069bfc7f8a4698ba62d42f7cff80315c9d6"
     },
     {
       "path": "services/livekit-agent/family_voice/browser.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "1a523379eff247bd6664d721dade9a867c154af49ed7a975def0180fa4b2cc31",
       "head_blob": "d7240b81bb5b04f7d676b24b95fb97bece28bc9c"
     },
     {
       "path": "services/livekit-agent/family_voice/cloud.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "dbde364f3133d1d358ff267b4b3c290c12abdeca1d2b834903a3fb47d44d42df",
       "head_blob": "06d5ec22706e29274ff3dfee0e7485dac8544122"
     },
     {
       "path": "services/livekit-agent/family_voice/config.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "478aa7277a01e149f70fc74233fac983d2e1e049dce4b89ad8ad5c2e2f3851ea",
       "head_blob": "e799319ae23a5c2684ffebd2f00a6a328f543db9"
     },
     {
       "path": "services/livekit-agent/family_voice/confirmation.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "65905f300100186794a41597546013fa768e6a84a128eff612d9af037b4516aa",
       "head_blob": "e48c90089393e77af1ada532dc1e61a9a155c9ab"
     },
     {
       "path": "services/livekit-agent/family_voice/content.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "54a0d2b8a653c1f9bd7059aa849833fc690967c273976914db7b83f6161afd35",
       "head_blob": "50918454c23fe2f1fcbb1c4bc0e12610d688c9e1"
     },
     {
       "path": "services/livekit-agent/family_voice/content_runtime.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "c372bcb83892ad69a0867399247c12750bae251b597d9d776d1e744e992f53f0",
       "head_blob": "32460791b5b619cc3b590df2695c7c613c5b92ea"
     },
     {
       "path": "services/livekit-agent/family_voice/conversation_log.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "b586001b9390360ff6fe844ed9438c2452b718f027bf223bf1e05d786e50d7f4",
       "head_blob": "ceb26a30185fd09336195c7f1e83e35c4481025f"
     },
     {
       "path": "services/livekit-agent/family_voice/conversation_memory.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "62e61222fa28836b1097101c874a50b573cbbb1bf314075f69fc9b4829bdec18",
       "head_blob": "18471ac979b7a278f0047325ecf16ab0f78601b8"
     },
     {
       "path": "services/livekit-agent/family_voice/counting.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "ea8a267eecd277c00d4e2172dd1d581256c08919c45a2aa0f04cb960717304a7",
       "head_blob": "37e3f695338b241d0050d7df62b6b57eb73d6765"
     },
     {
       "path": "services/livekit-agent/family_voice/dialogue_turn.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "7ce3549de5eb002e4fb69012eeccd534ea5aad4121ed8417b39a3a4f290d8ab1",
       "head_blob": "0a6b819cc5a374047b14601758e3bf01a65f1b9d"
     },
     {
       "path": "services/livekit-agent/family_voice/drain_output.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "4df620f4670592d94da057921300b91bf4a26d65a44e9e46b1e2f15b74ddb742",
       "head_blob": "885433c87c320fb94f38a11e05f7e9d980350243"
     },
     {
       "path": "services/livekit-agent/family_voice/logging_safe.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "e26e6d9b29a25d8217741d792262fd01dade6b0d5632a97d6b6f9f8ae07eaadb",
       "head_blob": "e4b3686eb3ae0b7853f661c132ce3cbe50408a8b"
     },
     {
       "path": "services/livekit-agent/family_voice/pair.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "dec85476622db233e4d2f2075e7c1c5972a97cf5835b4f54d4b267366467e58f",
       "head_blob": "1f47cb635052e6ae0514e31ef1451454a1db6931"
     },
     {
       "path": "services/livekit-agent/family_voice/preparation_audio.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "c1e0395a660690b01a2dfd3fab062e66235eb24e3a282e4fdabe212cdb5b8c45",
       "head_blob": "5483f0780a5bfcc524411da9f229ed2316873900"
     },
     {
       "path": "services/livekit-agent/family_voice/providers.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "a49b77d127f798e69e37c72d08db0535cd8853357bd383e047d1db03b007966e",
       "head_blob": "bd5f167017e9bea13e4050f2be4b44134865f05a"
     },
     {
       "path": "services/livekit-agent/family_voice/runtime.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "9517b09efb56787ade5e2baf1c83901745dcd31bb541900eaac25f8024b9755e",
       "head_blob": "b075fbe99b4c6763c08dab3c7642e202cbf4b10a"
     },
     {
       "path": "services/livekit-agent/family_voice/server.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "3b34ac07934bbc82b56479d17e58edaa3f6f9de1b0c25b21fa4adcf59fb7749a",
       "head_blob": "96c19fed82d9584c51f82ec68790cb601d2622fc"
     },
     {
       "path": "services/livekit-agent/family_voice/smoke.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "79f3c4a3272a04f866f1f8dceb90c3de79ab3463d38343e2e9d054a2ab3adc2a",
       "head_blob": "4ee9118bd62343ca162e92ada1f5aebb9bf2ed52"
     },
     {
       "path": "services/livekit-agent/requirements.txt",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "5d99416298bd7aed607df8d4f763b3d67b73a96a405d61cc67ede6311d1b6366",
       "head_blob": "9689c6b5c41ca4b34c0109aeaf59cb83cf575016"
     },
     {
       "path": "services/livekit-agent/tests/audio-core.test.mjs",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "e489001a0c6f88b3c70ef53462db0b17a703b4cc9742a8fd246cbb88aa2bbc98",
       "head_blob": "1ed0a1ecd332aa32ed9e58c45fb427de625eac40"
     },
     {
       "path": "services/livekit-agent/tests/continuous-client.test.mjs",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "ab68c0e047247ed18ed2bc69c6ec9304a981f52b9f0d96ae4b1fb794b218c0da",
       "head_blob": "11feaba3a353a7cbb292bf53f3a2280be131fe03"
     },
     {
       "path": "services/livekit-agent/tests/lifecycle.test.mjs",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "7f76959e9bdb53378b7c2f85db62088b86e5934d7232fe71613dd8a4a2244b85",
       "head_blob": "bd1b79785c615c6a565162c92aa1d32078f246a5"
     },
     {
       "path": "services/livekit-agent/tests/test_audio_io.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "46333f86c5858743f6e2eb91248e2251061104cddefba4c8128f1e29f62d9d20",
       "head_blob": "8e223b1f3d6fb252c71e46e5dc3d6808d1d24c9e"
     },
     {
       "path": "services/livekit-agent/tests/test_browser.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "1a28dd0fcdc3b1426d2b233d904b135a7bcdd48b24a61296fa4a2467cefaf3db",
       "head_blob": "36540f8492a1e09dcf1bd5d6eb4eaf69d94ff862"
     },
     {
       "path": "services/livekit-agent/tests/test_cloud.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "d0a686d9702b80c25adfdd4d6f2c2c5b8bff6b48f642b247761d795cda2e2542",
       "head_blob": "beff47bdb72524f8d441811e2bf3282f799c7d9a"
     },
     {
       "path": "services/livekit-agent/tests/test_confirmation.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "cae17de03b3a2db1e2c40a421e59c20048dbd695408dc0194b1aebb658695864",
       "head_blob": "2ed1348af7fda139d38cedff60f861a43fa3b36e"
     },
     {
       "path": "services/livekit-agent/tests/test_content.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "36b7dcc1d72526a1968a83b6b327cdd726d80b1eb249623604f890724e716c7d",
       "head_blob": "32ae25eb3c2b5be3853ea3229416e692c72453da"
     },
     {
       "path": "services/livekit-agent/tests/test_content_runtime.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "75f84d1e096374be4f27909e207ff2a6aad338eef97dfec3309da7f9507e90dc",
       "head_blob": "cc7642ce867134d11efc42d83e19346bc28c8cb0"
     },
     {
       "path": "services/livekit-agent/tests/test_continuous.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "6c8c37c2e3640440b303632bdc7796499ee753baf2aef8998a9e80a82408dc73",
       "head_blob": "e405418e2a60742f8e8bde032baa6146da0f54bc"
     },
     {
       "path": "services/livekit-agent/tests/test_conversation_log.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "76e5b39bcdec7b86be9dfce1e20c5960d4dcdcdd163a5894fb091b2206f01ff1",
       "head_blob": "fa2fe0848cc384a5b19034ae79a8a11dc32680e8"
     },
     {
       "path": "services/livekit-agent/tests/test_conversation_memory.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "054892bb68db63c4f97c7144373210f8ad1f1e85a4a946c22be18d3b0b6d6bf7",
       "head_blob": "20ca95e5429f14b32e12efc376ee911a5ae041f9"
     },
     {
       "path": "services/livekit-agent/tests/test_counting.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "764ee9273c7f2ff3e43de7427b0fd691a19ac2aa90ae0583068ed0d4719f8b41",
       "head_blob": "799fe915d4dfd87e844426ce06ca67f1e390e7a3"
     },
     {
       "path": "services/livekit-agent/tests/test_dialogue_turn.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "4fcf08942da048d38dd4303d2a7c05e7be299a447d54c2eded92c419b7b1fed9",
       "head_blob": "2d72d04ec12e5b209a7176efe0eedf12846bf94d"
     },
     {
       "path": "services/livekit-agent/tests/test_drain_output.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "4536c3a02d36a38cdcc6e9bd519a13223876d43ec74f22ed81a9b508432a6114",
       "head_blob": "45ea98e0aacbcdd6ee2401098301f045ced9c6ef"
     },
     {
       "path": "services/livekit-agent/tests/test_runtime.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "c572d75929f781ba65deb72deaa105ec0c7278594f03f91280db450f74b99c60",
       "head_blob": "ae8ef69165e38a3e74a2861d36caf36b85fcfe8f"
     },
     {
       "path": "services/livekit-agent/tests/test_server.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "89b987da4b023a147aeed20a51e98c0d8834838d3435c66f8c882488e9c2e108",
       "head_blob": "120251e326907f93f86811fb4203b1355ebce62f"
     },
     {
       "path": "services/livekit-agent/tests/test_smoke.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "744e1a42013ddcb1a36050ce8e0423ab8ecef6276800a6c2ee2e8590c484b14c",
       "head_blob": "2438c8132901efecbbec9a8266883c80ecfb48e3"
     },
     {
       "path": "services/livekit-agent/web/audio-core.mjs",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "73b65bc290dfc50bd59c8b2dedd379c7db2d4e5b3d4c9062d20688b359c57e38",
       "head_blob": "90de3c7eca6ea721cf8f2745cf487aff1cec6805"
     },
     {
       "path": "services/livekit-agent/web/client.css",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "029689530bf6a7457b8ca3b1cbb8a3a93e9916bdba083683b964556c5bcdfc15",
       "head_blob": "aca1386bcd3cf0ca1e3d96ac26b2c31fb3778b87"
     },
     {
       "path": "services/livekit-agent/web/client.mjs",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "fb07fe7abc56f5a2c8632092e78d36a8678aee9738eb87b92f354f1d77d34ae4",
       "head_blob": "acfd59cde1be42e2e8d51f081151272110840952"
     },
     {
       "path": "services/livekit-agent/web/index.html",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "a3dc08132a3e912d184c86bdaefc7ed0f6ac7402bfe94912cab1b0e721c0ddf8",
       "head_blob": "58e55ec9320b55bf65de4bd7ae8aee75007109f2"
     },
     {
       "path": "services/livekit-agent/web/input-worklet.mjs",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "630e572dd1e35ac988fdd94afaf09587d1323592ef3b0b2fefb3e1506865453c",
       "head_blob": "e3fc93dc1ed3b9dce04d333e63c15681e28f27eb"
     },
     {
       "path": "services/livekit-agent/web/lifecycle.mjs",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "7c33e6c7b369246f0d46e15a0af01fad76499fc7923fbfbfd3f1d8358c9663f8",
       "head_blob": "49f061e15d7fbac454fe16765659ce03efbce09d"
     },
     {
       "path": "tools/livekit-audit/README.md",
-      "decision": "rewrite_document",
-      "condition": "Keep a short historical entry and stable archive link/anchors; remove active old launch instructions.",
+      "decision": "update_backup_document",
+      "condition": "Keep restore/test/deployment instructions; mark the complete cascade as a retained alternative outside the current product.",
       "sha256_at_inventory": "8e58cbf8bf6d781d0331c79b490e8661e17781c63c8894e865a82877a4abda7f",
       "head_blob": "d5334f46d954a18f22e36f092d9019abbd5e1e46"
     },
     {
       "path": "tools/livekit-audit/device_sink_probe.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "a91ab8f642048e6e7ecaab88c0e9161565921a787e47950727a9fb272ce1a250",
       "head_blob": "60e600c27c2c22ada517a92a49ce6f4e0e4328ea"
     },
     {
       "path": "tools/livekit-audit/requirements.txt",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "50945e5d648422df0cb10e9f212200e1b2e4352ebe4728645342910c536c0d70",
       "head_blob": "cf082c82789b666c14916af956e2b0f86eb0441a"
     },
     {
       "path": "tools/livekit-audit/test_device_sink_probe.py",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "88cf1231bca78077e28d39c3c79ec6c01b528667f59c4d6119af188187827266",
       "head_blob": "38003422be3685120b8fff9e5fb409362616f41b"
     },
     {
       "path": "tools/mac-voice/README.md",
-      "decision": "rewrite_document",
-      "condition": "Keep a short historical entry and stable archive link/anchors; remove active old launch instructions.",
+      "decision": "update_backup_document",
+      "condition": "Keep restore/test/deployment instructions; mark the complete cascade as a retained alternative outside the current product.",
       "sha256_at_inventory": "e1a97f496e802bdbe68c7609cdc16b668c3f7bba6747e8b01717e6a92e2d846b",
       "head_blob": "69b1af2b7f29b115cea31cd38ea019ed3aa7dbf3"
     },
     {
       "path": "tools/mac-voice/open.command",
-      "decision": "delete_after_gates",
-      "condition": "Dedicated legacy implementation/test/tool; verify no retained consumer and finish service retirement.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "5197ca3f0a57a9fd605ad5c3f3c8096ddc8e7fcf22871d4654634efadc94ccf5",
       "head_blob": "4d00a2437d9d51e3c604ff003fb6deec953d056e"
     },
     {
       "path": "tools/native-voice/Info.plist",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "3f41296f27ed860c08fa8299874bbe5bd45700e6794ddb1dd13727ed9aec77ad",
       "head_blob": "7c260d3bf5c85c0fb2f44edf2b1a9e499b2e95ce"
     },
@@ -574,8 +568,8 @@
     },
     {
       "path": "tools/native-voice/README.md",
-      "decision": "rewrite_document",
-      "condition": "Describe current shared components and retained test entry.",
+      "decision": "update_backup_document",
+      "condition": "Keep restore/test/deployment instructions; mark the complete cascade as a retained alternative outside the current product.",
       "sha256_at_inventory": "9c98f9fcaef6fe8f7762d6819297a5d9e9f751c577dc669b42fa51e92dac7bb6",
       "head_blob": "d69f7667876fd1cb526804e335103df019740e8d"
     },
@@ -588,8 +582,8 @@
     },
     {
       "path": "tools/native-voice/Sources/DrainPlayer.swift",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "1cc2851b25c1b7c92c1c85521af56344d9f5ca9a200a3e2639a717a0bbdd0258",
       "head_blob": "8f05710c94f6539270110d2f2cbb7bd99766463c"
     },
@@ -610,7 +604,7 @@
     {
       "path": "tools/native-voice/Sources/NativeEndpoint.swift",
       "decision": "keep_common_test",
-      "condition": "Preserve coverage and provide test-common.command before deleting the old app builder.",
+      "condition": "Keep existing common tests and the retained NativeVoice build/test entry; no transfer required by this narrowed cleanup.",
       "sha256_at_inventory": "30043548b1bea87cfc434399e35f100be5be0eb0d99ee7c4277c7dc80765ce10",
       "head_blob": "4e3634dda33e08eaa8871ec8e541a302905275be"
     },
@@ -630,78 +624,78 @@
     },
     {
       "path": "tools/native-voice/Sources/SelfTest.swift",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "246b882fae26fc4ca6928f8de195997aee700d16ce486e570ef69db2c5d60eeb",
       "head_blob": "e2e2cf6bbab30ee772cb5acbd4fe1038c03123e4"
     },
     {
       "path": "tools/native-voice/Sources/VoiceClient.swift",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "6efae0ecf97cf366b0003f75e8aff33ce82bc0a422d75eb0771bccd433c0138c",
       "head_blob": "618cef68b6271c4d84152c8ad5c870bb8fe1888a"
     },
     {
       "path": "tools/native-voice/Sources/main.swift",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "8638487b07c06dabc9e593a9d21e136900f5949ad73ebe694e51560acd3eb463",
       "head_blob": "42e2eb23140ecc37b2c7ffb181567ecdd3bac05d"
     },
     {
       "path": "tools/native-voice/Tests/FixtureSpec.swift",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "c3d64d10384bd32b3477563015023d06509691e86b9d63d04ec2baeb163cf9b5",
       "head_blob": "d9501ff9a8acd0b4c486a732d6b01a7c9315940a"
     },
     {
       "path": "tools/native-voice/Tests/LedgerSpec.swift",
       "decision": "keep_common_test",
-      "condition": "Preserve coverage and provide test-common.command before deleting the old app builder.",
+      "condition": "Keep existing common tests and the retained NativeVoice build/test entry; no transfer required by this narrowed cleanup.",
       "sha256_at_inventory": "bba1c45446c8523ad9b8661787e1165ca5119983371f464cf550796fb35266eb",
       "head_blob": "89a0e2c90023ac7109964232509f0cd2f9c30d02"
     },
     {
       "path": "tools/native-voice/Tests/MicrophoneSpec.swift",
       "decision": "keep_common_test",
-      "condition": "Preserve coverage and provide test-common.command before deleting the old app builder.",
+      "condition": "Keep existing common tests and the retained NativeVoice build/test entry; no transfer required by this narrowed cleanup.",
       "sha256_at_inventory": "665b559cc527f59ca014e5f04422c032eabbad9f9bff2f49d7e6ad5e70ed30ff",
       "head_blob": "c843f80dcd77a229d7aba47cb6d99f77568837f5"
     },
     {
       "path": "tools/native-voice/Tests/launcher-spec.sh",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "0a03c95bd1705d19f12a989858d3ed0a8723268d70686b57867fc8dd01d66af1",
       "head_blob": "25126f072aa4bc753ef974303201229a7ff09e28"
     },
     {
       "path": "tools/native-voice/Tests/standby-probe.py",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "066138aa6269fbb4842a3bb11a2abd05d90e77d848c98e10771c7e5bfb4c580f",
       "head_blob": "d729cc40133ee95395741b0993467b6721a465c3"
     },
     {
       "path": "tools/native-voice/Tests/teardown-probe.py",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "9d007a24214091369195fe19211083a5a9898468aa0f96159d041e2e866a88ef",
       "head_blob": "a4d55ec978763bb4f1867e10cab83f15e6a03310"
     },
     {
       "path": "tools/native-voice/build.command",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "b8eade1608344f92947ce2965961c5feaaddc1d613139cc0c3d36a8118fb6583",
       "head_blob": "71407177958c0e6c563e474fe1e7dcfd3eb61039"
     },
     {
       "path": "tools/native-voice/open.command",
-      "decision": "delete_after_gates",
-      "condition": "Old cascade app only; retire clients and transfer shared tests first.",
+      "decision": "keep_cascade_backup",
+      "condition": "Retain the complete cascade alternative, including Python, bridge, clients, tests and dependency/deployment files. Not a deletion candidate.",
       "sha256_at_inventory": "b8b50591cc729d29e62f465cc1c09785f8eafe83aad062a36ca778a5a63ca57f",
       "head_blob": "047c24306d694d7811bb6c98cac782db41e65d4e"
     },
@@ -730,8 +724,8 @@
       "path": "tools/realtime-output-live/README.md",
       "decision": "rewrite_document",
       "condition": "Remove executable Python fallback instructions; keep Go usage and historical provenance.",
-      "sha256_at_inventory": "e31d7391bb62039b6012232e37915164ef624e8d8d2ec6d37ad1ac00db0c3368",
-      "head_blob": "c3292d2d141cc5b170dbaa99a130ee6b39e85d7b"
+      "sha256_at_inventory": "4e0bc8924c439dd95e65d6a3dd782df949b8de113e647a9d579e761263032567",
+      "head_blob": "ad2a6e0c4d0ebfc5a9aca82e838911bc6c86fead"
     },
     {
       "path": "tools/realtime-output-live/audio.py",
@@ -957,5 +951,13 @@
       "sha256_at_inventory": "6e25dc5c045ad4facc6630408fd99b6aa37c693a136354071ed59764956e8921",
       "head_blob": "a84cde5ba62c7e05e0dec1bcf48b81e671d83654"
     }
-  ]
+  ],
+  "previous_baseline_commit": "2f8406477696ee298ddeafa392431af7cb744e0b",
+  "policy_revision": {
+    "decision_date": "2026-10-28",
+    "cleanup_scope": "Superseded Python Realtime implementation and its dedicated comparison tools only.",
+    "cascade": "Retain complete ASR-LLM-TTS implementation, bridge, clients, tests, dependency declarations and deployment templates as an optional future alternative.",
+    "product": "Current product remains Go plus native Realtime; no cascade integration, routing, deployment or automatic fallback is introduced.",
+    "service_state": "No service start, stop, uninstall or always-on requirement is authorized by this document revision."
+  }
 }
