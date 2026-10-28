@@ -37,6 +37,7 @@ func relativeControl(text string) bool {
 // planControls uses a separate text-only connection. No planner audio or prose
 // reaches playback; only Bridge-filtered receipts are returned to the voice path.
 func (n *Native) planControls(ctx context.Context, current, history string, tools []map[string]any, execute func(context.Context, string, string, string) (string, error)) ([]controlReceipt, error) {
+	history = controlHistory(history)
 	if len(tools) == 0 || len(tools) > 3 || len(current) > 16384 || len(history) > 65536 {
 		return nil, errors.New("tool_input_limit")
 	}
@@ -142,6 +143,24 @@ func (n *Native) planControls(ctx context.Context, current, history string, tool
 		}
 	}
 	return receipts, errors.New("tool_round_limit")
+}
+
+// Restored sessions are optional background for tools. They must not consume
+// the existing planner's entire input budget and disable current-device control.
+func controlHistory(history string) string {
+	if len(history) <= 65536 {
+		return history
+	}
+	data, err := decodeObject([]byte(history))
+	if err != nil {
+		return history
+	}
+	delete(data, "prior_session_memory")
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return history
+	}
+	return string(encoded)
 }
 
 func controlCallFields(item map[string]any) (plannedControlCall, error) {

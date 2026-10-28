@@ -283,13 +283,8 @@ func (s *Session) routeDeviceControls(rt *liveTurn, history string) (string, err
 	if s.controls == nil {
 		return "", nil
 	}
-	timer := time.NewTimer(300 * time.Millisecond)
-	defer timer.Stop()
-	select {
-	case <-rt.ctx.Done():
-		return "", rt.ctx.Err()
-	case <-rt.transcriptReady:
-	case <-timer.C:
+	if err := waitTurnTranscript(rt); err != nil {
+		return "", err
 	}
 	s.mu.Lock()
 	text := rt.turn.User
@@ -341,6 +336,11 @@ func (s *Session) routeDeviceControls(rt *liveTurn, history string) (string, err
 
 func (s *Session) sessionFacts() map[string]any {
 	facts := s.cfg.facts()
+	if m := s.memory; m != nil {
+		m.mu.Lock()
+		facts["device_memory_enabled"] = m.loaded
+		m.mu.Unlock()
+	}
 	if c := s.controls; c != nil && closed(c.ready) {
 		names := []string{}
 		for _, tool := range c.tools {

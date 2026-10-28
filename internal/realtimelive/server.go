@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"familyrobot/internal/realtimestate"
+	"familyrobot/internal/recordstore"
 	"familyrobot/internal/voiceidentity"
 	"github.com/gorilla/websocket"
 	"net/http"
@@ -22,6 +23,8 @@ type Server struct {
 	mu          sync.Mutex
 	tickets     map[string]ticketBinding
 	devices     *voiceidentity.Store
+	memory      *recordstore.Store
+	memoryErr   error
 	initErr     error
 	leases      map[string]*sessionLease
 	cfg         Config
@@ -41,8 +44,12 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 		initErr = errors.New("invalid_max_sessions")
 	}
 	s := &Server{leases: map[string]*sessionLease{}, tickets: map[string]ticketBinding{}, devices: devices, initErr: initErr, cfg: cfg, product: product, root: root, build: build}
+	if cfg.MemoryEnabled {
+		s.memory, s.memoryErr = recordstore.Open(recordstore.Options{Directory: filepath.Join(root, ".memory"), Retention: memoryRetention})
+	}
 	s.run = func(ws *websocket.Conn, dir string) {
 		session := NewSession(ws, cfg, dir, product)
+		s.attachMemory(session)
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
 		session.Run()
 	}
@@ -126,6 +133,9 @@ func (s *Server) CloseActive(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+	if s.memory != nil {
+		return s.memory.Close(ctx)
+	}
 	return nil
 }
 func (s *Server) Handler() http.Handler {
@@ -138,7 +148,7 @@ func (s *Server) Handler() http.Handler {
 		if s.initErr != nil {
 			status = 503
 		}
-		respond(w, status, map[string]any{"device_identity": 1, "ready": s.initErr == nil, "busy": active > 0, "active_sessions": active, "max_sessions": s.cfg.MaxSessions, "capacity_full": active >= s.cfg.MaxSessions, "experiment": "output-asr-live", "backend": "go", "build": s.build})
+		respond(w, status, map[string]any{"device_identity": 1, "device_memory": s.memory != nil, "memory_ready": s.cfg.MemoryEnabled && s.memoryErr == nil, "ready": s.initErr == nil, "busy": active > 0, "active_sessions": active, "max_sessions": s.cfg.MaxSessions, "capacity_full": active >= s.cfg.MaxSessions, "experiment": "output-asr-live", "backend": "go", "build": s.build})
 	})
 	mux.HandleFunc("POST /devices", s.enrollDevice)
 	mux.HandleFunc("POST /pair", func(w http.ResponseWriter, r *http.Request) {

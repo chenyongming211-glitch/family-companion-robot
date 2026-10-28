@@ -14,6 +14,7 @@ type Config struct {
 	Tools                          []any
 	Synthetic                      bool
 	MaxSessions                    int
+	MemoryEnabled                  bool
 }
 
 func LoadConfig(path string) (Config, error) {

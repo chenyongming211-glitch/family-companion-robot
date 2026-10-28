@@ -5,6 +5,7 @@
 - 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
 - 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
 - 当前小智设备入口18041复用同一Go核心，按设备独立鉴权、会话和记录。新增[设备语音控制](docs/superpowers/specs/2026-10-27-realtime-device-controls-design.md)：发现设备实际支持的状态查询、音量和屏幕亮度工具，设置后回读核实；无声工具会话与保留联网搜索的语音会话分离。发布和实机边界见[验证记录](docs/verification/2026-10-27-realtime-device-controls.md)，Mac不提供实体设备控制。
+- 新增[同设备跨会话记忆第一期](docs/superpowers/specs/2026-10-28-device-session-memory-design.md)：按鉴权设备恢复最近7天、最多24轮的有界原话与摘录，仅保留有播放证据的助手内容；说“清除聊天记忆”可清除可恢复上下文，原始文字日志仍留存。Mac与小智共用实现，各设备独立，未合并个人身份或全部档案检索。验证与发布状态见[本轮记录](docs/verification/2026-10-28-device-session-memory.md)。
 - 旧Python Realtime实现已被Go替代，仍有测试引用；后续按[清理方案](docs/superpowers/plans/2026-10-27-legacy-voice-retirement.md)拆除依赖后清理，目前未删除。
 - **三段式完整保留为备用方案（2026-10-28）：** 保留Python/LiveKit ASR→LLM→TTS、18020桥、客户端、测试、依赖与部署说明，供以后不采用端到端时评估使用；当前产品不接入三段式，不自动切换或回退。
 - 旧Go的设备协议、鉴权、工具和存储按模块盘点复用；判题、提醒和长期记忆没有因这次标记自动实现。

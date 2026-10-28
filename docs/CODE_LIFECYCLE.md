@@ -46,6 +46,7 @@
 | `tools/native-voice/Sources/`、`OpusBridge.c`、`OpusBridge.h` | 当前Go Mac客户端仍编译/使用的共用音频、AEC、Opus与播放回报实现，保持有效 |
 | `tools/realtime-voice/Sources/Fixture.swift` | 当前Go客户端仍使用的合成输入调度工具，保持有效 |
 | `tools/realtime-output-live/replay_history.py`、`probe_grounding.py` | 手动日志分析/研究工具，按使用场景保留；不在Go默认请求路径执行 |
+| `internal/recordstore` | 当前Go Realtime的同设备近期跨会话记忆复用其私有快照、回执和过期存储；也是旧Go消费者，不能作为旧模块删除 |
 
 `LEGACY_VALIDATION_REFERENCE`只限制产品运行用途，不禁止差异测试使用Python。新Go服务不因此产生Python子进程依赖。保留测试参考的行为基线，不借标记改提示词、音频处理或历史规则。
 
@@ -72,7 +73,7 @@
 
 ## 当前开发约定
 
-新语音能力只进入当前Go核心。旧功能复用先列功能与依赖台账，接入一项就验证该项和现有语音体验；判题、提醒、长期记忆等未实现功能仍单独排期。以最新开发交接和本页为当前状态，旧方案/报告保留其当时证据，不作为新默认入口指令。
+新语音能力只进入当前Go核心。旧功能复用先列功能与依赖台账，接入一项就验证该项和现有语音体验；近期跨会话记忆第一期见[设计](superpowers/specs/2026-10-28-device-session-memory-design.md)，不代表完整长期记忆、个人画像或全量历史检索。判题、提醒等仍单独排期。以最新开发交接和本页为当前状态，旧方案/报告保留其当时证据，不作为新默认入口指令。
 
 ## 本次标记验证
 

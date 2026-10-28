@@ -23,6 +23,7 @@ type liveTurn struct {
 	asr                     *OutputASR
 	transcriptReady         chan struct{}
 	transcriptOnce          sync.Once
+	transcriptWait          sync.Once // Memory and controls share one ASR budget.
 }
 type Session struct {
 	ws                *websocket.Conn
@@ -37,6 +38,8 @@ type Session struct {
 	input             chan []byte
 	listener          *Native
 	controls          *deviceControls
+	memory            *sessionMemory
+	memoryFloor       int64 // Protected by mu; old playback state remains intact.
 	speechStart       *int64
 	seq               int64
 	output, lastInput *liveTurn
@@ -77,6 +80,9 @@ func (s *Session) record(event string, m map[string]any) error {
 	e := s.rec.add(event, m)
 	if e != nil {
 		s.failReason("record_write_failed")
+	}
+	if e == nil {
+		s.notifyMemory(event)
 	}
 	return e
 }
@@ -239,6 +245,13 @@ func (s *Session) Run() (err error) {
 				rt.asr.Close()
 			}
 		}
+		if s.memory != nil {
+			outcome := "saved"
+			if e := s.checkpointMemory(); e != nil {
+				outcome = "failed_or_unknown"
+			}
+			s.record("memory_finalized", map[string]any{"outcome": outcome})
+		}
 		if err != nil {
 			s.record("session_error", map[string]any{"error_type": "session_terminated"})
 		}
@@ -263,6 +276,12 @@ func (s *Session) Run() (err error) {
 	}()
 	if e := s.record("session_started", map[string]any{}); e != nil {
 		return e
+	}
+	if s.memory != nil {
+		if e := s.loadMemory(); e != nil {
+			s.record("memory_loaded", map[string]any{"outcome": "unavailable"})
+		}
+		s.spawn(s.runMemory)
 	}
 	codec, e := realtimeaudio.New(16000, s.inputFrame)
 	if e != nil {
@@ -584,7 +603,7 @@ func (s *Session) settle(ctx context.Context, rt *liveTurn) (string, error) {
 	s.mu.Lock()
 	prior := []*liveTurn{}
 	for _, v := range s.history {
-		if v != rt {
+		if v != rt && v.turn.ID >= s.memoryFloor {
 			prior = append(prior, v)
 		}
 	}
@@ -646,6 +665,7 @@ waitLoop:
 		records = append(records, map[string]any{"id": v.turn.ID, "next_id": rt.turn.ID, "candidate": v.turn.Prefix(), "evidence": realtimestate.PlaybackEvidence(v.turn), "completed": v.turn.Completed, "sent": v.turn.Sent, "asr_input_samples": samples})
 	}
 	s.mu.Unlock()
+	contextText = s.mergeMemory(contextText)
 	for _, r := range records {
 		if e := s.record("settled_playback", r); e != nil {
 			return "", e
@@ -702,6 +722,10 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.fail()
 		return
 	}
+	contextText, memoryReceipt, e := s.routeMemory(rt, contextText)
+	if e != nil {
+		return
+	}
 	controlContext, e := s.routeDeviceControls(rt, contextText)
 	if e != nil {
 		return
@@ -711,7 +735,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.turnError(rt)
 		return
 	}
-	prompt += controlContext
+	prompt += controlContext + memoryReceipt
 	producerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	encoded := make(chan encodedPacket, 1002)
