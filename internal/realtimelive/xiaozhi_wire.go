@@ -25,6 +25,7 @@ type xiaozhiWire struct {
 	wakeSamples      int
 	startDeadline    time.Time
 	blocks           map[int64]*devicePlayback // Session mutex owns all playback access.
+	diag             *audioDiagnostics
 }
 
 func newXiaozhiWire(ws *websocket.Conn, version, frameMS int, scope string) *xiaozhiWire {
@@ -88,6 +89,7 @@ func (w *xiaozhiWire) control(b []byte) (map[string]any, error) {
 	case "listen":
 		switch e["state"] {
 		case "detect":
+			w.diag.control("listen_detect", "", nil)
 			return nil, nil // Wake audio is never business input/history.
 		case "start":
 			if e["mode"] != "realtime" && e["mode"] != "auto" {
@@ -95,13 +97,17 @@ func (w *xiaozhiWire) control(b []byte) (map[string]any, error) {
 			}
 			w.listening = true
 			w.wakeSamples = 0
+			mode, _ := e["mode"].(string)
+			w.diag.control("listen_start", mode, nil)
 			return nil, nil
 		case "stop":
+			w.diag.control("listen_stop", "", nil)
 			return map[string]any{"type": "stop", "session_id": w.scope}, nil
 		default:
 			return nil, errors.New("unsupported_listen_state")
 		}
 	case "abort":
+		w.diag.control("abort", "", e["reason"])
 		return map[string]any{"type": "interrupt", "session_id": w.scope}, nil
 	case "playback":
 		p, err := protocol.ParsePlayback(b)

@@ -1,5 +1,7 @@
 # 真人Realtime已播位置实验
 
+Go核心新增可选单设备音频诊断：`--diagnostics-device <已鉴权设备ID>`、`--diagnostics-duration 5m`，默认关闭。每个进程只记录首个匹配的小智会话，最多5分钟/1MiB，写入该会话私有`audio-diagnostics.jsonl`；不修改语音或记忆行为。仅含上行/解码/队列/写入计数、分窗音量、固定控制枚举、取消来源和播放状态，不含原始声音或对话文本。开启、回归与部署边界见[云端诊断验证](../../docs/verification/2026-10-29-realtime-audio-diagnostics.md)。写入完成不代表模型确认收到，设备自报原因也不是已验证的物理原因。
+
 > **当前目录包含两类代码（2026-10-25）。** Swift客户端、构建和默认启动器仍在使用；server/upstream/audio/state/history/identity.py已标记DEPRECATED_PRODUCT_PATH，仅保留临时Python回退与差异测试参考。新功能只进入Go。Python18032仍在线，不表示它仍是默认入口。见[代码生命周期](../../docs/CODE_LIFECYCLE.md)。
 
 运行`./tools/realtime-output-live/open.command`，默认打开蓝色“小满 · Go 测试版（云端 18040）”。点一次开始并允许麦克风，之后自由说话。结束按钮停止收音，窗口保留；关窗退出并清理本启动器的SSH转发。不要同时开启其他语音窗口的对话。

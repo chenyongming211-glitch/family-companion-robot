@@ -27,6 +27,8 @@ func main() {
 	deviceConfig := flag.String("device-config", "/etc/family-robot/server.env", "protected server-only device authentication configuration")
 	maxSessions := flag.Int("max-sessions", 1, "maximum simultaneous terminal sessions (1-8)")
 	memory := flag.Bool("memory", true, "restore bounded recent conversation memory per authenticated device")
+	diagnosticDevice := flag.String("diagnostics-device", "", "optional authenticated device ID for one diagnostic session")
+	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
 	flag.Parse()
 	if *maxSessions < 1 || *maxSessions > 8 {
 		log.Fatal("invalid_max_sessions")
@@ -43,6 +45,8 @@ func main() {
 	}
 	cfg.MaxSessions = *maxSessions
 	cfg.MemoryEnabled = *memory
+	cfg.DiagnosticsDevice = *diagnosticDevice
+	cfg.DiagnosticsDuration = *diagnosticDuration
 	product, e := realtimestate.LoadProduct(*identity)
 	if e != nil {
 		log.Fatal("identity_invalid")

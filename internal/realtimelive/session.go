@@ -38,6 +38,7 @@ type Session struct {
 	input             chan []byte
 	listener          *Native
 	controls          *deviceControls
+	diag              *audioDiagnostics
 	memory            *sessionMemory
 	memoryFloor       int64 // Protected by mu; old playback state remains intact.
 	speechStart       *int64
@@ -83,6 +84,7 @@ func (s *Session) record(event string, m map[string]any) error {
 	}
 	if e == nil {
 		s.notifyMemory(event)
+		s.diag.observed(event, m)
 	}
 	return e
 }
@@ -166,10 +168,21 @@ func closed(ch <-chan struct{}) bool {
 		return false
 	}
 }
-func (s *Session) interrupt() error { return s.interruptExpected(nil) }
+func (s *Session) interrupt() error { return s.interruptFrom(nil, "unspecified") }
 func (s *Session) interruptExpected(expected *liveTurn) error {
+	return s.interruptFrom(expected, "generation_error")
+}
+func (s *Session) interruptFrom(expected *liveTurn, source string) error {
 	s.mu.Lock()
 	rt := s.output
+	var id int64
+	if rt != nil {
+		id = rt.turn.ID
+	}
+	if expected != nil {
+		id = expected.turn.ID
+	} // A late failure belongs to its retired turn.
+	s.diag.interrupt(source, id, rt != nil && (expected == nil || expected == rt))
 	if rt == nil || (expected != nil && rt != expected) {
 		s.mu.Unlock()
 		return nil
@@ -230,6 +243,10 @@ func (s *Session) interruptExpected(expected *liveTurn) error {
 func (s *Session) Run() (err error) {
 	if s.ownerErr != nil {
 		return s.ownerErr
+	}
+	if s.diag != nil {
+		go s.diag.run()
+		defer s.diag.stop()
 	}
 	reason := "session_error"
 	defer func() {
@@ -369,15 +386,19 @@ func (s *Session) Run() (err error) {
 			return nil
 		}
 		if kind == websocket.BinaryMessage {
+			s.diag.received(len(b))
 			pcm, e := s.wire.decodeAudio(b, codec)
 			if e != nil {
+				s.diag.decodeFailed()
 				return e
 			}
 			if len(pcm) == 0 {
 				continue
 			}
+			s.diag.decoded(pcm)
 			select {
 			case s.input <- pcm:
+				s.diag.queued(len(pcm)/2, len(s.input))
 			default:
 				return errors.New("microphone_backpressure")
 			}
@@ -408,7 +429,7 @@ func (s *Session) Run() (err error) {
 				if !device {
 					return errors.New("unknown_client_control")
 				}
-				if e = s.interrupt(); e != nil {
+				if e = s.interruptFrom(nil, "device_abort"); e != nil {
 					return e
 				}
 			case "receipt":
@@ -493,13 +514,17 @@ func (s *Session) microphone() error {
 		case <-s.ctx.Done():
 			return s.ctx.Err()
 		case pcm := <-s.input:
+			s.diag.dequeued(len(pcm) / 2)
 			s.mu.Lock()
 			e := s.ring.Append(pcm)
 			s.mu.Unlock()
 			if e != nil {
 				return e
 			}
-			if e = s.listener.Append(pcm); e != nil {
+			started := s.diag.appendBegin()
+			e = s.listener.Append(pcm)
+			s.diag.appendEnd(len(pcm)/2, started, e != nil)
+			if e != nil {
 				return e
 			}
 		}
@@ -521,7 +546,7 @@ func (s *Session) listen() error {
 		}
 		switch event["type"] {
 		case "input_audio_buffer.speech_started":
-			if e = s.interrupt(); e != nil {
+			if e = s.interruptFrom(nil, "provider_vad_start"); e != nil {
 				return e
 			}
 			s.mu.Lock()
@@ -559,7 +584,7 @@ func (s *Session) listen() error {
 				}
 				continue
 			}
-			if e = s.interrupt(); e != nil {
+			if e = s.interruptFrom(nil, "provider_vad_stop"); e != nil {
 				return e
 			}
 			rt := s.addTurn()

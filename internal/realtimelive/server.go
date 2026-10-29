@@ -19,19 +19,21 @@ import (
 )
 
 type Server struct {
-	stopping    bool
-	mu          sync.Mutex
-	tickets     map[string]ticketBinding
-	devices     *voiceidentity.Store
-	memory      *recordstore.Store
-	memoryErr   error
-	initErr     error
-	leases      map[string]*sessionLease
-	cfg         Config
-	product     *realtimestate.Product
-	root, build string
-	run         func(*websocket.Conn, string)
-	runDevice   func(*Session)
+	stopping          bool
+	mu                sync.Mutex
+	tickets           map[string]ticketBinding
+	devices           *voiceidentity.Store
+	memory            *recordstore.Store
+	memoryErr         error
+	initErr           error
+	leases            map[string]*sessionLease
+	cfg               Config
+	product           *realtimestate.Product
+	root, build       string
+	run               func(*websocket.Conn, string)
+	runDevice         func(*Session)
+	diagnosticClaimed bool
+	diagnosticCapture *audioDiagnostics
 }
 
 func NewServer(cfg Config, product *realtimestate.Product, root, build string) *Server {
@@ -42,6 +44,14 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 	devices, initErr := voiceidentity.Open(filepath.Join(root, "devices.json"))
 	if cfg.MaxSessions < 1 || cfg.MaxSessions > 8 {
 		initErr = errors.New("invalid_max_sessions")
+	}
+	if cfg.DiagnosticsDevice != "" {
+		if cfg.DiagnosticsDuration == 0 {
+			cfg.DiagnosticsDuration = diagnosticWindow
+		}
+		if !diagnosticDevicePattern.MatchString(cfg.DiagnosticsDevice) || cfg.DiagnosticsDuration <= 0 || cfg.DiagnosticsDuration > diagnosticWindow {
+			initErr = errors.New("invalid_diagnostics_config")
+		}
 	}
 	s := &Server{leases: map[string]*sessionLease{}, tickets: map[string]ticketBinding{}, devices: devices, initErr: initErr, cfg: cfg, product: product, root: root, build: build}
 	if cfg.MemoryEnabled {
@@ -143,12 +153,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		active := len(s.leases)
+		diagnosticArmed := s.cfg.DiagnosticsDevice != "" && !s.diagnosticClaimed
+		diagnosticClaimed := s.diagnosticClaimed
+		diagnosticActive := s.diagnosticCapture != nil && s.diagnosticCapture.enabled()
 		s.mu.Unlock()
 		status := 200
 		if s.initErr != nil {
 			status = 503
 		}
-		respond(w, status, map[string]any{"device_identity": 1, "device_memory": s.memory != nil, "memory_ready": s.cfg.MemoryEnabled && s.memoryErr == nil, "ready": s.initErr == nil, "busy": active > 0, "active_sessions": active, "max_sessions": s.cfg.MaxSessions, "capacity_full": active >= s.cfg.MaxSessions, "experiment": "output-asr-live", "backend": "go", "build": s.build})
+		respond(w, status, map[string]any{"device_identity": 1, "device_memory": s.memory != nil, "memory_ready": s.cfg.MemoryEnabled && s.memoryErr == nil, "ready": s.initErr == nil, "busy": active > 0, "active_sessions": active, "max_sessions": s.cfg.MaxSessions, "capacity_full": active >= s.cfg.MaxSessions, "experiment": "output-asr-live", "backend": "go", "build": s.build, "diagnostics_armed": diagnosticArmed, "diagnostics_claimed": diagnosticClaimed, "diagnostics_active": diagnosticActive})
 	})
 	mux.HandleFunc("POST /devices", s.enrollDevice)
 	mux.HandleFunc("POST /pair", func(w http.ResponseWriter, r *http.Request) {

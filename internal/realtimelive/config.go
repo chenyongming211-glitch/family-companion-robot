@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -15,6 +16,8 @@ type Config struct {
 	Synthetic                      bool
 	MaxSessions                    int
 	MemoryEnabled                  bool
+	DiagnosticsDevice              string
+	DiagnosticsDuration            time.Duration
 }
 
 func LoadConfig(path string) (Config, error) {

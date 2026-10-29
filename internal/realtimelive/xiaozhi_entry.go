@@ -160,6 +160,7 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		session.inputFrame = hello.AudioParams.FrameDuration * 16
 		session.wire = newXiaozhiWire(ws, hello.Version, hello.AudioParams.FrameDuration, session.rec.owner.SessionID)
 		session.wire.(*xiaozhiWire).mcp = hello.Features["mcp"]
+		s.attachDiagnostics(session)
 		session.enableDeviceControls()
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
 		s.runDevice(session)
