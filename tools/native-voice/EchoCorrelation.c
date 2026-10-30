@@ -15,6 +15,9 @@ typedef struct {
     int64_t id, generation;
     uint64_t sequence;
     double origin, origin_min, origin_max;
+    double converter_offset_min, converter_offset_max;
+    double mapping_offset_min, mapping_offset_max;
+    double source_clock_min, source_clock_max;
     float reference[REF_CAP];
     unsigned char valid[REF_CAP];
 } EchoPlayback;
@@ -23,6 +26,8 @@ struct FCEchoProbe {
     float microphone[MIC_CAP];
     int64_t mic_ticks[MIC_CAP], latest;
     double previous_capture_end;
+    FCEchoCaptureStats capture_stats;
+    double source_jump_s;
     double capture_group_sum, capture_group_host;
     int capture_group_count;
     int capture_clock_bad, closed;
@@ -59,6 +64,9 @@ void fc_echo_begin(FCEchoProbe *p,int64_t id,int64_t g) {
         p->dropped++;
     }
     memset(c,0,sizeof(*c)); c->active=1; c->id=id; c->generation=g; c->sequence=++p->sequence;
+    c->converter_offset_min=c->converter_offset_max=p->capture_stats.converter_offset_ms;
+    c->mapping_offset_min=c->mapping_offset_max=p->capture_stats.source_pcm_offset_ms;
+    c->source_clock_min=c->source_clock_max=p->capture_stats.source_clock_error_ms;
 }
 void fc_echo_reference(FCEchoProbe *p,int64_t g,const int16_t *pcm,size_t count,int64_t frame) {
     EchoPlayback *c=find(p,g);
@@ -85,18 +93,41 @@ void fc_echo_anchor(FCEchoProbe *p,int64_t g,double origin) {
     c->origin_min=fmin(c->origin_min,origin); c->origin_max=fmax(c->origin_max,origin);
     c->anchors++;
 }
-void fc_echo_capture(FCEchoProbe *p,const int16_t *pcm,size_t count,double host) {
-    if(!p || p->closed || !pcm || !count || count>4096 || !valid_time(host)) return;
-    double assigned=host;
-    if(p->previous_capture_end>0) {
-        double delta=host-p->previous_capture_end;
-        /* Source-tap timestamps and SRC output block lengths can differ by
-           fractional frames. Preserve sample phase within one analysis tick. */
-        if(fabs(delta)<=1.0/RATE) assigned=p->previous_capture_end;
-        else {
-            if(delta<0) p->capture_clock_bad=1;
-            p->capture_group_count=0; p->capture_group_sum=0;
-        }
+void fc_echo_capture_source(FCEchoProbe *p,const int16_t *pcm,size_t count,double host,size_t source_frames,double source_rate) {
+    if(!p || p->closed || !pcm || !count || count>4096 || !valid_time(host) || !source_frames || source_frames>131072
+       || !isfinite(source_rate) || source_rate<8000 || source_rate>384000) return;
+    FCEchoCaptureStats *s=&p->capture_stats;
+    double delta=s->blocks?host-s->last_source_end_s:0;
+    double assigned=s->blocks?p->previous_capture_end:host;
+    /* The source timestamp belongs to SOURCE frames, not this call's SRC
+       output. Priming/buffering can legitimately change output block size. */
+    if(s->blocks && fabs(delta)>1.0/RATE) {
+        assigned+=delta;
+        p->source_jump_s+=delta;
+        if(delta<0) { p->capture_clock_bad=1; s->source_backwards++; }
+        else s->source_gaps++;
+        p->capture_group_count=0; p->capture_group_sum=0;
+    }
+    if(!s->blocks) s->first_source_host_s=host;
+    s->blocks++;s->source_frames+=source_frames;s->converted_samples+=count;
+    s->source_duration_s+=source_frames/source_rate;s->pcm_duration_s+=count/16000.0;
+    s->last_source_end_s=host+source_frames/source_rate;
+    s->source_delta_ms=delta*1000;
+    s->source_delta_min_ms=fmin(s->source_delta_min_ms,s->source_delta_ms);
+    s->source_delta_max_ms=fmax(s->source_delta_max_ms,s->source_delta_ms);
+    s->converter_offset_ms=(s->pcm_duration_s-s->source_duration_s)*1000;
+    s->source_pcm_offset_ms=(host-assigned)*1000;
+    /* Source-clock rate error is independent of how SRC batches deliveries.
+       Recognized discontinuities retain holes instead of masquerading as drift. */
+    s->source_clock_error_ms=((s->last_source_end_s-s->first_source_host_s)-s->source_duration_s-p->source_jump_s)*1000;
+    for(int i=0;i<CONTEXTS;i++) if(p->playbacks[i].active) {
+        EchoPlayback *c=&p->playbacks[i];
+        c->converter_offset_min=fmin(c->converter_offset_min,s->converter_offset_ms);
+        c->converter_offset_max=fmax(c->converter_offset_max,s->converter_offset_ms);
+        c->mapping_offset_min=fmin(c->mapping_offset_min,s->source_pcm_offset_ms);
+        c->mapping_offset_max=fmax(c->mapping_offset_max,s->source_pcm_offset_ms);
+        c->source_clock_min=fmin(c->source_clock_min,s->source_clock_error_ms);
+        c->source_clock_max=fmax(c->source_clock_max,s->source_clock_error_ms);
     }
     p->previous_capture_end=assigned+count/16000.0;
     for(size_t i=0;i<count;i++) {
@@ -110,6 +141,10 @@ void fc_echo_capture(FCEchoProbe *p,const int16_t *pcm,size_t count,double host)
         }
     }
 }
+void fc_echo_capture(FCEchoProbe *p,const int16_t *pcm,size_t count,double host) {
+    fc_echo_capture_source(p,pcm,count,host,count,16000);
+}
+void fc_echo_capture_stats(const FCEchoProbe *p,FCEchoCaptureStats *out) { if(out) { if(p) *out=p->capture_stats; else memset(out,0,sizeof(*out)); } }
 void fc_echo_end(FCEchoProbe *p,int64_t g) { EchoPlayback *c=find(p,g); if(c) c->ended=1; }
 void fc_echo_close(FCEchoProbe *p) {
     if(!p) return;
@@ -177,13 +212,22 @@ int fc_echo_poll(FCEchoProbe *p,FCEchoResult *r) {
         if(c->anchors==0 && !p->closed) continue;
         int64_t start=c->anchors?tick(c->origin+(c->next*6+2.5)/24000.0):0;
         int ready=c->anchors && p->latest>=start+n-1+MAX_LAG;
-        if(!ready && !p->closed && c->anchors>0 && c->origin_max-c->origin_min<=0.010 && !p->capture_clock_bad) continue;
+        double converter_spread=c->converter_offset_max-c->converter_offset_min;
+        double mapping_spread=c->mapping_offset_max-c->mapping_offset_min;
+        double source_spread=c->source_clock_max-c->source_clock_min;
+        if(!ready && !p->closed && c->anchors>0 && c->origin_max-c->origin_min<=0.010 && !p->capture_clock_bad && !p->capture_stats.source_gaps && source_spread<=2) continue;
         memset(r,0,sizeof(*r)); r->playback_id=c->id; r->generation=c->generation;
         r->samples=n; r->window_start_ms=c->next*1000/RATE; r->anchors=c->anchors;
         r->reference_origin_host_s=c->origin; r->window_host_s=c->anchors?(double)start/RATE:0;
         r->anchor_spread_ms=(c->origin_max-c->origin_min)*1000;
+        r->converter_offset_spread_ms=converter_spread;
+        r->capture_mapping_spread_ms=mapping_spread;
+        r->source_clock_spread_ms=source_spread;
         if(c->anchors==0) r->status=FC_ECHO_CLOCK_MISSING;
-        else if(r->anchor_spread_ms>10 || p->capture_clock_bad) r->status=FC_ECHO_CLOCK_UNSTABLE;
+        else if(r->anchor_spread_ms>10 || p->capture_clock_bad || source_spread>2) r->status=FC_ECHO_CLOCK_UNSTABLE;
+        /* A lost SRC delivery's output length is unknown. Do not repair its
+           sample clock using only source duration, even for later windows. */
+        else if(p->capture_stats.source_gaps) r->status=FC_ECHO_CAPTURE_GAP;
         else if(n<400) r->status=FC_ECHO_SHORT_WINDOW;
         else if(!ready) r->status=FC_ECHO_INCOMPLETE;
         else measure(p,c,r,start);

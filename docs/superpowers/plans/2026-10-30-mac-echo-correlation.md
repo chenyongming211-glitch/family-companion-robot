@@ -8,6 +8,8 @@
 
 **Tech Stack:** 便携C11计算核心、Swift/AVFoundation接入、现有私有JSONL写入器；C测试在云端cc/clang运行，Mac仅SDK编译和真人测试客户端。
 
+执行结果：已取得20:24正常与20:26异常的同构建有效对照，首窗r=0.564/0.593、表观47.5/46.25ms。两轮均有播放相关残留，异常约631ms取消并转写助手问候。时基修正后最终云端28项通过，原语音行为未修复，详见[验证](../../verification/2026-10-30-mac-echo-correlation.md)。
+
 ## Task 1: 计算核心与云端合成验证
 
 文件：新增`tools/native-voice/EchoCorrelation.h`、`EchoCorrelation.c`、`Tests/EchoCorrelationSpec.c`。
@@ -30,12 +32,12 @@
 - [x] 播放结束保留有界尾部输入用于完整延迟搜索；总会话停止时未收齐部分明确标记incomplete，不延迟任何播放、发包、结束或取消。
 - [x] 更新所有显式构建入口编译并链接新C对象和Swift文件；OutputLive构建、共享Swift类型检查、五脚本bash -n、签名验证、git diff --check通过。
 
-时钟边界：reference_origin=render_host-player_sample/24000；该值不是扬声器物理发声时刻。tap host属于转换前源缓冲，SRC/播放/采集缓冲和时钟量化均进入表观时延，不据此声称纯声学延迟或Apple内部参考错误。记录多次anchor的离散程度，明显跳变时不输出有效相关性。
+时钟边界：reference_origin=render_host-player_sample/24000，不是扬声器物理发声时刻。源tap host须带真实源帧数/采样率，不能拿SRC输出块长判连续性；处理后PCM按实际累计采样建名义16k时轴，源时钟误差为host跨度减源帧时长及已识别jump。SRC交付积压单独记录，累计源漂移仍独立判无结论；正源缺口后丢SRC块长度未知，保守整会话无结论。SRC/播放/采集缓冲和量化均进入表观时延，不据此声称纯声学延迟或Apple内部参考错误。
 
 ## Task 3: 复核、真人样本及交接
 
 - [x] 只读独立复核有界内存/工作量、归属、时钟、低能量/缺口与输出字段；修正Important/Critical后重跑相关验证。
 - [x] 保留原客户端源码回退（Git归档，可重建二进制），只在窗口停止收音后加载新构建；云端服务、原身份/记忆、音量/设备和固件保持。
 - [x] 私有启动器启用两个诊断开关，确认云端18040、待命未收音；已请用户手动开始一轮三次问候，真人结果另行勾选。
-- [ ] 按session/playback/generation对齐本机统计与云端VAD/取消/实际播放，分别报告测量成功、低置信或采样待完成；不把相关性等同纯回声或AEC衰减。
+- [x] 按session/playback/generation对齐有效两轮统计、云端VAD/取消/实际播放，报告参考缺口/短窗；旧两轮无效不追认。SRC交付、小host累计漂移、首参考前丢块均有失败/通过用例，不把相关性等同纯回声或AEC衰减。
 - [x] 更新验证/交接并提交推送main；源码/合成用例入Git，原始波形、详细对话、会话标识、生成App及私有启动器不入Git。真人采样完成后恢复不带诊断的普通客户端。

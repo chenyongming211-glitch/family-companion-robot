@@ -28,6 +28,9 @@ final class AudioCorrelationProbe: @unchecked Sendable {
             "capture_source": "post_voice_processing_pre_opus_16k_pcm",
             "delay_basis": "player_render_to_source_tap_before_src",
             "capture_continuity_tolerance_ms": 0.25, "second_peak_exclusion_ms": 20,
+            "capture_clock_mapping": "pcm_count_anchored_to_first_source_host",
+            "capture_continuity_basis": "source_host_and_source_frames",
+            "source_clock_spread_limit_ms": 2,
             "converter_latency_calibrated": false])
         worker.asyncAfter(deadline: .now() + 120) { [weak self] in self?.stop(reason: "duration_limit") }
     }
@@ -56,9 +59,14 @@ final class AudioCorrelationProbe: @unchecked Sendable {
         guard frame >= 0, frame < 72000, !pcm.isEmpty, pcm.count <= 4096 else { return }
         submit { core in pcm.withUnsafeBufferPointer { fc_echo_reference(core, Int64(generation), $0.baseAddress, $0.count, frame) } }
     }
-    func capture(_ pcm: [Int16], sourceHostSeconds: Double?) {
-        guard let host = sourceHostSeconds, host.isFinite, !pcm.isEmpty, pcm.count <= 4096 else { return }
-        submit { core in pcm.withUnsafeBufferPointer { fc_echo_capture(core, $0.baseAddress, $0.count, host) } }
+    func capture(_ pcm: [Int16], sourceHostSeconds: Double?, sourceFrames: Int, sourceRate: Double) {
+        guard let host = sourceHostSeconds, host.isFinite, !pcm.isEmpty, pcm.count <= 4096,
+              sourceFrames > 0, sourceFrames <= 131072, sourceRate.isFinite, sourceRate >= 8000, sourceRate <= 384000 else { return }
+        submit { [self] core in
+            pcm.withUnsafeBufferPointer { fc_echo_capture_source(core, $0.baseAddress, $0.count, host, sourceFrames, sourceRate) }
+            var stats = FCEchoCaptureStats(); fc_echo_capture_stats(core, &stats)
+            if stats.blocks <= 8 { diagnostics.note("echo_capture_timing", timingFields(stats)) }
+        }
     }
     func anchor(generation: Int, originHostSeconds: Double) {
         submit { fc_echo_anchor($0, Int64(generation), originHostSeconds) }
@@ -72,12 +80,23 @@ final class AudioCorrelationProbe: @unchecked Sendable {
             if let core {
                 fc_echo_close(core); drain(core)
                 lock.lock(); let lost = dropped; lock.unlock()
-                diagnostics.note("echo_probe_stopped", ["reason": reason,
+                var stats = FCEchoCaptureStats(); fc_echo_capture_stats(core, &stats)
+                diagnostics.note("echo_probe_stopped", ["reason": reason, "capture_timing": timingFields(stats),
                     "probe_dropped_jobs": lost, "probe_dropped_playbacks": fc_echo_dropped_playbacks(core)], terminal: true)
                 fc_echo_destroy(core); self.core = nil
             }
         }
         lock.unlock()
+    }
+    private func timingFields(_ stats: FCEchoCaptureStats) -> [String: Any] {
+        ["blocks": stats.blocks, "source_frames": stats.source_frames, "converted_samples": stats.converted_samples,
+         "source_duration_ms": stats.source_duration_s * 1000, "pcm_duration_ms": stats.pcm_duration_s * 1000,
+         "source_delta_ms": stats.source_delta_ms, "source_delta_min_ms": stats.source_delta_min_ms,
+         "source_delta_max_ms": stats.source_delta_max_ms, "source_gaps": stats.source_gaps,
+         "source_backwards": stats.source_backwards, "converter_offset_ms": stats.converter_offset_ms,
+         "source_pcm_offset_ms": stats.source_pcm_offset_ms,
+         "source_clock_error_ms": stats.source_clock_error_ms,
+         "first_source_host_s": stats.first_source_host_s, "last_source_end_s": stats.last_source_end_s]
     }
     private func drain(_ core: OpaquePointer) {
         let statuses = ["measured", "low_reference_energy", "low_capture_energy", "reference_gap", "capture_gap",
@@ -87,12 +106,16 @@ final class AudioCorrelationProbe: @unchecked Sendable {
             let began = ProcessInfo.processInfo.systemUptime
             guard fc_echo_poll(core, &result) != 0 else { break }
             lock.lock(); let lost = dropped; lock.unlock()
+            var stats = FCEchoCaptureStats(); fc_echo_capture_stats(core, &stats)
             var row: [String: Any] = ["playback_id": result.playback_id, "generation": result.generation,
                 "status": statuses.indices.contains(Int(result.status)) ? statuses[Int(result.status)] : "unknown",
                 "window_start_ms": result.window_start_ms, "samples": result.samples,
                 "reference_origin_host_s": result.reference_origin_host_s, "window_host_s": result.window_host_s,
                 "anchor_spread_ms": result.anchor_spread_ms, "anchors": result.anchors,
-                "reference_rms": result.reference_rms, "analysis_rate": 4000,
+                "analysis_rate": 4000, "converter_offset_spread_ms": result.converter_offset_spread_ms,
+                "src_delivery_offset_spread_ms": result.capture_mapping_spread_ms,
+                "source_clock_spread_ms": result.source_clock_spread_ms,
+                "capture_timing_at_analysis": timingFields(stats),
                 "analysis_ms": (ProcessInfo.processInfo.systemUptime - began) * 1000,
                 "probe_dropped_jobs": lost, "probe_dropped_playbacks": fc_echo_dropped_playbacks(core)]
             if result.status == FC_ECHO_MEASURED {
@@ -100,6 +123,9 @@ final class AudioCorrelationProbe: @unchecked Sendable {
                 row["apparent_lag_ms"] = result.lag_ms; row["search_boundary"] = result.boundary != 0
                 row["tested_lags"] = result.tested_lags; row["capture_rms"] = result.capture_rms
                 row["projection_gain"] = result.projection_gain; row["projected_capture_rms"] = result.projected_capture_rms
+            }
+            if result.status == FC_ECHO_MEASURED || result.status == FC_ECHO_LOW_REFERENCE || result.status == FC_ECHO_LOW_CAPTURE {
+                row["reference_rms"] = result.reference_rms
             }
             diagnostics.note("echo_correlation_window", row, terminal: true)
         }

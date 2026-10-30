@@ -84,6 +84,53 @@ int main(void) {
     fc_echo_end(p,1);int split_count=0;
     while(fc_echo_poll(p,&r)) { assert(r.status==FC_ECHO_MEASURED);assert(fabs(r.lag_ms-73)<1);split_count++; }
     assert(split_count==12);fc_echo_destroy(p);passed("continuous 341 341 342 chunks and 48k tap timestamps do not create false gaps");
+    p=fc_echo_create();assert(p);frame=-8000;block=0;double source_host=999.5;int16_t primed[1728];
+    while(frame<64000) {
+        if(block==2) {fc_echo_begin(p,41,1);reference(p,1);fc_echo_anchor(p,1,1000);}
+        int n=block==0?1728:1600;if(n>64000-frame)n=64000-frame;
+        for(int i=0;i<n;i++) primed[i]=(int16_t)lrint(0.2*source((frame+i)/16000.0-0.073)*32767);
+        size_t source_frames=block==0?4800:(size_t)n*3;
+        fc_echo_capture_source(p,primed,(size_t)n,source_host,source_frames,48000);
+        source_host+=source_frames/48000.0;frame+=n;block++;
+    }
+    fc_echo_end(p,1);int primed_count=0;
+    while(fc_echo_poll(p,&r)) {assert(r.status==FC_ECHO_MEASURED && fabs(r.lag_ms-73)<1);primed_count++;}
+    FCEchoCaptureStats timing;fc_echo_capture_stats(p,&timing);
+    assert(primed_count==12 && timing.source_backwards==0 && fabs(timing.converter_offset_ms-8)<0.001);
+    fc_echo_destroy(p);passed("SRC priming before playback does not reverse the source clock");
+    p=prepared();frame=-8000;block=0;int16_t drifted[1600];
+    while(frame<64000) {
+        for(int i=0;i<1600;i++) drifted[i]=(int16_t)lrint(0.2*source((frame+i)/16000.0-0.073)*32767);
+        fc_echo_capture_source(p,drifted,1600,999.5+block*0.1001,4800,48000);
+        frame+=1600;block++;
+    }
+    fc_echo_end(p,1);int drift_count=0;
+    while(fc_echo_poll(p,&r)) { assert(r.status==FC_ECHO_CLOCK_UNSTABLE);drift_count++; }
+    assert(drift_count==12);fc_echo_destroy(p);passed("small per-block host deltas cannot conceal accumulated clock drift");
+    p=prepared();frame=-8000;block=0;double buffered_host=999.5;int16_t buffered[1728];
+    const int sizes[3]={1360,1728,1712};
+    while(frame<64000) {
+        int n=sizes[block%3];if(n>64000-frame)n=64000-frame;
+        for(int i=0;i<n;i++) buffered[i]=(int16_t)lrint(0.2*source((frame+i)/16000.0-0.073)*32767);
+        size_t frames=(frame+n==64000)?(size_t)n*3:4800;
+        fc_echo_capture_source(p,buffered,(size_t)n,buffered_host,frames,48000);
+        buffered_host+=frames/48000.0;frame+=n;block++;
+    }
+    fc_echo_end(p,1);int buffered_count=0;
+    while(fc_echo_poll(p,&r)) {assert(r.status==FC_ECHO_MEASURED && fabs(r.lag_ms-73)<1);buffered_count++;}
+    assert(buffered_count==12);fc_echo_destroy(p);passed("SRC delivery batching is not source clock drift");
+    p=fc_echo_create();assert(p);frame=-16000;block=0;buffered_host=999;
+    while(frame<64000) {
+        if(block==8) {fc_echo_begin(p,41,1);reference(p,1);fc_echo_anchor(p,1,1000);}
+        int n=sizes[block%3];if(n>64000-frame)n=64000-frame;
+        for(int i=0;i<n;i++) buffered[i]=(int16_t)lrint(0.2*source((frame+i)/16000.0-0.073)*32767);
+        size_t frames=(frame+n==64000)?(size_t)n*3:4800;
+        if(block!=1) fc_echo_capture_source(p,buffered,(size_t)n,buffered_host,frames,48000);
+        buffered_host+=frames/48000.0;frame+=n;block++;
+    }
+    fc_echo_end(p,1);int lost_count=0;
+    while(fc_echo_poll(p,&r)) {assert(r.status==FC_ECHO_CAPTURE_GAP);lost_count++;}
+    assert(lost_count==12);fc_echo_destroy(p);passed("missing SRC delivery before playback cannot leave a silently shifted sample clock");
 
     p=prepared();capture(p,0,0,0.02);fc_echo_end(p,1);
     while(fc_echo_poll(p,&r)) { assert(r.status==FC_ECHO_MEASURED); assert(fabs(r.correlation)<0.30); }

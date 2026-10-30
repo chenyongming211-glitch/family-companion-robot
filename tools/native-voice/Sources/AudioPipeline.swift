@@ -80,6 +80,7 @@ final class AudioPipeline {
             input.installTap(onBus: 0, bufferSize: 1024, format: source) { [weak self] buffer, time in
                 guard let self else { return }
                 let sourceHost = self.correlation != nil && time.isHostTimeValid ? AVAudioTime.seconds(forHostTime: time.hostTime) : nil
+                let sourceFrames = Int(buffer.frameLength)
                 self.captureLock.lock()
                 self.captureCallbacks += 1
                 self.captureSamples += Int(buffer.frameLength)
@@ -117,7 +118,7 @@ final class AudioPipeline {
                 self.queue.async {
                     self.captureLock.lock(); self.capturePending -= 1; self.captureLock.unlock()
                     if pcm.isEmpty { self.onFailure?("microphone_conversion") } else { self.onPCM?(pcm) }
-                    self.correlation?.capture(pcm, sourceHostSeconds: sourceHost)
+                    self.correlation?.capture(pcm, sourceHostSeconds: sourceHost, sourceFrames: sourceFrames, sourceRate: source.sampleRate)
                     self.traceCapture()
                 }
             }
