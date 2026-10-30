@@ -11,13 +11,14 @@ fi
 mkdir -p "$out_dir/RealtimeVoice.app/Contents/MacOS"
 chmod 700 "$out_dir"
 xcrun clang -O2 -I"$opus_root/include/opus" -c "$common/OpusBridge.c" -o "$out_dir/OpusBridge.o"
+xcrun clang -O2 -c "$common/EchoCorrelation.c" -o "$out_dir/EchoCorrelation.o"
 xcrun swiftc -swift-version 5 "$common/Sources/PlaybackLedger.swift" "$source_dir/Sources/Protocol.swift" "$source_dir/Tests/StateSpec.swift" -o "$out_dir/state-spec"
 "$out_dir/state-spec"
 xcrun swiftc -swift-version 5 -O -framework AppKit -framework AVFoundation \
   -import-objc-header "$common/OpusBridge.h" \
-  "$common/Sources/AudioPipeline.swift" "$common/Sources/AudioDiagnostics.swift" "$common/Sources/MicrophonePCM.swift" \
+  "$common/Sources/AudioPipeline.swift" "$common/Sources/AudioDiagnostics.swift" "$common/Sources/AudioCorrelationProbe.swift" "$common/Sources/MicrophonePCM.swift" \
   "$common/Sources/Opus.swift" "$common/Sources/PlaybackLedger.swift" \
-  "$source_dir"/Sources/*.swift "$out_dir/OpusBridge.o" \
+  "$source_dir"/Sources/*.swift "$out_dir/OpusBridge.o" "$out_dir/EchoCorrelation.o" \
   -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" \
   -o "$out_dir/RealtimeVoice.app/Contents/MacOS/RealtimeVoice"
 cp "$source_dir/Info.plist" "$out_dir/RealtimeVoice.app/Contents/Info.plist"

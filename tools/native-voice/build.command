@@ -10,8 +10,9 @@ fi
 mkdir -p "$out_dir/NativeVoice.app/Contents/MacOS"
 chmod 700 "$out_dir"
 xcrun clang -O2 -I"$opus_root/include/opus" -c "$source_dir/OpusBridge.c" -o "$out_dir/OpusBridge.o"
+xcrun clang -O2 -c "$source_dir/EchoCorrelation.c" -o "$out_dir/EchoCorrelation.o"
 xcrun swiftc -swift-version 5 -O -framework AppKit -framework AVFoundation \
-  -import-objc-header "$source_dir/OpusBridge.h" "$source_dir"/Sources/*.swift "$out_dir/OpusBridge.o" \
+  -import-objc-header "$source_dir/OpusBridge.h" "$source_dir"/Sources/*.swift "$out_dir/OpusBridge.o" "$out_dir/EchoCorrelation.o" \
   -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" \
   -o "$out_dir/NativeVoice.app/Contents/MacOS/NativeVoice"
 cp "$source_dir/Info.plist" "$out_dir/NativeVoice.app/Contents/Info.plist"
@@ -23,9 +24,9 @@ xcrun swiftc -framework AVFoundation "$source_dir/Sources/PlaybackLedger.swift" 
 "$out_dir/microphone-spec"
 xcrun swiftc -swift-version 5 -framework AppKit -framework AVFoundation \
   -import-objc-header "$source_dir/OpusBridge.h" \
-  "$source_dir/Sources/AudioPipeline.swift" "$source_dir/Sources/AudioDiagnostics.swift" "$source_dir/Sources/MicrophonePCM.swift" "$source_dir/Sources/DrainPlayer.swift" \
+  "$source_dir/Sources/AudioPipeline.swift" "$source_dir/Sources/AudioDiagnostics.swift" "$source_dir/Sources/AudioCorrelationProbe.swift" "$source_dir/Sources/MicrophonePCM.swift" "$source_dir/Sources/DrainPlayer.swift" \
   "$source_dir/Sources/Opus.swift" "$source_dir/Sources/PlaybackLedger.swift" \
-  "$source_dir/Sources/NativeEndpoint.swift" "$source_dir/Sources/VoiceClient.swift" "$source_dir/Tests/FixtureSpec.swift" "$out_dir/OpusBridge.o" \
+  "$source_dir/Sources/NativeEndpoint.swift" "$source_dir/Sources/VoiceClient.swift" "$source_dir/Tests/FixtureSpec.swift" "$out_dir/OpusBridge.o" "$out_dir/EchoCorrelation.o" \
   -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" -o "$out_dir/fixture-spec"
 "$out_dir/fixture-spec"
 bash "$source_dir/Tests/launcher-spec.sh"

@@ -36,6 +36,7 @@ final class AudioPipeline {
     private var inputVoiceProcessing = false, outputVoiceProcessing = false
     private(set) var presentationLatency = 0.0
     private let diagnostics: AudioDiagnostics?
+    private let correlation: AudioCorrelationProbe?
     private var captureEvidence: AudioCaptureEvidence?
     private var diagnosticPlaybackID = 0
 
@@ -46,7 +47,9 @@ final class AudioPipeline {
 
     init(queue: DispatchQueue, diagnosticSessionID: String? = nil) {
         self.queue = queue
-        diagnostics = AudioDiagnostics.make(sessionID: diagnosticSessionID)
+        let trace = AudioDiagnostics.make(sessionID: diagnosticSessionID)
+        diagnostics = trace
+        correlation = AudioCorrelationProbe.make(diagnostics: trace)
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
@@ -76,6 +79,7 @@ final class AudioPipeline {
             self.converter = converter
             input.installTap(onBus: 0, bufferSize: 1024, format: source) { [weak self] buffer, time in
                 guard let self else { return }
+                let sourceHost = self.correlation != nil && time.isHostTimeValid ? AVAudioTime.seconds(forHostTime: time.hostTime) : nil
                 self.captureLock.lock()
                 self.captureCallbacks += 1
                 self.captureSamples += Int(buffer.frameLength)
@@ -113,6 +117,7 @@ final class AudioPipeline {
                 self.queue.async {
                     self.captureLock.lock(); self.capturePending -= 1; self.captureLock.unlock()
                     if pcm.isEmpty { self.onFailure?("microphone_conversion") } else { self.onPCM?(pcm) }
+                    self.correlation?.capture(pcm, sourceHostSeconds: sourceHost)
                     self.traceCapture()
                 }
             }
@@ -143,6 +148,7 @@ final class AudioPipeline {
         }
         player.stop()
         decoder = try OpusDecoder(rate: 24000)
+        correlation?.begin(playbackID: diagnosticPlaybackID, generation: generation)
         traceState("playback_begin")
     }
     func traceFirstPacket(bytes: Int) {
@@ -181,7 +187,9 @@ final class AudioPipeline {
                 // The external callback can synchronously end this playback or
                 // begin another. Preserve the completing buffer's state first.
                 let firstPlayed = index == 0 ? self.traceStateSnapshot("first_buffer_data_played") : nil
+                let referenceOrigin = index <= 48 && index % 16 == 0 ? self.correlationClockOrigin() : nil
                 self.onCompleted?(contiguous)
+                if let referenceOrigin { self.correlation?.anchor(generation: token, originHostSeconds: referenceOrigin) }
                 if let firstPlayed { self.diagnostics?.note("audio_state", firstPlayed) }
             }
         }
@@ -189,6 +197,7 @@ final class AudioPipeline {
             player.play()
             traceState("player_play_invoked")
         }
+        correlation?.reference(pcm, frame: Int64(when.sampleTime), generation: token)
     }
     func played() throws -> Int {
         guard decoder != nil else { return 0 }
@@ -217,6 +226,7 @@ final class AudioPipeline {
         // Called only after all accepted samples have dataPlayedBack evidence.
         traceCapture(force: true)
         traceState("playback_end")
+        correlation?.end(generation: generation)
         generation += 1; player.stop(); decoder = nil; segments.removeAll()
     }
     func stop() {
@@ -226,10 +236,17 @@ final class AudioPipeline {
         if tapping { engine.inputNode.removeTap(onBus: 0); tapping = false }
         player.stop(); engine.stop(); decoder = nil; converter = nil; segments.removeAll()
         onPCM = nil
+        correlation?.stop()
         if let diagnostics {
             let captured = captureStatistics
             diagnostics.note("session_stopped", ["capture_callbacks": captured.callbacks, "capture_frames": captured.samples], terminal: true)
         }
+    }
+    private func correlationClockOrigin() -> Double? {
+        guard correlation?.active == true, let render = player.lastRenderTime, render.isHostTimeValid,
+              let clock = player.playerTime(forNodeTime: render), clock.isSampleTimeValid,
+              clock.sampleRate == 24000, clock.sampleTime >= 0, clock.sampleTime <= nextFrame + 2048 else { return nil }
+        return AVAudioTime.seconds(forHostTime: render.hostTime) - Double(clock.sampleTime) / 24000
     }
     private func traceCapture(force: Bool = false) {
         guard let diagnostics, diagnostics.active else { return }

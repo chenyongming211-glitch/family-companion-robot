@@ -1,6 +1,7 @@
 #ifndef NATIVE_OPUS_BRIDGE_H
 #define NATIVE_OPUS_BRIDGE_H
 #include <stdint.h>
+#include "EchoCorrelation.h"
 void *nv_encoder_create(int rate);
 void nv_encoder_destroy(void *encoder);
 int nv_encoder_lookahead(void *encoder);
