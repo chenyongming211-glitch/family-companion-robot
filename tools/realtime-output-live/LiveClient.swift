@@ -96,6 +96,7 @@ final class LiveClient: @unchecked Sendable {
             let id = data.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
             guard id == identity, active else { metadata("live.retired_packet", ["id": id]); return }
             guard !sealed, accepted - completed < 24000 else { throw ClientFailure("packet_window") }
+            if accepted == 0 { audio?.traceFirstPacket(bytes: data.count - 4) }
             try audio?.enqueue(Data(data.dropFirst(4))); accepted += 1440
         case .string(let text):
             guard let data = text.data(using: .utf8), data.count <= 16384,
@@ -110,7 +111,7 @@ final class LiveClient: @unchecked Sendable {
             switch event["type"] as? String {
             case "ready":
                 guard !ready else { throw ClientFailure("duplicate_ready") }
-                let audio = AudioPipeline(queue: queue); self.audio = audio; encoder = try OpusEncoder(rate: 16000)
+                let audio = AudioPipeline(queue: queue, diagnosticSessionID: sessionID); self.audio = audio; encoder = try OpusEncoder(rate: 16000)
                 audio.onPCM = { [weak self] in self?.inputPCM($0) }
                 audio.onFailure = { [weak self] _ in self?.fail("音频设备发生变化，请重新开始。") }
                 try audio.start(microphone: plan == nil)
@@ -126,7 +127,7 @@ final class LiveClient: @unchecked Sendable {
                 guard ready, !active, let id = event["id"] as? Int, id > identity else { throw ClientFailure("begin_identity") }
                 identity = id; accepted = 0; completed = 0; active = true; sealed = false; draining = false; transcript = ""
                 outputIndex = fixture?.index ?? -1
-                try audio?.begin(); let token = id
+                try audio?.begin(diagnosticID: id); let token = id
                 audio?.onCompleted = { [weak self] samples in
                     guard let self, !self.closed, self.active, self.identity == token else { return }
                     guard samples >= self.completed, samples <= self.accepted else { self.fail("播放回报异常，可重新开始。"); return }

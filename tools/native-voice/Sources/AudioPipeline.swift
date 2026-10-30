@@ -35,14 +35,18 @@ final class AudioPipeline {
     private(set) var aecEnabled = false
     private var inputVoiceProcessing = false, outputVoiceProcessing = false
     private(set) var presentationLatency = 0.0
+    private let diagnostics: AudioDiagnostics?
+    private var captureEvidence: AudioCaptureEvidence?
+    private var diagnosticPlaybackID = 0
 
     var captureStatistics: (callbacks: Int, samples: Int, peak: Double) {
         captureLock.lock(); defer { captureLock.unlock() }
         return (captureCallbacks, captureSamples, capturePeak)
     }
 
-    init(queue: DispatchQueue) {
+    init(queue: DispatchQueue, diagnosticSessionID: String? = nil) {
         self.queue = queue
+        diagnostics = AudioDiagnostics.make(sessionID: diagnosticSessionID)
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
@@ -62,14 +66,20 @@ final class AudioPipeline {
             let source = input.outputFormat(forBus: 0)
             metadata("microphone.format", ["sample_rate": source.sampleRate, "channels": source.channelCount,
                                            "interleaved": source.isInterleaved, "voice_processing_muted": input.isVoiceProcessingInputMuted])
+            if diagnostics != nil {
+                captureEvidence = AudioCaptureEvidence(channels: Int(source.channelCount), rate: source.sampleRate)
+                captureEvidence?.begin(playbackID: 0, generation: 0)
+                traceState("voice_processing_configured")
+            }
             let converter = try microphoneConverter(from: source)
             let target = converter.outputFormat
             self.converter = converter
-            input.installTap(onBus: 0, bufferSize: 1024, format: source) { [weak self] buffer, _ in
+            input.installTap(onBus: 0, bufferSize: 1024, format: source) { [weak self] buffer, time in
                 guard let self else { return }
                 self.captureLock.lock()
                 self.captureCallbacks += 1
                 self.captureSamples += Int(buffer.frameLength)
+                self.captureEvidence?.add(buffer, at: time)
                 if let channels = buffer.floatChannelData {
                     let count = Int(buffer.frameLength)
                     let channelCount = Int(buffer.format.channelCount)
@@ -103,6 +113,7 @@ final class AudioPipeline {
                 self.queue.async {
                     self.captureLock.lock(); self.capturePending -= 1; self.captureLock.unlock()
                     if pcm.isEmpty { self.onFailure?("microphone_conversion") } else { self.onPCM?(pcm) }
+                    self.traceCapture()
                 }
             }
             tapping = true
@@ -118,12 +129,25 @@ final class AudioPipeline {
                                       "output_voice_processing": outputVoiceProcessing,
                                       "presentation_latency_ms": presentationLatency * 1000,
                                       "output_sample_rate": engine.outputNode.outputFormat(forBus: 0).sampleRate])
+        traceState("engine_ready")
     }
-    func begin() throws {
+    func begin(diagnosticID: Int? = nil) throws {
         guard decoder == nil else { throw ClientFailure("decoder_overlap") }
+        traceCapture(force: true)
         generation += 1; segments.removeAll(); nextFrame = 0; accepted = 0; completed = 0
+        diagnosticPlaybackID = diagnosticID ?? 0 // 0 means no wire identity; generation remains local.
+        if diagnostics?.active == true {
+            captureLock.lock()
+            captureEvidence?.begin(playbackID: diagnosticPlaybackID, generation: generation)
+            captureLock.unlock()
+        }
         player.stop()
         decoder = try OpusDecoder(rate: 24000)
+        traceState("playback_begin")
+    }
+    func traceFirstPacket(bytes: Int) {
+        diagnostics?.note("first_packet_received", ["playback_id": diagnosticPlaybackID,
+            "generation": generation, "opus_bytes": bytes])
     }
     func enqueue(_ packet: Data) throws {
         guard let decoder else { throw ClientFailure("missing_decoder") }
@@ -142,6 +166,7 @@ final class AudioPipeline {
         segments.append(Segment(start: nextFrame, logical: accepted, count: pcm.count))
         let when = AVAudioTime(sampleTime: nextFrame, atRate: 24000)
         nextFrame += AVAudioFramePosition(pcm.count); accepted += pcm.count
+        if index == 0 { traceState("first_buffer_will_schedule") }
         player.scheduleBuffer(buffer, at: when, options: [], completionCallbackType: .dataPlayedBack) { [weak self] type in
             guard let self else { return }
             self.queue.async {
@@ -153,10 +178,17 @@ final class AudioPipeline {
                     contiguous += segment.count
                 }
                 self.completed = contiguous
+                // The external callback can synchronously end this playback or
+                // begin another. Preserve the completing buffer's state first.
+                let firstPlayed = index == 0 ? self.traceStateSnapshot("first_buffer_data_played") : nil
                 self.onCompleted?(contiguous)
+                if let firstPlayed { self.diagnostics?.note("audio_state", firstPlayed) }
             }
         }
-        if !player.isPlaying { player.play() }
+        if !player.isPlaying {
+            player.play()
+            traceState("player_play_invoked")
+        }
     }
     func played() throws -> Int {
         guard decoder != nil else { return 0 }
@@ -183,12 +215,59 @@ final class AudioPipeline {
     }
     func end() {
         // Called only after all accepted samples have dataPlayedBack evidence.
+        traceCapture(force: true)
+        traceState("playback_end")
         generation += 1; player.stop(); decoder = nil; segments.removeAll()
     }
     func stop() {
+        traceCapture(force: true)
+        traceState("audio_will_stop")
         generation += 1
         if tapping { engine.inputNode.removeTap(onBus: 0); tapping = false }
         player.stop(); engine.stop(); decoder = nil; converter = nil; segments.removeAll()
         onPCM = nil
+        if let diagnostics {
+            let captured = captureStatistics
+            diagnostics.note("session_stopped", ["capture_callbacks": captured.callbacks, "capture_frames": captured.samples], terminal: true)
+        }
+    }
+    private func traceCapture(force: Bool = false) {
+        guard let diagnostics, diagnostics.active else { return }
+        captureLock.lock()
+        let snapshot = captureEvidence?.snapshot(force: force)
+        captureLock.unlock()
+        if let snapshot { diagnostics.note("input_energy_window", snapshot) }
+    }
+    private func traceState(_ phase: String) {
+        if let state = traceStateSnapshot(phase) { diagnostics?.note("audio_state", state) }
+    }
+    private func traceStateSnapshot(_ phase: String) -> [String: Any]? {
+        guard let diagnostics, diagnostics.active else { return nil }
+        let queryStarted = ProcessInfo.processInfo.systemUptime
+        var fields: [String: Any] = ["phase": phase, "playback_id": diagnosticPlaybackID,
+            "generation": generation, "engine_running": engine.isRunning,
+            "observed_monotonic_ms": Int(queryStarted * 1000),
+            "player_playing": player.isPlaying, "accepted": accepted, "completed": completed,
+            "player_render": AudioDiagnostics.clock(player.lastRenderTime),
+            "output_render": AudioDiagnostics.clock(engine.outputNode.lastRenderTime),
+            "player_format": AudioDiagnostics.format(player.outputFormat(forBus: 0)),
+            "output_input_format": AudioDiagnostics.format(engine.outputNode.inputFormat(forBus: 0)),
+            "output_hardware_format": AudioDiagnostics.format(engine.outputNode.outputFormat(forBus: 0))]
+        let captured = captureStatistics
+        fields["capture_callbacks"] = captured.callbacks
+        fields["capture_frames"] = captured.samples
+        if tapping || captureEvidence != nil {
+            let input = engine.inputNode
+            fields["vp_input_enabled"] = input.isVoiceProcessingEnabled
+            fields["vp_output_enabled"] = engine.outputNode.isVoiceProcessingEnabled
+            fields["vp_bypassed"] = input.isVoiceProcessingBypassed
+            fields["vp_agc_enabled"] = input.isVoiceProcessingAGCEnabled
+            fields["vp_input_muted"] = input.isVoiceProcessingInputMuted
+            fields["input_hardware_format"] = AudioDiagnostics.format(input.inputFormat(forBus: 0))
+            fields["input_processed_format"] = AudioDiagnostics.format(input.outputFormat(forBus: 0))
+            fields["input_render"] = AudioDiagnostics.clock(input.lastRenderTime)
+        }
+        fields["state_query_ms"] = (ProcessInfo.processInfo.systemUptime - queryStarted) * 1000
+        return fields
     }
 }

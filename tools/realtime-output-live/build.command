@@ -10,7 +10,7 @@ chmod 700 "$out"
 xcrun clang -O2 -I"$opus_root/include/opus" -c "$common/OpusBridge.c" -o "$out/OpusBridge.o"
 xcrun swiftc -swift-version 5 -O -framework AppKit -framework AVFoundation \
   -import-objc-header "$common/OpusBridge.h" \
-  "$common/Sources/AudioPipeline.swift" "$common/Sources/MicrophonePCM.swift" \
+  "$common/Sources/AudioPipeline.swift" "$common/Sources/AudioDiagnostics.swift" "$common/Sources/MicrophonePCM.swift" \
   "$common/Sources/Opus.swift" "$common/Sources/PlaybackLedger.swift" \
   "$repo_root/tools/realtime-voice/Sources/Fixture.swift" "$src/DeviceIdentity.swift" "$src/LiveClient.swift" "$src/main.swift" \
   "$out/OpusBridge.o" -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" \

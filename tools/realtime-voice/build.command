@@ -15,7 +15,7 @@ xcrun swiftc -swift-version 5 "$common/Sources/PlaybackLedger.swift" "$source_di
 "$out_dir/state-spec"
 xcrun swiftc -swift-version 5 -O -framework AppKit -framework AVFoundation \
   -import-objc-header "$common/OpusBridge.h" \
-  "$common/Sources/AudioPipeline.swift" "$common/Sources/MicrophonePCM.swift" \
+  "$common/Sources/AudioPipeline.swift" "$common/Sources/AudioDiagnostics.swift" "$common/Sources/MicrophonePCM.swift" \
   "$common/Sources/Opus.swift" "$common/Sources/PlaybackLedger.swift" \
   "$source_dir"/Sources/*.swift "$out_dir/OpusBridge.o" \
   -L"$opus_root/lib" -lopus -Xlinker -rpath -Xlinker "$opus_root/lib" \
