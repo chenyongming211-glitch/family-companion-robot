@@ -45,6 +45,6 @@ Files: modify `firmware/tools/prepare_experiment.py`, `verify_experiment.py`, `.
 ## 5. 端到端与交接
 
 - [x] 云端验证该设备鉴权、跨设备凭据拒绝、真实模型/真实DMA完成回报、记录/近期记忆写入归属；原设备鉴权与构建回归通过，未自动操作原硬件。
-- [x] 实机按键进入对话，OLED/codec初始化及两轮上行/物理播放计数通过。用户确认两轮完整并可按键结束；95040/252000样本均sent=accepted=completed，i2s_dma/played。
+- [x] 实机按键进入对话，OLED/codec初始化及两轮上行/物理播放计数通过。用户确认两轮完整并可按键结束；95040/252000样本均sent=accepted=completed，i2s_dma/played。追加同C3重连加载2轮记忆、7个回答全量播放的后台证据；无新增逐轮真人反馈。
 - [ ] 重复结束/重连、音量实际调节、跨会话回忆、断网和长时间待机作为后续硬件验收；本轮两轮正常不外推这些结果。
 - [x] 更新 `docs/verification/2026-10-31-xmini-c3-button-entry.md` 与 `docs/DEVELOPMENT_HANDOFF.md`，区分实现、目标构建、安装和实机结果，列出剩余限制；随本轮收尾提交推送 main。
