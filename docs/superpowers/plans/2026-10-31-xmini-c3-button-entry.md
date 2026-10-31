@@ -33,17 +33,18 @@ Files: modify `firmware/tools/prepare_experiment.py`, `verify_experiment.py`, `.
 - [x] 用独立云端构建阶段生成 C3 native dependency candidate，审计 target 条件差异和关键版本后固定字节/摘要；最终正常构建不接受 lock 重写。
 - [x] 制备工具增加 `--target esp32c3`，其余默认保持 esp32s3。验证器按目标锁核对 provenance 与 native lock 字节，分别核对 C3 无 PSRAM/AFE/唤醒与正确分区。
 - [x] 先写 verifier 的错误 target、错误锁、缺播放能力、错误板型/地址/镜像容量拒绝用例，再实现。
-- [ ] 云端运行全 firmware host suite、上游脚本测试；提交推送 main，Actions 构建新 C3 和四旧目标。下载精确提交/variant 产物，核验镜像、分区、依赖、配置和 SHA256。
+- [x] 云端运行全 firmware host suite、上游脚本测试；提交推送 main，Actions 构建新 C3 和四旧目标。下载精确提交/variant 产物，核验镜像、分区、依赖、配置和 SHA256。
 
 ## 4. 独立设备登记与 USB 安装
 
-- [ ] 在服务器凭据表新增实际 Device-Id 与唯一 token，保留所有既有条目；准备 OTA 引导与回退，绝不输出 token。
-- [ ] 核对当前设备/固件分区兼容性，明确写入区和预期前后摘要；必要时迁移资源但保留 NVS/phy/storage/身份。
-- [ ] 用户网络资料可用时通过 USB 配置；不切换 Mac 到设备热点、不把网络凭据写进 Git。
-- [ ] 云端服务空闲时加载新凭据快照；仅在最终候选全部验证后刷写该 C3。启动前回读全部改动区与保留区，确认一致后才运行新应用。
+- [x] 在服务器凭据表新增实际 Device-Id 与唯一 token，保留所有既有条目；准备 OTA 引导与回退，绝不输出 token。
+- [x] 核对当前设备/固件分区兼容性，明确写入区和预期前后摘要；必要时迁移资源但保留 NVS/phy/storage/身份。
+- [x] 用户网络资料可用时通过 USB 配置；不切换 Mac 到设备热点、不把网络凭据写进 Git。
+- [x] 云端服务空闲时加载新凭据快照；仅在最终候选全部验证后刷写该 C3。启动前回读全部改动区与保留区，确认一致后才运行新应用。登记属主错误与初次串口重连回退均已处理；最终指定Wi-Fi、实际OTA VALID、激活及再次启动确认通过。
 
 ## 5. 端到端与交接
 
-- [ ] 云端验证该设备鉴权、跨设备凭据拒绝、真实模型/模拟完成回报、记录/记忆归属与原设备回归。
-- [ ] 实机按键进入对话，核对 OLED/codec/上行与物理播放计数，多轮结束/重连；真人听感与声学表现交由实际测试确认。
-- [ ] 更新 `docs/verification/2026-10-31-xmini-c3-button-entry.md` 与 `docs/DEVELOPMENT_HANDOFF.md`，区分实现、目标构建、安装和实机结果，列出剩余限制；提交推送 main。
+- [x] 云端验证该设备鉴权、跨设备凭据拒绝、真实模型/真实DMA完成回报、记录/近期记忆写入归属；原设备鉴权与构建回归通过，未自动操作原硬件。
+- [x] 实机按键进入对话，OLED/codec初始化及两轮上行/物理播放计数通过。用户确认两轮完整并可按键结束；95040/252000样本均sent=accepted=completed，i2s_dma/played。
+- [ ] 重复结束/重连、音量实际调节、跨会话回忆、断网和长时间待机作为后续硬件验收；本轮两轮正常不外推这些结果。
+- [x] 更新 `docs/verification/2026-10-31-xmini-c3-button-entry.md` 与 `docs/DEVELOPMENT_HANDOFF.md`，区分实现、目标构建、安装和实机结果，列出剩余限制；随本轮收尾提交推送 main。
