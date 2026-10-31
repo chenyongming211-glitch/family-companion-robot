@@ -52,6 +52,15 @@ The upstream manifest pins ESP-SR==2.4.7 exactly. If the modern kernel/profile i
 - [x] Resolve the exact abort and confirm the smallest correction. Old-source symbols match all1822864 instruction bytes; GNU addr2line confirms bad_alloc→vector→output SRC temporary.0013 retains C3's physical24k Opus output instead of recreating16k decode plus output SRC;6 focused checks GREEN. Cues, original codec profile and task stacks remain.
 - [x] Log C3 heap free/largest/minimum and input/Opus stack highwater at the existing periodic task diagnostic point, protecting Stop and failed-OTA restart task lifetimes.5 focused O2/ASan/UBSan cases passed. Actual load measurements remain part of installation/physical acceptance.
 - [x] Run focused GREEN and full cloud firmware/upstream checks, then independent spec/quality review.158 firmware checks and110 upstream checks passed; both reviews PASS. Server/VAD and other devices unchanged.
-- [ ] Complete corrected exact-target/other-variant builds and inspect the actual downloaded candidate.
+- [x] Complete corrected exact-target/other-variant builds and inspect the actual downloaded candidate.1cfaa30 five variants, stock and C3 symbol build passed; artifact13045035391/source/ELF/image/native pin/assets independently verified.
 - [x] Strengthen private installation verification to require15s after activation+idle with no panic/reboot/AEC fault; cover delayed abort and exact disarmed-selector rollback.23 cloud cases passed; new candidate source pin and actual installation remain pending.
 - [ ] Install the corrected verified candidate preserving stable app1, observe full startup, and only then request ordinary reply and speak-over-playback acceptance again. Initial user connection errors remain unaccepted until the corrected actual conversation passes.
+
+## Task 4: Bound live uplink handoff after exact second failure
+
+- [x] Record 1cf startup passing but actual sessions failing. Capture complete panic tail with the exact retained ELF; confirm1920B vector range-copy in c3_lite_uplink.inc rather than guessing from the exception wrapper. Automatically restore stable app1 and preserve all other flash.
+- [x] Add RED for output capacity bounded to one960-sample frame and buffer ownership transfer, preserving consecutive512-sample AEC output/order/tails and epoch close.6 GREEN cases, O2/ASan; observed old/new capacity1408/960 on identical input.
+- [x] Fill the C3 output buffer in bounded pieces; move a completed frame into the existing encoder callback and retain all remainder. Legacy branch,8/28KiB stacks, profile/rates, server/drain/receipt semantics remain.
+- [x] Run focused/full cloud checks and independent spec/quality review:164 firmware/110 upstream checks and both reviews PASS;24 private installation/8-second-tail regressions PASS.
+- [ ] Build exact candidate/other variants and verify downloaded artifacts, then install with stable fallback and full panic-tail retention.
+- [ ] Recheck actual connection/full response, echo and speak-over-playback after the concrete candidate is installed. Prior failed user trials remain failed.
