@@ -1,0 +1,56 @@
+name: C3 AEC resource probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build locked standalone probe, never product firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          EXPECTED_IDF=$(python3 -c 'import json;print(json.load(open("firmware/upstream.lock.json"))["idf_commit"])')
+          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
+          cp firmware/dependencies.esp32c3.lock firmware/probes/c3-aec/dependencies.lock
+          cd firmware/probes/c3-aec
+          idf.py set-target esp32c3
+          idf.py build
+          python3 - <<'PY'
+          import yaml
+          resolved=yaml.safe_load(open('dependencies.lock'))
+          locked=yaml.safe_load(open('../../dependencies.esp32c3.lock'))
+          assert resolved['target']==locked['target']=='esp32c3'
+          assert resolved['dependencies']['espressif/esp-sr']['version']=='2.4.7'
+          for name,dependency in resolved['dependencies'].items():
+              assert name in locked['dependencies'], name
+              original=locked['dependencies'][name]
+              for field in ('version','component_hash','source'):
+                  assert dependency.get(field)==original.get(field), (name,field)
+          print('Probe dependency subset matches product native lock')
+          PY
+          mkdir evidence
+          cp build/c3_aec_probe.bin build/c3_aec_probe.elf build/c3_aec_probe.map sdkconfig dependencies.lock evidence/
+          cp ../../dependencies.esp32c3.lock evidence/product-native.lock
+          cp managed_components/espressif__esp-sr/idf_component.yml evidence/sr-component.yml
+          cp managed_components/espressif__esp-sr/include/esp32c3/esp_aec.h evidence/
+          riscv32-esp-elf-nm -A -S managed_components/espressif__esp-sr/lib/esp32c3/libesp_audio_processor.a > evidence/sr-symbols.txt
+          sha256sum managed_components/espressif__esp-sr/lib/esp32c3/*.a > evidence/sr-library-sha256.txt
+          git -C "$IDF_PATH" rev-parse HEAD > evidence/idf-commit.txt
+          echo "$GITHUB_SHA" > evidence/source-sha.txt
+          cd evidence
+          sha256sum * > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: c3-aec-resource-probe-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: firmware/probes/c3-aec/evidence/
