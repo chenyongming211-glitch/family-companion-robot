@@ -60,7 +60,7 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
     auto* codec = Board::GetInstance().GetAudioCodec();
     if (strcmp(state->valuestring, "start") == 0) {
         if (id.playback <= playback_id_.playback) return false;
-#if CONFIG_XMINI_C3_BUTTON_ENTRY
+#if CONFIG_XMINI_C3_BUTTON_ENTRY && !CONFIG_XMINI_C3_VOICE_BARGE
         Application::GetInstance().GetAudioService().SetExperimentUplink(false);
 #endif
         // Runs before the next binary frame on this ordered WebSocket. A later

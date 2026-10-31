@@ -70,7 +70,7 @@ struct TestDisplay {void SetChatMessage(const char*,const char*){}};
 class Board {public:PowerSaveLevel power=PowerSaveLevel::PERFORMANCE;TestDisplay display;
     static Board& GetInstance(){static Board b;return b;}AudioCodec* GetAudioCodec(){return &codec;}
     void SetPowerSaveLevel(PowerSaveLevel p){power=p;}TestDisplay* GetDisplay(){return &display;}};
-class AudioService {public:bool preserve=false;int resets=0;void PreserveServerPlayback(bool b){preserve=b;}void ResetDecoder(){++resets;codec.PlaybackControl(AudioCodec::PlaybackOp::Reset);}};
+class AudioService {public:bool preserve=false,uplink=true;int resets=0;void SetExperimentUplink(bool b){uplink=b;}void PreserveServerPlayback(bool b){preserve=b;}void ResetDecoder(){++resets;codec.PlaybackControl(AudioCodec::PlaybackOp::Reset);}};
 enum AbortReason {kAbortReasonNone};
 class Protocol {public:virtual ~Protocol()=default;virtual void SendAbortSpeaking(AbortReason) {}
     virtual bool PlaybackNegotiated()const{return false;}
@@ -110,6 +110,9 @@ public:
     std::function<void(uint32_t)> on_audio_channel_closed_;
     void NotifyPlaybackClosed(uint32_t);uint32_t AudioChannelEpoch()const override;
     bool ResetPlaybackConnection(uint32_t expected=0,uint32_t* closed_epoch=nullptr);bool PlaybackNegotiated()const;
+#if CONFIG_XMINI_C3_BUTTON_ENTRY
+    bool PlaybackAllowsListening()const;
+#endif
     bool PlaybackDrainNegotiated()const override {std::lock_guard<std::mutex> lock(playback_mutex_);return playback_drain_negotiated_;}
     PlaybackEvent PlaybackEventIdentity(const cJSON*)const;bool PlaybackEventCurrent(PlaybackEvent)const override;
     bool HandlePlaybackTts(cJSON*,uint32_t);void DeliverAudio(std::unique_ptr<AudioStreamPacket>,uint32_t);
@@ -143,7 +146,11 @@ int main(){
     ws.on_incoming_audio_=[&](std::unique_ptr<AudioStreamPacket> p){frames.push_back(*p);};
     assert(!handle(tts("start",1.5).get()));
     assert(!handle(tts("start",1,"old").get()));
+    Application::GetInstance().audio_service_.uplink=true;
     auto first_start=tts("start"); assert(handle(first_start.get()));
+#if CONFIG_XMINI_C3_BUTTON_ENTRY
+    assert(Application::GetInstance().audio_service_.uplink==bool(CONFIG_XMINI_C3_VOICE_BARGE));
+#endif
     const auto first_event=ws.PlaybackEventIdentity(first_start.get());const auto first=first_event.identity;const auto token=codec.generation;
     ws.DeliverAudio(std::make_unique<AudioStreamPacket>(),ws.playback_connection_);
     ws.DeliverAudio(std::make_unique<AudioStreamPacket>(),ws.playback_connection_);
@@ -163,6 +170,9 @@ int main(){
     ws.SendAbortSpeaking(kAbortReasonNone);size_t count=frames.size();
     ws.DeliverAudio(std::make_unique<AudioStreamPacket>(),ws.playback_connection_);assert(frames.size()==count);
     ws.ResetPlaybackConnection();
+#if CONFIG_XMINI_C3_BUTTON_ENTRY
+    assert(!Application::GetInstance().audio_service_.uplink);
+#endif
     ws.playback_negotiated_=true;ws.session_id_="new";
     assert(!ws.HandlePlaybackTts(tts("start",99,"new").get(),first.connection));
     ws.DeliverAudio(std::make_unique<AudioStreamPacket>(),first.connection);

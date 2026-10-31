@@ -1,0 +1,274 @@
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1227,3 +1227,11 @@
+     help
+         Button starts continuous auto conversation. No local wake word or AEC.
+         Trusted completed-DMA playback and a half-duplex microphone gate.
++
++config XMINI_C3_VOICE_BARGE
++    bool "Xmini C3 standalone AEC with continuous playback-time capture"
++    default n
++    depends on XMINI_C3_BUTTON_ENTRY
++    help
++        Use matched completed-TX / physical-RX reference and standalone Lite AEC.
++        Keep the authorized button conversation uplink open through playback.
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -305,6 +305,13 @@
+ #endif
+         if (bits & MAIN_EVENT_CLOCK_TICK) {
+             clock_ticks_++;
++#if CONFIG_XMINI_C3_VOICE_BARGE
++            if(protocol_ && protocol_->IsAudioChannelOpened() &&
++               Board::GetInstance().GetAudioCodec()->ReferenceFaulted()) {
++                ESP_LOGE(TAG,"C3 reference/AEC fault; closing conversation");
++                RecoverListeningFailure();
++            }
++#endif
+             auto display = Board::GetInstance().GetDisplay();
+             display->UpdateStatusBar();
+
+@@ -529,6 +536,12 @@
+             // If upgrade failed, continue to normal operation
+         }
+
++#if CONFIG_XMINI_C3_VOICE_BARGE
++        if(Board::GetInstance().GetAudioCodec()->ReferenceFaulted()) {
++            ESP_LOGE(TAG,"C3 audio initialization failed; refusing OTA confirmation");
++            esp_restart();return;
++        }
++#endif
+         // No new version, mark the current version as valid
+         ota_->MarkCurrentVersionValid();
+         if (!ota_->HasActivationCode() && !ota_->HasActivationChallenge()) {
+@@ -1253,9 +1266,17 @@
+         listening_mode_ = kListeningModeAutoStop;
+ #endif
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
++    if (!protocol_ || !protocol_->IsAudioChannelOpened()) return;
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    if(audio_service_.C3Uplink().Capture()) {
++        // UI returns to Listening after each TTS block; retain its capture/DSP epoch.
++        ConfigureWakeWordForListening();return;
++    }
++#else
++    if(!protocol_->PlaybackAllowsListening())return;
++    if (!audio_service_.IsPlaybackIdle()) { pending_listening_start_ = true; return; }
++#endif
+     const auto reopen_revision = audio_service_.C3Uplink().Revision();
+-    if (!protocol_ || !protocol_->IsAudioChannelOpened() || !protocol_->PlaybackAllowsListening()) return;
+-    if (!audio_service_.IsPlaybackIdle()) { pending_listening_start_ = true; return; }
+ #endif
+     // Send the start listening command
+     if (!protocol_->SendStartListening(listening_mode_)) {
+@@ -1369,6 +1390,9 @@
+ }
+
+ ListeningMode Application::GetDefaultListeningMode() const {
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    return kListeningModeRealtime; // standalone Lite AEC, independent of the full AFE option
++#endif
+     if (aec_mode_ == kAecOff)
+         return kListeningModeAutoStop;
+ #if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -115,6 +115,10 @@
+         .skip_unhandled_events = true,
+     };
+     esp_timer_create(&audio_power_timer_args, &audio_power_timer_);
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    // Validate the scarce DSP allocation before activation can confirm OTA.
++    if(!InitializeAudioEngine())codec_->ReportReferenceFailure();
++#endif
+ }
+
+ void AudioService::Start() {
+@@ -208,13 +212,22 @@
+     audio_queue_cv_.notify_all();
+ }
+ bool AudioService::OpenC3Uplink(uint32_t revision) {
+-    return button_uplink_.Open(revision, [this] { ClearC3UplinkQueues(); });
++    const bool opened=button_uplink_.Open(revision, [this] { ClearC3UplinkQueues(); });
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    if(codec_)UpdateCaptureActive();
++#endif
++    return opened;
+ }
+ #endif
+ void AudioService::SetExperimentUplink(bool enabled, bool observer_tail) {
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+     (void)observer_tail;
+-    if (!enabled) button_uplink_.Close([this] { ClearC3UplinkQueues(); });
++    if (!enabled) {
++        button_uplink_.Close([this] { ClearC3UplinkQueues(); });
++#if CONFIG_XMINI_C3_VOICE_BARGE
++        if(codec_)UpdateCaptureActive(); // revoke paired RX now, before scheduled UI work
++#endif
++    }
+     return;
+ #endif
+     if (!codec_ || !codec_->ManagedCapture())
+@@ -254,9 +267,15 @@
+
+ bool AudioService::CaptureRequested() const {
+     const auto bits = xEventGroupGetBits(event_group_);
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    return !service_stopped_.load() &&
++           ((bits & AS_EVENT_AUDIO_TESTING_RUNNING) ||
++            (button_uplink_.Capture() && (bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING))));
++#else
+     return !service_stopped_.load() &&
+            (bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING |
+                     AS_EVENT_AUDIO_TESTING_RUNNING));
++#endif
+ }
+ void AudioService::UpdateCaptureActive() {
+     capture_activation_.Refresh([this] { return CaptureRequested(); },
+@@ -285,6 +304,19 @@
+         codec_->EnableInput(true);
+     }
+
++    const bool synchronized_capture=codec_->ManagedCapture()
++#if CONFIG_XMINI_C3_VOICE_BARGE
++        || true
++#endif
++        ;
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    const auto c3_generation=codec_->CaptureGeneration();
++    if(capture_generation_.load()!=c3_generation) {
++        capture_generation_.store(c3_generation);
++        std::lock_guard<std::mutex> lock(input_resampler_mutex_);
++        if(input_resampler_)esp_ae_rate_cvt_reset(input_resampler_);
++    }
++#endif
+     if (codec_->input_sample_rate() != sample_rate) {
+         data.resize(samples * codec_->input_sample_rate() / sample_rate * codec_->input_channels());
+         if (!codec_->InputData(data)) {
+@@ -311,14 +343,25 @@
+             UpdateExperimentGate();
+             return false;
+         }
+-        if (codec_->ManagedCapture() && input_resampler_ == nullptr)
++        if (synchronized_capture && input_resampler_ == nullptr) {
++#if CONFIG_XMINI_C3_VOICE_BARGE
++            codec_->ReportReferenceFailure();
++#endif
+             return false;
++        }
+         if (input_resampler_ != nullptr) {
+             std::lock_guard<std::mutex> lock(input_resampler_mutex_);
+             uint32_t in_sample_num = data.size() / codec_->input_channels();
+             uint32_t output_samples = 0;
+-            esp_ae_rate_cvt_get_max_out_sample_num(input_resampler_, in_sample_num,
++            const auto capacity_result=esp_ae_rate_cvt_get_max_out_sample_num(input_resampler_, in_sample_num,
+                                                    &output_samples);
++#if CONFIG_XMINI_C3_VOICE_BARGE
++            if(capacity_result!=0 || !output_samples || output_samples>family_robot::C3EchoStream::kMaxInput) {
++                codec_->ReportReferenceFailure();return false;
++            }
++#else
++            (void)capacity_result;
++#endif
+             auto resampled = std::vector<int16_t>(output_samples * codec_->input_channels());
+             uint32_t actual_output = output_samples;
+ #if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
+@@ -330,12 +373,12 @@
+ #if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
+             if(diag_probe)ESP_LOGI("WavePipeline", "resample end n=%u result=%d output=%u",diag_call,int(conversion_result),unsigned(actual_output));
+ #endif
+-            if (codec_->ManagedCapture() &&
++            if (synchronized_capture &&
+                 (conversion_result != 0 || actual_output > output_samples)) {
+                 codec_->ReportReferenceFailure();
+                 return false;
+             }
+-            if (codec_->ManagedCapture() && actual_output == 0)
++            if (synchronized_capture && actual_output == 0)
+                 return false;
+             resampled.resize(actual_output * codec_->input_channels());
+             data = std::move(resampled);
+@@ -347,6 +390,9 @@
+         }
+     }
+
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    if(c3_generation!=codec_->CaptureGeneration() || !codec_->ReferenceValid() || codec_->ReferenceFaulted())return false;
++#endif
+     if (codec_->SoftwareReference()) {
+         codec_->RecordDiagnostic(1, data.data(), data.size() / codec_->input_channels(),
+                                  codec_->input_channels(), capture_generation_.load());
+@@ -466,6 +512,9 @@
+             }
+         }
+
++#if CONFIG_XMINI_C3_VOICE_BARGE
++        if(codec_->ReferenceFaulted())SetExperimentUplink(false);
++#endif
+         // Read timeout/error should not terminate the input task.
+         vTaskDelay(pdMS_TO_TICKS(10));
+     }
+@@ -919,7 +968,11 @@
+ }
+
+ void AudioService::EnableVoiceProcessing(bool enable) {
+-    if (codec_->ManagedCapture() && IsAudioProcessorRunning() == enable)
++    if ((codec_->ManagedCapture()
++#if CONFIG_XMINI_C3_VOICE_BARGE
++         || true
++#endif
++         ) && IsAudioProcessorRunning() == enable)
+         return;
+     ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
+
+--- a/main/audio/engines/lite_audio_engine.cc
++++ b/main/audio/engines/lite_audio_engine.cc
+@@ -8,13 +8,24 @@
+ #define TAG "LiteAudioEngine"
+
+ LiteAudioEngine::LiteAudioEngine() = default;
+-LiteAudioEngine::~LiteAudioEngine() = default;
++LiteAudioEngine::~LiteAudioEngine() {
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    family_robot::C3LiteAec::Destroy(c3_aec_);
++#endif
++}
+
+ bool LiteAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmodel_list_t* models_list) {
+     codec_ = codec;
+     models_list_ = models_list;
+     frame_samples_ = frame_duration_ms * 16000 / 1000;
+     output_buffer_.reserve(frame_samples_);
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    if(!c3_aec_)c3_aec_=family_robot::C3LiteAec::Create();
++    if(!c3_aec_) {
++        ESP_LOGE(TAG,"C3 standalone AEC allocation or SDK contract failed");
++        codec_->ReportReferenceFailure();return false;
++    }
++#endif
+
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+     should_have_wake_word_ = false; // assets from the previous firmware cannot enable wake
+--- a/main/audio/engines/lite_audio_engine.h
++++ b/main/audio/engines/lite_audio_engine.h
+@@ -11,6 +11,9 @@
+
+ #include "audio_engine.h"
+
++#if CONFIG_XMINI_C3_VOICE_BARGE
++#include "c3_lite_aec.h"
++#endif
+ class EspWakeWord;
+
+ class LiteAudioEngine : public AudioEngine {
+@@ -59,6 +62,10 @@
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+     std::atomic<uint32_t> capture_epoch_{0};
+     uint32_t buffer_epoch_ = 0;
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    family_robot::C3LiteAec* c3_aec_ = nullptr;
++    uint32_t c3_capture_generation_ = 0;
++#endif
+ #endif
+     std::vector<int16_t> output_buffer_;
+     std::mutex output_mutex_;
