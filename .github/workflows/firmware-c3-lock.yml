@@ -1,0 +1,55 @@
+name: Inspect C3 native dependency lock
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Prepare locked source for dependency inspection
+        run: python3 firmware/tools/prepare_experiment.py
+      - name: Resolve C3 native dependency candidate without compiling firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          EXPECTED_IDF=$(python3 -c 'import json;print(json.load(open("firmware/upstream.lock.json"))["idf_commit"])')
+          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
+          git -C "$IDF_PATH" rev-parse HEAD > firmware/.cache/experiment/inspection-idf-commit.txt
+          cd firmware/.cache/experiment
+          python3 - <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('firmware_build', 'scripts/build.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module._configure_build('esp32c3', [
+              'CONFIG_BOARD_TYPE_XMINI_C3=y',
+              'CONFIG_WAKE_WORD_DISABLED=y',
+              'CONFIG_USE_ESP_WAKE_WORD=n',
+              'CONFIG_USE_AUDIO_PROCESSOR=n',
+              'CONFIG_USE_DEVICE_AEC=n',
+              'CONFIG_USE_SERVER_AEC=n',
+              'CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y',
+          ], 'xmini-c3', False)
+          PY
+      - name: Save dependency inspection records; these are not installable firmware
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: c3-dependency-inspection-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            firmware/.cache/experiment/dependencies.lock
+            firmware/.cache/experiment/sdkconfig
+            firmware/.cache/experiment/inspection-idf-commit.txt
+            firmware/.cache/experiment/.family-robot-source.json
+            firmware/.cache/experiment/managed_components/espressif__esp_codec_dev/
