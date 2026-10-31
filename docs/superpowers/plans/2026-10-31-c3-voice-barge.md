@@ -6,7 +6,7 @@
 
 **Architecture:** Establish the locked C3 AEC CPU/memory floor on actual hardware before integrating it with callback-owned TX playback and paired RX. Preserve the stable ota1 image as fallback; no server/device-policy change.
 
-**Tech Stack:** ESP32-C3 160MHz, ESP-IDF6.1, ESP-SR2.4.7, ESP codec/Opus, GitHub Actions and cloud host tests.
+**Tech Stack:** ESP32-C3 160MHz, ESP-IDF6.1, C3-only ESP-SR2.6.1 SR_LOW_COST (selected after rejecting the original2.4.7 resource result), ESP codec/Opus, GitHub Actions and cloud host tests.
 
 ## Task 1: Exact AEC feasibility gate
 
@@ -25,7 +25,8 @@ Files: firmware/probes/c3-aec/{CMakeLists.txt,sdkconfig.defaults,main/CMakeLists
 - [x] Extend C3 codec TX/RX DMA pairing with the existing bounded DuplexReference and cloud host failure tests. Keep old playback accounting and callback refill exclusive.
 - [x] Add aligned512-sample AEC buffering to Lite engine after shared MR resampling; retain partial frames and invalidate old capture epochs on close/reopen.
 - [x] Keep uplink live across playback with matching application realtime mode; server interruption/drain stays common. Preserve button close, volume, memory, actual receipts and old variants in code; physical behavior remains to verify.
-- [ ] Run cloud O2/ASan tests, exact-target builds and independent spec/quality reviews. Review physical echo suppression/double-talk and complete user interruption acceptance before reporting availability.
+- [x] Run cloud O2/ASan tests, exact-target builds and independent spec/quality reviews. Final enabled source4c5132f:147 firmware host checks,110 upstream script checks, all five variant builds and stock build passed; downloaded C3 image independently verified.
+- [ ] Install the verified candidate into inactive app0, verify activation/VALID and preservation, then review physical echo suppression/double-talk and complete user interruption acceptance before reporting availability.
 
 ### Product integration details
 
