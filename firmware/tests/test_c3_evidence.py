@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import struct
 import unittest
@@ -25,6 +26,12 @@ class C3EvidenceTests(unittest.TestCase):
         provenance = self.tree/'.family-robot-source.json'
         data = json.loads(provenance.read_text())
         data['dependencies_sha256'] = self.digest(self.tree/'dependencies.lock')
+        version = self.lock.get('esp_sr_version_esp32c3', self.lock['esp_sr_version'])
+        if version != self.lock['esp_sr_version']:
+            data['target_dependency_overrides'] = {'espressif/esp-sr': version}
+            manifest = self.tree/'main/idf_component.yml'
+            manifest.parent.mkdir()
+            manifest.write_text(f'dependencies:\n  espressif/esp-sr: =={version}\n')
         provenance.write_text(json.dumps(data))
         options = {
             'CONFIG_IDF_TARGET': '"esp32c3"', 'CONFIG_BOARD_TYPE_XMINI_C3': 'y',
@@ -72,12 +79,92 @@ class C3EvidenceTests(unittest.TestCase):
     def verify(self):
         return self.module.verify(self.firmware, self.tree, VARIANT, self.lock['idf_commit'])
 
+    def c3_dependency_override(self, native_version='2.6.1'):
+        self.lock['esp_sr_version_esp32c3'] = '2.6.1'
+        (self.firmware/'upstream.lock.json').write_text(json.dumps(self.lock))
+        native = self.tree/'dependencies.lock'
+        content, count = re.subn(r'(^  espressif/esp-sr:\n.*?^    version: )\S+',
+                                 lambda match: match[1] + native_version,
+                                 native.read_text(), flags=re.M | re.S)
+        self.assertEqual(count, 1)
+        native.write_text(content)
+        shutil.copyfile(native, self.firmware/'dependencies.esp32c3.lock')
+        expected_hash = self.digest(native)
+        (self.firmware/'dependencies.esp32c3.lock.sha256').write_text(expected_hash + '\n')
+        provenance = self.tree/'.family-robot-source.json'
+        data = json.loads(provenance.read_text())
+        data['dependencies_sha256'] = expected_hash
+        data['target_dependency_overrides'] = {'espressif/esp-sr': '2.6.1'}
+        provenance.write_text(json.dumps(data))
+        manifest = self.tree/'main/idf_component.yml'
+        manifest.parent.mkdir(exist_ok=True)
+        manifest.write_text('dependencies:\n  espressif/esp-sr: ==2.6.1\n')
+        return manifest, provenance
+
     def test_exact_c3_target_lock_and_layout_are_accepted(self):
         evidence = self.verify()
         self.assertEqual(evidence['board'], 'xmini/c3')
         self.assertEqual(evidence['dependency_lock_source'], 'dependencies.esp32c3.lock')
         self.assertEqual(evidence['partition_layout']['app_limit'], 0x2f0000)
         self.assertEqual(evidence['effective_config']['CONFIG_USE_DEVICE_AEC'], 'n')
+
+    def test_c3_override_requires_reviewed_native_version_and_prepared_manifest(self):
+        self.c3_dependency_override()
+        evidence = self.verify()
+        self.assertEqual(evidence['critical_versions']['espressif/esp-sr'], '2.6.1')
+
+    def test_c3_override_rejects_old_critical_version_even_with_reviewed_native_bytes(self):
+        self.c3_dependency_override(native_version='2.4.7')
+        with self.assertRaisesRegex(ValueError, 'critical component version mismatch: espressif/esp-sr'):
+            self.verify()
+
+    def test_c3_override_rejects_missing_wrong_or_extra_provenance_record(self):
+        _, provenance = self.c3_dependency_override()
+        original = json.loads(provenance.read_text())
+        for record in [None, {}, {'espressif/esp-sr': '2.4.7'},
+                       {'espressif/esp-sr': '2.6.1', 'other/component': '1.0.0'}]:
+            value = dict(original)
+            if record is None:
+                value.pop('target_dependency_overrides')
+            else:
+                value['target_dependency_overrides'] = record
+            provenance.write_text(json.dumps(value))
+            with self.subTest(record=record), self.assertRaisesRegex(ValueError, 'provenance'):
+                self.verify()
+
+    def test_c3_override_rejects_wrong_missing_duplicate_or_aliased_prepared_pin(self):
+        manifest, _ = self.c3_dependency_override()
+        for content in [None, 'dependencies:\n  espressif/esp-sr: ==2.4.7\n',
+                        'dependencies:\n  other/component: ==2.6.1\n',
+                        'dependencies:\n    espressif/esp-sr: ==2.6.1\n',
+                        'dependencies:\n' + '  espressif/esp-sr: ==2.6.1\n' * 2,
+                        'dependencies:\n  espressif/esp-sr: ==2.6.1\n  espressif/esp-sr: ==2.4.7\n']:
+            if content is None:
+                manifest.unlink()
+            else:
+                manifest.write_text(content)
+            with self.subTest(content=content), self.assertRaisesRegex(ValueError, 'manifest'):
+                self.verify()
+        manifest.unlink()
+        external = self.root/'external-manifest'
+        external.write_text('dependencies:\n  espressif/esp-sr: ==2.6.1\n')
+        manifest.symlink_to(external)
+        with self.assertRaisesRegex(ValueError, 'manifest'):
+            self.verify()
+
+    def test_c3_override_rejects_nonexact_lock_version(self):
+        self.c3_dependency_override()
+        self.lock['esp_sr_version_esp32c3'] = '^2.6.1'
+        (self.firmware/'upstream.lock.json').write_text(json.dumps(self.lock))
+        with self.assertRaisesRegex(ValueError, 'version'):
+            self.verify()
+
+    def test_c3_override_keeps_native_byte_drift_gate(self):
+        self.c3_dependency_override()
+        path = self.tree/'dependencies.lock'
+        path.write_bytes(path.read_bytes() + b'\n')
+        with self.assertRaisesRegex(ValueError, 'native dependencies.lock drift'):
+            self.verify()
 
     def test_s3_target_wake_aec_or_wrong_board_is_rejected(self):
         path = self.tree/'sdkconfig'; original = path.read_text()

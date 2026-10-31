@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,8 @@ def require_regular(path: Path) -> None:
 
 
 def prepare_experiment(archive: Path, destination: Path, lock: dict,
-                       patches: Path, overlays: Path, dependencies: Path) -> Path:
+                       patches: Path, overlays: Path, dependencies: Path,
+                       target: str = 'esp32s3') -> Path:
     """Publish a fresh experimental tree only after all controlled inputs apply."""
     refuse_existing(destination)
     require_regular(dependencies)
@@ -68,6 +70,15 @@ def prepare_experiment(archive: Path, destination: Path, lock: dict,
         'overlays': [],
         'dependencies_sha256': dependency_digest,
     }
+    overrides = {}
+    if target == 'esp32c3' and 'esp_sr_version_esp32c3' in lock:
+        previous_version = lock.get('esp_sr_version')
+        target_version = lock['esp_sr_version_esp32c3']
+        for version in (previous_version, target_version):
+            if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
+                raise ValueError('invalid exact ESP-SR version')
+        if target_version != previous_version:
+            overrides['espressif/esp-sr'] = target_version
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.prepare-experiment-', dir=destination.parent) as temporary:
         tree = Path(temporary) / 'source'
@@ -101,6 +112,20 @@ def prepare_experiment(archive: Path, destination: Path, lock: dict,
             shutil.copyfile(path, target)
             provenance['overlays'].append({'path': relative.as_posix(),
                                            'sha256': file_digest(target)})
+        if overrides:
+            manifest = tree / 'main/idf_component.yml'
+            require_regular(manifest)
+            if manifest.parent.is_symlink():
+                raise ValueError('symbolic component manifest parent is not allowed')
+            content = manifest.read_bytes()
+            old_pin = f'  espressif/esp-sr: =={previous_version}\n'.encode('ascii')
+            lines = content.splitlines(keepends=True)
+            component_keys = re.findall(rb'^[ \t]*espressif/esp-sr[ \t]*:', content, re.M)
+            if lines.count(old_pin) != 1 or len(component_keys) != 1:
+                raise ValueError('component manifest must contain exactly one locked ESP-SR pin')
+            new_pin = f'  espressif/esp-sr: =={target_version}\n'.encode('ascii')
+            manifest.write_bytes(b''.join(new_pin if line == old_pin else line for line in lines))
+            provenance['target_dependency_overrides'] = overrides
         # These records are controlled preparation output, never upstream overlays.
         refuse_existing(tree / '.family-robot-source.json')
         dependency_target = tree / 'dependencies.lock'
@@ -129,7 +154,8 @@ def main() -> int:
         prepared = prepare_experiment(
             archive, args.destination, lock, FIRMWARE / 'patches',
             FIRMWARE / 'overlays', FIRMWARE / (
-                'dependencies.esp32c3.lock' if args.target == 'esp32c3' else 'dependencies.lock'))
+                'dependencies.esp32c3.lock' if args.target == 'esp32c3' else 'dependencies.lock'),
+            target=args.target)
     except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError,
             subprocess.SubprocessError):
         print('prepare-experiment: experimental preparation failed', file=sys.stderr)

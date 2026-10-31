@@ -255,14 +255,34 @@ def verify(firmware, tree, variant, idf_commit):
                                patches=inputs(firmware/'patches', '*.patch'),
                                overlays=inputs(firmware/'overlays', '**/*'),
                                dependencies_sha256=expected_hash)
+    esp_sr_version = lock['esp_sr_version']
+    overrides = {}
+    if c3 and 'esp_sr_version_esp32c3' in lock:
+        target_version = lock['esp_sr_version_esp32c3']
+        for version in (esp_sr_version, target_version):
+            if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
+                raise ValueError('invalid exact ESP-SR version')
+        if target_version != esp_sr_version:
+            overrides['espressif/esp-sr'] = target_version
+            esp_sr_version = target_version
+            expected_provenance['target_dependency_overrides'] = overrides
     if json.loads((tree/'.family-robot-source.json').read_text()) != expected_provenance:
         raise ValueError('prepared source provenance mismatch')
+    if overrides:
+        manifest = tree/'main/idf_component.yml'
+        if manifest.is_symlink() or manifest.parent.is_symlink() or not manifest.is_file():
+            raise ValueError('missing/nonregular prepared component manifest')
+        content = manifest.read_bytes()
+        pin = f'  espressif/esp-sr: =={esp_sr_version}\n'.encode('ascii')
+        component_keys = re.findall(rb'^[ \t]*espressif/esp-sr[ \t]*:', content, re.M)
+        if content.splitlines(keepends=True).count(pin) != 1 or len(component_keys) != 1:
+            raise ValueError('prepared component manifest ESP-SR pin mismatch')
     # This is a version assertion on the EXACT checked-in, byte-validated native
     # lock, not a general YAML parser. IDF's component manager validates its schema.
     native = (tree/'dependencies.lock').read_text()
     if c3 and re.findall(r'^target: (\S+)\s*$', native, re.M) != ['esp32c3']:
         raise ValueError('native dependency target mismatch')
-    versions = {'espressif/esp-sr': lock['esp_sr_version'],
+    versions = {'espressif/esp-sr': esp_sr_version,
                 'espressif/esp_codec_dev': '1.6.2', 'idf': '6.1.0'}
     for name, version in versions.items():
         sections = re.findall(r'^  '+re.escape(name)+r':\n(.*?)(?=^  \S|\Z)', native, re.M | re.S)

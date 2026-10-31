@@ -83,6 +83,19 @@ class EvidenceTests(unittest.TestCase):
         config.write_text(config.read_text().replace('# CONFIG_USE_DEVICE_AEC is not set\n', ''))
         self.assertEqual(self.verify('m5stack-stopwatch')['effective_config']['CONFIG_STOPWATCH_SOFTWARE_AEC'], 'n')
 
+    def test_s3_ignores_optional_c3_dependency_override_and_keeps_old_pin(self):
+        original = self.verify()
+        provenance = (self.tree/'.family-robot-source.json').read_bytes()
+        manifest = self.tree/'main/idf_component.yml'
+        manifest.parent.mkdir()
+        manifest.write_text('dependencies:\n  espressif/esp-sr: ==2.4.7\n')
+        for version in ['2.6.1', 'invalid-unused-value']:
+            self.lock['esp_sr_version_esp32c3'] = version
+            (self.firmware/'upstream.lock.json').write_text(json.dumps(self.lock))
+            self.assertEqual(self.verify(), original)
+            self.assertEqual((self.tree/'.family-robot-source.json').read_bytes(), provenance)
+            self.assertEqual(manifest.read_text(), 'dependencies:\n  espressif/esp-sr: ==2.4.7\n')
+
     def xiaoman_assets(self, command='xiao man', model='mn7_cn'):
         index = json.dumps(dict(version=1, srmodels='srmodels.bin', multinet_model=dict(
             language='cn', duration=3000, threshold=0.2,

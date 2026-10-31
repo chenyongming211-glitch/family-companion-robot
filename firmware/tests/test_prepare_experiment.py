@@ -63,10 +63,24 @@ class ExperimentTests(unittest.TestCase):
         self.sibling.mkdir()
         (self.sibling / 'sentinel').write_bytes(b'keep temporary sibling\n')
 
-    def prepare(self):
+    def prepare(self, target=None):
+        options = {} if target is None else {'target': target}
         return self.module.prepare_experiment(
             self.archive, self.destination, self.lock, self.patches,
-            self.overlays, self.dependencies)
+            self.overlays, self.dependencies, **options)
+
+    def add_manifest(self, content=b'dependencies:\n  espressif/esp-sr: ==2.4.7\n'):
+        with tarfile.open(self.archive, 'w:gz') as output:
+            for name, data in [('main/value.txt', b'old\n'), ('main/idf_component.yml', content)]:
+                info = tarfile.TarInfo('source/' + name)
+                info.size = len(data)
+                output.addfile(info, io.BytesIO(data))
+        self.lock['archive_sha256'] = sha256(self.archive)
+        self.lock['esp_sr_version'] = '2.4.7'
+
+    def prepared_bytes(self):
+        return {path.relative_to(self.destination).as_posix(): path.read_bytes()
+                for path in self.destination.rglob('*') if path.is_file()}
 
     def assert_clean_failure(self, error):
         with self.assertRaises(error):
@@ -92,6 +106,94 @@ class ExperimentTests(unittest.TestCase):
     def test_real_patch_overlay_lock_and_provenance(self):
         self.assertEqual(self.prepare(), self.destination)
         self.assert_prepared()
+
+    def test_c3_override_changes_only_fresh_manifest_and_provenance(self):
+        self.add_manifest()
+        self.prepare()
+        original = self.prepared_bytes()
+        source_bytes = self.archive.read_bytes()
+        dependency_bytes = self.dependencies.read_bytes()
+        self.destination = self.destination.with_name('c3')
+        self.lock['esp_sr_version_esp32c3'] = '2.6.1'
+        self.prepare(target='esp32c3')
+        changed = self.prepared_bytes()
+        self.assertEqual({name for name in original if original[name] != changed[name]},
+                         {'main/idf_component.yml', '.family-robot-source.json'})
+        self.assertEqual(changed['main/idf_component.yml'],
+                         b'dependencies:\n  espressif/esp-sr: ==2.6.1\n')
+        provenance = json.loads(changed['.family-robot-source.json'])
+        self.assertEqual(provenance.pop('target_dependency_overrides'),
+                         {'espressif/esp-sr': '2.6.1'})
+        self.assertEqual(provenance, json.loads(original['.family-robot-source.json']))
+        self.assertEqual(self.archive.read_bytes(), source_bytes)
+        self.assertEqual(self.dependencies.read_bytes(), dependency_bytes)
+
+    def test_s3_ignores_c3_override_with_byte_identical_outputs(self):
+        self.add_manifest()
+        self.prepare()
+        original = self.prepared_bytes()
+        for override in ['2.6.1', 'invalid-unused-value']:
+            self.destination = self.destination.with_name('s3-' + override)
+            self.lock['esp_sr_version_esp32c3'] = override
+            self.prepare(target='esp32s3')
+            self.assertEqual(self.prepared_bytes(), original)
+
+    def test_c3_override_replaces_only_the_exact_manifest_line(self):
+        self.add_manifest(b'dependencies:\n  espressif/esp-sr: ==2.4.7\n'
+                          b'#  espressif/esp-sr: ==2.4.7\n')
+        self.lock['esp_sr_version_esp32c3'] = '2.6.1'
+        self.prepare(target='esp32c3')
+        self.assertEqual((self.destination / 'main/idf_component.yml').read_bytes(),
+                         b'dependencies:\n  espressif/esp-sr: ==2.6.1\n'
+                         b'#  espressif/esp-sr: ==2.4.7\n')
+
+    def test_c3_without_override_or_with_same_version_preserves_outputs(self):
+        self.add_manifest()
+        self.prepare()
+        original = self.prepared_bytes()
+        for override in [None, '2.4.7']:
+            self.destination = self.destination.with_name('c3-' + str(override))
+            if override is not None:
+                self.lock['esp_sr_version_esp32c3'] = override
+            self.prepare(target='esp32c3')
+            self.assertEqual(self.prepared_bytes(), original)
+
+    def test_c3_without_override_does_not_require_unused_global_version(self):
+        self.prepare()
+        original = self.prepared_bytes()
+        self.destination = self.destination.with_name('c3-no-version')
+        self.prepare(target='esp32c3')
+        self.assertEqual(self.prepared_bytes(), original)
+
+    def test_c3_override_rejects_wrong_missing_or_duplicate_manifest_pin_atomically(self):
+        for content in [b'dependencies:\n  espressif/esp-sr: ==2.4.6\n',
+                        b'dependencies:\n  other/component: ==2.4.7\n',
+                        b'dependencies:\n    espressif/esp-sr: ==2.4.7\n',
+                        b'dependencies:\n' + b'  espressif/esp-sr: ==2.4.7\n' * 2,
+                        b'dependencies:\n  espressif/esp-sr: ==2.4.7\n  espressif/esp-sr: ==2.6.1\n']:
+            self.add_manifest(content)
+            self.lock['esp_sr_version_esp32c3'] = '2.6.1'
+            with self.subTest(content=content), self.assertRaises(ValueError):
+                self.prepare(target='esp32c3')
+            self.assertFalse(os.path.lexists(self.destination))
+            self.assertEqual(list(self.destination.parent.iterdir()), [self.sibling])
+
+    def test_c3_override_rejects_nonexact_versions_atomically(self):
+        self.add_manifest()
+        for version in ['^2.6.1', '2.6', '2.6.1\n', '2.6.1; other/component: ==1.0.0',
+                        '２.６.１', '', None, 261, {'espressif/esp-sr': '2.6.1'}]:
+            self.lock['esp_sr_version_esp32c3'] = version
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                self.prepare(target='esp32c3')
+            self.assertFalse(os.path.lexists(self.destination))
+            self.assertEqual(list(self.destination.parent.iterdir()), [self.sibling])
+
+    def test_c3_override_validates_global_pin_version_atomically(self):
+        self.add_manifest()
+        self.lock.update(esp_sr_version='^2.4.7', esp_sr_version_esp32c3='2.6.1')
+        with self.assertRaises(ValueError):
+            self.prepare(target='esp32c3')
+        self.assertFalse(os.path.lexists(self.destination))
 
     def test_parent_git_repository_and_inherited_git_overrides_are_untouched(self):
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
@@ -291,6 +393,20 @@ class ExperimentTests(unittest.TestCase):
         provenance = json.loads((prepared / '.family-robot-source.json').read_text())
         self.assertEqual(provenance['dependencies_sha256'], hashlib.sha256(native).hexdigest())
         self.assertEqual((script.parent.parent / 'dependencies.lock').read_bytes(), self.dependencies.read_bytes())
+
+    def test_cli_c3_passes_target_to_manifest_preparation(self):
+        self.add_manifest()
+        self.lock['esp_sr_version_esp32c3'] = '2.6.1'
+        script = self.make_cli_fixture()
+        native = script.parent.parent / 'dependencies.esp32c3.lock'
+        shutil.copyfile(self.dependencies, native)
+        native.with_name(native.name + '.sha256').write_text(sha256(native) + '\n')
+        result = subprocess.run([sys.executable, str(script), '--target', 'esp32c3'],
+                                cwd=self.root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prepared = script.parent.parent / '.cache/experiment'
+        self.assertEqual((prepared / 'main/idf_component.yml').read_bytes(),
+                         b'dependencies:\n  espressif/esp-sr: ==2.6.1\n')
 
 
 if __name__ == '__main__':
