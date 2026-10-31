@@ -155,7 +155,7 @@ void app_main(void) {
     // The updated linear kernel provides a separate resource comparison; this
     // never certifies its acoustic residual suppression without a real speaker.
     aec_destroy(aec);aec=aec_create(16000,2,1,AEC_MODE_SR_LOW_COST);
-    if(aec && aec_get_chunksize(aec)==n) {
+    if(n>0 && n<=MAX_FRAME && aec && aec_get_chunksize(aec)==n) {
         random_state=0x12345678;codec_load(aec,n,0,AEC_MODE_SR_LOW_COST);
     } else printf("C3_AEC_PROBE loaded_failed linear_kernel\n");
 #endif
