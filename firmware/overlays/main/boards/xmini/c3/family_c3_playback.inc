@@ -26,6 +26,9 @@ uint32_t FamilyC3Codec::PlaybackGeneration() const {
 }
 bool FamilyC3Codec::PlaybackPoll(family_robot::PlaybackSnapshot& out) {
     portENTER_CRITICAL(&mux_);
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    CheckReferenceDeadlineLocked(esp_timer_get_time());
+#endif
     // A callback can validate its spacing only if another callback arrives.
     // Short sealed replies need this task-side deadline too. Arm from the
     // first pending PCM, rather than stale idle timestamps, and suspend when

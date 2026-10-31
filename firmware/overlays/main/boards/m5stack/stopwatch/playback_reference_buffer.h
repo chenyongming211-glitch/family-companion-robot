@@ -10,9 +10,11 @@ namespace family_robot {
 // Caller synchronizes every operation with one ISR/task-safe critical section,
 // including Reset, Read and diagnostic accessors. No internal locking is provided.
 // Indices describe the playback sample timeline, not arrival or network time.
-class PlaybackReferenceBuffer {
+template<size_t Capacity>
+class BoundedPlaybackReferenceBuffer {
 public:
-    static constexpr size_t kCapacity = 16000;
+    static constexpr size_t kCapacity = Capacity;
+    static_assert(Capacity > 0);
     enum class ReadStatus {
         Ready,
         NotYetAvailable,
@@ -21,9 +23,9 @@ public:
         InvalidRange,
     };
 
-    PlaybackReferenceBuffer() = default;
-    PlaybackReferenceBuffer(const PlaybackReferenceBuffer&) = delete;
-    PlaybackReferenceBuffer& operator=(const PlaybackReferenceBuffer&) = delete;
+    BoundedPlaybackReferenceBuffer() = default;
+    BoundedPlaybackReferenceBuffer(const BoundedPlaybackReferenceBuffer&) = delete;
+    BoundedPlaybackReferenceBuffer& operator=(const BoundedPlaybackReferenceBuffer&) = delete;
 
     void Reset(uint32_t generation) {
         generation_ = generation;
@@ -82,6 +84,8 @@ private:
     int64_t end_ = 0;
     uint32_t generation_ = 0;
 };
+
+using PlaybackReferenceBuffer = BoundedPlaybackReferenceBuffer<16000>;
 
 static_assert(sizeof(PlaybackReferenceBuffer) <= 32768);
 

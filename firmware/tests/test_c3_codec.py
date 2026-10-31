@@ -54,18 +54,18 @@ class C3CodecTests(unittest.TestCase):
             flags = ['c++', '-O2', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror',
                      '-pedantic', '-include', str(work/'platform.h'), '-I', str(work),
                      '-I', str(BOARD), '-I', str(FIRMWARE/'overlays/main/audio')]
-            for enabled in (1, 0):
-                with self.subTest(enabled=enabled):
-                    (work/'sdkconfig.h').write_text(f'#define CONFIG_XMINI_C3_BUTTON_ENTRY {enabled}\n')
-                    obj = work/f'codec-{enabled}.o'
+            for enabled, voice in ((1, 0), (0, 0), (1, 1), (0, 1)):
+                with self.subTest(enabled=enabled, voice=voice):
+                    (work/'sdkconfig.h').write_text(f'#define CONFIG_XMINI_C3_BUTTON_ENTRY {enabled}\n#define CONFIG_XMINI_C3_VOICE_BARGE {voice}\n')
+                    obj = work/f'codec-{enabled}-{voice}.o'
                     result = subprocess.run(flags+['-c', str(BOARD/'family_c3_codec.cc'),
                         '-o', str(obj)], capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     body = ('FamilyC3Codec codec(nullptr,0,24000,24000,0,0,0,0,0,0,1);'
                             'codec.Start();return codec.PlaybackSupported()?0:1;') if enabled else 'return 0;'
-                    caller = work/f'caller-{enabled}.cc'
+                    caller = work/f'caller-{enabled}-{voice}.cc'
                     caller.write_text('#include "family_c3_codec.h"\nint main(){'+body+'}\n')
-                    binary = work/f'standalone-{enabled}'
+                    binary = work/f'standalone-{enabled}-{voice}'
                     result = subprocess.run(flags+[str(caller), str(obj), '-o', str(binary)],
                                             capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)

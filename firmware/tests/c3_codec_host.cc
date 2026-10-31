@@ -30,7 +30,7 @@ constexpr int GPIO_NUM_NC=-1;
 struct i2s_event_data_t {void* dma_buf;size_t size;};
 struct Channel;
 using i2s_chan_handle_t=Channel*;
-struct i2s_event_callbacks_t {bool(*on_sent)(Channel*,i2s_event_data_t*,void*)=nullptr;};
+struct i2s_event_callbacks_t {bool(*on_sent)(Channel*,i2s_event_data_t*,void*)=nullptr;bool(*on_recv)(Channel*,i2s_event_data_t*,void*)=nullptr;};
 struct Clock {unsigned sample_rate_hz=24000;};
 struct StdSlot {
     int data_bit_width=16,slot_bit_width=16,slot_mode=1,slot_mask=1,ws_width=16;
@@ -48,6 +48,9 @@ struct Channel {
 };
 static int64_t now_us=1000000;
 static bool allocation_fails=false,registration_fails=false,read_fails=false;
+static unsigned allocation_calls=0,fail_allocation_call=0,registration_calls=0,fail_registration_call=0;
+static std::function<void(Channel*)> disable_hook;
+static std::function<void(const Channel&,const Channel&)> codec_destroy_hook;
 static bool initial_disable_fails=false,initial_enable_fails=false;
 static int drain_chunks=0,drain_error=0,drain_behavior=0,raw_writes=0,reads=0,drain_reads=0;
 static bool boundary_inflight=false;
@@ -59,17 +62,20 @@ static int64_t esp_timer_get_time(){return now_us;}
 static void vTaskDelay(int){now_us+=10000;if(delay_hook)delay_hook();}
 static void* heap_caps_malloc(size_t size,int caps){
     assert(caps==(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
-    return allocation_fails?nullptr:std::malloc(size);
+    ++allocation_calls;
+    return allocation_fails || allocation_calls==fail_allocation_call ? nullptr : std::malloc(size);
 }
 static void heap_caps_free(void* p){std::free(p);}
-static int i2s_channel_disable(Channel* c){if(c->disable_fails)return -1;c->enabled=false;return ESP_OK;}
+static int i2s_channel_disable(Channel* c){if(c->disable_fails)return -1;if(disable_hook)disable_hook(c);c->enabled=false;return ESP_OK;}
 static int i2s_channel_enable(Channel* c){if(c->enable_fails)return -1;c->enabled=true;return ESP_OK;}
 static int i2s_channel_get_info(Channel* c,i2s_chan_info_t* i){
     if(c->info_fails)return -1;
     *i=c->info;i->is_enabled=c->enabled;return ESP_OK;
 }
 static int i2s_channel_register_event_callback(Channel* c,i2s_event_callbacks_t* cb,void* arg){
-    assert(!c->enabled);if(registration_fails)return -1;c->callbacks=*cb;c->argument=arg;return ESP_OK;
+    assert(!c->enabled);++registration_calls;
+    if(registration_fails||registration_calls==fail_registration_call)return -1;
+    c->callbacks=*cb;c->argument=arg;return ESP_OK;
 }
 static int i2s_channel_read(Channel*,void* output,size_t n,size_t* count,int timeout){
     assert((timeout==0||timeout==100)&&n==480);*count=0;
@@ -110,7 +116,15 @@ public:
     virtual bool RealtimeEligible()const{return true;}
     virtual bool ReferenceFaulted()const{return false;}
     virtual void CaptureBoundary(){}
-    bool volume_loaded=false,input_enabled_=false,output_enabled_=false;
+    virtual void SetCaptureActive(bool){}
+    virtual uint32_t CaptureGeneration()const{return 0;}
+    virtual bool ReferenceValid()const{return true;}
+    virtual bool SoftwareReference()const{return false;}
+    virtual bool ManagedCapture()const{return SoftwareReference();}
+    virtual void NotifyAecReady(bool,uint32_t=0){}
+    virtual void ReportReferenceFailure(){}
+    bool volume_loaded=false,input_enabled_=false,output_enabled_=false,input_reference_=false;
+    int input_channels_=1;
 protected:
     virtual int Read(int16_t*,int)=0;
     virtual int Write(const int16_t*,int)=0;
@@ -123,6 +137,7 @@ public:
         tx.info={I2S_DIR_TX,I2S_COMM_MODE_STD,true,&rx,2880,768000,6144000,&tx_config};
         rx.info={I2S_DIR_RX,I2S_COMM_MODE_STD,true,&tx,2880,768000,6144000,&rx_config};
     }
+    ~Es8311AudioCodec()override{if(codec_destroy_hook)codec_destroy_hook(tx,rx);}
     void EnableInput(bool enable)override {
         assert(volume_loaded);if(enable==input_enabled_)return;
         input_enabled_=enable;++input_changes;Update();

@@ -7,11 +7,14 @@ namespace family_robot {
 // All calls serialized by the adapter's single portMUX. No heap or platform APIs.
 // 240 physical MONO16 frames = 10ms at 24k. Completion time anchors an epoch;
 // subsequent mapping uses integer sample positions, never rounded packet durations.
-class DuplexReference {
+template<size_t HistoryCapacity, size_t RxBlocks, int64_t HoldbackUs>
+class BoundedDuplexReference {
 public:
-    static constexpr size_t kBlock = 240, kRxBlocks = 16;
+    using Reference = BoundedPlaybackReferenceBuffer<HistoryCapacity>;
+    static constexpr size_t kBlock = 240, kRxBlocks = RxBlocks;
+    static_assert(HistoryCapacity >= kBlock && RxBlocks > 0 && HoldbackUs > 0);
     static constexpr int kRate = 24000, kMaxOffset = 2400;
-    static constexpr int64_t kHoldbackUs = 150000, kCadenceToleranceUs = 1500;
+    static constexpr int64_t kHoldbackUs = HoldbackUs, kCadenceToleranceUs = 1500;
     static constexpr int64_t kMaxClockErrorPpm = 1000, kRateWindowUs = 10000000;
     enum class Fault { None, Format, Sequence, Cadence, Overflow, Expired, Timeout, Setup };
     enum class Result { Ready, Wait, Warmup, Fault };
@@ -92,9 +95,9 @@ public:
         }
         // Read into a small task/ISR-shared scratch, not a second reference history.
         auto status = reference_.Read(generation_, first, scratch_.data(), n);
-        if (status == PlaybackReferenceBuffer::ReadStatus::NotYetAvailable)
+        if (status == Reference::ReadStatus::NotYetAvailable)
             return WaitOrFault(now, block.stamp);
-        if (status != PlaybackReferenceBuffer::ReadStatus::Ready) {
+        if (status != Reference::ReadStatus::Ready) {
             Fail(Fault::Expired);
             return Result::Fault;
         }
@@ -203,8 +206,8 @@ private:
         partial_ = 0;
     }
     // PCM history + reference scratch + TX clock/state metadata stay under32KiB.
-    static_assert(sizeof(PlaybackReferenceBuffer) + kBlock * sizeof(int16_t) + 160 <= 32768);
-    PlaybackReferenceBuffer reference_;
+    static_assert(sizeof(Reference) + kBlock * sizeof(int16_t) + 160 <= 32768);
+    Reference reference_;
     std::array<Block, kRxBlocks> rx_blocks_{};
     std::array<int16_t, kBlock> scratch_{};
     Clock tx_, rx_;
@@ -215,4 +218,5 @@ private:
     int64_t pairs_ = 0;
     bool capture_ = false, ready_ = false;
 };
+using DuplexReference = BoundedDuplexReference<16000, 16, 150000>;
 }  // namespace family_robot

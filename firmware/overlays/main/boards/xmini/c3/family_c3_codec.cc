@@ -13,4 +13,7 @@
 #include "family_c3_lifecycle.inc"
 #include "family_c3_playback.inc"
 #include "family_c3_dma.inc"
+#if CONFIG_XMINI_C3_VOICE_BARGE
+#include "family_c3_capture.inc"
+#endif
 #endif

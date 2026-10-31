@@ -8,8 +8,23 @@ FamilyC3Codec::FamilyC3Codec(void* bus,i2c_port_t port,int input_rate,int output
 }
 FamilyC3Codec::~FamilyC3Codec() {
     std::lock_guard<std::mutex> lock(lifecycle_);
-    portENTER_CRITICAL(&mux_);accepting_=false;portEXIT_CRITICAL(&mux_);
+    portENTER_CRITICAL(&mux_);accepting_=false;
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    reference_callbacks_armed_=false;capture_active_=false;ResetCaptureLocked();
+#endif
+    portEXIT_CRITICAL(&mux_);
     // Channel disable synchronizes against callbacks before their context dies.
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    for(auto* channel:{tx_handle_,rx_handle_}) {
+        i2s_chan_info_t info{};
+        if(i2s_channel_get_info(channel,&info)!=ESP_OK ||
+           (info.is_enabled && i2s_channel_disable(channel)!=ESP_OK))std::terminate();
+    }
+    i2s_event_callbacks_t empty{};
+    if(tx_callback_registered_ && i2s_channel_register_event_callback(tx_handle_,&empty,nullptr)!=ESP_OK)std::terminate();
+    if(rx_callback_registered_ && i2s_channel_register_event_callback(rx_handle_,&empty,nullptr)!=ESP_OK)std::terminate();
+    if(pair_) {pair_->~Pair();heap_caps_free(pair_);}
+#else
     if(callbacks_ok_) {
         i2s_chan_info_t info{};
         // A callback context must never be freed while a running interrupt can
@@ -19,16 +34,32 @@ FamilyC3Codec::~FamilyC3Codec() {
         i2s_event_callbacks_t callbacks{};
         if(i2s_channel_register_event_callback(tx_handle_,&callbacks,nullptr)!=ESP_OK)std::terminate();
     }
+#endif
     if(playback_) {playback_->~PlaybackProgress();heap_caps_free(playback_);}
 }
 void FamilyC3Codec::InitializePlayback(int input_rate,int output_rate) {
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    input_reference_=true;input_channels_=2; // logical MR only; ES8311 stays mono
+    auto* pair_memory=heap_caps_malloc(sizeof(Pair),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    if(pair_memory)pair_=new(pair_memory) Pair;
+#endif
     auto* memory=heap_caps_malloc(sizeof(family_robot::PlaybackProgress),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     if(memory)playback_=new(memory) family_robot::PlaybackProgress;
     const auto tx_off=i2s_channel_disable(tx_handle_);
     const auto rx_off=i2s_channel_disable(rx_handle_);
-    if(playback_ && input_rate==24000 && output_rate==24000 && tx_off==ESP_OK && rx_off==ESP_OK) {
+    if(playback_
+#if CONFIG_XMINI_C3_VOICE_BARGE
+       && pair_
+#endif
+       && input_rate==24000 && output_rate==24000 && tx_off==ESP_OK && rx_off==ESP_OK) {
         i2s_event_callbacks_t callbacks{};callbacks.on_sent=Sent;
         callbacks_ok_=i2s_channel_register_event_callback(tx_handle_,&callbacks,this)==ESP_OK;
+#if CONFIG_XMINI_C3_VOICE_BARGE
+        tx_callback_registered_=callbacks_ok_;
+        i2s_event_callbacks_t rx_callbacks{};rx_callbacks.on_recv=Received;
+        rx_callback_registered_=i2s_channel_register_event_callback(rx_handle_,&rx_callbacks,this)==ESP_OK;
+        callbacks_ok_=callbacks_ok_ && rx_callback_registered_;
+#endif
     }
     const auto tx_on=i2s_channel_enable(tx_handle_);
     const auto rx_on=i2s_channel_enable(rx_handle_);
@@ -36,6 +67,11 @@ void FamilyC3Codec::InitializePlayback(int input_rate,int output_rate) {
     if(setup_failed_) {portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);}
 }
 void FamilyC3Codec::FaultLocked() {
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    if(!faulted_) {capture_active_=false;ResetCaptureLocked();}
+    reference_callbacks_armed_=false;reference_valid_=false;aec_ready_generation_=UINT32_MAX;
+    if(pair_)pair_->Fail(Pair::Fault::Setup);
+#endif
     faulted_=true;accepting_=false;
     if(playback_)playback_->HardwareFault();
 }
@@ -105,7 +141,18 @@ bool FamilyC3Codec::VerifyHardware() {
     return true;
 }
 void FamilyC3Codec::OnDeviceEpoch(bool opened) {
-    portENTER_CRITICAL(&mux_);DisarmLocked();hardware_open_=opened;portEXIT_CRITICAL(&mux_);
+    portENTER_CRITICAL(&mux_);DisarmLocked();hardware_open_=opened;
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    reference_callbacks_armed_=false;ResetCaptureLocked();
+    if(opened && pair_ && !faulted_ && physical_generation_<UINT32_MAX-1) {
+        pair_->Begin(++physical_generation_,0);
+        reference_tx_us_=reference_rx_us_=esp_timer_get_time();
+        discard_tx_=discard_rx_=1; // first partial descriptors cannot anchor clocks
+        reference_callbacks_armed_=true;
+    } else if(opened)FaultLocked();
+    else capture_active_=false;
+#endif
+    portEXIT_CRITICAL(&mux_);
     if(!opened)return;
     const bool valid=VerifyHardware();
     portENTER_CRITICAL(&mux_);
@@ -185,11 +232,18 @@ int FamilyC3Codec::Write(const int16_t*,int) {
     portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);return 0;
 }
 bool FamilyC3Codec::InputData(std::vector<int16_t>& data) {
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    return InputPaired(data);
+#else
     std::lock_guard<std::mutex> lock(lifecycle_);
     if(data.empty() || data.size()>static_cast<size_t>(INT32_MAX))return false;
     return Read(data.data(),static_cast<int>(data.size()))==static_cast<int>(data.size()) && !ReferenceFaulted();
+#endif
 }
 void FamilyC3Codec::CaptureBoundary() {
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    portENTER_CRITICAL(&mux_);ResetCaptureLocked();portEXIT_CRITICAL(&mux_);
+#else
     std::lock_guard<std::mutex> lock(lifecycle_);
     if(!input_enabled_ || ReferenceFaulted())return;
     bool good=VerifyHardware();int16_t discard[family_robot::PlaybackProgress::kBlock];
@@ -212,6 +266,7 @@ void FamilyC3Codec::CaptureBoundary() {
         good=result==ESP_OK && bytes==sizeof(discard);
     }
     if(!good) {portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);}
+#endif
 }
 bool FamilyC3Codec::ReferenceFaulted() const {
     portENTER_CRITICAL(&mux_);const bool fault=faulted_;portEXIT_CRITICAL(&mux_);return fault;
