@@ -31,7 +31,7 @@ static int order_time(const void *a, const void *b) {
     const int64_t x=*(const int64_t*)a, y=*(const int64_t*)b;
     return (x>y)-(x<y);
 }
-static bool codec_load(aec_handle_t *aec,int n,int profile) {
+static bool codec_load(aec_handle_t *aec,int n,int profile,aec_mode_t mode) {
     void *encoder=NULL,*decoder=NULL;
     uint8_t *packet=NULL;
     bool good=false;
@@ -84,10 +84,10 @@ static bool codec_load(aec_handle_t *aec,int n,int profile) {
         vTaskDelay(1);
     }
     if(used!=0)goto end; // whole encoder/decoder frames share the measured window
-    printf("C3_AEC_PROBE loaded profile=%d blocks=%d samples=%d packets=%u aec_us=%"PRId64
+    printf("C3_AEC_PROBE loaded profile=%d aec_mode=%d blocks=%d samples=%d packets=%u aec_us=%"PRId64
            " encode_us=%"PRId64" decode_us=%"PRId64" total_cpu_us=%"PRId64
            " audio_budget_us=%"PRId64" max_combo_us=%"PRId64" decoded_energy=%"PRIu64" free=%u stack_min_free=%u\n",
-           profile,LOADED_BLOCKS,n,packets,aec_us,encode_us,decode_us,aec_us+encode_us+decode_us,
+           profile,(int)mode,LOADED_BLOCKS,n,packets,aec_us,encode_us,decode_us,aec_us+encode_us+decode_us,
            (int64_t)LOADED_BLOCKS*n*1000000/16000,max_combo_us,decoded_energy,
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
            (unsigned)uxTaskGetStackHighWaterMark(NULL));
@@ -149,8 +149,16 @@ void app_main(void) {
         if(!aec || aec_get_chunksize(aec)!=n) {
             printf("C3_AEC_PROBE loaded_failed profile=%d\n",profile);break;
         }
-        random_state=0x12345678;codec_load(aec,n,profile);
+        random_state=0x12345678;codec_load(aec,n,profile,mode);
     }
+#if CONFIG_C3_AEC_PROBE_FULL_DUPLEX
+    // The updated linear kernel provides a separate resource comparison; this
+    // never certifies its acoustic residual suppression without a real speaker.
+    aec_destroy(aec);aec=aec_create(16000,2,1,AEC_MODE_SR_LOW_COST);
+    if(aec && aec_get_chunksize(aec)==n) {
+        random_state=0x12345678;codec_load(aec,n,0,AEC_MODE_SR_LOW_COST);
+    } else printf("C3_AEC_PROBE loaded_failed linear_kernel\n");
+#endif
     aec_destroy(aec);
     printf("C3_AEC_PROBE done free=%u restarting_for_rollback\n",(unsigned)heap_caps_get_free_size(caps));
     fflush(stdout);vTaskDelay(pdMS_TO_TICKS(1000));esp_restart();
