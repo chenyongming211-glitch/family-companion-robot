@@ -140,6 +140,7 @@ void app_main(void) {
                (unsigned)heap_caps_get_minimum_free_size(caps));
         fflush(stdout);
     }
+    printf("C3_AEC_PROBE aec_stack_min_free=%u\n",(unsigned)uxTaskGetStackHighWaterMark(NULL));
     if(n>0 && n<=MAX_FRAME)codec_load(aec,n);
     aec_destroy(aec);
     printf("C3_AEC_PROBE done free=%u restarting_for_rollback\n",(unsigned)heap_caps_get_free_size(caps));
