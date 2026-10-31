@@ -1,6 +1,12 @@
 name: Inspect C3 native dependency lock
 on:
   workflow_dispatch:
+    inputs:
+      aec_version:
+        description: "Inspect a C3 dependency candidate; never install this output"
+        type: choice
+        options: ["2.4.7", "2.6.1"]
+        default: "2.4.7"
 permissions:
   contents: read
 jobs:
@@ -9,12 +15,14 @@ jobs:
     timeout-minutes: 30
     container:
       image: espressif/idf:v6.1
+    env:
+      AEC_VERSION: ${{ inputs.aec_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Prepare locked source for dependency inspection
-        run: python3 firmware/tools/prepare_experiment.py
+        run: python3 firmware/tools/prepare_experiment.py --target esp32c3
       - name: Resolve C3 native dependency candidate without compiling firmware
         shell: bash
         run: |
@@ -25,7 +33,15 @@ jobs:
           git -C "$IDF_PATH" rev-parse HEAD > firmware/.cache/experiment/inspection-idf-commit.txt
           cd firmware/.cache/experiment
           python3 - <<'PY'
-          import importlib.util
+          import importlib.util,os,pathlib
+          version=os.environ['AEC_VERSION']
+          assert version in ('2.4.7','2.6.1')
+          manifest=pathlib.Path('main/idf_component.yml')
+          original=manifest.read_text()
+          assert original.count('espressif/esp-sr: ==2.4.7')==1
+          manifest.write_text(original.replace('espressif/esp-sr: ==2.4.7',f'espressif/esp-sr: =={version}'))
+          pathlib.Path('inspection-manifest.yml').write_bytes(manifest.read_bytes())
+          pathlib.Path('inspection-aec-version.txt').write_text(version+'\n')
           spec = importlib.util.spec_from_file_location('firmware_build', 'scripts/build.py')
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
@@ -51,5 +67,8 @@ jobs:
             firmware/.cache/experiment/dependencies.lock
             firmware/.cache/experiment/sdkconfig
             firmware/.cache/experiment/inspection-idf-commit.txt
+            firmware/.cache/experiment/inspection-aec-version.txt
+            firmware/.cache/experiment/inspection-manifest.yml
             firmware/.cache/experiment/.family-robot-source.json
+            firmware/.cache/experiment/managed_components/espressif__esp-sr/idf_component.yml
             firmware/.cache/experiment/managed_components/espressif__esp_codec_dev/
