@@ -3,6 +3,9 @@
 bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected, uint32_t* closed_epoch) {
     std::lock_guard<std::mutex> lock(playback_mutex_);
     if (expected && expected != playback_connection_) return false;
+#if CONFIG_XMINI_C3_BUTTON_ENTRY
+    Application::GetInstance().GetAudioService().SetExperimentUplink(false);
+#endif
     // Never reuse a saturated epoch for another socket or close notification.
     if (playback_connection_ == UINT32_MAX || (!expected && playback_connection_ == UINT32_MAX - 1)) return false;
     // Saturation permanently disables receipts on this protocol object.
@@ -20,6 +23,12 @@ bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected, uint32_t* clo
 bool WebsocketProtocol::PlaybackNegotiated() const {
     std::lock_guard<std::mutex> lock(playback_mutex_); return playback_negotiated_;
 }
+#if CONFIG_XMINI_C3_BUTTON_ENTRY
+bool WebsocketProtocol::PlaybackAllowsListening() const {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    return playback_negotiated_ && !playback_receiving_;
+}
+#endif
 family_robot::PlaybackEvent WebsocketProtocol::PlaybackEventIdentity(const cJSON* root) const {
     // Metadata added only by the validated receive callback, not a later read of
     // current protocol state. Disconnect/new start cannot relabel scheduled UI.
@@ -51,6 +60,9 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
     auto* codec = Board::GetInstance().GetAudioCodec();
     if (strcmp(state->valuestring, "start") == 0) {
         if (id.playback <= playback_id_.playback) return false;
+#if CONFIG_XMINI_C3_BUTTON_ENTRY
+        Application::GetInstance().GetAudioService().SetExperimentUplink(false);
+#endif
         // Runs before the next binary frame on this ordered WebSocket. A later
         // scheduled UI start may not reset the decoder or relabel these frames.
         if (!playback_id_ || playback_receiving_)

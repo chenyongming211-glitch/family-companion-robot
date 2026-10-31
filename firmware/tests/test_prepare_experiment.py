@@ -277,6 +277,21 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(result.stderr, 'prepare-experiment: experimental preparation failed\n')
         self.assertFalse((script.parent.parent / '.cache/experiment').exists())
 
+    def test_cli_c3_uses_separate_pinned_dependency_bytes(self):
+        script = self.make_cli_fixture()
+        native = b'dependencies:\n  fixture:\n    version: 1.0.0\ntarget: esp32c3\n'
+        lock = script.parent.parent / 'dependencies.esp32c3.lock'
+        lock.write_bytes(native)
+        lock.with_name(lock.name + '.sha256').write_text(hashlib.sha256(native).hexdigest() + '\n')
+        result = subprocess.run([sys.executable, str(script), '--target', 'esp32c3'],
+                                cwd=self.root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prepared = script.parent.parent / '.cache/experiment'
+        self.assertEqual((prepared / 'dependencies.lock').read_bytes(), native)
+        provenance = json.loads((prepared / '.family-robot-source.json').read_text())
+        self.assertEqual(provenance['dependencies_sha256'], hashlib.sha256(native).hexdigest())
+        self.assertEqual((script.parent.parent / 'dependencies.lock').read_bytes(), self.dependencies.read_bytes())
+
 
 if __name__ == '__main__':
     unittest.main()

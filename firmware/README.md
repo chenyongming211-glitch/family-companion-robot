@@ -183,6 +183,59 @@ again when the user returns before any separately authorized installation.
 
 ## Experimental source preparation
 
+### Xmini C3 button entry
+
+The independent `xmini-c3-family` variant uses board directory `xmini/c3`,
+ESP32-C3, ES8311 mono16/24k audio, SSD1306 OLED and the original GPIO wiring.
+It is a button-start, half-duplex terminal for the same Go Realtime product.
+Local wake words, AFE, AEC and the color orb are disabled. This variant always
+uses WebSocket; retained old MQTT credentials cannot select another transport.
+Its compiled OTA URL is empty. USB provisioning must supply the product
+bootstrap URL and this device's own WebSocket credentials before first boot.
+The button ends an
+active conversation, including while the assistant is speaking. Playback-period
+capture is not sent upstream; completed playback restores listening. Opus work
+keeps a capture epoch through encoding and transport, so closed/reopened input
+cannot send an old frame or mix its partial PCM with a new capture.
+
+`FamilyC3Codec` reuses the bounded playback ledger with callback-owned DMA.
+Only actual TX descriptor completion counts as played. Its RX boundary drains
+queued audio and discards the next completed descriptor before fresh capture.
+There is no S3 reference buffer or AEC task. Allocation, callback, format,
+timing and read faults invalidate evidence rather than claiming completion.
+The product variant does not execute the upstream board's eFuse write.
+
+Prepare and build on a cloud host or Actions in the exact locked SDK:
+
+```sh
+python3 firmware/tools/prepare_experiment.py --target esp32c3
+cd firmware/.cache/experiment
+python3 scripts/build.py xmini/c3 --name xmini-c3-family --language zh-CN --zip
+```
+
+C3 uses `dependencies.esp32c3.lock` and its adjacent SHA256; default preparation
+still uses the original S3 lock. The C3 lock was captured in an isolated IDF
+configure run. Shared component versions/hashes are unchanged; target conditions
+remove unsupported S3 components and add the upstream C3 servo-controller
+dependencies. Those dependencies do not add a product servo feature. The manual
+dependency-inspection workflow produces inspection records only, never an
+installable or approved firmware package.
+
+The dedicated `partitions/xmini-c3-family-16m.csv` preserves the observed 2.2.6
+layout: NVS `0x9000+0x4000`, otadata `0xd000+0x2000`, PHY `0xf000+0x1000`,
+two `0x2f0000` application slots at `0x20000` and `0x310000`, and a 2MiB
+asset partition at `0x600000`. The upper 8MiB is unallocated and retained.
+Oversize app/assets fail verification; no automatic repartitioning occurs.
+The verifier checks native dependency bytes, effective board/target settings,
+C3 image chip IDs, source/binary layouts, image capacity and flash addresses.
+These addresses describe the new build; inspect the actual device backup before
+deciding which regions may be written. Do not install an S3 merged image.
+
+Target compilation, installation/readback and physical audio acceptance are
+separate gates. See the [approved scope](../docs/superpowers/specs/2026-10-31-xmini-c3-button-entry-design.md)
+and [implementation plan](../docs/superpowers/plans/2026-10-31-xmini-c3-button-entry.md)
+for current execution boundaries.
+
 Prepare a fresh experimental tree from the same locked upstream archive:
 
 ```sh

@@ -16,17 +16,25 @@ jobs:
         include:
           - variant: m5stack-stopwatch
             board: m5stack/stopwatch
+            target: esp32s3
           - variant: m5stack-stopwatch-software-aec
             board: m5stack/stopwatch
+            target: esp32s3
           - variant: m5stack-stopwatch-xiaoman
             board: m5stack/stopwatch
+            target: esp32s3
           - variant: esp32-s3-touch-amoled-2.16-xiaoman
             board: waveshare/esp32-s3-touch-amoled-2.16
+            target: esp32s3
+          - variant: xmini-c3-family
+            board: xmini/c3
+            target: esp32c3
     container:
       image: espressif/idf:v6.1
     env:
       VARIANT: ${{ matrix.variant }}
       BOARD: ${{ matrix.board }}
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -34,7 +42,7 @@ jobs:
       - name: Run firmware host tests (synthetic loopback only)
         run: python3 -m unittest discover -s firmware/tests -v
       - name: Prepare fresh patched source in this isolated matrix job
-        run: python3 firmware/tools/prepare_experiment.py
+        run: python3 firmware/tools/prepare_experiment.py --target "$TARGET"
       - name: Build selected board and variant from patched source
         shell: bash
         run: |

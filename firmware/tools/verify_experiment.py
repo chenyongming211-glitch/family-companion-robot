@@ -16,14 +16,17 @@ import subprocess
 
 FIRMWARE = Path(__file__).resolve().parents[1]
 WAVESHARE_VARIANT = 'esp32-s3-touch-amoled-2.16-xiaoman'
-VARIANTS = ('m5stack-stopwatch', 'm5stack-stopwatch-software-aec', 'm5stack-stopwatch-xiaoman', WAVESHARE_VARIANT)
+C3_VARIANT = 'xmini-c3-family'
+VARIANTS = ('m5stack-stopwatch', 'm5stack-stopwatch-software-aec', 'm5stack-stopwatch-xiaoman', WAVESHARE_VARIANT, C3_VARIANT)
 VARIANT_BOARDS = {variant: 'm5stack/stopwatch' for variant in VARIANTS[:3]}
 VARIANT_BOARDS[WAVESHARE_VARIANT] = 'waveshare/esp32-s3-touch-amoled-2.16'
+VARIANT_BOARDS[C3_VARIANT] = 'xmini/c3'
 CANONICAL_RELEASE_NAMES = {
     'm5stack-stopwatch': 'm5stack-stopwatch',
     'm5stack-stopwatch-software-aec': 'm5stack-stopwatch-software-aec',
     'm5stack-stopwatch-xiaoman': 'm5stack-stopwatch-xiaoman',
     WAVESHARE_VARIANT: 'waveshare-'+WAVESHARE_VARIANT,
+    C3_VARIANT: C3_VARIANT,
 }
 BUILD_FILES = ('build/xiaozhi.bin', 'build/merged-binary.bin', 'build/generated_assets.bin',
                'build/bootloader/bootloader.bin', 'build/partition_table/partition-table.bin',
@@ -169,14 +172,83 @@ def verify_waveshare_layout(tree):
         assets_bytes=sizes['generated_assets.bin'], app_limit=0x300000, assets_limit=0x600000)
 
 
+def verify_c3_layout(tree):
+    """Check the C3 retained table, source CSV, chip headers and flash addresses."""
+    expected = [('nvs', 1, 2, 0x9000, 0x4000), ('otadata', 1, 0, 0xd000, 0x2000),
+                ('phy_init', 1, 1, 0xf000, 0x1000), ('ota_0', 0, 0x10, 0x20000, 0x2f0000),
+                ('ota_1', 0, 0x11, 0x310000, 0x2f0000), ('assets', 1, 0x82, 0x600000, 0x200000)]
+    table = tree/'build/partition_table/partition-table.bin'
+    data = table.read_bytes()
+    if not 32 <= len(data) <= 0x1000 or len(data) % 32:
+        raise ValueError('invalid C3 partition table size')
+    entries, checksum = [], False
+    for position in range(0, len(data), 32):
+        entry = data[position:position+32]
+        if entry[:2] == b'\xeb\xeb':
+            checksum = (entry[2:16] == b'\xff'*14 and entry[16:] == hashlib.md5(data[:position]).digest()
+                        and data[position+32:] == b'\xff'*(len(data)-position-32))
+            break
+        magic, typ, sub, offset, size, label, flags = struct.unpack('<HBBII16sI', entry)
+        if magic != 0x50aa or flags or not size or offset+size > 0x1000000:
+            raise ValueError('invalid C3 partition entry')
+        entries.append((label.rstrip(b'\0').decode('ascii'), typ, sub, offset, size))
+    if not checksum or entries != expected:
+        raise ValueError('C3 partition layout/checksum differs from native contract')
+    def number(value):
+        value = value.strip()
+        if value[-1:].upper() in ('K', 'M'):
+            return int(value[:-1], 0)*(1024 if value[-1:].upper() == 'K' else 1024*1024)
+        return int(value, 0)
+    csv_rows, previous = [], 0x9000
+    types = {'app': 0, 'data': 1}
+    subs = {'nvs': 2, 'ota': 0, 'phy': 1, 'ota_0': 0x10, 'ota_1': 0x11, 'spiffs': 0x82}
+    for row in csv.reader((tree/'partitions/xmini-c3-family-16m.csv').read_text().splitlines()):
+        if not row or row[0].lstrip().startswith('#'): continue
+        if len(row) not in (5, 6) or (len(row) == 6 and row[5].strip()):
+            raise ValueError('invalid C3 partition CSV')
+        name, typ, sub, offset, size = [value.strip() for value in row[:5]]
+        alignment = 0x10000 if typ == 'app' else 0x1000
+        offset = number(offset) if offset else (previous+alignment-1)//alignment*alignment
+        size = number(size)
+        csv_rows.append((name, types[typ], subs[sub], offset, size)); previous = offset+size
+    if csv_rows != expected:
+        raise ValueError('C3 partition CSV differs from binary contract')
+    sizes = {}
+    for name, limit in [('xiaozhi.bin', 0x2f0000), ('generated_assets.bin', 0x200000)]:
+        size = (tree/'build'/name).stat().st_size
+        if not 0 < size <= limit: raise ValueError('C3 artifact exceeds partition: '+name)
+        sizes[name] = size
+    for relative in ['xiaozhi.bin', 'bootloader/bootloader.bin']:
+        image = tree/'build'/relative
+        with image.open('rb') as source: header = source.read(24)
+        if len(header) != 24 or header[0] != 0xe9 or struct.unpack_from('<H', header, 12)[0] != 5:
+            raise ValueError('C3 image chip header mismatch: '+relative)
+    files = json.loads((tree/'build/flasher_args.json').read_text())['flash_files']
+    locations = {}
+    wanted = {'xiaozhi.bin': 0x20000, 'generated_assets.bin': 0x600000,
+              'bootloader.bin': 0, 'partition-table.bin': 0x8000}
+    for offset, name in files.items():
+        basename = Path(name).name
+        if basename in wanted:
+            if basename in locations: raise ValueError('duplicate C3 flashed artifact')
+            locations[basename] = int(offset, 0)
+    if locations != wanted: raise ValueError('C3 flasher addresses differ from partition contract')
+    return dict(partition_table_sha256=digest(table), partitions=[dict(
+        name=name, type=typ, subtype=sub, offset=offset, size=size)
+        for name, typ, sub, offset, size in entries], app_bytes=sizes['xiaozhi.bin'],
+        assets_bytes=sizes['generated_assets.bin'], app_limit=0x2f0000, assets_limit=0x200000)
+
+
 def verify(firmware, tree, variant, idf_commit):
     if variant not in VARIANTS:
         raise ValueError('unknown variant')
     lock = json.loads((firmware/'upstream.lock.json').read_text())
     if idf_commit != lock['idf_commit']:
         raise ValueError('SDK commit mismatch')
-    expected_hash = (firmware/'dependencies.lock.sha256').read_text().strip()
-    if (digest(firmware/'dependencies.lock') != expected_hash
+    c3 = variant == C3_VARIANT
+    dependency_name = 'dependencies.esp32c3.lock' if c3 else 'dependencies.lock'
+    expected_hash = (firmware/(dependency_name+'.sha256')).read_text().strip()
+    if (digest(firmware/dependency_name) != expected_hash
             or digest(tree/'dependencies.lock') != expected_hash):
         raise ValueError('native dependencies.lock drift; deliberate changes require a reviewed pin')
     expected_provenance = dict(upstream_commit=lock['commit'], archive_sha256=lock['archive_sha256'],
@@ -188,6 +260,8 @@ def verify(firmware, tree, variant, idf_commit):
     # This is a version assertion on the EXACT checked-in, byte-validated native
     # lock, not a general YAML parser. IDF's component manager validates its schema.
     native = (tree/'dependencies.lock').read_text()
+    if c3 and re.findall(r'^target: (\S+)\s*$', native, re.M) != ['esp32c3']:
+        raise ValueError('native dependency target mismatch')
     versions = {'espressif/esp-sr': lock['esp_sr_version'],
                 'espressif/esp_codec_dev': '1.6.2', 'idf': '6.1.0'}
     for name, version in versions.items():
@@ -209,7 +283,7 @@ def verify(firmware, tree, variant, idf_commit):
     waveshare = variant == WAVESHARE_VARIANT
     experiment = variant == 'm5stack-stopwatch-software-aec' or variant == 'm5stack-stopwatch-xiaoman'
     xiaoman = variant == 'm5stack-stopwatch-xiaoman' or waveshare
-    usb_console = experiment or waveshare
+    usb_console = experiment or waveshare or c3
     required = {'CONFIG_IDF_TARGET': '"esp32s3"',
                 'CONFIG_BOARD_TYPE_M5STACK_STOPWATCH': 'n' if waveshare else 'y',
                 'CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16': 'y' if waveshare else 'n',
@@ -233,6 +307,18 @@ def verify(firmware, tree, variant, idf_commit):
         effective.setdefault('CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG', 'n')
     if waveshare:
         required.update(CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y')
+    if c3:
+        required.update(CONFIG_IDF_TARGET='"esp32c3"', CONFIG_BOARD_TYPE_M5STACK_STOPWATCH='n',
+                        CONFIG_BOARD_TYPE_XMINI_C3='y', CONFIG_XMINI_C3_BUTTON_ENTRY='y',
+                        CONFIG_SPIRAM='n', CONFIG_USE_AUDIO_PROCESSOR='n', CONFIG_USE_DEVICE_AEC='n',
+                        CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y',
+                        CONFIG_PARTITION_TABLE_CUSTOM_FILENAME='"partitions/xmini-c3-family-16m.csv"',
+                        CONFIG_WAKE_WORD_DISABLED='y', CONFIG_USE_ESP_WAKE_WORD='n',
+                        CONFIG_USE_AFE_WAKE_WORD='n', CONFIG_USE_CUSTOM_WAKE_WORD='n',
+                        CONFIG_OTA_URL='""', CONFIG_SECURE_BOOT='n',
+                        CONFIG_SECURE_FLASH_ENC_ENABLED='n', CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK='n')
+        for key, value in required.items():
+            if value == 'n': effective.setdefault(key, 'n')
     if experiment:
         try:
             offset = int(effective['CONFIG_STOPWATCH_AEC_OFFSET_SAMPLES'])
@@ -265,6 +351,9 @@ def verify(firmware, tree, variant, idf_commit):
     evidence = dict(variant=variant, board=VARIANT_BOARDS[variant], idf_commit=idf_commit, critical_versions=versions,
                     dependencies_sha256=expected_hash, effective_config=required,
                     acoustic_acceptance='pending')
+    if c3:
+        evidence['dependency_lock_source'] = dependency_name
+        evidence['partition_layout'] = verify_c3_layout(tree)
     if waveshare:
         evidence['partition_layout'] = verify_waveshare_layout(tree)
     if xiaoman:
@@ -292,8 +381,9 @@ def bundle(firmware, tree, output, source_sha, evidence):
         target = output/relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(tree/relative, target)
-    for name in ['upstream.lock.json', 'dependencies.lock.sha256']:
-        shutil.copyfile(firmware/name, output/name)
+    shutil.copyfile(firmware/'upstream.lock.json', output/'upstream.lock.json')
+    dependency_pin = 'dependencies.esp32c3.lock.sha256' if evidence['variant'] == C3_VARIANT else 'dependencies.lock.sha256'
+    shutil.copyfile(firmware/dependency_pin, output/'dependencies.lock.sha256')
     (output/'third_party').mkdir()
     shutil.copyfile(firmware/'third_party/xiaozhi-LICENSE', output/'third_party/xiaozhi-LICENSE')
     shutil.copyfile(firmware.parent/'THIRD_PARTY_NOTICES.txt', output/'THIRD_PARTY_NOTICES.txt')

@@ -118,6 +118,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', type=Path)
     parser.add_argument('--destination', type=Path, default=FIRMWARE / '.cache/experiment')
+    parser.add_argument('--target', choices=('esp32s3', 'esp32c3'), default='esp32s3')
     args = parser.parse_args()
     try:
         refuse_existing(args.destination)
@@ -127,7 +128,8 @@ def main() -> int:
             download_archive(lock['archive_url'], archive, lock['archive_sha256'])
         prepared = prepare_experiment(
             archive, args.destination, lock, FIRMWARE / 'patches',
-            FIRMWARE / 'overlays', FIRMWARE / 'dependencies.lock')
+            FIRMWARE / 'overlays', FIRMWARE / (
+                'dependencies.esp32c3.lock' if args.target == 'esp32c3' else 'dependencies.lock'))
     except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError,
             subprocess.SubprocessError):
         print('prepare-experiment: experimental preparation failed', file=sys.stderr)

@@ -1,0 +1,447 @@
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1218,3 +1218,12 @@
+ endmenu
+
+ endmenu
++
++config XMINI_C3_BUTTON_ENTRY
++    bool "Xmini C3 product button entry with trusted playback"
++    default n
++    depends on IDF_TARGET_ESP32C3 && BOARD_TYPE_XMINI_C3
++    depends on !USE_AUDIO_PROCESSOR && !I2S_ISR_IRAM_SAFE
++    help
++        Button starts continuous auto conversation. No local wake word or AEC.
++        Trusted completed-DMA playback and a half-duplex microphone gate.
+--- a/main/boards/xmini/c3/config.json
++++ b/main/boards/xmini/c3/config.json
+@@ -11,6 +11,37 @@
+                 "CONFIG_USE_ESP_WAKE_WORD=y",
+                 "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y"
+             ]
++        },
++        {
++            "name": "xmini-c3-family",
++            "sdkconfig_append": [
++                "CONFIG_BOARD_TYPE_XMINI_C3=y",
++                "CONFIG_XMINI_C3_BUTTON_ENTRY=y",
++                "CONFIG_PM_ENABLE=y",
++                "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y",
++                "CONFIG_OTA_URL=\"\"",
++                "CONFIG_SECURE_BOOT=n",
++                "CONFIG_SECURE_FLASH_ENC_ENABLED=n",
++                "CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK=n",
++                "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y",
++                "CONFIG_PARTITION_TABLE_CUSTOM=y",
++                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/xmini-c3-family-16m.csv\"",
++                "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",
++                "CONFIG_WAKE_WORD_DISABLED=y",
++                "CONFIG_USE_ESP_WAKE_WORD=n",
++                "CONFIG_USE_AFE_WAKE_WORD=n",
++                "CONFIG_USE_CUSTOM_WAKE_WORD=n",
++                "CONFIG_SR_WN_WN9S_NIHAOXIAOZHI=n",
++                "CONFIG_USE_AUDIO_PROCESSOR=n",
++                "CONFIG_USE_DEVICE_AEC=n",
++                "CONFIG_USE_SERVER_AEC=n",
++                "CONFIG_I2S_ISR_IRAM_SAFE=n",
++                "CONFIG_XIAOMAN_ORB_UI=n",
++                "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y",
++                "CONFIG_ESP_CONSOLE_UART_DEFAULT=n",
++                "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y",
++                "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n"
++            ]
+         }
+     ]
+-}
+\ No newline at end of file
++}
+--- a/main/boards/xmini/c3/xmini_c3_board.cc
++++ b/main/boards/xmini/c3/xmini_c3_board.cc
+@@ -1,5 +1,8 @@
+ #include "wifi_board.h"
+ #include "codecs/es8311_audio_codec.h"
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++#include "family_c3_codec.h"
++#endif
+ #include "display/oled_display.h"
+ #include "application.h"
+ #include "button.h"
+@@ -165,8 +168,10 @@
+     }
+
+     void InitializeTools() {
++#if !CONFIG_XMINI_C3_BUTTON_ENTRY
+         press_to_talk_tool_ = new PressToTalkMcpTool();
+         press_to_talk_tool_->Initialize();
++#endif
+     }
+
+ public:
+@@ -179,7 +184,9 @@
+
+         // 避免使用错误的固件，把 EFUSE 操作放在最后
+         // 把 ESP32C3 的 VDD SPI 引脚作为普通 GPIO 口使用
++#if !CONFIG_XMINI_C3_BUTTON_ENTRY
+         esp_efuse_write_field_bit(ESP_EFUSE_VDD_SPI_AS_GPIO);
++#endif
+     }
+
+     virtual Led* GetLed() override {
+@@ -192,7 +199,12 @@
+     }
+
+     virtual AudioCodec* GetAudioCodec() override {
+-        static Es8311AudioCodec audio_codec(codec_i2c_bus_, I2C_NUM_0, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++        static FamilyC3Codec audio_codec(
++#else
++        static Es8311AudioCodec audio_codec(
++#endif
++codec_i2c_bus_, I2C_NUM_0, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+             AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
+             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR);
+         return &audio_codec;
+--- a/main/audio/codecs/es8311_audio_codec.cc
++++ b/main/audio/codecs/es8311_audio_codec.cc
+@@ -200,7 +200,7 @@
+
+ int Es8311AudioCodec::Read(int16_t* dest, int samples) {
+     if (input_enabled_) {
+-#if CONFIG_STOPWATCH_SOFTWARE_AEC
++#if CONFIG_STOPWATCH_SOFTWARE_AEC || CONFIG_XMINI_C3_BUTTON_ENTRY
+         if (esp_codec_dev_read(dev_, (void*)dest, samples * sizeof(int16_t)) != ESP_CODEC_DEV_OK)
+             return 0;
+ #else
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -567,6 +567,9 @@
+
+     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
+
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    protocol_ = std::make_unique<WebsocketProtocol>();
++#else
+     if (ota_->HasMqttConfig()) {
+         protocol_ = std::make_unique<MqttProtocol>();
+     } else if (ota_->HasWebsocketConfig()) {
+@@ -575,6 +578,8 @@
+         ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
+         protocol_ = std::make_unique<MqttProtocol>();
+     }
++
++#endif
+
+     protocol_->OnConnected([this]() { DismissAlert(); });
+
+@@ -836,6 +841,13 @@
+         return;
+     }
+
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
++        audio_service_.SetExperimentUplink(false);
++        protocol_->CloseAudioChannel();
++        return;
++    }
++#endif
+     if (state == kDeviceStateIdle) {
+         ListeningMode mode = GetDefaultListeningMode();
+         if (!protocol_->IsAudioChannelOpened()) {
+@@ -1097,6 +1109,10 @@
+
+             // Make sure the audio processor is running
+             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++                // Ordered start/stop can coalesce UI events; the gate owns capture permission.
++                !audio_service_.C3Uplink().Capture() ||
++#endif
+                 (board.GetAudioCodec()->ManagedCapture() &&
+                  listening_mode_ != kListeningModeRealtime)) {
+                 // For auto mode, wait for the playback queue to drain before enabling
+@@ -1236,12 +1252,21 @@
+         !codec->RealtimeEligible())
+         listening_mode_ = kListeningModeAutoStop;
+ #endif
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    const auto reopen_revision = audio_service_.C3Uplink().Revision();
++    if (!protocol_ || !protocol_->IsAudioChannelOpened() || !protocol_->PlaybackAllowsListening()) return;
++    if (!audio_service_.IsPlaybackIdle()) { pending_listening_start_ = true; return; }
++#endif
+     // Send the start listening command
+     if (!protocol_->SendStartListening(listening_mode_)) {
+         RecoverListeningFailure();
+         return;
+     }
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    if (!audio_service_.OpenC3Uplink(reopen_revision)) return;
++#else
+     audio_service_.SetExperimentUplink(true, listening_mode_ != kListeningModeRealtime);
++#endif
+     audio_service_.EnableVoiceProcessing(true);
+
+     ConfigureWakeWordForListening();
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -1,5 +1,6 @@
+ #ifndef PROTOCOL_H
+ #define PROTOCOL_H
++#include "sdkconfig.h"
+
+ #include <cJSON.h>
+ #include "playback_progress.h"
+@@ -18,6 +19,9 @@
+     family_robot::PlaybackIdentity receipt_id{};
+     uint32_t receipt_first = 0;
+     uint32_t output_generation = 0;
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    uint32_t uplink_epoch = 0;
++#endif
+
+ };
+
+@@ -64,6 +68,9 @@
+     virtual uint32_t AudioChannelEpoch() const { return 0; }
+     virtual bool PlaybackNegotiated() const { return false; }
+     virtual bool PlaybackDrainNegotiated() const { return false; }
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    virtual bool PlaybackAllowsListening() const { return true; }
++#endif
+     virtual family_robot::PlaybackEvent PlaybackEventIdentity(const cJSON*) const { return {}; }
+     virtual bool PlaybackEventCurrent(family_robot::PlaybackEvent) const { return true; }
+     virtual void SendPlayback(const family_robot::PlaybackSnapshot&) {}
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -1,5 +1,6 @@
+ #ifndef AUDIO_SERVICE_H
+ #define AUDIO_SERVICE_H
++#include "sdkconfig.h"
+
+ #include <atomic>
+ #include <chrono>
+@@ -22,6 +23,9 @@
+ #include "audio_debugger.h"
+ #include "audio_engine.h"
+ #include "experiment_gate.h"
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++#include "button_uplink.h"
++#endif
+ #include "fixed_queue.h"
+ #include "ogg_demuxer.h"
+ #include "protocol.h"
+@@ -149,6 +153,10 @@
+     void EnableAudioTesting(bool enable);
+     void EnableDeviceAec(bool enable);
+     void SetExperimentUplink(bool enabled, bool observer_tail = false);
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    family_robot::ButtonUplink& C3Uplink() { return button_uplink_; }
++    bool OpenC3Uplink(uint32_t revision);
++#endif
+
+ #if CONFIG_XIAOMAN_ORB_UI
+     family_robot::OrbAudioActivity GetOrbAudioActivity();
+@@ -175,6 +183,11 @@
+     std::atomic<uint32_t> orb_gate_epoch_{0}; // UI-only lifecycle publication
+ #endif
+     family_robot::ExperimentGate experiment_gate_;
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    family_robot::ButtonUplink button_uplink_;
++    uint32_t button_input_epoch_ = 0; // single audio input task
++    void ClearC3UplinkQueues();
++#endif
+     family_robot::UplinkAuthorization experiment_authorization_;
+     family_robot::CaptureActivation capture_activation_;
+     family_robot::ObserverTail observer_tail_;
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -174,6 +174,9 @@
+ }
+
+ void AudioService::Stop() {
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    SetExperimentUplink(false);
++#endif
+     esp_timer_stop(audio_power_timer_);
+     service_stopped_.store(true);
+     UpdateCaptureActive();
+@@ -197,7 +200,23 @@
+     }
+ }
+
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++void AudioService::ClearC3UplinkQueues() {
++    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
++    audio_encode_queue_.clear();
++    audio_send_queue_.clear();
++    audio_queue_cv_.notify_all();
++}
++bool AudioService::OpenC3Uplink(uint32_t revision) {
++    return button_uplink_.Open(revision, [this] { ClearC3UplinkQueues(); });
++}
++#endif
+ void AudioService::SetExperimentUplink(bool enabled, bool observer_tail) {
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    (void)observer_tail;
++    if (!enabled) button_uplink_.Close([this] { ClearC3UplinkQueues(); });
++    return;
++#endif
+     if (!codec_ || !codec_->ManagedCapture())
+         return;
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+@@ -426,8 +445,23 @@
+         if (bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
+             int samples = 160;  // 10ms
+             std::vector<int16_t> data;
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++            const auto epoch = button_uplink_.Capture();
++            if (!epoch) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
++            if (epoch != button_input_epoch_) {
++                if (!codec_->input_enabled()) codec_->EnableInput(true);
++                codec_->CaptureBoundary(); // discard playback-period RX backlog on this input task
++                if (codec_->ReferenceFaulted()) { SetExperimentUplink(false); continue; }
++                button_input_epoch_ = epoch;
++            }
++#endif
+             if (ReadAudioData(data, 16000, samples)) {
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++                if (!button_uplink_.Allows(epoch)) continue;
++                audio_engine_->FeedCaptured(std::move(data), epoch);
++#else
+                 audio_engine_->FeedCaptured(std::move(data), capture_generation_.load());
++#endif
+                 continue;
+             }
+         }
+@@ -621,6 +655,10 @@
+                     if (task.type == kAudioTaskTypeEncodeToSendQueue) {
+                         {
+                             std::lock_guard<std::mutex> lock2(audio_queue_mutex_);
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++                            if (!button_uplink_.Allows(task.uplink_epoch)) continue;
++                            packet->uplink_epoch = task.uplink_epoch;
++#endif
+                             if (codec_->ManagedCapture() &&
+                                 (!experiment_gate_.Allows(task.uplink_epoch) ||
+                                  capture_generation_ != codec_->CaptureGeneration()))
+@@ -714,6 +752,12 @@
+         /* Push the task to the encode queue */
+         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++        if (type == kAudioTaskTypeEncodeToSendQueue) {
++            task.uplink_epoch = audio_engine_->OutputEpoch();
++            if (!button_uplink_.Allows(task.uplink_epoch)) return;
++        }
++#endif
+         if (codec_->ManagedCapture() && type == kAudioTaskTypeEncodeToSendQueue) {
+             task.uplink_epoch = audio_engine_->OutputEpoch();
+             if (!experiment_gate_.Allows(task.uplink_epoch))
+@@ -786,6 +830,12 @@
+
+ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    if (!button_uplink_.Capture()) {
++        audio_send_queue_.clear();
++        return nullptr;
++    }
++#endif
+     if (codec_->ManagedCapture() && (!experiment_gate_.Allows(experiment_gate_.epoch()) ||
+                                         capture_generation_ != codec_->CaptureGeneration())) {
+         audio_send_queue_.clear();
+--- a/main/audio/engines/lite_audio_engine.h
++++ b/main/audio/engines/lite_audio_engine.h
+@@ -1,5 +1,6 @@
+ #ifndef LITE_AUDIO_ENGINE_H
+ #define LITE_AUDIO_ENGINE_H
++#include "sdkconfig.h"
+
+ #include <atomic>
+ #include <functional>
+@@ -19,6 +20,10 @@
+
+     bool Initialize(AudioCodec* codec, int frame_duration_ms, srmodel_list_t* models_list) override;
+     void Feed(std::vector<int16_t>&& data) override;
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    void FeedCaptured(std::vector<int16_t>&& data, uint32_t generation) override;
++    uint32_t OutputEpoch() const override { return capture_epoch_.load(); }
++#endif
+
+     void EnableWakeWordDetection(bool enable) override;
+     void EnableVoiceProcessing(bool enable) override;
+@@ -51,6 +56,10 @@
+     std::atomic<bool> wake_word_enabled_ = false;
+     std::atomic<bool> voice_processing_enabled_ = false;
+     int frame_samples_ = 0;
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    std::atomic<uint32_t> capture_epoch_{0};
++    uint32_t buffer_epoch_ = 0;
++#endif
+     std::vector<int16_t> output_buffer_;
+     std::mutex output_mutex_;
+     mutable std::mutex wake_word_mutex_;
+--- a/main/audio/engines/lite_audio_engine.cc
++++ b/main/audio/engines/lite_audio_engine.cc
+@@ -16,10 +16,14 @@
+     frame_samples_ = frame_duration_ms * 16000 / 1000;
+     output_buffer_.reserve(frame_samples_);
+
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    should_have_wake_word_ = false; // assets from the previous firmware cannot enable wake
++#else
+     should_have_wake_word_ = models_list != nullptr &&
+         esp_srmodel_filter(models_list, ESP_WN_PREFIX, nullptr) != nullptr;
+ #if CONFIG_USE_ESP_WAKE_WORD
+     should_have_wake_word_ = should_have_wake_word_ || models_list == nullptr;
++#endif
+ #endif
+     {
+         std::lock_guard<std::mutex> lock(wake_word_mutex_);
+@@ -160,6 +164,9 @@
+     return true;
+ }
+
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++#include "c3_lite_uplink.inc"
++#else
+ void LiteAudioEngine::OutputRawAudio(const std::vector<int16_t>& data) {
+     if (!output_callback_ || codec_ == nullptr) {
+         return;
+@@ -187,3 +194,4 @@
+         }
+     }
+ }
++#endif
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -24,6 +24,9 @@
+ }
+
+ bool WebsocketProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    return Application::GetInstance().GetAudioService().C3Uplink().Send(packet->uplink_epoch, [&] {
++#endif
+     if (websocket_ == nullptr || !websocket_->IsConnected()) {
+         return false;
+     }
+@@ -53,6 +56,9 @@
+     } else {
+         return websocket_->Send(packet->payload.data(), packet->payload.size(), true);
+     }
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    });
++#endif
+ }
+
+ bool WebsocketProtocol::SendText(const std::string& text) {
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -19,6 +19,9 @@
+     bool Start() override;
+     uint32_t AudioChannelEpoch() const override;
+     bool PlaybackNegotiated() const override;
++#if CONFIG_XMINI_C3_BUTTON_ENTRY
++    bool PlaybackAllowsListening() const override;
++#endif
+     bool PlaybackDrainNegotiated() const override {
+         std::lock_guard<std::mutex> lock(playback_mutex_);
+         return playback_drain_negotiated_;
