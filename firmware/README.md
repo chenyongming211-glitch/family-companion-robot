@@ -210,7 +210,7 @@ Prepare and build on a cloud host or Actions in the exact locked SDK:
 ```sh
 python3 firmware/tools/prepare_experiment.py --target esp32c3
 cd firmware/.cache/experiment
-python3 scripts/build.py xmini/c3 --name xmini-c3-family --language zh-CN --zip
+python3 scripts/build.py xmini/c3 --name xmini-c3-family --language zh-CN --wake-word disabled --zip
 ```
 
 C3 uses `dependencies.esp32c3.lock` and its adjacent SHA256; default preparation

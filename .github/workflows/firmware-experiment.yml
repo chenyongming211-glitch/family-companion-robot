@@ -54,7 +54,11 @@ jobs:
           idf.py --version
           cd firmware/.cache/experiment
           python3 -m unittest discover -s scripts/tests -v
-          python3 scripts/build.py "$BOARD" --name "$VARIANT" --language zh-CN --zip
+          BUILD_ARGS=()
+          if [[ "$VARIANT" == xmini-c3-family ]]; then
+            BUILD_ARGS+=(--wake-word disabled)
+          fi
+          python3 scripts/build.py "$BOARD" --name "$VARIANT" --language zh-CN --zip "${BUILD_ARGS[@]}"
       - name: Verify dependency bytes, effective config and source provenance; package evidence
         shell: bash
         run: |

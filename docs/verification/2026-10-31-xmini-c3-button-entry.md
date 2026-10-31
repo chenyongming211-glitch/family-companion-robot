@@ -38,6 +38,7 @@ C3驱动真实生产方法的O2、ASan/UBSan及独立翻译单元开/关宏编�
 1. **短回答丢失所有后续DMA回调时无限等待。** 原生产方法复现为240样本提交、首次填充后不再收到ISR，5秒后仍valid/busy。新增仅对待播PCM生效的200ms任务轮询心跳：失效回报、立即静音PA，再用非阻塞生命周期锁关闭codec。原复现已转为fault/无声/停止TXRX/无效终态，长闲置不误触发。驱动独立规格、质量复审均通过。
 2. **TTS开始或断线期间的迟到重开。** 实际StartListeningAudio在SendStartListening期间被接收任务关闭后，旧逻辑仍无条件打开上行。现关闭总是撤销旧票据，仅当前未变的闭合revision可重开；同时核对当前协议播放阶段和物理排空。真实方法回归先失败、修复后通过。
 3. **快速start/stop合并UI事件后无法恢复收音。** 原真实六方法复现显示state=listening、processor=running而gate=closed，exit17。C3聆听分支现在把closed gate作为重新启动条件，经同一协议/排空/票据路径恢复。O2和ASan/UBSan均先失败后通过，独立复核gate=open/listen_starts=1/exit0；S3路径由宏隔离。
+4. **首轮目标任务被上游配置测试拦截。** [07426d4的五目标任务41169123513](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41169123513)均在目标编译前报相同两项：C3板级配置重复默认16MB选项、板级不允许指定`CONFIG_SR_WN_*`模型。移除冗余默认项，将关闭默认模型交给仅C3使用的构建参数`--wake-word disabled`；其他四目标参数不变。修正后云端新制备树的上游110项脚本测试通过。服务器没有`python`别名，首次运行的6项环境错误通过任务私有目录中的`python → python3`解决，没有修改系统或上游测试。
 
 发送路径已按固定网络组件源码核对：SDK Send错误直接返回，断开回调由接收任务触发；未发现已证锁反向。主机测试与静态审查不能替代真实网络、单核负载、供电和声学验证。
 

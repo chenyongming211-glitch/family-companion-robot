@@ -15,7 +15,7 @@
 +        Trusted completed-DMA playback and a half-duplex microphone gate.
 --- a/main/boards/xmini/c3/config.json
 +++ b/main/boards/xmini/c3/config.json
-@@ -11,6 +11,37 @@
+@@ -11,6 +11,35 @@
                  "CONFIG_USE_ESP_WAKE_WORD=y",
                  "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y"
              ]
@@ -31,7 +31,6 @@
 +                "CONFIG_SECURE_BOOT=n",
 +                "CONFIG_SECURE_FLASH_ENC_ENABLED=n",
 +                "CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK=n",
-+                "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y",
 +                "CONFIG_PARTITION_TABLE_CUSTOM=y",
 +                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/xmini-c3-family-16m.csv\"",
 +                "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",
@@ -39,7 +38,6 @@
 +                "CONFIG_USE_ESP_WAKE_WORD=n",
 +                "CONFIG_USE_AFE_WAKE_WORD=n",
 +                "CONFIG_USE_CUSTOM_WAKE_WORD=n",
-+                "CONFIG_SR_WN_WN9S_NIHAOXIAOZHI=n",
 +                "CONFIG_USE_AUDIO_PROCESSOR=n",
 +                "CONFIG_USE_DEVICE_AEC=n",
 +                "CONFIG_USE_SERVER_AEC=n",
