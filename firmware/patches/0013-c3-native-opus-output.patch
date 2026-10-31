@@ -1,0 +1,15 @@
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -760,6 +760,12 @@
+ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    // Opus can decode the same packet directly at the physical output rate.
++    // Local 16k cues then reuse C3's 24k decoder without another output SRC
++    // or a transient resampling vector on this memory-constrained target.
++    sample_rate = codec_->output_sample_rate();
++#endif
+     if (decoder_sample_rate_ == sample_rate && decoder_duration_ms_ == frame_duration) {
+         return;
+     }
+     std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
+     if (opus_decoder_ != nullptr) {

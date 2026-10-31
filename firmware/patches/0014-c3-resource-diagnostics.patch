@@ -1,0 +1,75 @@
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -1,5 +1,6 @@
+ #include "audio_service.h"
+ #include <esp_log.h>
++#include <esp_heap_caps.h>
+ #include <cstring>
+
+ #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
+@@ -122,6 +123,12 @@
+ }
+
+ void AudioService::Start() {
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    // A failed OTA can restart the service while the main clock still reports
++    // resources. Retire old TCB pointers before publishing the running state.
++    audio_input_task_handle_ = nullptr;
++    opus_codec_task_handle_ = nullptr;
++#endif
+     service_stopped_.store(false);
+     xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING |
+                                            AS_EVENT_AUDIO_PROCESSOR_RUNNING |
+@@ -1138,6 +1145,30 @@
+     return true;
+ }
+
++void AudioService::PrintC3Resources() const {
++#if CONFIG_XMINI_C3_VOICE_BARGE
++    constexpr uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
++    // ESP-IDF reports stack highwater in bytes. Never pass NULL: that would
++    // report this calling main task rather than an audio task not yet started.
++    unsigned input_stack = 0, opus_stack = 0;
++    // C3 is single-core. Stop sets service_stopped_ before either worker can
++    // exit; keep that lifetime check and TCB reads indivisible to task deletion.
++    // No heap query, logging or blocking API runs while scheduling is paused.
++    vTaskSuspendAll();
++    if (!service_stopped_.load()) {
++        if (audio_input_task_handle_)
++            input_stack = static_cast<unsigned>(uxTaskGetStackHighWaterMark(audio_input_task_handle_));
++        if (opus_codec_task_handle_)
++            opus_stack = static_cast<unsigned>(uxTaskGetStackHighWaterMark(opus_codec_task_handle_));
++    }
++    xTaskResumeAll();
++    ESP_LOGI(TAG, "C3 resources free=%u largest=%u min=%u input_stack_min=%u opus_stack_min=%u",
++        static_cast<unsigned>(heap_caps_get_free_size(caps)),
++        static_cast<unsigned>(heap_caps_get_largest_free_block(caps)),
++        static_cast<unsigned>(heap_caps_get_minimum_free_size(caps)), input_stack, opus_stack);
++#endif
++}
++
+ void AudioService::CheckAndUpdateAudioPowerState() {
+     auto now = std::chrono::steady_clock::now();
+     auto input_elapsed =
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -139,6 +139,7 @@
+     bool IsIdle();
+     bool IsPlaybackIdle();
+     void PollPlaybackDrained();
++    void PrintC3Resources() const;
+     bool IsWakeWordRunning() const {
+         return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING;
+     }
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -318,6 +318,9 @@
+             // Print debug info every 10 seconds
+             if (clock_ticks_ % 10 == 0) {
+                 SystemInfo::PrintHeapStats();
++#if CONFIG_XMINI_C3_VOICE_BARGE
++                audio_service_.PrintC3Resources();
++#endif
+                 // SystemInfo::PrintTaskList();
+                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
+             }

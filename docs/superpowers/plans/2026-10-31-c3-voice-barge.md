@@ -43,3 +43,15 @@ Selected candidate uses2.6.1 mode0 with unchanged codec profile;0012 explicitly 
 ### Conditional C3 dependency pin
 
 The upstream manifest pins ESP-SR==2.4.7 exactly. If the modern kernel/profile is accepted, keep the S3 native lock byte-for-byte unchanged: add optional `esp_sr_version_esp32c3` metadata, and apply that single manifest override only when preparing a fresh `--target esp32c3` tree. Record the override in prepared provenance and verify both the record and actual manifest pin. The optional recipe has no effect while the metadata is absent; do not enable/change a real target pin before the resource gate. Reject a missing/duplicate old pin or invalid version before publishing a prepared tree.
+
+## Task 3: Candidate runtime failure investigation and correction
+
+- [x] Preserve the user failure honestly: authenticated sessions and one partial DMA playback do not prove stable conversation; follow-up USB boot shows an audio-path abort. Disarm failed seq3 and return to verified stable app1 without changing current NVS or other flash.
+- [x] Add an exact-source C3 diagnostic build retaining ELF/map; first compare its instruction segment with the installed candidate before resolving the original PC.
+- [x] Establish cloud RED for actual production decode-rate selection: C3 local16k cues currently rebuild the decoder and allocate output SRC, while legacy paths and24k downlink retain their baseline behavior. Check actual locked cue packets can decode directly at24k with unchanged packet clock; this is not ESP/hardware acceptance.
+- [x] Resolve the exact abort and confirm the smallest correction. Old-source symbols match all1822864 instruction bytes; GNU addr2line confirms bad_alloc→vector→output SRC temporary.0013 retains C3's physical24k Opus output instead of recreating16k decode plus output SRC;6 focused checks GREEN. Cues, original codec profile and task stacks remain.
+- [x] Log C3 heap free/largest/minimum and input/Opus stack highwater at the existing periodic task diagnostic point, protecting Stop and failed-OTA restart task lifetimes.5 focused O2/ASan/UBSan cases passed. Actual load measurements remain part of installation/physical acceptance.
+- [x] Run focused GREEN and full cloud firmware/upstream checks, then independent spec/quality review.158 firmware checks and110 upstream checks passed; both reviews PASS. Server/VAD and other devices unchanged.
+- [ ] Complete corrected exact-target/other-variant builds and inspect the actual downloaded candidate.
+- [x] Strengthen private installation verification to require15s after activation+idle with no panic/reboot/AEC fault; cover delayed abort and exact disarmed-selector rollback.23 cloud cases passed; new candidate source pin and actual installation remain pending.
+- [ ] Install the corrected verified candidate preserving stable app1, observe full startup, and only then request ordinary reply and speak-over-playback acceptance again. Initial user connection errors remain unaccepted until the corrected actual conversation passes.
