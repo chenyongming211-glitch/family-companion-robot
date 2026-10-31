@@ -62,5 +62,7 @@ The upstream manifest pins ESP-SR==2.4.7 exactly. If the modern kernel/profile i
 - [x] Add RED for output capacity bounded to one960-sample frame and buffer ownership transfer, preserving consecutive512-sample AEC output/order/tails and epoch close.6 GREEN cases, O2/ASan; observed old/new capacity1408/960 on identical input.
 - [x] Fill the C3 output buffer in bounded pieces; move a completed frame into the existing encoder callback and retain all remainder. Legacy branch,8/28KiB stacks, profile/rates, server/drain/receipt semantics remain.
 - [x] Run focused/full cloud checks and independent spec/quality review:164 firmware/110 upstream checks and both reviews PASS;24 private installation/8-second-tail regressions PASS.
-- [ ] Build exact candidate/other variants and verify downloaded artifacts, then install with stable fallback and full panic-tail retention.
+- [x] Build exact candidate/other variants and verify downloaded artifacts:2210797 five variants/stock/C3 symbols builds passed; artifact13045627110 exact source/native/config/image/ELF/assets verified.
+- [x] Install with stable fallback and full panic-tail retention:2210797 app0/seq3 VALID, readbacks/preservation and two15s post-idle boots passed.
+- [ ] Complete actual conversation acceptance; first check one full non-repeating answer before speak-over-playback.
 - [ ] Recheck actual connection/full response, echo and speak-over-playback after the concrete candidate is installed. Prior failed user trials remain failed.
