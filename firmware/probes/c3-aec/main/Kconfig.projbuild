@@ -1,0 +1,4 @@
+config C3_AEC_PROBE_FULL_DUPLEX
+    bool "Probe the newer ESP-SR full-duplex implementation"
+    default n
+    depends on IDF_TARGET_ESP32C3

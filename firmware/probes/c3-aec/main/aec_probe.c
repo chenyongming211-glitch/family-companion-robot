@@ -98,9 +98,14 @@ void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(1500));
     const uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
     const size_t before=heap_caps_get_free_size(caps);
-    printf("C3_AEC_PROBE begin version=2 cpu_mhz=160 free=%u largest=%u\n",
-           (unsigned)before,(unsigned)heap_caps_get_largest_free_block(caps));
-    aec_handle_t *aec=aec_create(16000,2,1,AEC_MODE_SR_LOW_COST);
+#if CONFIG_C3_AEC_PROBE_FULL_DUPLEX
+    const aec_mode_t mode=AEC_MODE_FD_LOW_COST;
+#else
+    const aec_mode_t mode=AEC_MODE_SR_LOW_COST;
+#endif
+    printf("C3_AEC_PROBE begin version=3 mode=%d cpu_mhz=160 free=%u largest=%u\n",
+           (int)mode,(unsigned)before,(unsigned)heap_caps_get_largest_free_block(caps));
+    aec_handle_t *aec=aec_create(16000,2,1,mode);
     if (!aec) {
         printf("C3_AEC_PROBE create_failed\n");
         fflush(stdout);vTaskDelay(pdMS_TO_TICKS(200));esp_restart();return;

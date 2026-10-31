@@ -1,6 +1,12 @@
 name: C3 AEC resource probe
 on:
   workflow_dispatch:
+    inputs:
+      aec_version:
+        description: "Isolated probe library (product native lock is never modified)"
+        type: choice
+        options: ["2.4.7", "2.6.1"]
+        default: "2.4.7"
 permissions:
   contents: read
 jobs:
@@ -9,6 +15,8 @@ jobs:
     timeout-minutes: 30
     container:
       image: espressif/idf:v6.1
+    env:
+      AEC_VERSION: ${{ inputs.aec_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -22,20 +30,35 @@ jobs:
           test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
           cp firmware/dependencies.esp32c3.lock firmware/probes/c3-aec/dependencies.lock
           cd firmware/probes/c3-aec
+          python3 - <<'PY'
+          import os,pathlib
+          version=os.environ['AEC_VERSION']
+          assert version in ('2.4.7','2.6.1')
+          manifest=pathlib.Path('main/idf_component.yml')
+          manifest.write_text(manifest.read_text().replace('"==2.4.7"',f'"=={version}"'))
+          if version=='2.6.1':
+              with open('sdkconfig.defaults','a') as f:f.write('\nCONFIG_C3_AEC_PROBE_FULL_DUPLEX=y\n')
+          PY
           idf.py set-target esp32c3
           idf.py build
           python3 - <<'PY'
-          import yaml
+          import os,yaml
           resolved=yaml.safe_load(open('dependencies.lock'))
           locked=yaml.safe_load(open('../../dependencies.esp32c3.lock'))
           assert resolved['target']==locked['target']=='esp32c3'
-          assert resolved['dependencies']['espressif/esp-sr']['version']=='2.4.7'
+          version=os.environ['AEC_VERSION']
+          assert resolved['dependencies']['espressif/esp-sr']['version']==version
           for name,dependency in resolved['dependencies'].items():
+              if version=='2.6.1' and name=='espressif/esp-sr':continue
+              if version=='2.6.1' and name not in locked['dependencies']:
+                  source=dependency['source']
+                  assert source['type']=='service' and source['registry_url'].rstrip('/')=='https://components.espressif.com',name
+                  continue
               assert name in locked['dependencies'], name
               original=locked['dependencies'][name]
               for field in ('version','component_hash','source'):
                   assert dependency.get(field)==original.get(field), (name,field)
-          print('Probe dependency subset matches product native lock')
+          print('Checked probe graph; product native lock was not modified; AEC version',version)
           PY
           mkdir evidence
           cp build/c3_aec_probe.bin build/c3_aec_probe.elf build/c3_aec_probe.map sdkconfig dependencies.lock evidence/
@@ -46,11 +69,12 @@ jobs:
           sha256sum managed_components/espressif__esp-sr/lib/esp32c3/*.a > evidence/sr-library-sha256.txt
           git -C "$IDF_PATH" rev-parse HEAD > evidence/idf-commit.txt
           echo "$GITHUB_SHA" > evidence/source-sha.txt
+          echo "$AEC_VERSION" > evidence/probe-aec-version.txt
           cd evidence
           sha256sum * > SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: c3-aec-resource-probe-${{ github.sha }}
+          name: c3-aec-resource-probe-${{ inputs.aec_version }}-${{ github.sha }}
           retention-days: 7
           if-no-files-found: error
           path: firmware/probes/c3-aec/evidence/
