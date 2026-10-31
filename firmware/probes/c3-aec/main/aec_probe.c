@@ -83,10 +83,11 @@ static bool codec_load(aec_handle_t *aec,int n) {
     if(used!=0)goto end; // whole encoder/decoder frames share the measured window
     printf("C3_AEC_PROBE loaded blocks=%d samples=%d packets=%u aec_us=%"PRId64
            " encode_us=%"PRId64" decode_us=%"PRId64" total_cpu_us=%"PRId64
-           " audio_budget_us=%"PRId64" max_combo_us=%"PRId64" decoded_energy=%"PRIu64" free=%u\n",
+           " audio_budget_us=%"PRId64" max_combo_us=%"PRId64" decoded_energy=%"PRIu64" free=%u stack_min_free=%u\n",
            LOADED_BLOCKS,n,packets,aec_us,encode_us,decode_us,aec_us+encode_us+decode_us,
            (int64_t)LOADED_BLOCKS*n*1000000/16000,max_combo_us,decoded_energy,
-           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+           (unsigned)uxTaskGetStackHighWaterMark(NULL));
     good=true;
 end:
     if(!good)printf("C3_AEC_PROBE loaded_failed\n");
