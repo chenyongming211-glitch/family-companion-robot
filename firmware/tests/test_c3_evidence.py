@@ -36,6 +36,7 @@ class C3EvidenceTests(unittest.TestCase):
         options = {
             'CONFIG_IDF_TARGET': '"esp32c3"', 'CONFIG_BOARD_TYPE_XMINI_C3': 'y',
             'CONFIG_XMINI_C3_BUTTON_ENTRY': 'y', 'CONFIG_WAKE_WORD_DISABLED': 'y',
+            'CONFIG_XMINI_C3_VOICE_BARGE': 'y',
             'CONFIG_OTA_URL': '""',
             'CONFIG_ESPTOOLPY_FLASHSIZE_16MB': 'y', 'CONFIG_PARTITION_TABLE_CUSTOM': 'y',
             'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE': 'y',
@@ -107,6 +108,13 @@ class C3EvidenceTests(unittest.TestCase):
         self.assertEqual(evidence['dependency_lock_source'], 'dependencies.esp32c3.lock')
         self.assertEqual(evidence['partition_layout']['app_limit'], 0x2f0000)
         self.assertEqual(evidence['effective_config']['CONFIG_USE_DEVICE_AEC'], 'n')
+
+    def test_product_c3_evidence_requires_playback_voice_capture(self):
+        config = self.tree/'sdkconfig'
+        config.write_text(config.read_text().replace('CONFIG_XMINI_C3_VOICE_BARGE=y\n',
+                                                    'CONFIG_XMINI_C3_VOICE_BARGE=n\n'))
+        with self.assertRaisesRegex(ValueError, 'CONFIG_XMINI_C3_VOICE_BARGE'):
+            self.verify()
 
     def test_c3_override_requires_reviewed_native_version_and_prepared_manifest(self):
         self.c3_dependency_override()

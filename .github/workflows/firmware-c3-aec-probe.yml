@@ -6,7 +6,7 @@ on:
         description: "Isolated probe library (product native lock is never modified)"
         type: choice
         options: ["2.4.7", "2.6.1"]
-        default: "2.4.7"
+        default: "2.6.1"
 permissions:
   contents: read
 jobs:
@@ -48,8 +48,11 @@ jobs:
           assert resolved['target']==locked['target']=='esp32c3'
           version=os.environ['AEC_VERSION']
           assert resolved['dependencies']['espressif/esp-sr']['version']==version
+          expected_sr={'2.4.7':'809d0041cdddd98a278f0d5afef7bb60a451290577b98cf718dfffc91bdcbd9b',
+                       '2.6.1':'7ba1e97d446440faa96a7d98fbda7dbaaf7ae6b960e06cc68264d38aa6eb4d14'}
+          assert resolved['dependencies']['espressif/esp-sr']['component_hash']==expected_sr[version]
           for name,dependency in resolved['dependencies'].items():
-              if version=='2.6.1' and name=='espressif/esp-sr':continue
+              if name=='espressif/esp-sr':continue
               if version=='2.6.1' and name not in locked['dependencies']:
                   source=dependency['source']
                   assert source['type']=='service' and source['registry_url'].rstrip('/')=='https://components.espressif.com',name

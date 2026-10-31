@@ -1,0 +1,36 @@
+--- a/main/boards/xmini/c3/config.json
++++ b/main/boards/xmini/c3/config.json
+@@ -17,6 +17,7 @@
+             "sdkconfig_append": [
+                 "CONFIG_BOARD_TYPE_XMINI_C3=y",
+                 "CONFIG_XMINI_C3_BUTTON_ENTRY=y",
++                "CONFIG_XMINI_C3_VOICE_BARGE=y",
+                 "CONFIG_PM_ENABLE=y",
+                 "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y",
+                 "CONFIG_OTA_URL=\"\"",
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -155,7 +155,11 @@
+             audio_service->AudioInputTask();
+             vTaskDelete(NULL);
+         },
++#if CONFIG_XMINI_C3_VOICE_BARGE
++        "audio_input", 8192, this, 8, &audio_input_task_handle_);
++#else
+         "audio_input", 2048 * 2, this, 8, &audio_input_task_handle_);
++#endif
+
+     /* Start the audio output task */
+     xTaskCreate(
+@@ -174,7 +178,11 @@
+             audio_service->OpusCodecTask();
+             vTaskDelete(NULL);
+         },
++#if CONFIG_XMINI_C3_VOICE_BARGE
++        "opus_codec", 28672, this, 2, &opus_codec_task_handle_);
++#else
+         "opus_codec", 2048 * 12, this, 2, &opus_codec_task_handle_);
++#endif
+ }
+
+ void AudioService::Stop() {

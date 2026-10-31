@@ -330,6 +330,7 @@ def verify(firmware, tree, variant, idf_commit):
     if c3:
         required.update(CONFIG_IDF_TARGET='"esp32c3"', CONFIG_BOARD_TYPE_M5STACK_STOPWATCH='n',
                         CONFIG_BOARD_TYPE_XMINI_C3='y', CONFIG_XMINI_C3_BUTTON_ENTRY='y',
+                        CONFIG_XMINI_C3_VOICE_BARGE='y',
                         CONFIG_SPIRAM='n', CONFIG_USE_AUDIO_PROCESSOR='n', CONFIG_USE_DEVICE_AEC='n',
                         CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y',
                         CONFIG_PARTITION_TABLE_CUSTOM_FILENAME='"partitions/xmini-c3-family-16m.csv"',

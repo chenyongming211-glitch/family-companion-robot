@@ -11,5 +11,6 @@
   "esp_sr_version": "2.4.7",
   "board": "m5stack/stopwatch",
   "variant": "m5stack-stopwatch",
-  "target": "esp32s3"
+  "target": "esp32s3",
+  "esp_sr_version_esp32c3": "2.6.1"
 }

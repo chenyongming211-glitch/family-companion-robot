@@ -6,7 +6,7 @@ on:
         description: "Inspect a C3 dependency candidate; never install this output"
         type: choice
         options: ["2.4.7", "2.6.1"]
-        default: "2.4.7"
+        default: "2.6.1"
 permissions:
   contents: read
 jobs:
@@ -33,13 +33,15 @@ jobs:
           git -C "$IDF_PATH" rev-parse HEAD > firmware/.cache/experiment/inspection-idf-commit.txt
           cd firmware/.cache/experiment
           python3 - <<'PY'
-          import importlib.util,os,pathlib
+          import importlib.util,os,pathlib,re
           version=os.environ['AEC_VERSION']
           assert version in ('2.4.7','2.6.1')
           manifest=pathlib.Path('main/idf_component.yml')
           original=manifest.read_text()
-          assert original.count('espressif/esp-sr: ==2.4.7')==1
-          manifest.write_text(original.replace('espressif/esp-sr: ==2.4.7',f'espressif/esp-sr: =={version}'))
+          replaced,count=re.subn(r'^  espressif/esp-sr: ==[0-9]+\.[0-9]+\.[0-9]+$',
+              f'  espressif/esp-sr: =={version}',original,flags=re.M)
+          assert count==1
+          manifest.write_text(replaced)
           pathlib.Path('inspection-manifest.yml').write_bytes(manifest.read_bytes())
           pathlib.Path('inspection-aec-version.txt').write_text(version+'\n')
           spec = importlib.util.spec_from_file_location('firmware_build', 'scripts/build.py')
