@@ -9,7 +9,7 @@ bool FamilyC3Codec::PlaybackControl(PlaybackOp op,family_robot::PlaybackIdentity
             // Never let old descriptor identities alias a fresh connection.
             // The owning WebsocketProtocol already allocates monotonic epochs.
             if(!id.connection || id.connection<=last_connection_) {result=false;break;}
-            if(id.connection==UINT32_MAX) {FaultLocked(StartupFaultSource::PlaybackConnection,DiagnosticNow());result=false;break;}
+            if(id.connection==UINT32_MAX) {FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::PlaybackConnection,DiagnosticNow()));result=false;break;}
             last_connection_=id.connection;AdvanceGenerationLocked();playback_->Connect(id.connection);break;
         case PlaybackOp::Start:result=accepting_ && !faulted_ && playback_->Start(id);break;
         case PlaybackOp::Admit:result=accepting_ && !faulted_ && playback_->Admit(id,first,n);break;
@@ -36,7 +36,7 @@ bool FamilyC3Codec::PlaybackPoll(family_robot::PlaybackSnapshot& out) {
     if(accepting_ && playback_ && playback_->Busy()) {
         const auto latest=std::max(pending_since_us_,last_tx_us_);
         const auto now=esp_timer_get_time();
-        if(latest<=0 || now<latest || now-latest>200000)FaultLocked(StartupFaultSource::PlaybackDeadline,now);
+        if(latest<=0 || now<latest || now-latest>200000)FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::PlaybackDeadline,now));
     }
     const bool fault=faulted_;
     portEXIT_CRITICAL(&mux_);
@@ -78,7 +78,7 @@ void FamilyC3Codec::OutputSpan(const int16_t* pcm,size_t count,family_robot::Pla
         if(result==family_robot::PlaybackProgress::SubmitResult::Rejected)return;
         if(result==family_robot::PlaybackProgress::SubmitResult::Accepted) {offset+=n;progress=esp_timer_get_time();continue;}
         if(esp_timer_get_time()-progress>200000) {
-            portENTER_CRITICAL(&mux_);FaultLocked(StartupFaultSource::OutputTimeout,DiagnosticNow());portEXIT_CRITICAL(&mux_);return;
+            portENTER_CRITICAL(&mux_);FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::OutputTimeout,DiagnosticNow()));portEXIT_CRITICAL(&mux_);return;
         }
         vTaskDelay(1); // no mux held: ISR progress, Connect and Reset remain live
     }

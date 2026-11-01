@@ -2,7 +2,13 @@
 #include "sdkconfig.h"
 #if CONFIG_XMINI_C3_BUTTON_ENTRY
 #include "codecs/es8311_audio_codec.h"
+#if CONFIG_XMINI_C3_PCM
 #include "c3_startup_diagnostics.h"
+// Drop every diagnostic argument token in legacy variants, including timer reads.
+#define FAMILY_C3_DIAGNOSTIC_ARGS(...) __VA_ARGS__
+#else
+#define FAMILY_C3_DIAGNOSTIC_ARGS(...)
+#endif
 #if CONFIG_XMINI_C3_VOICE_BARGE
 #include "../../m5stack/stopwatch/duplex_reference.h"
 #endif
@@ -11,8 +17,8 @@
 // path adds bounded mono RX / completed TX pairing without changing I2S shape.
 class FamilyC3Codec final : public Es8311AudioCodec {
 public:
-    using StartupFaultSource=family_robot::C3StartupFaultSource;
 #if CONFIG_XMINI_C3_PCM
+    using StartupFaultSource=family_robot::C3StartupFaultSource;
     family_robot::C3CodecStartupDiagnostics StartupDiagnostics() const override;
 #endif
     FamilyC3Codec(void* bus, i2c_port_t port, int input_rate, int output_rate,
@@ -60,13 +66,15 @@ private:
     void ClearClosedDescriptors();
     void StopFaultedOutput(); // task-only PA mute; lifecycle try_lock never waits
     void DisarmLocked(); // mux_ held
+#if CONFIG_XMINI_C3_PCM
     void FaultLocked(StartupFaultSource,int64_t,int64_t previous_us=0); // mux_ held, ISR-safe
     static int64_t DiagnosticNow();
-#if CONFIG_XMINI_C3_PCM
     void RecordStartupFaultLocked(StartupFaultSource,int64_t,int64_t previous_us=0); // numeric stores only
     void RecordHardwareCheck(const family_robot::C3HardwareCheck&); // task-only
     family_robot::C3CodecStartupDiagnostics startup_fault_{};
     family_robot::C3HardwareCheck hardware_check_{};
+#else
+    void FaultLocked(); // mux_ held, ISR-safe
 #endif
     void AdvanceGenerationLocked();
     static bool Sent(i2s_chan_handle_t, i2s_event_data_t*, void*);
@@ -77,7 +85,11 @@ private:
     static bool Received(i2s_chan_handle_t, i2s_event_data_t*, void*);
     void ResetCaptureLocked(); // mux_ held; retain physical history and clocks
     void CheckReferenceDeadlineLocked(int64_t now); // mux_ held, task-only
+#if CONFIG_XMINI_C3_PCM
     void PublishReferenceLocked(StartupFaultSource,int64_t,int64_t previous_us=0); // mux_ held; fail closed on pairing error
+#else
+    void PublishReferenceLocked(); // mux_ held; fail closed on pairing error
+#endif
     bool InputPaired(std::vector<int16_t>& data);
     Pair* pair_=nullptr;
     uint32_t physical_generation_=0,capture_generation_=0,aec_ready_generation_=UINT32_MAX;

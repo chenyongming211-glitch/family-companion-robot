@@ -18,11 +18,16 @@ void FamilyC3Codec::CheckReferenceDeadlineLocked(int64_t now) {
        (now-reference_tx_us_>Pair::kHoldbackUs || now-reference_rx_us_>Pair::kHoldbackUs ||
         now+Pair::kCadenceToleranceUs<reference_tx_us_ || now+Pair::kCadenceToleranceUs<reference_rx_us_)) {
         if(pair_)pair_->Fail(Pair::Fault::Timeout);
-        FaultLocked(StartupFaultSource::ReferenceDeadline,now);
+        FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::ReferenceDeadline,now));
     }
 }
-void FamilyC3Codec::PublishReferenceLocked(StartupFaultSource source,int64_t now,int64_t previous_us) {
-    if(!pair_ || pair_->fault()!=Pair::Fault::None) {FaultLocked(source,now,previous_us);return;}
+#if CONFIG_XMINI_C3_PCM
+void FamilyC3Codec::PublishReferenceLocked(StartupFaultSource source,int64_t now,int64_t previous_us)
+#else
+void FamilyC3Codec::PublishReferenceLocked()
+#endif
+{
+    if(!pair_ || pair_->fault()!=Pair::Fault::None) {FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(source,now,previous_us));return;}
     reference_valid_=capture_active_ && !capture_boundary_pending_ && pair_->eligible() && !faulted_;
 }
 void FamilyC3Codec::SetCaptureActive(bool active) {
@@ -50,7 +55,7 @@ void FamilyC3Codec::NotifyAecReady(bool ready,uint32_t generation) {
     portEXIT_CRITICAL(&mux_);
 }
 void FamilyC3Codec::ReportReferenceFailure() {
-    portENTER_CRITICAL(&mux_);FaultLocked(StartupFaultSource::ExplicitReferenceFailure,DiagnosticNow());portEXIT_CRITICAL(&mux_);StopFaultedOutput();
+    portENTER_CRITICAL(&mux_);FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::ExplicitReferenceFailure,DiagnosticNow()));portEXIT_CRITICAL(&mux_);StopFaultedOutput();
 }
 bool FamilyC3Codec::InputPaired(std::vector<int16_t>& data) {
     constexpr size_t kMaxFrames=1440;
@@ -71,7 +76,7 @@ bool FamilyC3Codec::InputPaired(std::vector<int16_t>& data) {
         }
         const size_t count=pair_ ? std::min(frames-done,pair_->front_remaining()) : 0;
         const auto result=pair_ ? pair_->Take(data.data()+done*2,count,esp_timer_get_time()) : Pair::Result::Fault;
-        PublishReferenceLocked(StartupFaultSource::ReferenceTake,DiagnosticNow());
+        PublishReferenceLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::ReferenceTake,DiagnosticNow()));
         const bool fault=faulted_;
         portEXIT_CRITICAL(&mux_);
         if(fault || result==Pair::Result::Fault) {StopFaultedOutput();return false;}
