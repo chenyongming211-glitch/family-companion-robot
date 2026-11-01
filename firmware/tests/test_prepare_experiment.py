@@ -107,6 +107,15 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(self.prepare(), self.destination)
         self.assert_prepared()
 
+    def test_python_bytecode_is_not_a_prepared_or_recorded_source_input(self):
+        names = ['scripts/__pycache__/recipe.cpython-312.pyc', 'scripts/recipe.pyc', 'scripts/recipe.pyo']
+        for name in names:
+            path = self.overlays/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'cache')
+        self.prepare()
+        self.assert_prepared()
+        for name in names:
+            self.assertFalse((self.destination/name).exists())
+
     def test_c3_override_changes_only_fresh_manifest_and_provenance(self):
         self.add_manifest()
         self.prepare()

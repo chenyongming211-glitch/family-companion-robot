@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -17,6 +18,8 @@ import sys
 import tempfile
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from prepare import is_source_input
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'overlays/scripts'))
 import family_c3_build as c3_build
 import family_c3_network as c3_network
@@ -37,7 +40,8 @@ CANONICAL_RELEASE_NAMES = {
 }
 BUILD_FILES = ('build/xiaozhi.bin', 'build/merged-binary.bin', 'build/generated_assets.bin',
                'build/bootloader/bootloader.bin', 'build/partition_table/partition-table.bin',
-               'build/flasher_args.json', 'build/compile_commands.json')
+               'build/flasher_args.json', 'build/flash_args', 'build/ota_data_initial.bin',
+               'build/compile_commands.json')
 NATIVE_NETWORK_FILES = tuple('managed_components/78__esp-ml307/'+name for name in c3_network.ORIGINAL_SHA256)
 C3_BUILD_FILES = ('build/xiaozhi.elf', 'build/xiaozhi.map',
     'build/family_c3_pcm/family_c3_pcm_cues.pack', 'build/family_c3_pcm/family_c3_pcm_cues.json',
@@ -66,6 +70,140 @@ def compiled_paths(path):
         except (KeyError, TypeError) as exc:
             raise ValueError('invalid compiled input record') from exc
     return compiled
+
+
+def unique_json(data):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate JSON key: '+key)
+            result[key] = value
+        return result
+    return json.loads(data, object_pairs_hook=unique)
+
+
+def flash_options(tokens):
+    allowed = {'--flash-mode', '--flash-size', '--flash-freq'}
+    result = {}
+    if len(tokens) % 2:
+        raise ValueError('invalid flash option/value pairs')
+    for key, value in zip(tokens[::2], tokens[1::2]):
+        if key not in allowed or key in result or not isinstance(value, str):
+            raise ValueError('unknown/duplicate flash option')
+        result[key] = value
+    # All six approved builds use this profile. Fail closed rather than emulate
+    # esptool changing a bootloader header/digest for an unsupported profile.
+    if result != {'--flash-mode': 'dio', '--flash-size': '16MB', '--flash-freq': '80m'}:
+        raise ValueError('unsupported native flash profile')
+    return result
+
+
+def flash_partitions(path):
+    data = read_regular(path)
+    if not 32 <= len(data) <= 0x1000 or len(data) % 32:
+        raise ValueError('invalid native flash partition table size')
+    entries = []
+    for position in range(0, len(data), 32):
+        record = data[position:position+32]
+        if record[:2] == b'\xeb\xeb':
+            if (record[2:16] != b'\xff'*14 or record[16:] != hashlib.md5(data[:position]).digest()
+                    or data[position+32:] != b'\xff'*(len(data)-position-32)):
+                raise ValueError('native flash partition checksum/trailer mismatch')
+            break
+        magic, typ, sub, offset, size, label, flags = struct.unpack('<HBBII16sI', record)
+        if (magic != 0x50aa or flags or not size or offset < 0x9000 or offset+size > 0x1000000
+                or offset % (0x10000 if typ == 0 else 0x1000)):
+            raise ValueError('invalid native flash partition entry')
+        entries.append((label.rstrip(b'\0').decode('ascii'), typ, sub, offset, size))
+    else:
+        raise ValueError('missing native flash partition checksum')
+    ordered = sorted(entries, key=lambda entry: entry[3])
+    if (not entries or len({entry[0] for entry in entries}) != len(entries)
+            or any(right[3] < left[3]+left[4] for left, right in zip(ordered, ordered[1:]))):
+        raise ValueError('duplicate/overlapping native flash partitions')
+    return entries
+
+
+def verify_flash_images(tree, c3=False):
+    """Bind both IDF input lists and the entire native raw merged output.
+
+    Frozen IDF fff9895/esptool raw merge uses base 0, FF gaps and no final
+    padding unless an explicit merge-only option is supplied. Only its three
+    native flash flags are accepted here. The approved bootloader header must
+    already match them, so merge does not need to patch its header or digest.
+    Verified against all five trusted 6b79e4c experiment artifact byte streams.
+    """
+    build = tree.resolve()/'build'
+    partitions = flash_partitions(build/'partition_table/partition-table.bin')
+    def one(predicate):
+        entries = [entry for entry in partitions if predicate(entry)]
+        if len(entries) != 1:
+            raise ValueError('native flash partition selection is not unique')
+        return entries[0]
+    app = one(lambda entry: entry[1:3] == (0, 0x10))
+    assets = one(lambda entry: entry[0] == 'assets' and entry[1:3] == (1, 0x82))
+    ota = one(lambda entry: entry[1:3] == (1, 0))
+    if c3 and (app[3], assets[3], assets[4], ota[3]) != (0x20000, 0x600000, 0x200000, 0xd000):
+        raise ValueError('C3 canonical flash partition offsets differ')
+    expected = {0: build/'bootloader/bootloader.bin', 0x8000: build/'partition_table/partition-table.bin',
+                ota[3]: build/'ota_data_initial.bin', app[3]: build/'xiaozhi.bin',
+                assets[3]: build/'generated_assets.bin'}
+    if c3: expected[0x650000] = build/'family_c3_pcm/family_c3_pcm_cues.pack'
+    metadata = unique_json(read_regular(build/'flasher_args.json'))
+    options = flash_options(metadata['write_flash_args'])
+    if metadata['flash_settings'] != {key[2:].replace('-', '_'): value for key, value in options.items()}:
+        raise ValueError('flash JSON options/settings mismatch')
+    def pairs(records):
+        result = {}
+        for offset, name in records:
+            offset = int(offset, 0)
+            if offset in result:
+                raise ValueError('duplicate numeric flash offset/alias')
+            result[offset] = (build/name).resolve()
+        if result != expected:
+            raise ValueError('flash inputs differ from canonical offset/path map')
+        return result
+    pairs(metadata['flash_files'].items())
+    arguments = shlex.split(read_regular(build/'flash_args').decode())
+    prefix = 0
+    while prefix < len(arguments) and arguments[prefix].startswith('--'):
+        prefix += 2
+    if flash_options(arguments[:prefix]) != options or len(arguments[prefix:]) % 2:
+        raise ValueError('flash_args flags differ from JSON')
+    pairs(zip(arguments[prefix::2], arguments[prefix+1::2]))
+    if read_regular(expected[ota[3]]) != b'\xff'*ota[4]:
+        raise ValueError('native OTA initializer differs from empty partition bytes')
+    boot = read_regular(expected[0])
+    chip = 5 if c3 else 9
+    for relative in ('bootloader/bootloader.bin', 'xiaozhi.bin'):
+        image = read_regular(build/relative)
+        if len(image) < 24 or image[0] != 0xe9 or struct.unpack_from('<H', image, 12)[0] != chip:
+            raise ValueError('native flash image chip header mismatch')
+    if boot[2:4] != b'\x02\x4f':
+        raise ValueError('bootloader header would require unsupported merge patching')
+    sizes = {path: len(read_regular(path)) for path in expected.values()}
+    limits = {expected[0]: 0x8000, expected[0x8000]: 0x1000,
+              expected[app[3]]: app[4], expected[assets[3]]: 0x50000 if c3 else assets[4]}
+    if c3: limits[expected[0x650000]] = 0x1b0000
+    if any(sizes[path] > limit for path, limit in limits.items()):
+        raise ValueError('canonical flash image exceeds native partition/reserved range')
+    ranges = sorted((offset, offset+sizes[path], path) for offset, path in expected.items())
+    if any(right[0] < left[1] for left, right in zip(ranges, ranges[1:])):
+        raise ValueError('canonical flash inputs overlap')
+    merged = read_regular(build/'merged-binary.bin')
+    end = ranges[-1][1]
+    if end > 0x1000000 or len(merged) != end:
+        raise ValueError('whole merged image length differs from canonical raw merge')
+    canonical = bytearray(b'\xff'*end)
+    for start, stop, path in ranges:
+        canonical[start:stop] = read_regular(path)
+    if merged != canonical:
+        raise ValueError('whole merged image bytes differ from canonical raw merge')
+    return dict(images={path.relative_to(build).as_posix(): dict(offset=offset, bytes=sizes[path], sha256=digest(path))
+                        for offset, path in sorted(expected.items())},
+                flash_args_sha256=digest(build/'flash_args'), merged_sha256=digest(build/'merged-binary.bin'),
+                merged_bytes=len(merged), base_offset=0, gap_byte=255, final_padding='none', header_changes='none')
 
 
 def verify_c3_pcm(tree):
@@ -141,26 +279,8 @@ def verify_c3_pcm(tree):
                      read_regular(component/'CMakeLists.txt').decode())}
     if set(selected) != ((native_sources-originals) | replacements):
         raise ValueError('C3 compiled network sources changed beyond the two reviewed replacements')
-    flash = json.loads(read_regular(build/'flasher_args.json'))['flash_files']
-    ranges, pcm_entries = [], []
-    for text_offset, relative in flash.items():
-        offset = int(text_offset, 0)
-        path = build/relative
-        if not path.resolve().is_relative_to(build):
-            raise ValueError('C3 flashed input escapes build directory')
-        data = read_regular(path)
-        if offset < 0 or offset+len(data) > 0x1000000:
-            raise ValueError('C3 flashed input exceeds flash capacity')
-        ranges.append((offset, offset+len(data), path.resolve(), data))
-        if path.name == 'family_c3_pcm_cues.pack': pcm_entries.append((offset, path.resolve()))
-    if pcm_entries != [(0x650000, build/'family_c3_pcm/family_c3_pcm_cues.pack')]:
-        raise ValueError('C3 PCM flasher trailer offset/path mismatch')
-    ranges.sort(key=lambda entry: entry[0])
-    if any(right[0] < left[1] for left, right in zip(ranges, ranges[1:])):
-        raise ValueError('C3 flashed input overlap')
+    flash = verify_flash_images(tree, c3=True)
     merged = read_regular(build/'merged-binary.bin')
-    if len(merged) > 0x1000000 or any(merged[start:end] != data for start, end, _, data in ranges):
-        raise ValueError('C3 merged image differs from flashed inputs')
     releases = list((tree/'releases').glob('*_xmini-c3-family.zip'))
     if len(releases) != 1:
         raise ValueError('C3 expected one canonical release ZIP')
@@ -174,6 +294,7 @@ def verify_c3_pcm(tree):
     except zipfile.BadZipFile as exc:
         raise ValueError('invalid C3 release ZIP') from exc
     return dict(cues=cues, assets_prefix=prefix, elf_sha256=elf_sha.hex(), network=manifest,
+                flash_inputs=flash,
                 compile_commands_sha256=digest(build/'compile_commands.json'),
                 merged_sha256=hashlib.sha256(merged).hexdigest(), release_sha256=digest(releases[0]))
 
@@ -206,6 +327,10 @@ def digest(path):
 def inputs(directory, pattern):
     records = []
     for path in sorted(directory.glob(pattern)):
+        if not is_source_input(path.relative_to(directory)):
+            continue
+        if path.is_symlink():
+            raise ValueError('symbolic controlled source input')
         if path.is_file():
             c3_build.regular(path)
             records.append(dict(path=path.relative_to(directory).as_posix(), sha256=digest(path)))
@@ -565,7 +690,8 @@ def c3_retained_inputs(firmware):
     paths.update('managed_components/78__esp-ml307/'+name for name in c3_network.ORIGINAL_SHA256)
     paths.update('main/assets/'+name for name, _, _ in c3_build.INVENTORY)
     paths.update(path.relative_to(firmware/'overlays').as_posix()
-                 for path in (firmware/'overlays').rglob('*') if path.is_file())
+                 for path in (firmware/'overlays').rglob('*')
+                 if path.is_file() and is_source_input(path.relative_to(firmware/'overlays')))
     for patch in (firmware/'patches').glob('*.patch'):
         paths.update(re.findall(r'^\+\+\+ b/([^\n]+)$', patch.read_text(), re.M))
     return sorted(paths)
@@ -574,6 +700,8 @@ def c3_retained_inputs(firmware):
 def bundle(firmware, tree, output, source_sha, evidence):
     if not re.fullmatch('[0-9a-f]{40}', source_sha):
         raise ValueError('invalid source SHA')
+    flash = verify_flash_images(tree, c3=evidence['variant'] == C3_VARIANT)
+    evidence = dict(evidence, flash_inputs=flash)
     required = ['dependencies.lock', 'sdkconfig', '.family-robot-source.json', *BUILD_FILES]
     if evidence['variant'] == C3_VARIANT:
         required.extend((*C3_BUILD_FILES, *c3_retained_inputs(firmware)))
@@ -603,7 +731,8 @@ def bundle(firmware, tree, output, source_sha, evidence):
     shutil.copyfile(firmware/'third_party/xiaozhi-LICENSE', output/'third_party/xiaozhi-LICENSE')
     shutil.copyfile(firmware.parent/'THIRD_PARTY_NOTICES.txt', output/'THIRD_PARTY_NOTICES.txt')
     for name in ['patches', 'overlays']:
-        shutil.copytree(firmware/name, output/'source'/name)
+        shutil.copytree(firmware/name, output/'source'/name,
+            ignore=lambda directory, names: [name for name in names if not is_source_input(Path(name))])
     (output/'build-evidence.json').write_text(
         json.dumps(dict(evidence, source_sha=source_sha), indent=2)+'\n')
     (output/'SHA256SUMS').write_text(''.join(
@@ -625,6 +754,7 @@ def bundle_baseline(firmware, tree, output, source_sha, idf_commit):
     # Required even though config-only unit fixtures may omit compiler output.
     c3_build.regular(tree/'build/compile_commands.json')
     native = verify_no_pcm(tree)
+    flash = verify_flash_images(tree)
     releases = list((tree/'releases').glob('*_m5stack-stopwatch.zip'))
     if len(releases) != 1:
         raise ValueError('expected one stock canonical release ZIP')
@@ -651,6 +781,7 @@ def bundle_baseline(firmware, tree, output, source_sha, idf_commit):
         target.write_bytes(read_regular(source))
     (output/'build-evidence.json').write_text(json.dumps(dict(source_sha=source_sha, idf_commit=idf_commit,
         variant='stock-m5stack-stopwatch', native_network_inputs=native,
+        flash_inputs=flash,
         dependencies_sha256=digest(tree/'dependencies.lock'), acoustic_acceptance='pending'), indent=2)+'\n')
     (output/'SHA256SUMS').write_text(''.join(digest(path)+'  '+path.relative_to(output).as_posix()+'\n'
         for path in sorted(output.rglob('*')) if path.is_file()))

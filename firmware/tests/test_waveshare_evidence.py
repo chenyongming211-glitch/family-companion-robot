@@ -110,9 +110,10 @@ class WaveshareEvidenceTests(unittest.TestCase):
         output = self.root/'evidence'
         # Native input validation uses real pinned fixtures in the PCM evidence
         # suite; these synthetic fixtures exercise layout and ZIP selection.
-        with existing.mock.patch.object(self.module, 'verify_no_pcm', return_value={'fixture': True}):
+        with existing.mock.patch.object(self.module, 'verify_no_pcm', return_value={'fixture': True}), \
+             existing.mock.patch.object(self.module, 'verify_flash_images', return_value={'fixture': True}):
             evidence = self.verify()
-        self.module.bundle(self.firmware, self.tree, output, 'a'*40, evidence)
+            self.module.bundle(self.firmware, self.tree, output, 'a'*40, evidence)
         return output
 
     def test_bundle_uses_actual_manufacturer_prefixed_waveshare_release_name(self):

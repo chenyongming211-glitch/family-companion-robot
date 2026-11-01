@@ -240,7 +240,8 @@ class C3EvidenceTests(unittest.TestCase):
         name = 'v2.5.2_xmini-c3-family.zip'
         (releases/name).write_bytes(b'synthetic release')
         output = self.root/'evidence'
-        self.module.bundle(self.firmware, self.tree, output, 'a'*40, self.verify())
+        with existing.mock.patch.object(self.module, 'verify_flash_images', return_value={'fixture': True}):
+            self.module.bundle(self.firmware, self.tree, output, 'a'*40, self.verify())
         self.assertEqual((output/'dependencies.lock.sha256').read_text().strip(),
                          self.digest(output/'dependencies.lock'))
         self.assertNotEqual((output/'dependencies.lock.sha256').read_bytes(),

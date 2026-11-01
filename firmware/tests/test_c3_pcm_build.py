@@ -149,6 +149,25 @@ class C3FixtureTests(unittest.TestCase):
         self.addCleanup(sys.path.remove, str(FIRMWARE/'tools'))
         spec.loader.exec_module(self.module)
 
+    def test_source_archive_cache_is_verified_and_reused_without_overwrite(self):
+        import hashlib
+        self.assertTrue(hasattr(self.module, 'cache_source_archive'), 'verified test archive cache hook missing')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root/'locked.tar.gz'; source.write_bytes(b'verified archive fixture')
+            target = root/'cache/source.tar.gz'; checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+            self.module.cache_source_archive(source, target, checksum)
+            before = target.stat().st_mtime_ns
+            self.module.cache_source_archive(source, target, checksum)
+            self.assertEqual(target.stat().st_mtime_ns, before)
+            source.write_bytes(b'drift')
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                self.module.cache_source_archive(source, target, checksum)
+            self.assertEqual(target.read_bytes(), b'verified archive fixture')
+            source.write_bytes(b'verified archive fixture'); target.write_bytes(b'bad cache')
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                self.module.cache_source_archive(source, target, checksum)
+            self.assertEqual(target.read_bytes(), b'bad cache')
+
     def test_zip_traversal_symlinks_duplicates_and_digest_drift_rejected_atomically(self):
         import hashlib
         import zipfile

@@ -12,7 +12,7 @@ import sys
 import tempfile
 import urllib.error
 
-from prepare import FIRMWARE, LOCK_PATH, download_archive, prepare_source, refuse_existing
+from prepare import FIRMWARE, LOCK_PATH, download_archive, is_source_input, prepare_source, refuse_existing
 
 
 DEPENDENCY_MAX_BYTES = 1024 * 1024
@@ -56,6 +56,8 @@ def prepare_experiment(archive: Path, destination: Path, lock: dict,
         require_regular(path)
     overlay_paths = []
     for path in sorted(overlays.rglob('*')):
+        if not is_source_input(path.relative_to(overlays)):
+            continue
         if path.is_symlink():
             raise ValueError('symbolic overlay input is not allowed')
         if path.is_dir():

@@ -49,7 +49,7 @@ jobs:
       - name: Prepare fresh patched source in this isolated matrix job
         run: python3 firmware/tools/prepare_experiment.py --target "$TARGET"
       - name: Prepare pinned immutable network test fixture
-        run: python3 firmware/tools/prepare_c3_fixtures.py --destination firmware/.cache/c3-network-fixture
+        run: python3 firmware/tools/prepare_c3_fixtures.py --destination firmware/.cache/c3-network-fixture --cache-upstream-source
       - name: Run firmware host tests with real cue and network fixtures
         env:
           C3_NETWORK_COMPONENT: ${{ github.workspace }}/firmware/.cache/c3-network-fixture

@@ -10,6 +10,7 @@ import struct
 import tempfile
 import unittest
 import zipfile
+import test_flash_evidence as flash_fixture
 
 FIRMWARE = Path(__file__).resolve().parents[1]
 
@@ -42,6 +43,7 @@ class PcmEvidence(unittest.TestCase):
         self.out = self.tree/'build/family_c3_pcm'
         self.net = self.tree/'build/family_c3_network'
         self.component = self.tree/'managed_components/78__esp-ml307'
+        self.files = flash_fixture.fixture(self.tree)
         self.prefix = self.tree/'build/generated_assets.bin'
         self.prefix.write_bytes(b'fixture-prefix')
         # Layout/real stable prefix are tested separately. This synthetic image
@@ -53,12 +55,10 @@ class PcmEvidence(unittest.TestCase):
         self.addCleanup(self.prefix_check.stop)
         elf = self.tree/'build/xiaozhi.elf'; elf.write_bytes(b'\x7fELF fixture exact symbols')
         (self.tree/'build/xiaozhi.map').write_text('fixture map\n')
-        app = bytearray(256); app[0] = 0xe9
+        app = flash_fixture.image(5)
         app[32:36] = struct.pack('<I', 0xabcd5432)
         app[176:208] = hashlib.sha256(elf.read_bytes()).digest()
         (self.tree/'build/xiaozhi.bin').write_bytes(app)
-        self.files = {'0x20000': 'xiaozhi.bin', '0x600000': 'generated_assets.bin',
-                      '0x650000': 'family_c3_pcm/family_c3_pcm_cues.pack'}
         self.write_flash()
         generated = [self.net/'web_socket.cc', self.net/'esp_tcp.cc']
         others = [self.component/name for name in re.findall(r'"([^"\n]+\.cc)"',
@@ -70,12 +70,8 @@ class PcmEvidence(unittest.TestCase):
         (self.net/'compiled-sources.txt').write_text('\n'.join(map(str, generated+others))+'\n')
 
     def write_flash(self):
-        (self.tree/'build/flasher_args.json').write_text(json.dumps({'flash_files': self.files}))
-        merged = bytearray(b'\xff'*(0x650000+1490032))
-        for offset, name in self.files.items():
-            data = (self.tree/'build'/name).read_bytes()
-            start = int(offset, 0); merged[start:start+len(data)] = data
-        (self.tree/'build/merged-binary.bin').write_bytes(merged)
+        flash_fixture.write_flash(self.tree, self.files)
+        merged = (self.tree/'build/merged-binary.bin').read_bytes()
         releases = self.tree/'releases'; releases.mkdir(exist_ok=True)
         with zipfile.ZipFile(releases/'v2.5.2_xmini-c3-family.zip', 'w') as output:
             output.writestr('merged-binary.bin', merged)
@@ -119,6 +115,24 @@ class PcmEvidence(unittest.TestCase):
         release = self.tree/'releases/v2.5.2_xmini-c3-family.zip'
         with zipfile.ZipFile(release, 'w') as output: output.writestr('merged-binary.bin', b'wrong')
         with self.assertRaisesRegex(ValueError, 'release'): self.verify()
+
+    def test_redirected_app_and_prefix_cannot_pass_with_matching_merged_release(self):
+        for offset, canonical in [('0x20000', 'xiaozhi.bin'), ('0x600000', 'generated_assets.bin')]:
+            path = self.tree/'build/other'/canonical; path.parent.mkdir(exist_ok=True)
+            path.write_bytes((self.tree/'build'/canonical).read_bytes()+b'forged')
+            self.files[offset] = 'other/'+canonical; self.write_flash()
+            with self.subTest(canonical=canonical), self.assertRaisesRegex(ValueError, 'canonical'):
+                self.verify()
+            self.files[offset] = canonical
+        self.write_flash()
+
+    def test_gap_and_appended_ff_cannot_pass_when_release_is_updated(self):
+        path = self.tree/'build/merged-binary.bin'; original = path.read_bytes()
+        for changed in [original[:0x5000]+b'\x00'+original[0x5001:], original+b'\xff']:
+            path.write_bytes(changed)
+            with zipfile.ZipFile(self.tree/'releases/v2.5.2_xmini-c3-family.zip', 'w') as output:
+                output.writestr('merged-binary.bin', changed)
+            with self.assertRaisesRegex(ValueError, 'whole merged'): self.verify()
 
     def test_network_original_generated_helper_recipe_and_compiled_inputs_must_match(self):
         for path in [self.component/'src/web_socket.cc', self.net/'web_socket.cc',
@@ -200,15 +214,15 @@ class PcmEvidence(unittest.TestCase):
     def test_stock_bundle_retains_compile_provenance_and_hashes_every_file(self):
         self.assertTrue(hasattr(self.verifier, 'bundle_baseline'), 'stock evidence bundler missing')
         stock = Path(self.temp.name)/'stock'
+        flash_fixture.fixture(stock, c3=False)
         component = stock/'managed_components/78__esp-ml307'
         shutil.copytree(os.environ['C3_NETWORK_COMPONENT'], component)
         for name in self.verifier.BUILD_FILES:
             path = stock/name; path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b'synthetic '+name.encode())
+            if not path.exists(): path.write_bytes(b'synthetic '+name.encode())
         commands = [dict(directory=str(stock), file=str(component/name), command='c++ -c original')
                     for name in ('src/web_socket.cc', 'src/esp/esp_tcp.cc')]
         (stock/'build/compile_commands.json').write_text(json.dumps(commands))
-        (stock/'build/flasher_args.json').write_text('{"flash_files":{}}')
         (stock/'sdkconfig').write_text('CONFIG_IDF_TARGET="esp32s3"\n# CONFIG_XMINI_C3_PCM is not set\n')
         shutil.copyfile(FIRMWARE/'dependencies.lock', stock/'dependencies.lock')
         releases = stock/'releases'; releases.mkdir()

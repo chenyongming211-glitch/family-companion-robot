@@ -19,6 +19,12 @@ FIRMWARE = Path(__file__).resolve().parents[1]
 LOCK_PATH = FIRMWARE / 'upstream.lock.json'
 
 
+def is_source_input(path: Path) -> bool:
+    """One source inventory rule shared by preparation and evidence retention."""
+    return not any(part == '__pycache__' or part.endswith(('.pyc', '.pyo'))
+                   for part in Path(path).parts)
+
+
 def verify_checksum(path: Path, checksum: str) -> None:
     digest = hashlib.sha256()
     total = 0

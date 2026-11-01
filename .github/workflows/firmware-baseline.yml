@@ -26,7 +26,7 @@ jobs:
       - name: Prepare verified stock source
         run: python3 firmware/tools/prepare.py
       - name: Prepare pinned immutable network test fixture
-        run: python3 firmware/tools/prepare_c3_fixtures.py --destination firmware/.cache/c3-network-fixture
+        run: python3 firmware/tools/prepare_c3_fixtures.py --destination firmware/.cache/c3-network-fixture --cache-upstream-source
       - name: Test source preparation and firmware with real fixtures
         env:
           C3_NETWORK_COMPONENT: ${{ github.workspace }}/firmware/.cache/c3-network-fixture
