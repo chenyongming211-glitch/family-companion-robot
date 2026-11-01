@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"familyrobot/internal/speaker"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -188,5 +190,80 @@ func TestBenchmarkCLIErrorPrivacy(t *testing.T) {
 	}
 	if out.Len() != 0 || strings.Contains(errs.String(), "secret") || !strings.Contains(errs.String(), "benchmark_failed") {
 		t.Fatal("unsafe or missing error")
+	}
+}
+
+func TestSequenceAllocatesLabelsAfterRejectedNovelVoice(t *testing.T) {
+	cases := benchmarkFixtures()
+	for i := range cases {
+		cases[i].vector = append(cases[i].vector, 0)
+	}
+	for n := 0; n < 5; n++ {
+		split := "holdout"
+		if n < 2 {
+			split = "calibration"
+		}
+		cases = append(cases, embeddedCase{fixtureCase: fixtureCase{ID: fmt.Sprintf("fourth_%d", n), Speaker: "fixture_4", Split: split, Samples: 32000}, vector: []float32{0, 0, 0, 1}})
+	}
+	cases[12].quality = "short"
+	cases[12].vector = nil
+	r, e := analyzeBenchmark(cases, testSHA, 4)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if r.Sequence.Stable != 22 || r.Sequence.Uncertain != 2 || r.Sequence.WrongKnown != 0 {
+		t.Fatalf("valid later allocations mis-scored: %+v", r.Sequence)
+	}
+	labels := map[int]string{}
+	for _, c := range r.Sequence.Cases {
+		if c.State == speaker.StateTemporary {
+			if old := labels[c.Fixture]; old != "" && old != c.Label {
+				t.Fatal("fixture label changed")
+			}
+			labels[c.Fixture] = c.Label
+		}
+	}
+	if labels[3] != "guest_4" || labels[4] != "guest_3" {
+		t.Fatalf("rejected voice reserved an ID: %v", labels)
+	}
+	for _, c := range r.Capacity.Cases {
+		if c.Fixture > 2 && c.Expected != "unknown" {
+			t.Fatalf("capacity rejection expected %q", c.Expected)
+		}
+	}
+}
+func TestSequenceDoesNotRemapKnownFixtureAfterSplit(t *testing.T) {
+	cases := benchmarkFixtures()
+	// Voice A's first held-out sample is distinct enough to allocate a new label.
+	// Its next samples still use A's original anchor, so the split must remain wrong.
+	cases[2].vector = []float32{0, 0, 1}
+	r, e := analyzeBenchmark(cases, testSHA, 3)
+	if e != nil {
+		t.Fatal(e)
+	}
+	first := r.Sequence.Cases[0]
+	if first.Correct || first.Expected != "guest_1" || first.Label != "guest_3" || r.Sequence.WrongKnown == 0 {
+		t.Fatalf("split silently remapped: %+v", r.Sequence)
+	}
+	// C's identical vector matches the label already owned by split A; it is wrong.
+	for _, c := range r.Sequence.Cases {
+		if c.Fixture == 3 && c.State == speaker.StateTemporary && c.Correct {
+			t.Fatal("new fixture took another fixture's label")
+		}
+	}
+}
+
+func TestCapacityRejectedNovelVoiceStillExpectsUnknown(t *testing.T) {
+	cases := benchmarkFixtures()
+	cases[12].quality = "silence"
+	cases[12].vector = nil
+	r, e := analyzeBenchmark(cases, testSHA, 3)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, c := range r.Capacity.Cases {
+		if c.Fixture == 3 && c.State == speaker.StateUncertain && c.Expected != "unknown" {
+			t.Fatalf("rejected novel voice expected %q", c.Expected)
+		}
 	}
 }

@@ -132,6 +132,8 @@ new=maxDifferent+gap/4、match=maxDifferent+gap/2、margin=gap/8。
 
 匿名序列用前两种音色的第一项calibration初始化Tracker，然后交错所有holdout两遍。
 独立容量2对照重复相同序列，明确计数第三种音色unknown／不确定／误归已知，以及前两种音色重获。
+评分以首个成功的新标签建立fixture与guest的一一映射，拒识不预留编号；已有fixture分裂到新标签或匹配其他fixture已有标签均计错，不静默重映射。
+尚无映射的fixture期望为 `new_guest`，容量2的额外fixture期望始终为 `unknown`。
 Tracker在当前运行结束清除，不登记姓名、不保存模板；输出只有生成的fixture序号、guest标签和状态。
 所有holdout之间的同／异音色余弦仅报告聚合数量与范围，不输出完整配对矩阵。
 

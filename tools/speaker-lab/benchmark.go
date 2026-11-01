@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"math"
 	"os"
@@ -353,12 +352,20 @@ func runSequence(cases []embeddedCase, sha string, dimension int, cal calibratio
 		end += int64(c.Samples)
 		return tracker.Observe(speaker.Observation{Scope: scope, StartSample: start, EndSample: end, Embedding: c.vector, Complete: true, SingleSpeaker: c.quality == "" || c.quality == "qualified"})
 	}
+	fixtureLabels := map[string]string{}
+	labelOwners := map[string]string{}
 	for _, g := range groups[:2] {
 		for _, c := range cases {
 			if c.Speaker == g && c.Split == "calibration" {
-				if _, e = observe(c); e != nil {
-					return r, e
+				result, err := observe(c)
+				if err != nil {
+					return r, err
 				}
+				if result.State != speaker.StateTemporary || labelOwners[result.Label] != "" {
+					return r, errProtocol
+				}
+				fixtureLabels[g] = result.Label
+				labelOwners[result.Label] = g
 				break
 			}
 		}
@@ -385,18 +392,35 @@ func runSequence(cases []embeddedCase, sha string, dimension int, cal calibratio
 					continue
 				}
 				c := a[n]
+				expected := fixtureLabels[c.Speaker]
+				if expected == "" {
+					expected = "new_guest"
+				}
+				if capacity == 2 && g >= 2 {
+					expected = "unknown"
+				}
 				if len(c.vector) == 0 {
 					r.Uncertain++
-					r.Cases = append(r.Cases, sequenceCase{Index: len(r.Cases) + 1, Fixture: g + 1, Round: round, State: speaker.StateUncertain, Expected: fmt.Sprintf("guest_%d", g+1)})
+					r.Cases = append(r.Cases, sequenceCase{Index: len(r.Cases) + 1, Fixture: g + 1, Round: round, State: speaker.StateUncertain, Expected: expected})
 					continue
 				}
 				result, e := observe(c)
 				if e != nil {
 					return r, e
 				}
-				expected := fmt.Sprintf("guest_%d", g+1)
-				if capacity == 2 && g >= 2 {
-					expected = "unknown"
+				// Assign the reference mapping only for a genuinely new label. A
+				// rejected first sample reserves no ordinal; a known fixture that
+				// later splits keeps its original reference label and scores wrong.
+				if result.State == speaker.StateTemporary {
+					if expected == "new_guest" && labelOwners[result.Label] == "" {
+						fixtureLabels[c.Speaker] = result.Label
+						expected = result.Label
+					}
+					// Retain ownership even for an incorrect split, so a different
+					// fixture cannot subsequently claim that already-created label.
+					if labelOwners[result.Label] == "" {
+						labelOwners[result.Label] = c.Speaker
+					}
 				}
 				correct := string(result.State) == expected || result.State == speaker.StateTemporary && result.Label == expected
 				row := sequenceCase{Index: len(r.Cases) + 1, Fixture: g + 1, Round: round, State: result.State, Label: result.Label, Expected: expected, Correct: correct}
