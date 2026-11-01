@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+ulimit -c 0
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 source_dir="$repo_root/tools/speaker-session"
 out_dir="$repo_root/.superpowers/speaker-session"
@@ -11,4 +12,7 @@ xcrun swiftc -swift-version 5 -O -framework AppKit -framework AVFoundation \
   -o "$out_dir/SpeakerSession.app/Contents/MacOS/SpeakerSession"
 cp "$source_dir/Info.plist" "$out_dir/SpeakerSession.app/Contents/Info.plist"
 codesign --force --sign - --identifier com.familycompanion.speakersession "$out_dir/SpeakerSession.app" >/dev/null
+xcrun swiftc -swift-version 5 "$source_dir/Transport.swift" "$source_dir/Tests/Lifecycle.swift" \
+  -o "$out_dir/lifecycle-spec"
+"$out_dir/lifecycle-spec"
 printf '已构建：%s\n' "$out_dir/SpeakerSession.app"

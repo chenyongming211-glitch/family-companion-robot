@@ -161,7 +161,7 @@ stdin 复用上述 v1 binary PCM 帧，scope 必须为 `manual-test`，同一连
 
 仅合格片段提取特征，每句重新启动／关闭／回收实际 worker，保留其10秒冷启动与2秒RPC上限，以免人工4秒采集超过原worker的2秒空闲期限。父进程只保留一个最多8人的首次模板 Tracker；首个合格特征锁定维度，模板不随匹配更新。临时向量在 Observe 后清零，PCM 在每句处理后清零，不写录音、特征或人物库。每句冷启动仅为隔离诊断设计，不是产品延迟指标。
 
-stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `id`、`label`（`guest_1`～`guest_8`／`uncertain`／`unknown`）与 `duration_ms`，所有事件带 `evidence:user_declared_test`。没有向量、PCM、路径、姓名、文本。错误仅 stderr 固定 `session_failed`。真实输入结果不能重定向到文件。
+stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `id`、`label`（`guest_1`～`guest_8`／`uncertain`／`unknown`）与 `duration_ms`（输入音频片段时长，按样本数换算并向下取整；不是处理耗时；即使0ms也始终提供），所有事件带 `evidence:user_declared_test`。没有向量、PCM、路径、姓名、文本。错误仅 stderr 固定 `session_failed`。真实输入结果不能重定向到文件。
 
 低于1.5秒／RMS低于0.005直接 observation uncertain、不会生成身份。单人状态来自参与者显式声明，非算法验证；门禁不检测语音／换人／重叠。ERes2Net研究阈值 new=0.622530、match=0.682987、margin=0.030229来自既有合成基准，未经家庭真人校准，不作身份认证或登记依据。单人多句实测不能宣称多人验收。
 

@@ -21,6 +21,7 @@ struct SpeakerEvent { let event: String; let id: UInt64; let label: String }
 
 final class SessionTransport {
     private let queue = DispatchQueue(label: "speaker.session.transport")
+    private let queueKey = DispatchSpecificKey<UInt8>()
     private let lock = NSLock()
     private var cancelled = false
     private var queuedReads = 0
@@ -41,11 +42,12 @@ final class SessionTransport {
 
     init(configuration: SpeakerConfiguration, callback: @escaping (Result<SpeakerEvent, ClientFailure>) -> Void) {
         self.configuration = configuration; self.callback = callback
+        queue.setSpecific(key: queueKey, value: 1)
     }
     private var stopped: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     private func emit(_ value: Result<SpeakerEvent, ClientFailure>) { DispatchQueue.main.async { [weak self] in guard let self, !self.stopped else { return }; self.callback(value) } }
     private func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-    func start() {
+    func start(launch: ((Process) throws -> Void)? = nil) {
         queue.async { [weak self] in
             guard let self, !self.stopped else { return }
             let child = Process(), stdin = Pipe(), stdout = Pipe()
@@ -55,17 +57,28 @@ final class SessionTransport {
             child.environment = ["PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "HOME": NSHomeDirectory()]
             child.standardInput = stdin; child.standardOutput = stdout; child.standardError = FileHandle.nullDevice
             stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                let data = (try? handle.read(upToCount: 16385)) ?? Data()
+                guard let data = self?.availableChunk() else { return }
                 self?.enqueueRead(data)
             }
+            _ = fcntl(stdout.fileHandleForReading.fileDescriptor, F_SETFL, O_NONBLOCK)
             child.terminationHandler = { [weak self] _ in self?.queue.async { [weak self] in self?.fail() } }
             self.lock.lock()
             if self.cancelled { self.lock.unlock(); stdout.fileHandleForReading.readabilityHandler = nil; return }
             self.process = child; self.input = stdin.fileHandleForWriting; self.output = stdout.fileHandleForReading
-            do { try child.run(); _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETFL, O_NONBLOCK); self.lock.unlock() } catch { self.lock.unlock(); self.fail(); return }
+            do { if let launch { try launch(child) } else { try child.run() }; _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETFL, O_NONBLOCK); self.lock.unlock() } catch { self.lock.unlock(); self.fail(); return }
             self.armTimeout(15)
             self.queue.asyncAfter(deadline: .now() + 300) { [weak self] in self?.fail() }
         }
+    }
+    private func availableChunk() -> Data? {
+        // The descriptor stays owned while reading; shutdown removes the
+        // reference under this same lock before closing it on the queue.
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled, let output else { return nil }
+        var bytes = [UInt8](repeating: 0, count: 16385)
+        let count = Darwin.read(output.fileDescriptor, &bytes, bytes.count)
+        if count < 0 && (errno == EAGAIN || errno == EINTR) { return nil }
+        return count > 0 ? Data(bytes[0..<count]) : Data()
     }
     private func enqueueRead(_ data: Data) {
         lock.lock()
@@ -143,13 +156,35 @@ final class SessionTransport {
         lock.lock(); let child = process; let stdin = input; let stdout = output; process = nil; input = nil; output = nil; lock.unlock()
         stdout?.readabilityHandler = nil
         try? stdin?.close(); try? stdout?.close()
-        if let child, child.isRunning { child.terminate(); DispatchQueue.global().asyncAfter(deadline: .now() + 1) { if child.isRunning { kill(child.processIdentifier, SIGKILL) } } }
+        retire(child)
         timeout?.cancel(); pending.resetBytes(in: 0..<pending.count); pending.removeAll()
     }
-    func stop() {
-        lock.lock(); cancelled = true; let child = process; lock.unlock()
-        if let child, child.isRunning { child.terminate() }
-        queue.async { [weak self] in self?.shutdown() }
+    // EOF first, then bounded TERM/KILL escalation and reaping. This happens
+    // before stop returns, including when the application is about to exit.
+    private func retire(_ child: Process?) {
+        guard let child, child.processIdentifier > 0 else { return }
+        func awaitExit(_ seconds: Double) {
+            let deadline = ProcessInfo.processInfo.systemUptime + seconds
+            while child.isRunning && ProcessInfo.processInfo.systemUptime < deadline { usleep(10000) }
+        }
+        child.terminationHandler = nil
+        awaitExit(0.2)
+        if child.isRunning { child.terminate(); awaitExit(0.5) }
+        if child.isRunning { kill(child.processIdentifier, SIGKILL) }
+        // SIGKILL cannot be ignored. Foundation reaps the actual child before
+        // this returns; there is no deferred cleanup relying on a live app.
+        child.waitUntilExit()
     }
-    deinit { if let process, process.isRunning { process.terminate() }; try? input?.close(); output?.readabilityHandler = nil; try? output?.close() }
+    func stop() {
+        lock.lock(); cancelled = true; lock.unlock()
+        // The nonblocking write loop observes cancellation within its 50 ms
+        // poll. Close descriptors only after it has relinquished the queue.
+        if DispatchQueue.getSpecific(key: queueKey) != nil { shutdown() }
+        else { queue.sync { self.shutdown() } }
+    }
+    deinit {
+        output?.readabilityHandler = nil
+        try? input?.close(); try? output?.close()
+        retire(process)
+    }
 }
