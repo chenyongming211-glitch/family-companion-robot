@@ -1,0 +1,11 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -11,3 +11,8 @@
+ 
+ set(PROJECT_VER "2.5.2")
+ project(xiaozhi)
++
++if(CONFIG_XMINI_C3_PCM AND NOT CMAKE_BUILD_EARLY_EXPANSION)
++    include("${CMAKE_CURRENT_LIST_DIR}/cmake/family_c3_pcm.cmake")
++    family_c3_pcm_build()
++endif()

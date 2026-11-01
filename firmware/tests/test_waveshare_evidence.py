@@ -96,7 +96,7 @@ class WaveshareEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.verify()
 
     def bundle_fixture(self, release_names):
-        for relative in self.module.BUILD_FILES:
+        for relative in (*self.module.BUILD_FILES, *self.module.NATIVE_NETWORK_FILES):
             path = self.tree/relative
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +108,11 @@ class WaveshareEvidenceTests(unittest.TestCase):
         for name in release_names:
             (releases/name).write_bytes(b'synthetic release ZIP fixture')
         output = self.root/'evidence'
-        self.module.bundle(self.firmware, self.tree, output, 'a'*40, self.verify())
+        # Native input validation uses real pinned fixtures in the PCM evidence
+        # suite; these synthetic fixtures exercise layout and ZIP selection.
+        with existing.mock.patch.object(self.module, 'verify_no_pcm', return_value={'fixture': True}):
+            evidence = self.verify()
+        self.module.bundle(self.firmware, self.tree, output, 'a'*40, evidence)
         return output
 
     def test_bundle_uses_actual_manufacturer_prefixed_waveshare_release_name(self):

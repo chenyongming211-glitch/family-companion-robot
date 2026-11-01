@@ -20,6 +20,9 @@ class C3EvidenceTests(unittest.TestCase):
 
     def setUp(self):
         existing.EvidenceTests.setUp(self)
+        # These fixtures exercise native lock/config/layout, independently of
+        # real cue/network/symbol artifacts covered by test_c3_pcm_evidence.py.
+        self.module.verify_c3_pcm = lambda tree: {'fixture': True}
         for name in ['dependencies.esp32c3.lock', 'dependencies.esp32c3.lock.sha256']:
             shutil.copyfile(existing.FIRMWARE/name, self.firmware/name)
         shutil.copyfile(self.firmware/'dependencies.esp32c3.lock', self.tree/'dependencies.lock')
@@ -37,6 +40,8 @@ class C3EvidenceTests(unittest.TestCase):
             'CONFIG_IDF_TARGET': '"esp32c3"', 'CONFIG_BOARD_TYPE_XMINI_C3': 'y',
             'CONFIG_XMINI_C3_BUTTON_ENTRY': 'y', 'CONFIG_WAKE_WORD_DISABLED': 'y',
             'CONFIG_XMINI_C3_VOICE_BARGE': 'y',
+            'CONFIG_XMINI_C3_PCM': 'y', 'CONFIG_LANGUAGE_ZH_CN': 'y',
+            'CONFIG_FLASH_DEFAULT_ASSETS': 'y',
             'CONFIG_OTA_URL': '""',
             'CONFIG_ESPTOOLPY_FLASHSIZE_16MB': 'y', 'CONFIG_PARTITION_TABLE_CUSTOM': 'y',
             'CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE': 'y',
@@ -114,6 +119,13 @@ class C3EvidenceTests(unittest.TestCase):
         config.write_text(config.read_text().replace('CONFIG_XMINI_C3_VOICE_BARGE=y\n',
                                                     'CONFIG_XMINI_C3_VOICE_BARGE=n\n'))
         with self.assertRaisesRegex(ValueError, 'CONFIG_XMINI_C3_VOICE_BARGE'):
+            self.verify()
+
+    def test_product_c3_requires_explicit_pcm(self):
+        path = self.tree/'sdkconfig'
+        path.write_text(path.read_text().replace('CONFIG_XMINI_C3_PCM=y\n', '')
+                        + '# CONFIG_XMINI_C3_PCM is not set\n')
+        with self.assertRaisesRegex(ValueError, 'CONFIG_XMINI_C3_PCM'):
             self.verify()
 
     def test_c3_override_requires_reviewed_native_version_and_prepared_manifest(self):
@@ -218,7 +230,8 @@ class C3EvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'partition'): self.verify()
 
     def test_bundle_keeps_c3_native_pin_and_canonical_release_name(self):
-        for relative in self.module.BUILD_FILES:
+        for relative in (*self.module.BUILD_FILES, *self.module.C3_BUILD_FILES,
+                         *self.module.c3_retained_inputs(self.firmware)):
             path = self.tree/relative
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)

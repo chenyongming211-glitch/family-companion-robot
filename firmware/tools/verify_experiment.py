@@ -13,6 +13,13 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
+import tempfile
+import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'overlays/scripts'))
+import family_c3_build as c3_build
+import family_c3_network as c3_network
 
 FIRMWARE = Path(__file__).resolve().parents[1]
 WAVESHARE_VARIANT = 'esp32-s3-touch-amoled-2.16-xiaoman'
@@ -30,7 +37,166 @@ CANONICAL_RELEASE_NAMES = {
 }
 BUILD_FILES = ('build/xiaozhi.bin', 'build/merged-binary.bin', 'build/generated_assets.bin',
                'build/bootloader/bootloader.bin', 'build/partition_table/partition-table.bin',
-               'build/flasher_args.json')
+               'build/flasher_args.json', 'build/compile_commands.json')
+NATIVE_NETWORK_FILES = tuple('managed_components/78__esp-ml307/'+name for name in c3_network.ORIGINAL_SHA256)
+C3_BUILD_FILES = ('build/xiaozhi.elf', 'build/xiaozhi.map',
+    'build/family_c3_pcm/family_c3_pcm_cues.pack', 'build/family_c3_pcm/family_c3_pcm_cues.json',
+    'build/family_c3_pcm/family_c3_pcm_cues_generated.h',
+    'build/family_c3_network/web_socket.cc', 'build/family_c3_network/esp_tcp.cc',
+    'build/family_c3_network/family_c3_network.manifest.json',
+    'build/family_c3_network/LICENSE.esp-ml307', 'build/family_c3_network/compiled-sources.txt')
+
+
+def read_regular(path):
+    return c3_build.regular(path).read_bytes()
+
+
+def compiled_paths(path):
+    commands = json.loads(read_regular(path))
+    if not isinstance(commands, list):
+        raise ValueError('compiled inputs are not a list')
+    compiled = []
+    for entry in commands:
+        try:
+            source = Path(entry['file'])
+            source = source if source.is_absolute() else Path(entry['directory'])/source
+            if not entry.get('command') and not entry.get('arguments'):
+                raise ValueError('compiled input has no compiler invocation')
+            compiled.append(source.resolve())
+        except (KeyError, TypeError) as exc:
+            raise ValueError('invalid compiled input record') from exc
+    return compiled
+
+
+def verify_c3_pcm(tree):
+    """Bind separate trailer, real source/compile inputs, symbols and release bytes."""
+    tree = tree.resolve()
+    build, generated = tree/'build', tree/'build/family_c3_network'
+    for relative in C3_BUILD_FILES:
+        c3_build.regular(tree/relative)
+    cues = c3_build.verify_cues(tree, build/'family_c3_pcm')
+    prefix = c3_build.verify_prefix(build/'generated_assets.bin')
+    elf = read_regular(build/'xiaozhi.elf')
+    app = read_regular(build/'xiaozhi.bin')
+    elf_sha = hashlib.sha256(elf).digest()
+    if (elf[:4] != b'\x7fELF' or len(app) < 208 or app[32:36] != struct.pack('<I', 0xabcd5432)
+            or app[176:208] != elf_sha):
+        raise ValueError('C3 ELF/app descriptor SHA256 mismatch')
+    component = tree/'managed_components/78__esp-ml307'
+    manifest = json.loads(read_regular(generated/'family_c3_network.manifest.json'))
+    for key, expected in dict(schema=1, source_uri=c3_network.SOURCE_URI,
+        source_commit=c3_network.SOURCE_COMMIT, archive_sha256=c3_network.ARCHIVE_SHA256,
+        component_hash=c3_network.COMPONENT_HASH, license='Apache-2.0',
+        original_sha256=c3_network.ORIGINAL_SHA256).items():
+        if manifest.get(key) != expected:
+            raise ValueError('C3 network manifest pin mismatch: '+key)
+    for name, expected in c3_network.ORIGINAL_SHA256.items():
+        if hashlib.sha256(read_regular(component/name)).hexdigest() != expected:
+            raise ValueError('C3 network managed original SHA256 mismatch: '+name)
+    if read_regular(generated/'LICENSE.esp-ml307') != read_regular(component/'LICENSE'):
+        raise ValueError('C3 network retained license mismatch')
+    for name, field, directory in [('web_socket.cc', 'patched_sha256', generated),
+                                  ('esp_tcp.cc', 'patched_sha256', generated),
+                                  *[(name, 'helper_sha256', tree/'main/audio') for name in c3_network.HELPERS]]:
+        actual = hashlib.sha256(read_regular(directory/name)).hexdigest()
+        if manifest.get(field, {}).get(name) != actual:
+            raise ValueError('C3 network generated/helper SHA256 mismatch: '+name)
+    recipe_sha = hashlib.sha256(read_regular(tree/'scripts/family_c3_network.py')).hexdigest()
+    if manifest.get('recipe_sha256') != recipe_sha:
+        raise ValueError('C3 network recipe SHA256 mismatch')
+    for name in ('family_c3_network.py', 'family_c3_build.py', 'family_c3_pcm_cues.py'):
+        if read_regular(tree/'scripts'/name) != read_regular(FIRMWARE/'overlays/scripts'/name):
+            raise ValueError('C3 prepared build recipe differs from reviewed input: '+name)
+    for name in c3_network.HELPERS:
+        if read_regular(tree/'main/audio'/name) != read_regular(FIRMWARE/'overlays/main/audio'/name):
+            raise ValueError('C3 prepared network helper differs from reviewed input: '+name)
+    # Re-run the reviewed recipes. Self-consistent manifests alone cannot prove
+    # that a changed PCM payload or network source came from those recipes.
+    with tempfile.TemporaryDirectory(prefix='verify-c3-recipes-') as temporary:
+        expected_network = Path(temporary)/'network'
+        expected_manifest = c3_network.generate(component, expected_network)
+        if (manifest != expected_manifest or any(read_regular(generated/name) != read_regular(expected_network/name)
+                for name in ('web_socket.cc', 'esp_tcp.cc', 'LICENSE.esp-ml307'))):
+            raise ValueError('C3 network copies differ from canonical generator output')
+        expected_cues = Path(temporary)/'cues'
+        expected_cue_manifest = c3_build.generate(tree, expected_cues)
+        if (cues != expected_cue_manifest or read_regular(build/'family_c3_pcm/family_c3_pcm_cues.pack')
+                != read_regular(expected_cues/'family_c3_pcm_cues.pack')):
+            raise ValueError('C3 PCM pack differs from canonical libopus 1.4 decoder output')
+    # Compare real exported compiler inputs to the final component SOURCES.
+    compiled = compiled_paths(build/'compile_commands.json')
+    selected = []
+    for line in read_regular(generated/'compiled-sources.txt').decode().splitlines():
+        path = Path(line)
+        selected.append((path if path.is_absolute() else component/path).resolve())
+    originals = {component/'src/web_socket.cc', component/'src/esp/esp_tcp.cc'}
+    replacements = {generated/'web_socket.cc', generated/'esp_tcp.cc'}
+    if (any(p in compiled or p in selected for p in originals)
+            or any(compiled.count(p) != 1 or selected.count(p) != 1 for p in replacements)
+            or len(selected) != len(set(selected))
+            or any(compiled.count(p) != 1 for p in selected)):
+        raise ValueError('C3 compiled network input/source selection mismatch')
+    # Every native component source is retained except the exact two replacements.
+    native_sources = {component/name for name in re.findall(r'"([^"\n]+\.cc)"',
+                     read_regular(component/'CMakeLists.txt').decode())}
+    if set(selected) != ((native_sources-originals) | replacements):
+        raise ValueError('C3 compiled network sources changed beyond the two reviewed replacements')
+    flash = json.loads(read_regular(build/'flasher_args.json'))['flash_files']
+    ranges, pcm_entries = [], []
+    for text_offset, relative in flash.items():
+        offset = int(text_offset, 0)
+        path = build/relative
+        if not path.resolve().is_relative_to(build):
+            raise ValueError('C3 flashed input escapes build directory')
+        data = read_regular(path)
+        if offset < 0 or offset+len(data) > 0x1000000:
+            raise ValueError('C3 flashed input exceeds flash capacity')
+        ranges.append((offset, offset+len(data), path.resolve(), data))
+        if path.name == 'family_c3_pcm_cues.pack': pcm_entries.append((offset, path.resolve()))
+    if pcm_entries != [(0x650000, build/'family_c3_pcm/family_c3_pcm_cues.pack')]:
+        raise ValueError('C3 PCM flasher trailer offset/path mismatch')
+    ranges.sort(key=lambda entry: entry[0])
+    if any(right[0] < left[1] for left, right in zip(ranges, ranges[1:])):
+        raise ValueError('C3 flashed input overlap')
+    merged = read_regular(build/'merged-binary.bin')
+    if len(merged) > 0x1000000 or any(merged[start:end] != data for start, end, _, data in ranges):
+        raise ValueError('C3 merged image differs from flashed inputs')
+    releases = list((tree/'releases').glob('*_xmini-c3-family.zip'))
+    if len(releases) != 1:
+        raise ValueError('C3 expected one canonical release ZIP')
+    c3_build.regular(releases[0])
+    try:
+        with zipfile.ZipFile(releases[0]) as release:
+            entries = release.infolist()
+            if (len(entries) != 1 or entries[0].filename != 'merged-binary.bin'
+                    or entries[0].file_size != len(merged) or release.read(entries[0]) != merged):
+                raise ValueError('C3 release merged image differs from verified build')
+    except zipfile.BadZipFile as exc:
+        raise ValueError('invalid C3 release ZIP') from exc
+    return dict(cues=cues, assets_prefix=prefix, elf_sha256=elf_sha.hex(), network=manifest,
+                compile_commands_sha256=digest(build/'compile_commands.json'),
+                merged_sha256=hashlib.sha256(merged).hexdigest(), release_sha256=digest(releases[0]))
+
+
+def verify_no_pcm(tree):
+    for directory in ('build/family_c3_pcm', 'build/family_c3_network'):
+        if (tree/directory).exists():
+            raise ValueError('non-C3 build contains PCM generated artifacts')
+    flash = tree/'build/flasher_args.json'
+    if flash.exists() and 'family_c3_' in read_regular(flash).decode():
+        raise ValueError('non-C3 flash contains PCM trailer')
+    commands = tree/'build/compile_commands.json'
+    if commands.exists():
+        if 'family_c3_network' in read_regular(commands).decode():
+            raise ValueError('non-C3 compiled inputs contain C3 replacements')
+        compiled = compiled_paths(commands)
+        component = tree.resolve()/'managed_components/78__esp-ml307'
+        if any(compiled.count(component/name) != 1 for name in ('src/web_socket.cc', 'src/esp/esp_tcp.cc')):
+            raise ValueError('non-C3 compiled inputs must retain both original network sources exactly once')
+        for name, expected in c3_network.ORIGINAL_SHA256.items():
+            if hashlib.sha256(read_regular(component/name)).hexdigest() != expected:
+                raise ValueError('non-C3 network original SHA256 mismatch: '+name)
+        return dict(compile_commands_sha256=digest(commands), original_sha256=c3_network.ORIGINAL_SHA256)
 
 
 def digest(path):
@@ -38,8 +204,12 @@ def digest(path):
 
 
 def inputs(directory, pattern):
-    return [dict(path=path.relative_to(directory).as_posix(), sha256=digest(path))
-            for path in sorted(directory.glob(pattern)) if path.is_file()]
+    records = []
+    for path in sorted(directory.glob(pattern)):
+        if path.is_file():
+            c3_build.regular(path)
+            records.append(dict(path=path.relative_to(directory).as_posix(), sha256=digest(path)))
+    return records
 
 
 def verify_xiaoman_assets(path):
@@ -288,6 +458,8 @@ def verify(firmware, tree, variant, idf_commit):
         sections = re.findall(r'^  '+re.escape(name)+r':\n(.*?)(?=^  \S|\Z)', native, re.M | re.S)
         if len(sections) != 1 or re.findall(r'^    version: (\S+)\s*$', sections[0], re.M) != [version]:
             raise ValueError('critical component version mismatch: '+name)
+    if c3 and expected_hash != 'e178b87a1832979ff7143ae2c5cde006b7ab62bc8067f18e718b4b26be558bbc':
+        raise ValueError('C3 native dependency pin differs from reviewed ESP-SR 2.6.1 lock')
     effective = {}
     for line in (tree/'sdkconfig').read_text().splitlines():
         if line.startswith('CONFIG_') and '=' in line:
@@ -305,6 +477,7 @@ def verify(firmware, tree, variant, idf_commit):
     xiaoman = variant == 'm5stack-stopwatch-xiaoman' or waveshare
     usb_console = experiment or waveshare or c3
     required = {'CONFIG_IDF_TARGET': '"esp32s3"',
+                'CONFIG_XMINI_C3_PCM': 'y' if c3 else 'n',
                 'CONFIG_BOARD_TYPE_M5STACK_STOPWATCH': 'n' if waveshare else 'y',
                 'CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16': 'y' if waveshare else 'n',
                 'CONFIG_WAVESHARE_XIAOMAN_REALTIME': 'y' if waveshare else 'n',
@@ -331,6 +504,7 @@ def verify(firmware, tree, variant, idf_commit):
         required.update(CONFIG_IDF_TARGET='"esp32c3"', CONFIG_BOARD_TYPE_M5STACK_STOPWATCH='n',
                         CONFIG_BOARD_TYPE_XMINI_C3='y', CONFIG_XMINI_C3_BUTTON_ENTRY='y',
                         CONFIG_XMINI_C3_VOICE_BARGE='y',
+                        CONFIG_LANGUAGE_ZH_CN='y', CONFIG_FLASH_DEFAULT_ASSETS='y',
                         CONFIG_SPIRAM='n', CONFIG_USE_AUDIO_PROCESSOR='n', CONFIG_USE_DEVICE_AEC='n',
                         CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y',
                         CONFIG_PARTITION_TABLE_CUSTOM_FILENAME='"partitions/xmini-c3-family-16m.csv"',
@@ -362,6 +536,7 @@ def verify(firmware, tree, variant, idf_commit):
     effective.setdefault('CONFIG_STOPWATCH_SOFTWARE_AEC', 'n')
     effective.setdefault('CONFIG_STOPWATCH_DEFAULT_REALTIME', 'n')
     effective.setdefault('CONFIG_XIAOMAN_ORB_UI', 'n')
+    effective.setdefault('CONFIG_XMINI_C3_PCM', 'n')
     # Kconfig omits the device-AEC symbol when this stock board's dependency
     # expression is false. Absent means disabled, never an enabled core path.
     if not experiment:
@@ -375,6 +550,9 @@ def verify(firmware, tree, variant, idf_commit):
     if c3:
         evidence['dependency_lock_source'] = dependency_name
         evidence['partition_layout'] = verify_c3_layout(tree)
+        evidence['c3_pcm'] = verify_c3_pcm(tree)
+    else:
+        evidence['native_network_inputs'] = verify_no_pcm(tree)
     if waveshare:
         evidence['partition_layout'] = verify_waveshare_layout(tree)
     if xiaoman:
@@ -382,10 +560,25 @@ def verify(firmware, tree, variant, idf_commit):
     return evidence
 
 
+def c3_retained_inputs(firmware):
+    paths = {'main/idf_component.yml', 'CMakeLists.txt', 'managed_components/78__esp-ml307/CMakeLists.txt'}
+    paths.update('managed_components/78__esp-ml307/'+name for name in c3_network.ORIGINAL_SHA256)
+    paths.update('main/assets/'+name for name, _, _ in c3_build.INVENTORY)
+    paths.update(path.relative_to(firmware/'overlays').as_posix()
+                 for path in (firmware/'overlays').rglob('*') if path.is_file())
+    for patch in (firmware/'patches').glob('*.patch'):
+        paths.update(re.findall(r'^\+\+\+ b/([^\n]+)$', patch.read_text(), re.M))
+    return sorted(paths)
+
+
 def bundle(firmware, tree, output, source_sha, evidence):
     if not re.fullmatch('[0-9a-f]{40}', source_sha):
         raise ValueError('invalid source SHA')
     required = ['dependencies.lock', 'sdkconfig', '.family-robot-source.json', *BUILD_FILES]
+    if evidence['variant'] == C3_VARIANT:
+        required.extend((*C3_BUILD_FILES, *c3_retained_inputs(firmware)))
+    else:
+        required.extend(NATIVE_NETWORK_FILES)
     release_name = CANONICAL_RELEASE_NAMES.get(evidence['variant'])
     if release_name is None:
         raise ValueError('unknown canonical release variant')
@@ -395,7 +588,8 @@ def bundle(firmware, tree, output, source_sha, evidence):
     required.append(releases[0].relative_to(tree).as_posix())
     for relative in required:
         path = tree/relative
-        if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
+        if (not path.is_file() or path.is_symlink() or path.stat().st_size == 0
+                or any(parent.is_symlink() for parent in path.parents)):
             raise ValueError('missing/nonregular build evidence: '+relative)
     output.mkdir(parents=True, exist_ok=False)
     for relative in required:
@@ -417,20 +611,71 @@ def bundle(firmware, tree, output, source_sha, evidence):
         for path in sorted(output.rglob('*')) if path.is_file()))
 
 
+def bundle_baseline(firmware, tree, output, source_sha, idf_commit):
+    """Keep stock sources unpatched while retaining auditable original inputs."""
+    if not re.fullmatch('[0-9a-f]{40}', source_sha):
+        raise ValueError('invalid source SHA')
+    lock = json.loads(read_regular(firmware/'upstream.lock.json'))
+    if idf_commit != lock['idf_commit']:
+        raise ValueError('SDK commit mismatch')
+    config = read_regular(tree/'sdkconfig').decode()
+    if (re.findall(r'^CONFIG_IDF_TARGET=(\S+)\s*$', config, re.M) != ['"esp32s3"']
+            or any(value != 'n' for value in re.findall(r'^CONFIG_XMINI_C3_PCM=(\S+)\s*$', config, re.M))):
+        raise ValueError('stock baseline target/PCM configuration mismatch')
+    # Required even though config-only unit fixtures may omit compiler output.
+    c3_build.regular(tree/'build/compile_commands.json')
+    native = verify_no_pcm(tree)
+    releases = list((tree/'releases').glob('*_m5stack-stopwatch.zip'))
+    if len(releases) != 1:
+        raise ValueError('expected one stock canonical release ZIP')
+    required = ['dependencies.lock', 'sdkconfig', *BUILD_FILES, *NATIVE_NETWORK_FILES,
+                releases[0].relative_to(tree).as_posix()]
+    for relative in required:
+        c3_build.regular(tree/relative)
+    with zipfile.ZipFile(releases[0]) as release:
+        entries = release.infolist()
+        merged = read_regular(tree/'build/merged-binary.bin')
+        if (len(entries) != 1 or entries[0].filename != 'merged-binary.bin'
+                or entries[0].file_size != len(merged) or release.read(entries[0]) != merged):
+            raise ValueError('stock release differs from merged image')
+    output.mkdir(parents=True, exist_ok=False)
+    for relative in required:
+        target = output/relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(tree/relative, target)
+    for source, relative in [(firmware/'upstream.lock.json', 'upstream.lock.json'),
+                             (firmware/'third_party/xiaozhi-LICENSE', 'third_party/xiaozhi-LICENSE'),
+                             (firmware.parent/'THIRD_PARTY_NOTICES.txt', 'THIRD_PARTY_NOTICES.txt')]:
+        target = output/relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(read_regular(source))
+    (output/'build-evidence.json').write_text(json.dumps(dict(source_sha=source_sha, idf_commit=idf_commit,
+        variant='stock-m5stack-stopwatch', native_network_inputs=native,
+        dependencies_sha256=digest(tree/'dependencies.lock'), acoustic_acceptance='pending'), indent=2)+'\n')
+    (output/'SHA256SUMS').write_text(''.join(digest(path)+'  '+path.relative_to(output).as_posix()+'\n'
+        for path in sorted(output.rglob('*')) if path.is_file()))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tree', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--variant', choices=VARIANTS, required=True)
+    parser.add_argument('--variant', choices=VARIANTS)
+    parser.add_argument('--baseline', action='store_true', help='unpatched stock S3 evidence')
     parser.add_argument('--source-sha', required=True)
     parser.add_argument('--idf-commit', required=True)
     args = parser.parse_args()
+    if args.baseline == bool(args.variant):
+        parser.error('choose exactly one of --baseline or --variant')
     actual = subprocess.check_output(['git', '-c', f'safe.directory={FIRMWARE.parent}', '-C', str(FIRMWARE.parent), 'rev-parse', 'HEAD'], text=True).strip()
     if actual != args.source_sha:
         parser.error('checkout does not match requested source SHA')
-    evidence = verify(FIRMWARE, args.tree, args.variant, args.idf_commit)
-    bundle(FIRMWARE, args.tree, args.output, actual, evidence)
-    print('Verified source, SDK, dependency bytes and effective '+args.variant+' configuration; acoustics pending')
+    if args.baseline:
+        bundle_baseline(FIRMWARE, args.tree, args.output, actual, args.idf_commit)
+    else:
+        evidence = verify(FIRMWARE, args.tree, args.variant, args.idf_commit)
+        bundle(FIRMWARE, args.tree, args.output, actual, evidence)
+    print('Verified source and build evidence; acoustics pending')
 
 
 if __name__ == '__main__':

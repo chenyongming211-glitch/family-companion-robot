@@ -7,6 +7,7 @@ import shutil
 import struct
 import tempfile
 import unittest
+from unittest import mock
 
 FIRMWARE = Path(__file__).resolve().parents[1]
 SCRIPT = FIRMWARE/'tools/verify_experiment.py'
@@ -82,6 +83,16 @@ class EvidenceTests(unittest.TestCase):
         config = self.tree/'sdkconfig'
         config.write_text(config.read_text().replace('# CONFIG_USE_DEVICE_AEC is not set\n', ''))
         self.assertEqual(self.verify('m5stack-stopwatch')['effective_config']['CONFIG_STOPWATCH_SOFTWARE_AEC'], 'n')
+
+    def test_s3_rejects_pcm_config_and_generated_trailer(self):
+        config = self.tree/'sdkconfig'
+        config.write_text(config.read_text()+'CONFIG_XMINI_C3_PCM=y\n')
+        with self.assertRaisesRegex(ValueError, 'CONFIG_XMINI_C3_PCM'):
+            self.verify()
+        self.config(True)
+        (self.tree/'build/family_c3_pcm').mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, 'non-C3'):
+            self.verify()
 
     def test_s3_ignores_optional_c3_dependency_override_and_keeps_old_pin(self):
         original = self.verify()
@@ -213,7 +224,7 @@ class EvidenceTests(unittest.TestCase):
                 self.verify()
 
     def test_bundle_copies_required_evidence_and_hashes_every_file(self):
-        for relative in self.module.BUILD_FILES:
+        for relative in (*self.module.BUILD_FILES, *self.module.NATIVE_NETWORK_FILES):
             target = self.tree/relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b'synthetic '+relative.encode())
@@ -221,7 +232,11 @@ class EvidenceTests(unittest.TestCase):
         release.parent.mkdir()
         release.write_bytes(b'synthetic release')
         output = self.root/'evidence'
-        self.module.bundle(self.firmware, self.tree, output, 'a'*40, self.verify())
+        # Native compilation/hash validation has real registry fixtures in
+        # test_c3_pcm_evidence.py; this fixture checks packaging and config.
+        with mock.patch.object(self.module, 'verify_no_pcm', return_value={'fixture': True}):
+            evidence = self.verify()
+        self.module.bundle(self.firmware, self.tree, output, 'a'*40, evidence)
         self.assertTrue((output/'third_party/xiaozhi-LICENSE').is_file())
         self.assertEqual((output/'third_party/xiaozhi-LICENSE').read_bytes(), self.license_bytes)
         self.assertTrue((output/'THIRD_PARTY_NOTICES.txt').is_file())
