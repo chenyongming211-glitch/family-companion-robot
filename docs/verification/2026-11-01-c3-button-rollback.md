@@ -26,4 +26,31 @@ Go 仍为 `58c14cd`，`ready/memory_ready=true`、active0，gateway health 为 o
 
 代码已通过原规格与独立质量复核，无阻断项。云端冻结源的64个不同预期用例已逐一通过：63项/43.016s，另1项/61.642s，无skip；前一命令包含一个类名拼错的loader error，原日志保留，不混称一次完整64项绿色调用。覆盖Opus稳定打包、三实验flag误开拒绝、原始网络输入、半双工上行门控/按键重开、实际DMA完成和微雪证据。204个输入测试后无漂移；1806个prepared文件仅C3 config及provenance变化，微雪/M5来源与配置逐字节保持。
 
-证据在云端 `/opt/family-robot-validation/c3-button-rollback-20261101/` 的 `final-targeted.log`、`final-media-config.log`、`source-closure.json` 与 `source-closure-after-tests.json`。新原生CI结果待确认；当前实机继续使用已验收6b镜像，未安装本轮新构建。
+证据在云端 `/opt/family-robot-validation/c3-button-rollback-20261101/` 的 `final-targeted.log`、`final-media-config.log`、`source-closure.json` 与 `source-closure-after-tests.json`。
+
+## 原生 CI 与实际产物核验
+
+精确源码 `977024333df985362fa261fc5cabae44d0dadefa` 的六个原生构建目标均完成并返回 success：[五目标 experiment](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41292919595) 与 [stock](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41292919618)。
+
+| 目标 | Job | 结果 |
+|---|---|---|
+| C3 稳定按键版 | 124807715725 | success |
+| M5 原版 | 124807715572 | success |
+| M5 software-aec | 124807715410 | success |
+| M5 小满 | 124807715665 | success |
+| 微雪小满 | 124807715608 | success |
+| stock M5 | 124807715559 | success |
+
+C3 job 的主机测试共 280 项/202.822s，结果为 `OK (skipped=1)`；唯一跳过项需要精确旧 `ee4249d` 产物进行历史负对照，不属于稳定按键版验收。上游 110 项/7.257s 无 skip 通过，随后原生编译、链接、正常构建验证及打包通过。故障注入测试输出中的 `assets.bin exceeds 100 bytes` 不是本次实际构建失败。
+
+实际下载 C3 artifact `13078201329`，名称为 `stopwatch-patched-xmini-c3-family-977024333df985362fa261fc5cabae44d0dadefa`；ZIP 为 5,398,575 字节，SHA256 为 `064cb55b82cc2042083dce505c53305fa98c930247b0b4d08796b1e9f06d8a89`。云端独立检查确认：
+
+- ZIP 大小、SHA256、CRC、安全解包及逐文件一致性通过；`SHA256SUMS` 的 107 个文件全部匹配，清单无遗漏。
+- 构建证据绑定上述精确源码、`xmini/c3`、IDF 6.1.0/`fff9895c82d744c7237be8847347bdd1b07c6643`；依赖锁、补丁及 overlay 摘要匹配。
+- 实际 `sdkconfig` 与有效配置一致：按键入口为 y，语音插话、PCM、实验 IRAM 均为 n；Kconfig 未出现的布尔项按 n 解释。
+- 编译输入使用原始 `esp-ml307` 网络源码，摘要和编译记录一致，没有切换到实验网络源。
+- 五项正常 Flash 输入的偏移、大小和摘要，与合并镜像每段及填充字节逐一匹配；发布 ZIP 只包含同一合并镜像。无 PCM 提示音包或 `0x650000` trailer 写入项。
+
+新 app 为 2,408,576 字节，SHA256 为 `f0b27da0ce20c42af270a676fcff5f0c03b48748176e97cc68aff1ed19fd41ea`。云端私有产物与独立核验记录在 `/opt/family-robot-validation/c3-pcm-product-20261101/task5-go-build/artifacts-9770243/`，包括 `xmini-c3-family-download-proof.json` 和 `xmini-c3-family-independent-proof.json`。
+
+当前实机继续使用已真人验收的 `6b79e4c` 稳定镜像，未安装本轮 `9770243` 新构建；新产物的声学验收仍为 pending。此次完成默认构建与产品策略收口，不追加刷机、服务部署或真人试说。
