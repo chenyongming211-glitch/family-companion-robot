@@ -275,14 +275,15 @@ func runWorker(ctx context.Context, socket, model, sha string) error {
 // workerProcess has one serial owner. Every timeout/protocol failure retires the
 // actual child before returning; no old result can be consumed by a later request.
 type workerProcess struct {
-	cmd       *exec.Cmd
-	conn      net.Conn
-	dimension int
-	sha       string
-	done      chan struct{}
-	closeOnce sync.Once
-	cleanup   func()
-	coldStart time.Duration
+	cmd            *exec.Cmd
+	conn           net.Conn
+	dimension      int
+	sha            string
+	done           chan struct{}
+	closeOnce      sync.Once
+	cleanup        func()
+	coldStart      time.Duration
+	socketIdentity os.FileInfo
 }
 
 func (w *workerProcess) Close() {
@@ -327,7 +328,14 @@ func launchWorker(ctx context.Context, cmd *exec.Cmd, socket, sha string, coldLi
 			w.Close()
 			return nil, errWorker
 		}
-		c, e := (&net.Dialer{}).DialContext(startup, "unix", socket)
+		// Capture the path inode before connecting and verify it again after ready.
+		// Never infer ownership from a socket found only during later cleanup.
+		identity, identityErr := os.Lstat(socket)
+		var c net.Conn
+		e := errWorker
+		if identityErr == nil && identity.Mode()&os.ModeSocket != 0 {
+			c, e = (&net.Dialer{}).DialContext(startup, "unix", socket)
+		}
 		if e == nil {
 			w.conn = c
 			deadline, _ := startup.Deadline()
@@ -335,10 +343,12 @@ func launchWorker(ctx context.Context, cmd *exec.Cmd, socket, sha string, coldLi
 			cancelRead := context.AfterFunc(startup, func() { _ = c.Close() })
 			w.dimension, e = readReady(c, sha)
 			cancelRead()
-			if e != nil || startup.Err() != nil {
+			current, statErr := os.Lstat(socket)
+			if e != nil || startup.Err() != nil || statErr != nil || !os.SameFile(identity, current) {
 				w.Close()
 				return nil, errWorker
 			}
+			w.socketIdentity = identity
 			_ = c.SetDeadline(time.Time{})
 			w.coldStart = time.Since(started)
 			return w, nil
@@ -374,23 +384,28 @@ func startWorkerBinary(ctx context.Context, executable, model, sha string) (*wor
 		return nil, errWorker
 	}
 	socket := filepath.Join(d, "worker.sock")
-	cleanup := func() {
-		st, e := os.Lstat(socket)
-		if e == nil && st.Mode()&os.ModeSocket != 0 {
-			_ = os.Remove(socket)
-		}
-		_ = os.Remove(d)
-	}
 	cmd := exec.Command(executable, "worker", "--socket", socket, "--model", model, "--sha256", sha)
 	// The model process receives no service tokens, database keys, or caller configuration.
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
 	w, e := launchWorker(ctx, cmd, socket, sha, startupTimeout)
 	if e != nil {
-		cleanup()
+		// No verified inode is available: remove only an empty directory.
+		cleanupWorkerDirectory(d, socket, nil)
 		return nil, e
 	}
-	w.cleanup = cleanup
+	w.cleanup = func() { cleanupWorkerDirectory(d, socket, w.socketIdentity) }
 	return w, nil
+}
+
+// Remove only the verified socket inode. An unknown or replaced entry keeps
+// the private directory non-empty and is deliberately left for its owner.
+func cleanupWorkerDirectory(dir, socket string, identity os.FileInfo) {
+	if identity != nil {
+		if current, e := os.Lstat(socket); e == nil && os.SameFile(identity, current) {
+			_ = os.Remove(socket)
+		}
+	}
+	_ = os.Remove(dir)
 }
 func (w *workerProcess) request(ctx context.Context, h requestHeader, pcm []byte) ([]float32, int64, error) {
 	if !validRequest(h, w.sha) || len(pcm) != h.PCMBytes {

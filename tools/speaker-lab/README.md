@@ -48,7 +48,8 @@ WAV 由有界 Go 解析器读取：RIFF/WAVE、单一 16 字节 PCM `fmt `、16k
 
 只允许显式 Unix socket，没有 TCP。路径须是规范绝对路径且每级没有符号链接；
 父目录须属于当前 UID 且权限为 0700，socket 为 0600。
-拒绝已有任何同名路径，不自动 unlink；正常结束仅清理自己创建的同一 socket inode。
+拒绝已有任何同名路径，不自动 unlink；正常结束仅清理自己创建的同一 socket inode；父进程也保留连接前后核验的原 inode，
+路径被替换时保留替换项，启动失败且未确认归属时仅尝试删除空临时目录。
 模型必须为无符号链接的 regular file、大小 1～100 MiB；摘要完全一致后通过已验证文件描述符加载，
 不重新打开可被替换的模型路径。冷启动成功后连接收到 `ready` 帧，包含固定摘要和模型实际维度（1～1024）。
 
@@ -91,9 +92,9 @@ SPEAKER_LAB_TEST_MODEL=/private/models/model.onnx \
 SPEAKER_LAB_TEST_SHA256=<64位小写SHA256> \
 SPEAKER_LAB_TEST_WAV=/private/synthetic/fixture.wav \
 SPEAKER_LAB_TEST_BINARY=/private/evidence/speaker-lab \
-go test -v -count=1 -run 'TestReal(ModelProbe|WorkerCleanShutdown)OptIn' ./...
+go test -v -count=1 -run 'TestReal(ModelProbe|Worker.*)OptIn' ./...
 ```
 
-模型探测校验安全 JSON；真实 worker 另测环境隔离、SIGTERM 正常退出与 socket 清理。
+模型探测校验安全 JSON；真实 worker 另测环境隔离、SIGTERM 正常退出、socket 清理及替换 socket 保留。
 协议、WAV、路径权限、模型摘要和子进程超时测试独立运行；超时 fake extractor 只用于确定性控制协议/回收路径，
 不能代替真实 ONNX 探测或说话人质量评估。

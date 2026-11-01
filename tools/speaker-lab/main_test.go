@@ -297,3 +297,62 @@ func TestRealWorkerCleanShutdownOptIn(t *testing.T) {
 		t.Fatal("worker left socket")
 	}
 }
+
+func TestRealWorkerCleanupPreservesReplacementOptIn(t *testing.T) {
+	model, sha, exe := os.Getenv("SPEAKER_LAB_TEST_MODEL"), os.Getenv("SPEAKER_LAB_TEST_SHA256"), os.Getenv("SPEAKER_LAB_TEST_BINARY")
+	if model == "" || sha == "" || exe == "" {
+		t.Skip("explicit model+digest+binary opt-in not set")
+	}
+	w, e := startWorkerBinary(context.Background(), exe, model, sha)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer w.Close()
+	socket := w.conn.RemoteAddr().String()
+	dir := filepath.Dir(socket)
+	if e = os.Remove(socket); e != nil {
+		t.Fatal(e)
+	}
+	replacement, e := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	replacement.SetUnlinkOnClose(false)
+	defer replacement.Close()
+	defer os.Remove(dir)
+	defer os.Remove(socket)
+	identity, e := os.Lstat(socket)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w.Close()
+	current, e := os.Lstat(socket)
+	if e != nil || !os.SameFile(identity, current) {
+		t.Fatal("parent cleanup removed replacement socket")
+	}
+}
+
+func TestParentCleanupWithoutVerifiedIdentityPreservesSocket(t *testing.T) {
+	d := t.TempDir()
+	os.Chmod(d, 0700)
+	socket := filepath.Join(d, "worker.sock")
+	l, e := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	l.SetUnlinkOnClose(false)
+	defer l.Close()
+	identity, e := os.Lstat(socket)
+	if e != nil {
+		t.Fatal(e)
+	}
+	cleanupWorkerDirectory(d, socket, nil)
+	current, e := os.Lstat(socket)
+	if e != nil || !os.SameFile(identity, current) {
+		t.Fatal("unverified startup socket removed")
+	}
+	cleanupWorkerDirectory(d, socket, identity)
+	if _, e = os.Lstat(d); !os.IsNotExist(e) {
+		t.Fatal("owned socket and empty directory not removed")
+	}
+}
