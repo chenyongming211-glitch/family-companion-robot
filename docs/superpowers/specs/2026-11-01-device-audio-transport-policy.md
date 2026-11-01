@@ -22,6 +22,8 @@ C3 的记忆、音量、身份、Wi-Fi、播放回报和按键交互继续保留
 
 ## 实机状态与证据
 
+后续用户已要求实刷并明确不备份、不保留旧固件：当前安装 `9770243`/app0，selector0 seq5/VALID；旧 app1 及 selector1 已清除。两次联网激活/idle 后观察通过，设备配置逻辑保持；仅 PHY 校准自写。新包仍为 Opus 按键模式，未包含爆音专项修复，声学效果待用户复验。详见[后续实刷](../../verification/2026-11-01-c3-button-rollback.md#后续用户授权实刷当前为-9770243)。以下为实刷前历史核对。
+
 本次零 Flash/eFuse 写入核对：C3 app1 与已验收的 `6b79e4c014c36ee30817f0f186d50e2d502f736a` 一致，selector0 为 seq3/ABORTED，selector1 为 seq2/VALID；实际 ELF `bf00948a1…`、联网激活/idle 后 15.166 秒无故障，串口关闭。原按键、多轮、记忆、音量、待机恢复的真人验收见[稳定版记录](../../verification/2026-10-31-xmini-c3-button-entry.md)。这次未追加真人试说，不冒称新听感验收。
 
 私有新证据：`.superpowers/c3-button-rollback-20261101/usb-stable-check/result.json`。备份、日志、身份资料、原始音频和固件产物继续留在 Git 外。
