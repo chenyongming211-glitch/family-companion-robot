@@ -69,6 +69,8 @@ Recovery clarification: pool/frame/network faults close and invalidate only that
 
 Files: .github/workflows/{firmware-experiment.yml,firmware-baseline.yml,firmware-c3-diagnostic.yml}; build preparation/CMake/converter hooks and verify_experiment.py; tracked provenance tests.
 
+- [x] Task4A source integration3ff3951+cbc49de: CMake generation/two-source replacement/trailer registration, all compile inputs and C3 symbols retention, canonical JSON/flash_args/whole-merged/ZIP binding. Independent spec then quality PASS atcbc49de. Baseline3ff full225/no skips1056.633s; finalcbc focused114/17.988s+upstream110/7.396s and188/188 source closure pass. Six actual native CI builds and final full-source host regression remain required; historical S3/C3 composition fixtures prove format only.
+
 - [ ] Build C3 cue trailer/header before app compilation using a recorded libopus version; retain trailer, manifest, source/SDK/native lock, app/ELF/map and hashes in artifacts. Verify original generated_assets.bin stays within0x50000 and unchanged.
 - [ ] Commit/push main once source is reviewed. Require exact C3 symbols, five variants and stock success; inspect downloaded actual app/trailer/source/ELF and partition compatibility.
 - [ ] Update private installer/rollback guards for the additional exact trailer range; cloud failure-injection tests cover partial writes, boot/mapping/hash failures, resource-gate failure and fault-tail recovery.

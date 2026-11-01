@@ -10,6 +10,7 @@
 | 固定PCM池与提示音包基础 | f0ef155 | 云端16项测试通过，包含O2、ASan/UBSan、全部21项真实源提示音及517帧读取；独立规格和质量复核通过 |
 | C3受限网络构建输入 | d9b4cac | 云端7项Python测试通过，实际生成WebSocket39、EspTcp12、辅助器14项分别在O2与ASan/UBSan通过；独立规格和质量复核通过 |
 | 实际PCM媒体、流式提示音、FD和资源观测接线 | d156e8d、d6c6ff3、14df705 | 最终25项源码摘要与云端一致；独立规格和质量复核均在14df705通过。d6完整206项/388.211s通过且无skip；最终PCM控制修正的20项专项/67.462s及4配置8次旧协议构建/运行通过。最终整合源码的完整回归仍属Task4/CI门槛 |
+| 构建接线与实际产物绑定 | 3ff3951、cbc49de | 3ff基线完整225项/1056.633s无skip通过，上游110项/7.581s通过；cbc修正后的114项专项与准备流程回归/17.988s、上游110项/7.396s通过。最新188项源码闭合前后一致，独立规格与质量复审均PASS；仍待六目标实际CI，不把3ff完整结果当作cbc完整回归 |
 
 测试在云端独立目录`/opt/family-robot-validation/c3-pcm-product-20261101`执行，Mac未运行语音服务或运行时测试。Go日志保留在`logs/`，池/提示音日志保留在`primitives/`，网络日志保留在`network-bound/`。这些是私有执行证据路径，生成文件未进入Git。
 
@@ -46,3 +47,19 @@ Go新入口仅在version1、pcm_s16le及pcm_s16le_v1明确协商时接受PCM，�
 - 无人讲话不自触发、播放中真人插问、新回答完整、记忆/音量/按键与故障恢复。
 
 不以启动成功、数字回环或主机测试替代实机资源和声学验收。
+
+## 构建接线与产物绑定进度
+
+Task4A已接入C3专用CMake生成依赖：生成header与独立trailer，且只替换锁定网络组件的两个编译输入；原managed sources与依赖锁不改。PCM pack通过冻结IDF的四参数flash-image API注册到0x650000，实际`flash_args`、JSON、合并镜像和release必须一致。其他四种experiment与stock必须保留原网络编译源，六目标均保留compile_commands；C3主产物额外保留精确ELF/map与全部受控源。
+
+质量复核发现的三处P2已实现修正，并在cbc49de由同一规格与质量复核者依次PASS：按规范偏移和解析后的路径绑定实际刷写文件，拒绝同名重定向或额外输入；保留并交叉核对真实`flash_args`与OTA初始化文件；按原生raw merge的base0、FF填充、无尾部padding规则重建整份镜像，拒绝空隙篡改和附加字节。已用四份可信历史S3合并镜像验证格式规则；其flash_args是按原JSON重建，旧C3 app与新pack的组合仅验证文件绑定格式，不作为新候选或目标构建证据。
+
+验证目录为云端`task4a/`。`closed-full.log`、`closed-upstream.log`仅对应3ff3951基线；cbc49de对应`flash-fix-focused-final.log`、`flash-fix-upstream-green.log`及`flash-fix-provenance.json`。188项`flash-fix-source.sha256`清单SHA为`6d0c1f364a28d290ae56683cb117cfa820b800ade1a4ca564f5428d99cb7cd0c`，前后188/188一致。来源清单统一排除Python bytecode缓存，真实源码漂移仍拒绝；下载缓存只复用已验证SHA的原归档，各测试类仍重新准备源码。第一次上游运行因缺少已有任务目录的python别名出现6项exit127，补齐PATH后110项通过，期间未改源码。
+
+准备推送已复核源码以触发六目标CI；尚未运行这版原生构建，未部署、刷写或开始真人验收。
+
+## 云端依赖安装附带重启核对
+
+Task4安装云端CMake时，apt的needrestart自动重启了保留的Python测试单元`family-robot-realtime-output-live.service`，超出该步骤预期；未主动执行服务部署或重启命令。安装日志位于云端`logs/task4-cmake-install.log`，needrestart的stderr另行保留。已停止继续包安装，后续云端apt使用`NEEDRESTART_MODE=l`只列出待重启项并保留stdout/stderr。
+
+2026-11-01核对：正式Go仍PID4139298、8000入口仍PID4139310，二者启动时间均为10月31日13:00:45、NRestarts0；18040为Go09d22e6、ready/记忆就绪true、active0，8000health为ok。Python测试单元为PID1202653、11月1日10:49:35启动，127.0.0.1:18032健康检查ready=true/busy=false。没有再执行重启来“撤销”该事件，C3及其他实体设备未操作。
