@@ -22,13 +22,16 @@ bool AudioService::InitializeC3CuePack() {
     return true;
 }
 // Actual PCM media methods. No Opus task, queued heap PCM, or prompt decoder.
+void AudioService::WakeC3PcmOwner() {
+    if(callbacks_.on_send_queue_available)callbacks_.on_send_queue_available();
+}
 void AudioService::RequestC3PcmFault(uint32_t epoch) {
     if(!epoch)epoch=button_uplink_.Revision();
     button_uplink_.Revoke(epoch); // never waits for synchronous network Send
     auto previous=c3_pcm_.fault_epoch.load();
     while(previous<epoch && !c3_pcm_.fault_epoch.compare_exchange_weak(previous,epoch)) {}
     c3_pcm_.fault_pending.store(true);
-    if(callbacks_.on_send_queue_available)callbacks_.on_send_queue_available();
+    WakeC3PcmOwner();
 }
 bool AudioService::FinishC3PcmFault() {
     if(!c3_pcm_.fault_pending.exchange(false))return false;

@@ -2,6 +2,7 @@
 #include "c3_pcm_buffer.h"
 #include "button_uplink.h"
 #include <cassert>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -73,6 +74,7 @@ class Board {public:PowerSaveLevel power=PowerSaveLevel::PERFORMANCE;TestDisplay
     static Board& GetInstance(){static Board b;return b;}AudioCodec* GetAudioCodec(){return &codec;}
     void SetPowerSaveLevel(PowerSaveLevel p){power=p;}TestDisplay* GetDisplay(){return &display;}};
 class AudioService {public:
+ void WakeC3PcmOwner(){}
  family_robot::ButtonUplink gate;family_robot::C3PcmOutputPool output;bool receiving=false;unsigned faults=0;
  family_robot::ButtonUplink& C3Uplink(){return gate;}
  void RequestC3PcmFault(uint32_t token){gate.Revoke(token);++faults;}
@@ -114,6 +116,8 @@ public:
     std::function<void(std::unique_ptr<AudioStreamPacket>)> on_incoming_audio_;
     int server_sample_rate_=24000,server_frame_duration_=60,event_group_handle_=0;
     void DeliverC3PcmAudio(const uint8_t*,size_t,uint32_t);
+    std::atomic<uint32_t> c3_current_connection_{0},c3_pending_connection_{0};
+    void RequestC3PcmDisconnect(uint32_t);void PollC3PcmDisconnect();
     void ParseServerHello(const cJSON*,uint32_t);
     int sent=0;std::string last_text;void SendText(const std::string& s){++sent;last_text=s;}
     std::function<void(uint32_t)> on_audio_channel_closed_;

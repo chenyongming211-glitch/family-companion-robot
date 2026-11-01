@@ -11,7 +11,14 @@
 +    depends on XMINI_C3_BUTTON_ENTRY && XMINI_C3_VOICE_BARGE
 --- a/main/application.cc
 +++ b/main/application.cc
-@@ -211,6 +211,9 @@
+@@ -207,10 +207,16 @@
+     while (true) {
+         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, pdMS_TO_TICKS(20));
+         if (protocol_) {
++#if CONFIG_XMINI_C3_PCM
++            protocol_->PollC3PcmDisconnect(); // owner after bounded in-flight Send
++#endif
+             family_robot::PlaybackSnapshot receipt;
              auto* playback_codec = Board::GetInstance().GetAudioCodec();
              for (size_t i = 0; i < family_robot::PlaybackProgress::kRecords && playback_codec->PlaybackPoll(receipt); ++i)
                  protocol_->SendPlayback(receipt);
@@ -21,7 +28,7 @@
              audio_service_.PollPlaybackDrained();
          }
  
-@@ -630,6 +633,9 @@
+@@ -630,6 +636,9 @@
              return;
          }
          if (strcmp(type->valuestring, "notify") == 0) {
@@ -31,7 +38,7 @@
              auto audio_url = cJSON_GetObjectItem(root, "audio_url");
              if (!cJSON_IsString(audio_url) || audio_url->valuestring[0] == '\0') {
                  ESP_LOGW(TAG, "Notify message requires audio_url");
-@@ -843,6 +849,9 @@
+@@ -843,6 +852,9 @@
          SetDeviceState(kDeviceStateIdle);
          return;
      } else if (state == kDeviceStateWifiConfiguring) {
@@ -41,7 +48,7 @@
          audio_service_.EnableAudioTesting(true);
          SetDeviceState(kDeviceStateAudioTesting);
          return;
-@@ -917,6 +926,9 @@
+@@ -917,6 +929,9 @@
          SetDeviceState(kDeviceStateIdle);
          return;
      } else if (state == kDeviceStateWifiConfiguring) {
@@ -51,7 +58,7 @@
          audio_service_.EnableAudioTesting(true);
          SetDeviceState(kDeviceStateAudioTesting);
          return;
-@@ -1313,6 +1325,9 @@
+@@ -1313,6 +1328,9 @@
  }
  
  void Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles) {
@@ -61,7 +68,7 @@
      if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
          ESP_LOGW(TAG, "Ignoring notify message while device is busy");
          return;
-@@ -1356,6 +1371,7 @@
+@@ -1356,6 +1374,7 @@
          ESP_LOGE(TAG, "Failed to start notification playback");
          StopNotification();
      }
@@ -453,20 +460,21 @@
  
  #define AS_OPUS_GET_FRAME_DRU_ENUM(duration_ms)                  \
      ((duration_ms) == 5     ? ESP_OPUS_ENC_FRAME_DURATION_5_MS   \
-@@ -155,6 +164,12 @@
+@@ -155,6 +164,13 @@
      void EnableDeviceAec(bool enable);
      void SetExperimentUplink(bool enabled, bool observer_tail = false);
  #if CONFIG_XMINI_C3_BUTTON_ENTRY
 +#if CONFIG_XMINI_C3_PCM
 +    bool PushC3PcmOutput(const uint8_t*,size_t,family_robot::C3PcmOutputMetadata);
 +    void RequestC3PcmFault(uint32_t);
++    void WakeC3PcmOwner();
 +    bool FinishC3PcmFault();
 +    void SetC3ServerReceiving(bool);
 +#endif
      family_robot::ButtonUplink& C3Uplink() { return button_uplink_; }
      bool OpenC3Uplink(uint32_t revision);
  #endif
-@@ -175,6 +190,22 @@
+@@ -175,6 +191,22 @@
      void SetModelsList(srmodel_list_t* models_list);
  
  private:
@@ -489,7 +497,7 @@
      AudioCodec* codec_ = nullptr;
      std::atomic<bool> preserve_server_playback_{false};
      std::atomic<bool> capture_ready_waiting_{false};
-@@ -227,7 +258,7 @@
+@@ -227,7 +259,7 @@
      TaskHandle_t audio_input_task_handle_ = nullptr;
      TaskHandle_t audio_output_task_handle_ = nullptr;
      TaskHandle_t opus_codec_task_handle_ = nullptr;
@@ -564,9 +572,38 @@
  }
  
  void NotifyPlayer::Stop() {
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -65,6 +65,9 @@
+     void OnConnected(std::function<void()> callback);
+     void OnDisconnected(std::function<void()> callback);
+ 
++#if CONFIG_XMINI_C3_PCM
++    virtual void PollC3PcmDisconnect() {} // main owner only; no deferred this capture
++#endif
+     virtual uint32_t AudioChannelEpoch() const { return 0; }
+     virtual bool PlaybackNegotiated() const { return false; }
+     virtual bool PlaybackDrainNegotiated() const { return false; }
 --- a/main/protocols/websocket_protocol.cc
 +++ b/main/protocols/websocket_protocol.cc
-@@ -28,9 +28,21 @@
+@@ -16,7 +16,15 @@
+ 
+ WebsocketProtocol::WebsocketProtocol() { event_group_handle_ = xEventGroupCreate(); }
+ 
+-WebsocketProtocol::~WebsocketProtocol() { vEventGroupDelete(event_group_handle_); }
++WebsocketProtocol::~WebsocketProtocol() {
++#if CONFIG_XMINI_C3_PCM
++    // Stop/join receive callbacks while the protocol atomics and event group live.
++    // Application owner paths close the channel before replacing the protocol.
++    c3_current_connection_.store(0);c3_pending_connection_.store(0);
++    websocket_.reset();
++#endif
++    vEventGroupDelete(event_group_handle_);
++}
+ 
+ bool WebsocketProtocol::Start() {
+     // Only connect to server when audio channel is needed
+@@ -28,9 +36,21 @@
      return Application::GetInstance().GetAudioService().C3Uplink().Send(packet->uplink_epoch, [&] {
  #endif
      if (websocket_ == nullptr || !websocket_->IsConnected()) {
@@ -591,7 +628,7 @@
      if (version_ == 2) {
          std::string serialized;
          serialized.resize(sizeof(BinaryProtocol2) + packet->payload.size());
-@@ -56,6 +68,7 @@
+@@ -56,6 +76,7 @@
      } else {
          return websocket_->Send(packet->payload.data(), packet->payload.size(), true);
      }
@@ -599,7 +636,7 @@
  #if CONFIG_XMINI_C3_BUTTON_ENTRY
      });
  #endif
-@@ -78,7 +91,11 @@
+@@ -78,7 +99,11 @@
  }
  
  bool WebsocketProtocol::IsAudioChannelOpened() const {
@@ -612,7 +649,7 @@
  }
  
  bool WebsocketProtocol::OpenAudioChannel() {
-@@ -91,6 +108,11 @@
+@@ -91,6 +116,11 @@
          version_ = version;
      }
  
@@ -624,7 +661,13 @@
      error_occurred_ = false;
  
      auto network = Board::GetInstance().GetNetwork();
-@@ -119,6 +141,9 @@
+@@ -116,9 +146,15 @@
+         std::lock_guard<std::mutex> lock(playback_mutex_);
+         connection = playback_connection_;
+         socket_connection_ = connection;
++#if CONFIG_XMINI_C3_PCM
++        c3_current_connection_.store(connection);
++#endif
      }
      websocket_->OnData([this, connection](const char* data, size_t len, bool binary) {
          if (binary) {
@@ -634,7 +677,7 @@
              if (on_incoming_audio_ != nullptr) {
                  if (version_ == 2) {
                      BinaryProtocol2* bp2 = (BinaryProtocol2*)data;
-@@ -150,6 +175,7 @@
+@@ -150,6 +186,7 @@
                          .payload = std::vector<uint8_t>((uint8_t*)data, (uint8_t*)data + len)}), connection);
                  }
              }
@@ -642,7 +685,19 @@
          } else {
              // Parse JSON data
              auto root = cJSON_ParseWithLength(data, len);
-@@ -202,7 +228,11 @@
+@@ -177,7 +214,11 @@
+     });
+ 
+     websocket_->OnDisconnected([this, connection]() {
++#if CONFIG_XMINI_C3_PCM
++        RequestC3PcmDisconnect(connection);
++#else
+         NotifyPlaybackClosed(connection);
++#endif
+     });
+ 
+ #if !CONFIG_STOPWATCH_SOFTWARE_AEC
+@@ -202,7 +243,11 @@
      EventBits_t bits =
          xEventGroupWaitBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT, pdTRUE,
                              pdFALSE, pdMS_TO_TICKS(10000));
@@ -655,7 +710,7 @@
          ESP_LOGE(TAG, "Failed to receive server hello");
          SetError(Lang::Strings::SERVER_TIMEOUT);
          return false;
-@@ -225,6 +255,9 @@
+@@ -225,6 +270,9 @@
      cJSON_AddBoolToObject(features, "aec", true);
  #endif
      cJSON_AddBoolToObject(features, "mcp", true);
@@ -665,7 +720,7 @@
      if (Board::GetInstance().GetAudioCodec()->PlaybackSupported()) {
          cJSON_AddBoolToObject(features, "playback_progress_v1", true);
          cJSON_AddBoolToObject(features, "playback_drain_v1", true);
-@@ -233,7 +266,11 @@
+@@ -233,7 +281,11 @@
      AddTextFontCapabilities(root);
      cJSON_AddStringToObject(root, "transport", "websocket");
      cJSON* audio_params = cJSON_CreateObject();
@@ -677,7 +732,7 @@
      cJSON_AddNumberToObject(audio_params, "sample_rate", 16000);
      cJSON_AddNumberToObject(audio_params, "channels", 1);
      cJSON_AddNumberToObject(audio_params, "frame_duration", OPUS_FRAME_DURATION_MS);
-@@ -246,3 +283,7 @@
+@@ -246,3 +298,7 @@
  }
  
  #include "playback_websocket.inc"
@@ -687,11 +742,34 @@
 +#endif
 --- a/main/protocols/websocket_protocol.h
 +++ b/main/protocols/websocket_protocol.h
-@@ -47,6 +47,9 @@
+@@ -4,6 +4,9 @@
+ 
+ #include "protocol.h"
+ #include <mutex>
++#if CONFIG_XMINI_C3_PCM
++#include <atomic>
++#endif
+ 
+ #include <web_socket.h>
+ #include <freertos/FreeRTOS.h>
+@@ -17,6 +20,9 @@
+     ~WebsocketProtocol();
+ 
+     bool Start() override;
++#if CONFIG_XMINI_C3_PCM
++    void PollC3PcmDisconnect() override;
++#endif
+     uint32_t AudioChannelEpoch() const override;
+     bool PlaybackNegotiated() const override;
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+@@ -47,6 +53,12 @@
      bool playback_drain_negotiated_ = false;
      // Only the WebSocket receive task mutates ingress order. Main polls reports;
      // this mutex protects connection/session checks, never taken in an ISR.
 +#if CONFIG_XMINI_C3_PCM
++    // Main owns connection/socket retirement. Receive callbacks only revoke and publish.
++    std::atomic<uint32_t> c3_current_connection_{0},c3_pending_connection_{0};
++    void RequestC3PcmDisconnect(uint32_t);
 +    void DeliverC3PcmAudio(const uint8_t*,size_t,uint32_t);
 +#endif
      void DeliverAudio(std::unique_ptr<AudioStreamPacket> packet, uint32_t connection);

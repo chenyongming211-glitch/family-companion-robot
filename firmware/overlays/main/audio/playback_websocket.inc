@@ -3,6 +3,10 @@
 bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected, uint32_t* closed_epoch) {
     std::lock_guard<std::mutex> lock(playback_mutex_);
     if (expected && expected != playback_connection_) return false;
+#if CONFIG_XMINI_C3_PCM
+    // Retire before dispatch-linearized closure/replacement can reopen capture.
+    c3_current_connection_.store(0);
+#endif
 #if CONFIG_XMINI_C3_BUTTON_ENTRY
     Application::GetInstance().GetAudioService().SetExperimentUplink(false);
 #endif

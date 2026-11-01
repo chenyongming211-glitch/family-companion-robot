@@ -39,9 +39,24 @@ class C3PcmMediaTests(unittest.TestCase):
             defaults.method((cls.source/'main/audio/audio_service.cc').read_text(),'void AudioService::PrintC3Resources() const')).replace('// PRODUCTION_OPEN_METHOD',defaults.method((cls.source/'main/audio/audio_service.cc').read_text(),'bool AudioService::OpenC3Uplink('))
         initialize=(FIRMWARE/'tests/c3_pcm_initialize_host.cc').read_text().replace('// PRODUCTION_INITIALIZE_METHOD',
             defaults.method((cls.source/'main/audio/audio_service.cc').read_text(),'void AudioService::Initialize('))
+        disconnect=(FIRMWARE/'tests/c3_pcm_disconnect_host.cc').read_text()
+        playback=(FIRMWARE/'overlays/main/audio/playback_websocket.inc').read_text()
+        pcm=(FIRMWARE/'overlays/main/audio/c3_pcm_protocol.inc').read_text()
+        ws+='\n'+'\n'.join(defaults.method(pcm,signature) for signature in ['void WebsocketProtocol::RequestC3PcmDisconnect(', 'void WebsocketProtocol::PollC3PcmDisconnect('])
+        disconnect_methods=[defaults.method(ws_source,signature) for signature in [
+            'WebsocketProtocol::WebsocketProtocol()', 'WebsocketProtocol::~WebsocketProtocol()',
+            'bool WebsocketProtocol::OpenAudioChannel(', 'bool WebsocketProtocol::SendAudio(',
+            'std::string WebsocketProtocol::GetHelloMessage(']]
+        disconnect_methods += [defaults.method(playback,signature) for signature in [
+            'bool WebsocketProtocol::ResetPlaybackConnection(', 'void WebsocketProtocol::NotifyPlaybackClosed(',
+            'void WebsocketProtocol::CloseAudioChannel(']]
+        for signature in ['void WebsocketProtocol::RequestC3PcmDisconnect(', 'void WebsocketProtocol::PollC3PcmDisconnect(']:
+            disconnect_methods.append(defaults.method(pcm,signature))
+        disconnect_methods.append(defaults.method((FIRMWARE/'overlays/main/audio/c3_pcm_audio.inc').read_text(),'void AudioService::WakeC3PcmOwner('))
+        disconnect=disconnect.replace('// PRODUCTION_DISCONNECT_METHODS','\n'.join(disconnect_methods))
         cls.binaries={}
         for name,program,libs in [('media',media,['-lcrypto']),
-                ('assets',assets,[]),('initialize',initialize,[]),('ws',ws,[]),('unsupported',unsupported,[]),('revoke',(FIRMWARE/'tests/c3_pcm_revocation_host.cc').read_text(),[]),
+                ('assets',assets,[]),('disconnect',disconnect,[]),('initialize',initialize,[]),('ws',ws,[]),('unsupported',unsupported,[]),('revoke',(FIRMWARE/'tests/c3_pcm_revocation_host.cc').read_text(),[]),
                 ('lite',(FIRMWARE/'tests/c3_pcm_lite_host.cc').read_text(),[]),
                 ('protocol',(FIRMWARE/'tests/c3_pcm_protocol_host.cc').read_text(),[])]:
             source=cls.work/(name+'.cc');source.write_text(program)
@@ -66,6 +81,10 @@ class C3PcmMediaTests(unittest.TestCase):
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_nonblocking_token_revocation_while_transport_owns_dispatch(self):self.run_case('revoke')
+    def test_actual_registered_disconnect_revokes_without_dispatch_wait_and_owner_retires_exact_socket(self):
+        self.run_case('disconnect')
+        owner=defaults.method((self.source/'main/application.cc').read_text(),'void Application::Run(')
+        self.assertLess(owner.index('protocol_->PollC3PcmDisconnect()'),owner.index('FinishC3PcmFault()'))
     def test_actual_initialize_uses_pcm_callback_and_input_src_with_no_opus_or_output_src_platform_api(self):self.run_case('initialize')
     def test_pcm_flag_is_opt_in_and_enabled_only_for_family_c3(self):
         config=json.loads((self.source/'main/boards/xmini/c3/config.json').read_text())

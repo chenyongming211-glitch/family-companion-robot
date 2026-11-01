@@ -30,7 +30,7 @@ static char* cJSON_PrintUnformatted(cJSON* root){
  for(auto* name:{"pcm_s16le_v1","playback_progress_v1","playback_drain_v1"})assert(cJSON_GetObjectItem(features,name)->valuedouble==1);
  ++hello_checks;return ::strdup("{}");}
 struct AudioStreamPacket{std::vector<uint8_t> payload;uint32_t uplink_epoch=0,timestamp=0;};
-struct GateOwner {family_robot::ButtonUplink gate;unsigned faults=0;void RequestC3PcmFault(uint32_t epoch){gate.Revoke(epoch);++faults;}auto& C3Uplink(){return gate;}};
+struct GateOwner {void WakeC3PcmOwner(){}family_robot::ButtonUplink gate;unsigned faults=0;void RequestC3PcmFault(uint32_t epoch){gate.Revoke(epoch);++faults;}auto& C3Uplink(){return gate;}};
 struct Application {static Application& GetInstance(){static Application app;return app;}GateOwner audio;auto& GetAudioService(){return audio;}};
 struct Result {bool ok=true;explicit operator bool()const{return ok;}Result error()const{return *this;}std::string ToString()const{return "fake";}};
 static int creates=0,sends=0,connects=0;static size_t sent_bytes=0;
@@ -56,6 +56,8 @@ using EventBits_t=int;static void xEventGroupClearBits(int,int){}static int xEve
 struct WebsocketProtocol {
  std::unique_ptr<WebSocket> websocket_;int version_=1,event_group_handle_=0;
  bool error_occurred_=false,negotiated=false;uint32_t playback_connection_=0,socket_connection_=0;
+ std::atomic<uint32_t> c3_current_connection_{0},c3_pending_connection_{0};
+ void RequestC3PcmDisconnect(uint32_t);void PollC3PcmDisconnect();
  std::mutex playback_mutex_;std::chrono::steady_clock::time_point last_incoming_time_;
  std::function<void()> on_audio_channel_opened_;std::function<void(const cJSON*)> on_incoming_json_;
  bool ResetPlaybackConnection(){++playback_connection_;return true;}bool PlaybackNegotiated()const{return negotiated;}

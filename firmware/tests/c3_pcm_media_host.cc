@@ -105,6 +105,7 @@ public:
  void AudioInputTask(){while(!service_stopped_.load())std::this_thread::yield();}
  bool MarkPlaybackDrainedLocked(){if(!C3PcmPlaybackDrainedLocked()||playback_drained_notified_)return false;playback_drained_notified_=true;return true;}
  void PrintC3Resources()const;
+ void WakeC3PcmOwner();
  bool OpenC3Uplink(uint32_t);
  bool InitializeC3CuePack();void RequestC3PcmFault(uint32_t);bool FinishC3PcmFault();
  bool FeedC3PcmSpan(const int16_t*,size_t,uint32_t);std::unique_ptr<AudioStreamPacket> PopC3PcmPacket();
