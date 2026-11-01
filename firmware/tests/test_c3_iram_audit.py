@@ -4,7 +4,10 @@ import os
 import json
 from pathlib import Path
 import struct
+import shutil
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -140,9 +143,62 @@ class IramAuditTests(unittest.TestCase):
         paths={line.strip() for line in step.split('path: |\n',1)[1].splitlines() if line.strip()}
         self.assertEqual(paths,{'firmware/.cache/experiment/build/xiaozhi.elf',
             'firmware/.cache/experiment/build/xiaozhi.map','firmware/.cache/experiment/sdkconfig',
-            'firmware/.cache/experiment/build/compile_commands.json','firmware/.cache/experiment/build/family_c3_cache/'})
+            'firmware/.cache/experiment/build/compile_commands.json','firmware/.cache/experiment/build/family_c3_cache/',
+            'firmware/.cache/experiment/build/esp-idf/main/libmain.a',
+            'firmware/.cache/experiment/build/CMakeCache.txt','firmware/.cache/experiment/build/build.ninja'})
         for forbidden in ('xiaozhi.bin','merged-binary.bin','flash_args','family_c3_pcm/'):
             self.assertNotIn(forbidden,step)
+
+    def test_failed_c3_section_capture_uses_only_unique_cached_tool_and_records_missing_or_failure(self):
+        workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/firmware-experiment.yml').read_text()
+        marker='      - name: Capture failed C3 archive sections\n'
+        self.assertIn(marker,workflow)
+        step=workflow.split(marker,1)[1].split('\n      - ',1)[0]
+        self.assertIn("if: ${{ failure() && matrix.variant == 'xmini-c3-family' }}",step)
+        self.assertIn('continue-on-error: true',step)
+        script=textwrap.dedent(step.split('run: |\n',1)[1])
+        objdump=Path(shutil.which('objdump')).resolve()
+        for case in ('captured','archive_missing','cache_missing','cache_ambiguous','objdump_failed'):
+            with self.subTest(case=case),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);build=root/'firmware/.cache/experiment/build'
+                archive=build/'esp-idf/main/libmain.a';archive.parent.mkdir(parents=True)
+                tool=Path(shutil.which('false')).resolve() if case=='objdump_failed' else objdump
+                cache=build/'CMakeCache.txt';row=f'CMAKE_OBJDUMP:FILEPATH={tool}\n'
+                if case!='cache_missing':cache.write_text(row*(2 if case=='cache_ambiguous' else 1))
+                (build/'build.ninja').write_text('# actual build binding fixture\n')
+                if case!='archive_missing':
+                    source=root/'probe.c';source.write_text('int section_capture_probe;\n')
+                    subprocess.run(['cc','-c',str(source),'-o',str(root/'probe.o')],check=True,capture_output=True)
+                    subprocess.run(['ar','rcs',str(archive),str(root/'probe.o')],check=True,capture_output=True)
+                result=subprocess.run(['bash','-c',script],cwd=root,text=True,capture_output=True,
+                                      env=dict(os.environ,LC_ALL='POSIX'),timeout=30)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                out=build/'family_c3_cache/ldgen-debug'
+                report=json.loads((out/'capture.json').read_text())
+                expected='capture_error' if case.startswith('cache_') else case
+                self.assertEqual(report['status'],expected)
+                self.assertEqual(report['locale'],'C')
+                self.assertEqual(report['inputs']['build.ninja']['sha256'],
+                                 self.module.sha((build/'build.ninja').read_bytes()))
+                if case.startswith('cache_'):
+                    self.assertIn('CMAKE_OBJDUMP',report['error'])
+                    self.assertFalse((out/'main-sections.txt').exists())
+                    continue
+                self.assertEqual(report['tool']['configured_path'],str(tool))
+                self.assertEqual(report['tool']['sha256'],self.module.sha(tool.read_bytes()))
+                self.assertTrue((out/'objdump-version.txt').is_file())
+                if case=='archive_missing':
+                    self.assertFalse(report['inputs']['esp-idf/main/libmain.a']['exists'])
+                    self.assertIsNone(report['dump_exit_code'])
+                    self.assertFalse((out/'main-sections.txt').exists())
+                else:
+                    code=1 if case=='objdump_failed' else 0
+                    self.assertEqual(report['dump_exit_code'],code)
+                    self.assertEqual((out/'main-sections.exit.txt').read_text().strip(),str(code))
+                    self.assertTrue((out/'main-sections.stderr.txt').is_file())
+                    self.assertEqual(report['inputs']['esp-idf/main/libmain.a']['sha256'],
+                                     self.module.sha(archive.read_bytes()))
+                    if case=='captured':self.assertIn('In archive',(out/'main-sections.txt').read_text())
 
     def test_flash_code_and_unknown_indirect_fail_closed(self):
         code=struct.pack('<II',0x420002b7,0x000280e7)+b'\x82\x80'

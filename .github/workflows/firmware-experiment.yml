@@ -90,6 +90,54 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           path: firmware/.cache/evidence/
+      - name: Capture failed C3 archive sections
+        if: ${{ failure() && matrix.variant == 'xmini-c3-family' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, re, subprocess
+          build = Path('firmware/.cache/experiment/build').resolve()
+          out = build/'family_c3_cache/ldgen-debug'
+          out.mkdir(parents=True, exist_ok=True)
+          archive = build/'esp-idf/main/libmain.a'
+          cache = build/'CMakeCache.txt'
+          sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+          inputs = {name: {'exists': (build/name).is_file(),
+                          'sha256': sha(build/name) if (build/name).is_file() else None}
+                    for name in ('esp-idf/main/libmain.a', 'CMakeCache.txt', 'build.ninja')}
+          report = {'status': 'capture_error', 'locale': 'C', 'inputs': inputs,
+                    'source_sha': os.environ.get('GITHUB_SHA'), 'dump_exit_code': None}
+          def run(label, command):
+              with (out/(label+'.txt')).open('wb') as stdout, (out/(label+'.stderr.txt')).open('wb') as stderr:
+                  result = subprocess.run(command, env=dict(os.environ, LC_ALL='C'),
+                                          stdout=stdout, stderr=stderr, timeout=30)
+              (out/(label+'.exit.txt')).write_text(str(result.returncode)+'\n')
+              return result.returncode
+          try:
+              if not cache.is_file():
+                  raise ValueError('CMAKE_OBJDUMP cache missing')
+              tools = re.findall(r'^CMAKE_OBJDUMP:[^=\r\n]+=(.*)$', cache.read_text(), re.MULTILINE)
+              if len(tools) != 1 or not tools[0]:
+                  raise ValueError('CMAKE_OBJDUMP must have exactly one nonempty cache entry')
+              tool = Path(tools[0])
+              if not tool.is_absolute() or not tool.is_file() or not os.access(tool, os.X_OK):
+                  raise ValueError('CMAKE_OBJDUMP must be an existing absolute executable')
+              report['tool'] = {'configured_path': str(tool), 'resolved_path': str(tool.resolve()),
+                                'sha256': sha(tool)}
+              report['version_exit_code'] = run('objdump-version', [str(tool), '--version'])
+              if archive.is_file():
+                  report['dump_command'] = [str(tool), '-h', str(archive)]
+                  report['dump_exit_code'] = run('main-sections', report['dump_command'])
+                  report['status'] = 'captured' if report['dump_exit_code'] == 0 else 'objdump_failed'
+              else:
+                  report['status'] = 'archive_missing'
+          except Exception as error:
+              report['error'] = type(error).__name__+': '+str(error)
+          (out/'capture.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
+          print(json.dumps(report, sort_keys=True))
+          PY
       - name: Retain failed C3 build diagnostics only
         if: ${{ failure() && matrix.variant == 'xmini-c3-family' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -104,3 +152,6 @@ jobs:
             firmware/.cache/experiment/sdkconfig
             firmware/.cache/experiment/build/compile_commands.json
             firmware/.cache/experiment/build/family_c3_cache/
+            firmware/.cache/experiment/build/esp-idf/main/libmain.a
+            firmware/.cache/experiment/build/CMakeCache.txt
+            firmware/.cache/experiment/build/build.ninja
