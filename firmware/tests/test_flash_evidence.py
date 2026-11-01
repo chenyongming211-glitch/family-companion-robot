@@ -19,7 +19,7 @@ def image(chip):
     return result
 
 
-def fixture(tree, c3=True):
+def fixture(tree, c3=True, pcm=True):
     build = tree/'build'; build.mkdir(parents=True, exist_ok=True)
     rows = [('nvs', 1, 2, 0x9000, 0x4000 if c3 else 0x6000),
             ('otadata', 1, 0, 0xd000 if c3 else 0xf000, 0x2000),
@@ -34,7 +34,7 @@ def fixture(tree, c3=True):
              'partition_table/partition-table.bin': table+b'\xff'*(3072-len(table)),
              'ota_data_initial.bin': b'\xff'*0x2000, 'xiaozhi.bin': bytes(image(5 if c3 else 9)),
              'generated_assets.bin': b'fixture original assets'}
-    if c3: paths['family_c3_pcm/family_c3_pcm_cues.pack'] = b'fixture separate pack'
+    if c3 and pcm: paths['family_c3_pcm/family_c3_pcm_cues.pack'] = b'fixture separate pack'
     for name, data in paths.items():
         path = build/name; path.parent.mkdir(parents=True, exist_ok=True)
         if name.endswith('.pack') and path.exists(): continue
@@ -42,7 +42,7 @@ def fixture(tree, c3=True):
     files = {'0x0': 'bootloader/bootloader.bin', '0x8000': 'partition_table/partition-table.bin',
              hex(rows[1][3]): 'ota_data_initial.bin', '0x20000': 'xiaozhi.bin',
              hex(rows[-1][3]): 'generated_assets.bin'}
-    if c3: files['0x650000'] = 'family_c3_pcm/family_c3_pcm_cues.pack'
+    if c3 and pcm: files['0x650000'] = 'family_c3_pcm/family_c3_pcm_cues.pack'
     write_flash(tree, files)
     return files
 
@@ -71,7 +71,23 @@ class FlashEvidence(unittest.TestCase):
         self.tree = self.root/'c3'; self.files = fixture(self.tree)
 
     def verify(self):
-        return self.module.verify_flash_images(self.tree, c3=True)
+        return self.module.verify_flash_images(self.tree, c3=True, pcm=True)
+
+    def test_stable_c3_requires_native_opus_map_without_pcm_trailer(self):
+        tree = self.root/'stable'; files = fixture(tree, pcm=False)
+        # Stable Opus assets may use the original full partition, not PCM's
+        # experimental 0x50000 prefix reservation.
+        (tree/'build/generated_assets.bin').write_bytes(b'assets'+bytes(0x50000))
+        write_flash(tree, files)
+        result = self.module.verify_flash_images(tree, c3=True)
+        self.assertEqual(result['images']['ota_data_initial.bin']['offset'], 0xd000)
+        self.assertNotIn('family_c3_pcm/family_c3_pcm_cues.pack', result['images'])
+        pack = tree/'build/family_c3_pcm/family_c3_pcm_cues.pack'
+        pack.parent.mkdir(); pack.write_bytes(b'experimental trailer')
+        files['0x650000'] = pack.relative_to(tree/'build').as_posix()
+        write_flash(tree, files)
+        with self.assertRaisesRegex(ValueError, 'canonical'):
+            self.module.verify_flash_images(tree, c3=True)
 
     def test_canonical_c3_and_stock_use_their_native_partition_offsets(self):
         evidence = self.verify()

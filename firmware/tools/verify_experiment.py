@@ -129,7 +129,7 @@ def flash_partitions(path):
     return entries
 
 
-def verify_flash_images(tree, c3=False):
+def verify_flash_images(tree, c3=False, pcm=False):
     """Bind both IDF input lists and the entire native raw merged output.
 
     Frozen IDF fff9895/esptool raw merge uses base 0, FF gaps and no final
@@ -153,7 +153,10 @@ def verify_flash_images(tree, c3=False):
     expected = {0: build/'bootloader/bootloader.bin', 0x8000: build/'partition_table/partition-table.bin',
                 ota[3]: build/'ota_data_initial.bin', app[3]: build/'xiaozhi.bin',
                 assets[3]: build/'generated_assets.bin'}
-    if c3: expected[0x650000] = build/'family_c3_pcm/family_c3_pcm_cues.pack'
+    if pcm:
+        if not c3:
+            raise ValueError('PCM flash evidence requires an explicit C3 experiment')
+        expected[0x650000] = build/'family_c3_pcm/family_c3_pcm_cues.pack'
     metadata = unique_json(read_regular(build/'flasher_args.json'))
     options = flash_options(metadata['write_flash_args'])
     if metadata['flash_settings'] != {key[2:].replace('-', '_'): value for key, value in options.items()}:
@@ -188,8 +191,8 @@ def verify_flash_images(tree, c3=False):
         raise ValueError('bootloader header would require unsupported merge patching')
     sizes = {path: len(read_regular(path)) for path in expected.values()}
     limits = {expected[0]: 0x8000, expected[0x8000]: 0x1000,
-              expected[app[3]]: app[4], expected[assets[3]]: 0x50000 if c3 else assets[4]}
-    if c3: limits[expected[0x650000]] = 0x1b0000
+              expected[app[3]]: app[4], expected[assets[3]]: 0x50000 if pcm else assets[4]}
+    if pcm: limits[expected[0x650000]] = 0x1b0000
     if any(sizes[path] > limit for path, limit in limits.items()):
         raise ValueError('canonical flash image exceeds native partition/reserved range')
     ranges = sorted((offset, offset+sizes[path], path) for offset, path in expected.items())
@@ -211,7 +214,7 @@ def verify_flash_images(tree, c3=False):
 
 
 def verify_c3_pcm(tree):
-    """Bind separate trailer, real source/compile inputs, symbols and release bytes."""
+    """Explicit experimental-only validation; never selected by normal C3 CLI."""
     tree = tree.resolve()
     build, generated = tree/'build', tree/'build/family_c3_network'
     for relative in C3_BUILD_FILES:
@@ -284,7 +287,7 @@ def verify_c3_pcm(tree):
                      read_regular(component/'CMakeLists.txt').decode())}
     if set(selected) != ((native_sources-originals) | replacements):
         raise ValueError('C3 compiled network sources changed beyond the two reviewed replacements')
-    flash = verify_flash_images(tree, c3=True)
+    flash = verify_flash_images(tree, c3=True, pcm=True)
     merged = read_regular(build/'merged-binary.bin')
     releases = list((tree/'releases').glob('*_xmini-c3-family.zip'))
     if len(releases) != 1:
@@ -305,23 +308,23 @@ def verify_c3_pcm(tree):
 
 
 def verify_no_pcm(tree):
-    for directory in ('build/family_c3_pcm', 'build/family_c3_network'):
+    for directory in ('build/family_c3_pcm', 'build/family_c3_network', 'build/family_c3_cache'):
         if (tree/directory).exists():
-            raise ValueError('non-C3 build contains PCM generated artifacts')
+            raise ValueError('non-PCM build contains PCM generated artifacts')
     flash = tree/'build/flasher_args.json'
     if flash.exists() and 'family_c3_' in read_regular(flash).decode():
-        raise ValueError('non-C3 flash contains PCM trailer')
+        raise ValueError('non-PCM flash contains PCM trailer')
     commands = tree/'build/compile_commands.json'
     if commands.exists():
         if 'family_c3_network' in read_regular(commands).decode():
-            raise ValueError('non-C3 compiled inputs contain C3 replacements')
+            raise ValueError('non-PCM compiled inputs contain C3 replacements')
         compiled = compiled_paths(commands)
         component = tree.resolve()/'managed_components/78__esp-ml307'
         if any(compiled.count(component/name) != 1 for name in ('src/web_socket.cc', 'src/esp/esp_tcp.cc')):
-            raise ValueError('non-C3 compiled inputs must retain both original network sources exactly once')
+            raise ValueError('non-PCM compiled inputs must retain both original network sources exactly once')
         for name, expected in c3_network.ORIGINAL_SHA256.items():
             if hashlib.sha256(read_regular(component/name)).hexdigest() != expected:
-                raise ValueError('non-C3 network original SHA256 mismatch: '+name)
+                raise ValueError('non-PCM network original SHA256 mismatch: '+name)
         return dict(compile_commands_sha256=digest(commands), original_sha256=c3_network.ORIGINAL_SHA256)
 
 
@@ -607,7 +610,7 @@ def verify(firmware, tree, variant, idf_commit):
     xiaoman = variant == 'm5stack-stopwatch-xiaoman' or waveshare
     usb_console = experiment or waveshare or c3
     required = {'CONFIG_IDF_TARGET': '"esp32s3"',
-                'CONFIG_XMINI_C3_PCM': 'y' if c3 else 'n',
+                'CONFIG_XMINI_C3_PCM': 'n',
                 'CONFIG_BOARD_TYPE_M5STACK_STOPWATCH': 'n' if waveshare else 'y',
                 'CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16': 'y' if waveshare else 'n',
                 'CONFIG_WAVESHARE_XIAOMAN_REALTIME': 'y' if waveshare else 'n',
@@ -631,9 +634,9 @@ def verify(firmware, tree, variant, idf_commit):
     if waveshare:
         required.update(CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y')
     if c3:
-        required.update(CONFIG_IDF_TARGET='"esp32c3"', CONFIG_I2S_ISR_IRAM_SAFE='y', CONFIG_BOARD_TYPE_M5STACK_STOPWATCH='n',
+        required.update(CONFIG_IDF_TARGET='"esp32c3"', CONFIG_BOARD_TYPE_M5STACK_STOPWATCH='n',
                         CONFIG_BOARD_TYPE_XMINI_C3='y', CONFIG_XMINI_C3_BUTTON_ENTRY='y',
-                        CONFIG_XMINI_C3_VOICE_BARGE='y',
+                        CONFIG_XMINI_C3_VOICE_BARGE='n',
                         CONFIG_LANGUAGE_ZH_CN='y', CONFIG_FLASH_DEFAULT_ASSETS='y',
                         CONFIG_SPIRAM='n', CONFIG_USE_AUDIO_PROCESSOR='n', CONFIG_USE_DEVICE_AEC='n',
                         CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y',
@@ -680,9 +683,7 @@ def verify(firmware, tree, variant, idf_commit):
     if c3:
         evidence['dependency_lock_source'] = dependency_name
         evidence['partition_layout'] = verify_c3_layout(tree)
-        evidence['c3_pcm'] = verify_c3_pcm(tree)
-    else:
-        evidence['native_network_inputs'] = verify_no_pcm(tree)
+    evidence['native_network_inputs'] = verify_no_pcm(tree)
     if waveshare:
         evidence['partition_layout'] = verify_waveshare_layout(tree)
     if xiaoman:
@@ -708,16 +709,21 @@ def bundle(firmware, tree, output, source_sha, evidence):
     flash = verify_flash_images(tree, c3=evidence['variant'] == C3_VARIANT)
     evidence = dict(evidence, flash_inputs=flash)
     required = ['dependencies.lock', 'sdkconfig', '.family-robot-source.json', *BUILD_FILES]
-    if evidence['variant'] == C3_VARIANT:
-        required.extend((*C3_BUILD_FILES, *c3_retained_inputs(firmware)))
-    else:
-        required.extend(NATIVE_NETWORK_FILES)
+    required.extend(NATIVE_NETWORK_FILES)
     release_name = CANONICAL_RELEASE_NAMES.get(evidence['variant'])
     if release_name is None:
         raise ValueError('unknown canonical release variant')
     releases = list((tree/'releases').glob('*_'+release_name+'.zip'))
     if len(releases) != 1:
         raise ValueError('expected exactly one canonical release ZIP')
+    if evidence['variant'] == C3_VARIANT:
+        c3_build.regular(releases[0])
+        with zipfile.ZipFile(releases[0]) as release:
+            entries = release.infolist()
+            merged = read_regular(tree/'build/merged-binary.bin')
+            if (len(entries) != 1 or entries[0].filename != 'merged-binary.bin'
+                    or entries[0].file_size != len(merged) or release.read(entries[0]) != merged):
+                raise ValueError('C3 release merged image differs from verified build')
     required.append(releases[0].relative_to(tree).as_posix())
     for relative in required:
         path = tree/relative
@@ -809,12 +815,6 @@ def main():
     if args.baseline:
         bundle_baseline(FIRMWARE, args.tree, args.output, actual, args.idf_commit)
     else:
-        if args.variant == C3_VARIANT:
-            idf=os.environ.get('IDF_PATH')
-            if not idf:parser.error('C3 native evidence capture requires builder IDF_PATH')
-            c3_iram.capture_build(args.tree,idf)
-            report=c3_iram.audit_tree(args.tree)
-            (args.tree/'build/family_c3_cache/iram-audit.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
         evidence = verify(FIRMWARE, args.tree, args.variant, args.idf_commit)
         bundle(FIRMWARE, args.tree, args.output, actual, evidence)
     print('Verified source and build evidence; acoustics pending')

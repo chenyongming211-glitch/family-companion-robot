@@ -1,5 +1,6 @@
 """Run actual C3 voice integration paths; all execution belongs on the cloud host."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,6 +13,16 @@ class C3VoiceIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         defaults.RealtimeDefaultTests.setUpClass.__func__(cls)
+
+    def test_product_c3_defaults_to_stable_button_half_duplex(self):
+        variants = json.loads((self.source/'main/boards/xmini/c3/config.json').read_text())['builds']
+        options = next(v['sdkconfig_append'] for v in variants if v['name'] == 'xmini-c3-family')
+        keys = [option.split('=', 1)[0] for option in options]
+        self.assertEqual(len(keys), len(set(keys)), 'prepared config contains duplicate flag values')
+        for flag, value in [('XMINI_C3_BUTTON_ENTRY', 'y'), ('XMINI_C3_VOICE_BARGE', 'n'),
+                            ('XMINI_C3_PCM', 'n'), ('I2S_ISR_IRAM_SAFE', 'n'),
+                            ('USE_AUDIO_PROCESSOR', 'n'), ('USE_DEVICE_AEC', 'n'), ('USE_SERVER_AEC', 'n')]:
+            self.assertIn(f'CONFIG_{flag}={value}', options)
 
     def run_host(self,program,enabled,include=None):
         for flags in (['-O2'],['-fsanitize=address,undefined','-fno-sanitize-recover=all']):

@@ -90,10 +90,12 @@ class C3PcmMediaTests(unittest.TestCase):
         self.assertLess(owner.index('protocol_->PollC3PcmDisconnect()'),owner.index('FinishC3PcmFault()'))
     def test_actual_initialize_uses_pcm_callback_and_input_src_with_no_opus_or_output_src_platform_api(self):self.run_case('initialize')
     def test_actual_lite_initialize_retains_first_aec_create_result(self):self.run_case('lite-initialize')
-    def test_pcm_flag_is_opt_in_and_enabled_only_for_family_c3(self):
+    def test_pcm_flag_is_experimental_and_disabled_for_product_c3(self):
         config=json.loads((self.source/'main/boards/xmini/c3/config.json').read_text())
         for variant in config['builds']:
-            self.assertEqual('CONFIG_XMINI_C3_PCM=y' in variant['sdkconfig_append'],variant['name']=='xmini-c3-family')
+            self.assertNotIn('CONFIG_XMINI_C3_PCM=y', variant['sdkconfig_append'])
+            if variant['name']=='xmini-c3-family':
+                self.assertIn('CONFIG_XMINI_C3_PCM=n', variant['sdkconfig_append'])
         block=(self.source/'main/Kconfig.projbuild').read_text().split('config XMINI_C3_PCM',1)[1].split('\nconfig ',1)[0]
         self.assertIn('default n',block);self.assertIn('depends on XMINI_C3_BUTTON_ENTRY && XMINI_C3_VOICE_BARGE',block)
     def test_actual_lite_engine_bypasses_vectors_and_stops_after_callback_close(self):self.run_case('lite')

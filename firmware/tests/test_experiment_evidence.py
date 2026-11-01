@@ -91,7 +91,7 @@ class EvidenceTests(unittest.TestCase):
             self.verify()
         self.config(True)
         (self.tree/'build/family_c3_pcm').mkdir(parents=True)
-        with self.assertRaisesRegex(ValueError, 'non-C3'):
+        with self.assertRaisesRegex(ValueError, 'non-PCM'):
             self.verify()
 
     def test_s3_ignores_optional_c3_dependency_override_and_keeps_old_pin(self):

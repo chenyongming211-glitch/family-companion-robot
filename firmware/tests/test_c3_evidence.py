@@ -6,7 +6,9 @@ import re
 import shutil
 import struct
 import unittest
+import zipfile
 import test_experiment_evidence as existing
+import test_flash_evidence as flash_fixture
 
 VARIANT = 'xmini-c3-family'
 PARTITIONS = [('nvs', 1, 2, 0x9000, 0x4000), ('otadata', 1, 0, 0xd000, 0x2000),
@@ -20,9 +22,8 @@ class C3EvidenceTests(unittest.TestCase):
 
     def setUp(self):
         existing.EvidenceTests.setUp(self)
-        # These fixtures exercise native lock/config/layout, independently of
-        # real cue/network/symbol artifacts covered by test_c3_pcm_evidence.py.
-        self.module.verify_c3_pcm = lambda tree: {'fixture': True}
+        # Production C3 evidence must never enter the experimental PCM path.
+        self.module.verify_c3_pcm = existing.mock.Mock(side_effect=AssertionError('unexpected PCM validation'))
         for name in ['dependencies.esp32c3.lock', 'dependencies.esp32c3.lock.sha256']:
             shutil.copyfile(existing.FIRMWARE/name, self.firmware/name)
         shutil.copyfile(self.firmware/'dependencies.esp32c3.lock', self.tree/'dependencies.lock')
@@ -39,8 +40,8 @@ class C3EvidenceTests(unittest.TestCase):
         options = {
             'CONFIG_IDF_TARGET': '"esp32c3"', 'CONFIG_BOARD_TYPE_XMINI_C3': 'y',
             'CONFIG_XMINI_C3_BUTTON_ENTRY': 'y', 'CONFIG_WAKE_WORD_DISABLED': 'y',
-            'CONFIG_XMINI_C3_VOICE_BARGE': 'y',
-            'CONFIG_XMINI_C3_PCM': 'y', 'CONFIG_I2S_ISR_IRAM_SAFE': 'y', 'CONFIG_LANGUAGE_ZH_CN': 'y',
+            'CONFIG_XMINI_C3_VOICE_BARGE': 'n',
+            'CONFIG_XMINI_C3_PCM': 'n', 'CONFIG_I2S_ISR_IRAM_SAFE': 'n', 'CONFIG_LANGUAGE_ZH_CN': 'y',
             'CONFIG_FLASH_DEFAULT_ASSETS': 'y',
             'CONFIG_OTA_URL': '""',
             'CONFIG_ESPTOOLPY_FLASHSIZE_16MB': 'y', 'CONFIG_PARTITION_TABLE_CUSTOM': 'y',
@@ -114,18 +115,25 @@ class C3EvidenceTests(unittest.TestCase):
         self.assertEqual(evidence['partition_layout']['app_limit'], 0x2f0000)
         self.assertEqual(evidence['effective_config']['CONFIG_USE_DEVICE_AEC'], 'n')
 
-    def test_product_c3_evidence_requires_playback_voice_capture(self):
+    def test_product_c3_evidence_rejects_voice_barge(self):
         config = self.tree/'sdkconfig'
-        config.write_text(config.read_text().replace('CONFIG_XMINI_C3_VOICE_BARGE=y\n',
-                                                    'CONFIG_XMINI_C3_VOICE_BARGE=n\n'))
+        config.write_text(config.read_text().replace('# CONFIG_XMINI_C3_VOICE_BARGE is not set',
+                                                    'CONFIG_XMINI_C3_VOICE_BARGE=y'))
         with self.assertRaisesRegex(ValueError, 'CONFIG_XMINI_C3_VOICE_BARGE'):
             self.verify()
 
-    def test_product_c3_requires_explicit_pcm(self):
+    def test_product_c3_rejects_experimental_pcm(self):
         path = self.tree/'sdkconfig'
-        path.write_text(path.read_text().replace('CONFIG_XMINI_C3_PCM=y\n', '')
-                        + '# CONFIG_XMINI_C3_PCM is not set\n')
+        path.write_text(path.read_text().replace('# CONFIG_XMINI_C3_PCM is not set',
+                                                 'CONFIG_XMINI_C3_PCM=y'))
         with self.assertRaisesRegex(ValueError, 'CONFIG_XMINI_C3_PCM'):
+            self.verify()
+
+    def test_product_c3_rejects_experimental_iram(self):
+        path = self.tree/'sdkconfig'
+        path.write_text(path.read_text().replace('# CONFIG_I2S_ISR_IRAM_SAFE is not set',
+                                                 'CONFIG_I2S_ISR_IRAM_SAFE=y'))
+        with self.assertRaisesRegex(ValueError, 'CONFIG_I2S_ISR_IRAM_SAFE'):
             self.verify()
 
     def test_c3_override_requires_reviewed_native_version_and_prepared_manifest(self):
@@ -230,20 +238,45 @@ class C3EvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'partition'): self.verify()
 
     def test_bundle_keeps_c3_native_pin_and_canonical_release_name(self):
-        for relative in (*self.module.BUILD_FILES, *self.module.C3_BUILD_FILES,
-                         *self.module.c3_retained_inputs(self.firmware)):
+        flash_fixture.fixture(self.tree, pcm=False)
+        for relative in (*self.module.BUILD_FILES, *self.module.NATIVE_NETWORK_FILES):
             path = self.tree/relative
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'synthetic '+relative.encode())
         releases = self.tree/'releases'; releases.mkdir()
         name = 'v2.5.2_xmini-c3-family.zip'
-        (releases/name).write_bytes(b'synthetic release')
+        with zipfile.ZipFile(releases/name, 'w') as release:
+            release.writestr('merged-binary.bin', (self.tree/'build/merged-binary.bin').read_bytes())
         output = self.root/'evidence'
-        with existing.mock.patch.object(self.module, 'verify_flash_images', return_value={'fixture': True}):
+        with existing.mock.patch.object(self.module, 'verify_no_pcm', return_value={'original_network_fixture': True}):
             self.module.bundle(self.firmware, self.tree, output, 'a'*40, self.verify())
         self.assertEqual((output/'dependencies.lock.sha256').read_text().strip(),
                          self.digest(output/'dependencies.lock'))
         self.assertNotEqual((output/'dependencies.lock.sha256').read_bytes(),
                             (self.firmware/'dependencies.lock.sha256').read_bytes())
         self.assertTrue((output/'releases'/name).is_file())
+        self.assertFalse((output/'build/family_c3_pcm').exists())
+        self.assertFalse((output/'build/family_c3_cache').exists())
+        metadata = json.loads((output/'build-evidence.json').read_text())
+        self.assertNotIn('c3_pcm', metadata)
+        self.assertEqual(metadata['native_network_inputs'], {'original_network_fixture': True})
+        for relative in self.module.NATIVE_NETWORK_FILES:
+            self.assertEqual((output/relative).read_bytes(), (self.tree/relative).read_bytes())
+        with zipfile.ZipFile(releases/name, 'w') as release:
+            release.writestr('merged-binary.bin', b'forged')
+        with existing.mock.patch.object(self.module, 'verify_no_pcm', return_value={'original_network_fixture': True}), \
+             self.assertRaisesRegex(ValueError, 'release'):
+            self.module.bundle(self.firmware, self.tree, self.root/'bad-evidence', 'a'*40, self.verify())
+
+    def test_normal_c3_cli_does_not_capture_experimental_iram(self):
+        arguments = ['verify_experiment.py', '--tree', str(self.tree), '--output', str(self.root/'output'),
+                     '--variant', VARIANT, '--source-sha', 'a'*40, '--idf-commit', self.lock['idf_commit']]
+        with existing.mock.patch.object(self.module.sys, 'argv', arguments), \
+             existing.mock.patch.dict(self.module.os.environ, {}, clear=True), \
+             existing.mock.patch.object(self.module.subprocess, 'check_output', return_value='a'*40), \
+             existing.mock.patch.object(self.module, 'verify', return_value={'variant': VARIANT}), \
+             existing.mock.patch.object(self.module, 'bundle') as package, \
+             existing.mock.patch.object(self.module.c3_iram, 'capture_build', side_effect=AssertionError('unexpected IRAM capture')):
+            self.module.main()
+        package.assert_called_once()
