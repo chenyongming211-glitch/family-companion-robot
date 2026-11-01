@@ -145,3 +145,24 @@ JSON还包含模型／manifest摘要、有效质量与CPU配置、冷加载耗�
 报告始终 `source_kind:synthetic`、`production_acceptance:false`、`human_acceptance:false`、
 `feature_enabled:false`；重叠与分段均为 `unavailable`。
 合成音色可分与guest标签稳定仅是工程／合成证据，不能替代真实家庭语音、重叠／换人降级或产品验收。
+
+## 手动、仅内存 session 输入
+
+```sh
+/private/evidence/speaker-lab session \
+  --model /private/models/eres2net.onnx \
+  --sha256 <64位小写SHA256> \
+  --declared-single-speaker
+```
+
+必须显式声明单人测试，不作为默认模式。启动先核验模型摘要，然后 stdout 输出一行 `{"event":"ready","evidence":"user_declared_test"}`；不打开麦克风。配套 Mac 手动入口见 [`../speaker-session/README.md`](../speaker-session/README.md)。
+
+stdin 复用上述 v1 binary PCM 帧，scope 必须为 `manual-test`，同一连接固定 session／generation／模型，ID 严格递增，sample 区间从0连续相接，每句最多64000 samples（4秒）。最多32句／5分钟，包含空闲和不完整帧等待。EOF、取消、超时、坏帧关闭并清除临时 Tracker；session 拥有可关闭 stdin，取消直接关闭读取，不遗留阻塞 reader goroutine。
+
+仅合格片段提取特征，每句重新启动／关闭／回收实际 worker，保留其10秒冷启动与2秒RPC上限，以免人工4秒采集超过原worker的2秒空闲期限。父进程只保留一个最多8人的首次模板 Tracker；首个合格特征锁定维度，模板不随匹配更新。临时向量在 Observe 后清零，PCM 在每句处理后清零，不写录音、特征或人物库。每句冷启动仅为隔离诊断设计，不是产品延迟指标。
+
+stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `id`、`label`（`guest_1`～`guest_8`／`uncertain`／`unknown`）与 `duration_ms`，所有事件带 `evidence:user_declared_test`。没有向量、PCM、路径、姓名、文本。错误仅 stderr 固定 `session_failed`。真实输入结果不能重定向到文件。
+
+低于1.5秒／RMS低于0.005直接 observation uncertain、不会生成身份。单人状态来自参与者显式声明，非算法验证；门禁不检测语音／换人／重叠。ERes2Net研究阈值 new=0.622530、match=0.682987、margin=0.030229来自既有合成基准，未经家庭真人校准，不作身份认证或登记依据。单人多句实测不能宣称多人验收。
+
+新增 `TestRealSessionBridgeOptIn` 使用显式合成 WAV，经实际 stdin CLI→新 worker→Tracker，间隔超过 worker idle deadline 后检查同标签再获和 EOF 关闭。与既有3项原生opt-in同样通过显式模型／摘要／fixture／binary环境运行。应用内存处理不证明系统／内核所有副本或既有 swap 的状态；不改系统 swap。

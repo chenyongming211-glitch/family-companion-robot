@@ -25,6 +25,9 @@ func main() {
 	os.Exit(runCLI(ctx, os.Args[1:], os.Stdout, os.Stderr))
 }
 func runCLI(ctx context.Context, args []string, out, errOut io.Writer) int {
+	return runCLIWithInput(ctx, args, os.Stdin, out, errOut)
+}
+func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, out, errOut io.Writer) int {
 	fail := func(code string) int {
 		_ = json.NewEncoder(errOut).Encode(struct {
 			Error string `json:"error"`
@@ -39,7 +42,10 @@ func runCLI(ctx context.Context, args []string, out, errOut io.Writer) int {
 	model := f.String("model", "", "")
 	sha := f.String("sha256", "", "")
 	var socket, wav, manifest *string
+	var declared *bool
 	switch args[0] {
+	case "session":
+		declared = f.Bool("declared-single-speaker", false, "")
 	case "worker":
 		socket = f.String("socket", "", "")
 	case "benchmark":
@@ -51,6 +57,12 @@ func runCLI(ctx context.Context, args []string, out, errOut io.Writer) int {
 	}
 	if f.Parse(args[1:]) != nil || f.NArg() != 0 || *model == "" || !shaPattern.MatchString(*sha) {
 		return fail("usage")
+	}
+	if declared != nil {
+		if runSession(ctx, input, out, *model, *sha, *declared, sessionOptions{}) != nil {
+			return fail("session_failed")
+		}
+		return 0
 	}
 	if socket != nil {
 		if *socket == "" {

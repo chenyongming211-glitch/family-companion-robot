@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>SpeakerSession</string>
+<key>CFBundleIdentifier</key><string>com.familycompanion.speakersession</string>
+<key>CFBundleName</key><string>小满会话说话人测试</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>NSMicrophoneUsageDescription</key><string>手动点击后采集4秒单人语音，经SSH发送您配置的独立云端实验；应用不保存录音或登记声纹。</string>
+</dict></plist>
