@@ -1,6 +1,6 @@
 # C3有界PCM实施与验证
 
-当前状态：实现进行中，109c92f首轮原生CI的四种S3定制与stock通过，C3因旧SHA接口编译失败。最小PSA接口修正32024dc已通过独立规格/质量复审，准备新六目标CI，尚无可安装候选。未安装或声学验收，C3仍为稳定按键版6b79e4c/app1；自然插话尚未修好。正式服务未部署本轮PCM适配，M5/微雪保留Opus。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
+当前状态：58c14cd六目标CI、实际六产物独立检查及私有安装工具复核已通过；Go58适配已受控部署。C3首次启动在音频初始化门禁拒绝OTA确认，已恢复稳定app1并完成15秒观察，随后只读NVS审计及再次启动观察通过，串口关闭。未做真人测试，尚无实机PCM负载或回声结果，自然插话尚未修好。正在补齐首次硬件/reference故障的定长数值诊断，不先定性OOM或改音频容错策略。M5/微雪保留Opus且未刷写。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
 
 ## 已完成的源码和云端验证
 
@@ -48,6 +48,48 @@ Go新入口仅在version1、pcm_s16le及pcm_s16le_v1明确协商时接受PCM，�
 - 无人讲话不自触发、播放中真人插问、新回答完整、记忆/音量/按键与故障恢复。
 
 不以启动成功、数字回环或主机测试替代实机资源和声学验收。
+
+## 58c14cd精确构建与实际产物
+
+精确源码`58c14cdefdad54db8aac7610a7c2d0971e2abf27`的[experiment41271574904](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41271574904)五目标及[stock41271574932](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41271574932)全部success。C3 job124745250823的248项完整主机测试/190.381s、上游110项/7.595s无skip通过，原生编译/链接/构建校验/打包均通过。
+
+六份实际ZIP均按GitHub artifact ID/digest/字节数、CRC及解包全量文件匹配。五个非PCM产物的独立报告在云端`task4a-actual-artifacts/report.md`，12项证据清单SHA为`9c26d6f5996888f6249ff78e4a7c6a047f21e9da9e94842ba9ac1e492676682b`；原网络双源和六原输入、配置/源码库存、实际镜像checksum/digest、分区/资源、flash_args/JSON、全部merged字节及release均通过。四个patched S3严格匹配f0568dd原生锁；stock按原始未补丁manifest解析为b26df81锁，关键版本相同，仅button/esp_jpeg/iot_usbh_cdc三个非关键minor版本不同，详报保留边界，不把stock称为patched锁字节一致。微雪唯一共享`xiaoman_orb_view.cc`按0008 owning CMake核验，无错选M5 codec。
+
+C3 artifact13069607051 ZIP SHA为`fdc819ca2899cbacdae4fa2c70a47a1a1367f462f7d1ccbd1f538bfa396bf68d`。完整云端独立检查重建120项实际输入及网络/提示音规范生成器，核对原始compile_commands、全部flash/merged/release、e178原生锁、IDF来源、配置与原assets/分区保持。app2234816B，SHA`375b19ee59f7e094ba93da9e0175a5f3447a70a1c5c5cd029d5b4e2dc9a03b44`；实际ELF42411076B，SHA`41a8be584f3cbcf139267b324775f390c23893ace79d548c780a12ba1ef5c333`等于app描述符；包1490032B/7457718e摘要保持，chip5/rev3..199支持本机rev4、secure_version0。报告在`task4b/actual-c3-58c14cd.json`，实际inventory摘要`8ffae3a68d4cebbe3a662c9b676ed7416fc38c1164d8ed27e9a6f536d4a9e348`。
+
+root通过GitHub push run的精确head/path及实际artifact身份独立建立外部binding，Mac标准库client gate逐文件复验通过，binding规范摘要`0824b91778ba974b65bc8a68b1d5dc45e2aa6c6aade39d665c57425163263dca`。此为技术前置核验记录，不替代实机验收。私有工具历经规格/质量反馈后最终51项/10.947s通过，原规格及原质量复审均PASS；缺失诊断、晚零栈、累计旧值、保护区漂移、Git未跟踪/ignored/blob漂移及bytecode影子导入均有拒绝回归。代码、备份、产物留在私有目录，未入Git。
+
+## 受控服务端更新与首次USB安装
+
+2026-11-01 12:25 CST，仅将Go二进制更新为58c14cd，旧二进制及当前身份/记忆备份在云端`task5-go-build/rollout-58-20261101T042514Z`；更新前双方active0。Go手动重启后PID1304344，ready/memory_ready=true、max_sessions2、active0；gateway仍PID4139310，未重启。六项保护配置/属主/权限及身份/记忆文件逐项保持，14项引导/鉴权/交叉拒绝检查通过，0声音会话/模型请求。新二进制SHA`a5ea30f5d70996dd79cc3a82cb5ad35d22ed4b394470a479f5e483b323931213`。未改共同VAD/取消/drain策略，本轮没有用M5/微雪实际出声验证。
+
+12:26 CST启动经核验的USB安装工具，唯一原设备`/dev/cu.usbmodem14201`/68:c6:3a:39:64:98；打开前无其他串口持有者。私有工作目录`.superpowers/c3-pcm-install-20261101/usb-58-20261101T0426Z`，安装日志位于`.superpowers/c3-pcm-rollout-20261101/install-58c14cd.log`。正在鲜取备份与核对16MiB补集，后续只允许app0、精确扇区取整trailer及selector0，不写稳定app1或eFuse。此处尚无安装成功、启动资源、实际网络或插话结论。
+
+### 首次启动拒绝确认，已完成稳定版恢复
+
+写前全部三域原字节已备份，16MiB补集字节SHA/设备MD5核对通过；实际只写app0 `0x20000+0x222000`、trailer `0x650000+0x16c000`、selector0 `0xd000+0x1000`，序号5。三域写入及各自逐字节回读通过。
+
+首次boot准确加载ELF41a8be584，原设备身份/SKU保持；ES8311和24k单声道TX/RX打开，1663ms LiteAudioEngine报告Initialized/WakeNet:no。随后Wi-Fi/IP、原assets映射校验及8000引导HTTP成功；3553ms唯一错误为`C3 audio initialization failed; refusing OTA confirmation`，设备重启并自动OTA回退app1，ELFbf00948a1、Activationdone/idle。没有panic/assert或明确AEC创建错误，没有进入资源日志主循环，不能据此说OOM、语音网络故障或回声验收失败。
+
+`first-boot.proof.json`记录同句柄故障后尾部8.127秒、14209B、日志SHA`e4e062ec2e561887dedd93f6e48009a331eeccaa178c8590893c440100571a48`，ready=false。安装工具随后核对稳定启动路径，先将候选ABORTED，再恢复app0/trailer/原selector0；最终保护区回读及稳定启动核验仍在进行。不能将自动回退那次启动等同于整个恢复工具已完成。
+
+12:51已完成恢复工具：`stable_restored=true`，三授权域原字节均恢复、稳定路径和eFuse身份通过，稳定app1激活/idle后观察15.011秒无故障；进程以候选失败exit1结束且finally关闭串口。保护范围0..0xd000有变化，故明确`whole_flash_restored=false`，没有声称全部16MiB逐字节恢复。工具没有写回未授权NVS。
+
+随后12:52做独立只读审计，0 Flash写：新取128KiB前缀与原备份差1964B，全部位于0x9000..0xd000的NVS；逻辑27项→27项，仅`phy/cal_data`校准记录变化，其余26项及13个SSID/password/token/url/UUID/volume等字段逐项相同，值未输出或上传。稳定app1又激活/idle后观察15.057秒通过，串口关闭。私有证据在`nvs-read-audit-20261101T0452Z/{logical-diff.json,result.json,stable-audit-boot.log}`。
+
+原日志还明确记录：1663ms Lite Initialized后，1703ms PHY版本1235/8bd8c6fc，1733ms因checksum失败或过期保存新校准数据；自动稳定回退时同PHY版本但无Saving行。该事件与NVS差异吻合，可能涉及非IRAM I2S回调在Flash操作期间的延迟，但首fault也可能更早发生在pack/hash阶段，当前不能确定因果；诊断将用首次微秒时间及来源区分，未先更改回调/时序策略。
+
+只读代码/日志对齐把范围缩到codec打开后的VerifyHardware或DMA/reference静默FaultLocked路径，尚无唯一根因。显式pack/SRC/AEC/task创建失败通常会关闭输入/输出并打印false，本轮没有这些日志；constructor/setup在EnableInput入口前通过，AEC首次Create失败应有另一条错误但实际Initialized。空闲时Pair仍检查时序，故启动期静默锁存是可证路径而非本次已证明原因。实际app含期望pack SHA恰1次、硬件SHA配置启用；Assets MMU空闲候选4608KB/稳定6016KB仅作映射旁证。下一步保存首次fault来源/时间/Pair原因与初始化阶段状态、在OTA拒绝前一次输出；不在ISR打印，不放宽容错，不先重排初始化，不追加真人盲测。
+
+### 首次故障诊断源码，尚未构建或安装
+
+bd0723f增加PCM专用的定长数值诊断：同一mux内保存不可覆盖的首次来源、微秒时间、原Pair原因、TX/RX样本和回调前时间；硬件失败保存位图、查询返回值和实际参数。初始化阶段分别记录partition/map、两次真实PSA hash、SRC、AEC及任务创建状态，NotEntered与成功返回0区分。最多10个内部堆快照，两个结构分别限制在160B和448B内。仅在既有ReferenceFaulted/OTA拒绝分支从任务统一打印，不在ISR打印或分配，不更改门禁、阈值、FD参数、缓冲边界或初始化顺序。8b3e2a0另在锁外报告故障打印时的当前内部堆。
+
+云端`task5-startup-diag/`的bd源码专项为startup2项/11.808s、codec2项/31.693s、duplex1项/8.041s、media33项/84.165s，均通过；codec覆盖57场景的PCM0/1与O2/ASan四配置，duplex覆盖34场景的双配置。8b日志修正的`report-green.log`确认O2/ASan均exit0；该次188源输入清单`c3-report-source.sha256.json`自身SHA为`8255d16d1be11bf61371aadea94e28cc18b3e633ec246f5700ed29fcecd726c1`。中途准备路径/SSH环境失败的运行不算产品RED或通过证据。
+
+规格复核发现的唯一范围缺口已由374ea95修正：PCM0移除DiagnosticNow及诊断参数求值，恢复FaultLocked()/PublishReferenceLocked()原私有签名。公共base virtual和诊断状态守卫保持，不涉及M5/S3运行行为或对象布局变化。云端旧源码nm回归的两个PCM0组合均失败（5.441s）；新源码codec2项/23.205s（57场景×4及符号断言）、startup2项/8.675s、duplex1项/5.314s通过。188项清单`c3-pcm0-source.sha256.json`自身SHA为`6fd473d3b717e29ef813f66268d9ff3ffbcb0d7ba099f49a121485628f7aacca`，本地冻结HEAD逐项相同，双目标依赖锁和提示音包保持；原规格复审PASS，独立质量复核进行中。
+
+374ea95随后通过独立质量复核，未见P1/P2或阻断项；该批准仅针对诊断代码，主机证据不能证明实机ISR时长或故障已修复。下一步推送精确源码并重跑六目标CI及实际产物检查，之前58的构建/安装结果不能替代新源码证据。当前没有再次USB操作；Go58/PID1304344及gateway4139310的`/healthz`只读复查正常、active0，不因固件诊断重启服务。
 
 ## 构建接线与产物绑定进度
 
