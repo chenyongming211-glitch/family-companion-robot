@@ -1,6 +1,7 @@
 #pragma once
 #include "c3_pcm_buffer.h"
 #include "c3_pcm_cues.h"
+#include "c3_startup_diagnostics.h"
 #include <atomic>
 namespace family_robot {
 // All members other than cue_generation/fault_epoch are under audio_queue_mutex_.

@@ -1,28 +1,94 @@
 // The trailer owns a separate mmap handle: generic Assets::UnApplyPartition
 // cannot invalidate cue bytes while the output worker borrows the pack.
-static bool C3PcmSha256(const uint8_t* bytes,size_t size,uint8_t* digest) {
+static bool C3PcmSha256(const uint8_t* bytes,size_t size,uint8_t* digest,family_robot::C3StartupHash* diagnostic=nullptr) {
     // IDF initializes PSA at startup; this public call is safely idempotent.
-    if(psa_crypto_init()!=PSA_SUCCESS)return false;
+    if(diagnostic)diagnostic->state=family_robot::C3StartupStep::Entered;
+    const auto initialized=psa_crypto_init();
+    if(diagnostic)diagnostic->init_status=initialized;
+    if(initialized!=PSA_SUCCESS) {
+        if(diagnostic)diagnostic->state=family_robot::C3StartupStep::Failed;
+        return false;
+    }
     size_t length=0;
-    return psa_hash_compute(PSA_ALG_SHA_256,bytes,size,digest,32,&length)==PSA_SUCCESS && length==32;
+    const auto hashed=psa_hash_compute(PSA_ALG_SHA_256,bytes,size,digest,32,&length);
+    const bool valid=hashed==PSA_SUCCESS && length==32;
+    if(diagnostic) {
+        diagnostic->hash_status=hashed;diagnostic->length=length;
+        diagnostic->state=valid?family_robot::C3StartupStep::Succeeded:family_robot::C3StartupStep::Failed;
+    }
+    return valid;
 }
-static bool C3PcmVerifyHash(const uint8_t* bytes,size_t size,const uint8_t* expected,void*) {
-    uint8_t digest[32];return C3PcmSha256(bytes,size,digest) && !std::memcmp(digest,expected,32);
+static bool C3PcmVerifyHash(const uint8_t* bytes,size_t size,const uint8_t* expected,void* context) {
+    auto* startup=static_cast<family_robot::C3StartupDiagnostics*>(context);
+    auto* diagnostic=startup && startup->hash_count<2?&startup->hash[startup->hash_count++]:nullptr;
+    uint8_t digest[32];if(!C3PcmSha256(bytes,size,digest,diagnostic))return false;
+    const bool valid=!std::memcmp(digest,expected,32);
+    if(diagnostic) {diagnostic->matched=valid;diagnostic->state=valid?family_robot::C3StartupStep::Succeeded:family_robot::C3StartupStep::Failed;}
+    return valid;
 }
 bool AudioService::InitializeC3CuePack() {
     if(c3_pcm_.pack.count())return true;
+    using Step=family_robot::C3StartupStep;
+    const bool first=c3_startup_.pack_partition==Step::NotEntered;
+    if(first)c3_startup_.pack_partition=Step::Entered;
     const auto* partition=esp_partition_find_first(ESP_PARTITION_TYPE_DATA,ESP_PARTITION_SUBTYPE_ANY,"assets");
+    if(first && partition) {c3_startup_.partition_address=partition->address;c3_startup_.partition_size=partition->size;}
     constexpr size_t offset=0x50000,capacity=0x1b0000;
     if(!partition || partition->address!=0x600000 || partition->size<offset ||
        kFamilyC3PcmPackBytes>capacity || kFamilyC3PcmPackBytes>partition->size-offset ||
-       uint64_t(partition->address)+offset+kFamilyC3PcmPackBytes>=0x800000)return false;
+       uint64_t(partition->address)+offset+kFamilyC3PcmPackBytes>=0x800000) {
+        if(first)c3_startup_.pack_partition=Step::Failed;
+        return false;
+    }
+    if(first) {c3_startup_.pack_partition=Step::Succeeded;c3_startup_.map=Step::Entered;}
     const void* bytes=nullptr;
-    if(esp_partition_mmap(partition,offset,kFamilyC3PcmPackBytes,ESP_PARTITION_MMAP_DATA,&bytes,&c3_cue_mmap_)!=ESP_OK)return false;
-    if(!c3_pcm_.pack.Open(static_cast<const uint8_t*>(bytes),kFamilyC3PcmPackBytes,kFamilyC3PcmPackSha256,C3PcmVerifyHash,nullptr) ||
+    const auto mapped=esp_partition_mmap(partition,offset,kFamilyC3PcmPackBytes,ESP_PARTITION_MMAP_DATA,&bytes,&c3_cue_mmap_);
+    if(first) {c3_startup_.map_result=mapped;c3_startup_.map=mapped==ESP_OK?Step::Succeeded:Step::Failed;}
+    if(mapped!=ESP_OK)return false;
+    if(first)c3_startup_.pack_open=Step::Entered;
+    if(!c3_pcm_.pack.Open(static_cast<const uint8_t*>(bytes),kFamilyC3PcmPackBytes,kFamilyC3PcmPackSha256,C3PcmVerifyHash,first?&c3_startup_:nullptr) ||
        c3_pcm_.pack.count()!=21) {
+        if(first) {c3_startup_.pack_open=Step::Failed;c3_startup_.pack_count=c3_pcm_.pack.count();}
         esp_partition_munmap(c3_cue_mmap_);c3_cue_mmap_=0;return false;
     }
+    if(first) {c3_startup_.pack_open=Step::Succeeded;c3_startup_.pack_count=c3_pcm_.pack.count();}
     return true;
+}
+void AudioService::RecordC3StartupHeap(family_robot::C3StartupStage stage) {
+    // Initializer / lifecycle owner only. Never called from an ISR or portMUX.
+    if(c3_startup_.heap_count==family_robot::C3StartupDiagnostics::kHeapStages)return;
+    auto& entry=c3_startup_.heap[c3_startup_.heap_count];entry.stage=stage;entry.timestamp_us=esp_timer_get_time();
+    entry.free=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    entry.largest=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    entry.minimum=heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    ++c3_startup_.heap_count;
+}
+void AudioService::PrintC3StartupDiagnostics() {
+    family_robot::C3StartupDiagnostics d;
+    {std::lock_guard<std::mutex> lock(c3_service_lifecycle_);d=c3_startup_;}
+    const auto f=codec_->StartupDiagnostics();
+    ESP_LOGI(TAG,"C3 startup at_us=%lld fault=%lu us=%lld pair=%lu active/armed/open=%lu/%lu/%lu tx/rx_us=%lld/%lld samples=%lld/%lld prev_us=%lld",
+        (long long)esp_timer_get_time(),(unsigned long)f.source,(long long)f.timestamp_us,(unsigned long)f.pair_fault,
+        (unsigned long)f.capture_active,(unsigned long)f.callbacks_armed,(unsigned long)f.hardware_open,
+        (long long)f.tx_us,(long long)f.rx_us,(long long)f.tx_samples,(long long)f.rx_samples,(long long)f.callback_previous_us);
+    ESP_LOGI(TAG,"C3 startup hw mask=%lu channel=%lu get_tx/rx=%ld/%ld state=%lu",
+        (unsigned long)f.hardware.mask,(unsigned long)f.hardware.channel,(long)f.hardware.tx_result,(long)f.hardware.rx_result,(unsigned long)f.hardware.state);
+    const auto* a=f.hardware.actual;
+    ESP_LOGI(TAG,"C3 startup hw actual dma/bclk/mclk/rate/width/slot/mode/mask/ws/pol/shift/align/endian/lsb=%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu",
+        (unsigned long)a[0],(unsigned long)a[1],(unsigned long)a[2],(unsigned long)a[3],(unsigned long)a[4],(unsigned long)a[5],(unsigned long)a[6],
+        (unsigned long)a[7],(unsigned long)a[8],(unsigned long)a[9],(unsigned long)a[10],(unsigned long)a[11],(unsigned long)a[12],(unsigned long)a[13]);
+    ESP_LOGI(TAG,"C3 startup partition/map/open=%lu/%lu/%lu addr/size=%lu/%lu map_rc=%ld count=%lu hashes=%lu src/engine/aec=%lu/%lu/%lu src_rc=%ld tasks=%lu/%lu task_rc=%ld/%ld",
+        (unsigned long)d.pack_partition,(unsigned long)d.map,(unsigned long)d.pack_open,(unsigned long)d.partition_address,(unsigned long)d.partition_size,
+        (long)d.map_result,(unsigned long)d.pack_count,(unsigned long)d.hash_count,(unsigned long)d.input_src,(unsigned long)d.audio_engine,(unsigned long)d.aec_create,
+        (long)d.input_src_result,(unsigned long)d.input_task,(unsigned long)d.output_task,(long)d.input_task_result,(long)d.output_task_result);
+    for(unsigned i=0;i<d.hash_count && i<2;++i) {
+        const auto& h=d.hash[i];ESP_LOGI(TAG,"C3 startup hash=%u state=%lu init/compute=%ld/%ld length/match=%lu/%lu",i,
+            (unsigned long)h.state,(long)h.init_status,(long)h.hash_status,(unsigned long)h.length,(unsigned long)h.matched);
+    }
+    for(unsigned i=0;i<d.heap_count;++i) {
+        const auto& h=d.heap[i];ESP_LOGI(TAG,"C3 startup heap stage=%lu us=%lld free/largest/min=%lu/%lu/%lu",
+            (unsigned long)h.stage,(long long)h.timestamp_us,(unsigned long)h.free,(unsigned long)h.largest,(unsigned long)h.minimum);
+    }
 }
 // Actual PCM media methods. No Opus task, queued heap PCM, or prompt decoder.
 void AudioService::WakeC3PcmOwner() {
@@ -216,22 +282,35 @@ void AudioService::StartC3Pcm() {
     std::lock_guard<std::mutex> lifecycle(c3_service_lifecycle_);
     if(!service_stopped_.load())return;
     if(c3_lifecycle_failed_ || audio_input_task_handle_ || audio_output_task_handle_) {codec_->ReportReferenceFailure();return;}
+    using Step=family_robot::C3StartupStep;
+    const bool first=c3_startup_.input_task==Step::NotEntered;
+    if(first)RecordC3StartupHeap(family_robot::C3StartupStage::Start);
     audio_input_task_handle_=audio_output_task_handle_=opus_codec_task_handle_=nullptr;
     constexpr EventBits_t exits=AS_C3_INPUT_EXIT|AS_C3_OUTPUT_EXIT;
     xEventGroupClearBits(event_group_,exits|AS_C3_TASKS_GO|AS_EVENT_AUDIO_TESTING_RUNNING|
         AS_EVENT_WAKE_WORD_RUNNING|AS_EVENT_AUDIO_PROCESSOR_RUNNING|AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
+    if(first)c3_startup_.input_task=Step::Entered;
     const auto input=xTaskCreate([](void* arg){
         auto* self=static_cast<AudioService*>(arg);
         xEventGroupWaitBits(self->event_group_,AS_C3_TASKS_GO,pdFALSE,pdTRUE,portMAX_DELAY);
         if(!self->service_stopped_.load())self->AudioInputTask();
         xEventGroupSetBits(self->event_group_,AS_C3_INPUT_EXIT);vTaskDelete(nullptr);
     },"audio_input",8192,this,8,&audio_input_task_handle_);
+    if(first) {
+        c3_startup_.input_task_result=input;c3_startup_.input_task=input==pdPASS?Step::Succeeded:Step::Failed;
+        RecordC3StartupHeap(family_robot::C3StartupStage::InputTaskComplete);
+        if(input==pdPASS)c3_startup_.output_task=Step::Entered;
+    }
     const auto output=input==pdPASS?xTaskCreate([](void* arg){
         auto* self=static_cast<AudioService*>(arg);
         xEventGroupWaitBits(self->event_group_,AS_C3_TASKS_GO,pdFALSE,pdTRUE,portMAX_DELAY);
         if(!self->service_stopped_.load())self->C3PcmOutputTask();
         xEventGroupSetBits(self->event_group_,AS_C3_OUTPUT_EXIT);vTaskDelete(nullptr);
     },"audio_output",4096,this,4,&audio_output_task_handle_):pdFAIL;
+    if(first) {
+        if(input==pdPASS) {c3_startup_.output_task_result=output;c3_startup_.output_task=output==pdPASS?Step::Succeeded:Step::Failed;}
+        RecordC3StartupHeap(family_robot::C3StartupStage::OutputTaskComplete);
+    }
     if(input!=pdPASS || output!=pdPASS) {
         c3_lifecycle_failed_=true;codec_->ReportReferenceFailure();
         if(input!=pdPASS)xEventGroupSetBits(event_group_,AS_C3_INPUT_EXIT);
@@ -244,6 +323,7 @@ void AudioService::StartC3Pcm() {
     service_stopped_.store(false);
     esp_timer_start_periodic(audio_power_timer_,1000000);
     xEventGroupSetBits(event_group_,AS_C3_TASKS_GO);
+    if(first)RecordC3StartupHeap(family_robot::C3StartupStage::StartComplete);
 }
 void AudioService::StopC3Pcm() {
     std::lock_guard<std::mutex> lifecycle(c3_service_lifecycle_);

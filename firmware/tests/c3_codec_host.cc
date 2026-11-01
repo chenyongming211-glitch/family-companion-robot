@@ -10,6 +10,9 @@
 #include <new>
 #include <thread>
 #include <vector>
+#if CONFIG_XMINI_C3_PCM
+#include "c3_startup_diagnostics.h"
+#endif
 
 // SDK and base-codec plumbing only. Every FamilyC3Codec method below is the
 // unmodified production implementation, also compiled as a standalone TU.
@@ -116,6 +119,7 @@ public:
     virtual void OutputTagged(std::vector<int16_t>&,family_robot::PlaybackIdentity,uint64_t,uint32_t){}
 #if CONFIG_XMINI_C3_PCM
     virtual void OutputTaggedSpan(const int16_t*,size_t,family_robot::PlaybackIdentity,uint64_t,uint32_t){}
+    virtual family_robot::C3CodecStartupDiagnostics StartupDiagnostics()const{return {};}
 #endif
     virtual bool RealtimeEligible()const{return true;}
     virtual bool ReferenceFaulted()const{return false;}

@@ -18,6 +18,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <type_traits>
+#if __has_include("c3_startup_diagnostics.h")
+#include "c3_startup_diagnostics.h"
+#define HAS_STARTUP_DIAGNOSTICS 1
+#endif
 using namespace family_robot;
 static bool psa_initialized=false;
 static psa_status_t psa_init_status=PSA_SUCCESS,psa_hash_status=PSA_SUCCESS;
@@ -39,13 +44,15 @@ psa_status_t psa_hash_compute(psa_algorithm_t alg,const uint8_t* input,size_t in
 }
 constexpr int ESP_OK=0,ESP_PARTITION_TYPE_DATA=1,ESP_PARTITION_SUBTYPE_ANY=0,ESP_PARTITION_MMAP_DATA=0;
 struct esp_partition_t {size_t address=0x600000,size=0x200000;};static esp_partition_t partition;
-static std::vector<uint8_t> pack_bytes;static int maps=0,unmaps=0;
-static const esp_partition_t* esp_partition_find_first(int,int,const char*){return &partition;}
+static std::vector<uint8_t> pack_bytes;static int maps=0,unmaps=0,map_result=0;
+static bool partition_missing=false;
+static const esp_partition_t* esp_partition_find_first(int,int,const char*){return partition_missing?nullptr:&partition;}
 static int esp_partition_mmap(const esp_partition_t*,size_t offset,size_t n,int,const void** bytes,unsigned* handle){
- assert(offset==0x50000&&n==pack_bytes.size());++maps;*handle=maps;*bytes=pack_bytes.data();return 0;}
+ assert(offset==0x50000&&n==pack_bytes.size());++maps;if(map_result)return map_result;*handle=maps;*bytes=pack_bytes.data();return 0;}
 static void esp_partition_munmap(unsigned){++unmaps;}
 static unsigned scheduler_depth=0,resource_task_reads=0,heap_reads=0,resource_logs=0;
-template<class... Args> static void Log(const char*,const char* format,Args... args){assert(scheduler_depth==0);char text[1024];if constexpr(sizeof...(Args)) {assert(std::snprintf(text,sizeof(text),format,args...)>0);}else {assert(std::snprintf(text,sizeof(text),"%s",format)>0);}++resource_logs;}
+static std::vector<std::string> logged_lines;
+template<class... Args> static void Log(const char*,const char* format,Args... args){assert(scheduler_depth==0);char text[1024];if constexpr(sizeof...(Args)) {assert(std::snprintf(text,sizeof(text),format,args...)>0);}else {assert(std::snprintf(text,sizeof(text),"%s",format)>0);}++resource_logs;logged_lines.emplace_back(text);}
 #define ESP_LOGE(...) Log(__VA_ARGS__)
 #define ESP_LOGI(...) Log(__VA_ARGS__)
 #define TAG "AudioService"
@@ -82,6 +89,7 @@ constexpr unsigned MALLOC_CAP_INTERNAL=1,MALLOC_CAP_8BIT=2;
 static size_t heap_caps_get_free_size(unsigned){assert(!scheduler_depth);++heap_reads;return 40000;}
 static size_t heap_caps_get_largest_free_block(unsigned){assert(!scheduler_depth);++heap_reads;return 20000;}
 static size_t heap_caps_get_minimum_free_size(unsigned){assert(!scheduler_depth);++heap_reads;return 15000;}
+static int64_t esp_timer_get_time(){return 123456;}
 struct LiteAudioEngine {C3EchoStatistics C3Statistics(){assert(!scheduler_depth);return {};}};
 static void JoinTasks(){for(auto& task:tasks)if(task->thread.joinable())task->thread.join();tasks.clear();}
 static void esp_timer_stop(int){}static void esp_timer_start_periodic(int,int){}
@@ -97,6 +105,7 @@ struct AudioCodec {
   if(op==PlaybackOp::Reset){++generation;++resets;busy=false;}if(op==PlaybackOp::Release)++releases;return true;}
  bool output_enabled()const{return enabled.load();}void EnableOutput(bool b){if(b&&!enabled.load()){++generation;if(enable_hook)enable_hook();}enabled=b;}
  bool ReferenceFaulted()const{return fault.load();}
+ C3CodecStartupDiagnostics StartupDiagnostics()const{return {};}
  void ReportReferenceFailure(){fault=true;}
  void OutputTaggedSpan(const int16_t* pcm,size_t count,PlaybackIdentity,uint64_t,uint32_t gen){
   if(output_hook)output_hook();
@@ -110,6 +119,10 @@ public:
  C3PcmAudioState c3_pcm_;ButtonUplink button_uplink_;AudioCodec* codec_;Callbacks callbacks_;
  std::unique_ptr<LiteAudioEngine> audio_engine_=std::make_unique<LiteAudioEngine>();
  unsigned c3_cue_mmap_=0;std::mutex c3_service_lifecycle_;bool c3_lifecycle_failed_=false;
+#if HAS_STARTUP_DIAGNOSTICS
+ C3StartupDiagnostics c3_startup_;
+ void RecordC3StartupHeap(C3StartupStage);
+#endif
  mutable std::mutex audio_queue_mutex_;std::condition_variable audio_queue_cv_;
  std::atomic<bool> service_stopped_{true};Event event;Event* event_group_=&event;
  Task* audio_input_task_handle_=nullptr,*audio_output_task_handle_=nullptr,*opus_codec_task_handle_=nullptr;
@@ -123,6 +136,7 @@ public:
  void AudioInputTask(){while(!service_stopped_.load())std::this_thread::yield();}
  bool MarkPlaybackDrainedLocked(){if(!C3PcmPlaybackDrainedLocked()||playback_drained_notified_)return false;playback_drained_notified_=true;return true;}
  void PrintC3Resources()const;
+ void PrintC3StartupDiagnostics();
  void WakeC3PcmOwner();
  bool OpenC3Uplink(uint32_t);
  bool InitializeC3CuePack();void RequestC3PcmFault(uint32_t);bool FinishC3PcmFault();
@@ -176,6 +190,10 @@ static void HashAdmission(const std::string& test,const std::string& source){
  }else{
   assert(!audio.InitializeC3CuePack());
   assert(maps==1&&unmaps==1&&audio.c3_cue_mmap_==0&&audio.c3_pcm_.pack.count()==0);
+  const auto& d=audio.c3_startup_;assert(d.pack_open==C3StartupStep::Failed&&d.hash_count==1&&d.hash[0].state==C3StartupStep::Failed);
+  if(test=="hash-mapping-init-error")assert(d.hash[0].init_status==PSA_ERROR_HARDWARE_FAILURE&&d.hash[0].hash_status==INT32_MIN&&d.hash[0].length==UINT32_MAX&&d.hash[0].matched==UINT32_MAX);
+  else if(test=="hash-mapping-error")assert(d.hash[0].init_status==PSA_SUCCESS&&d.hash[0].hash_status==PSA_ERROR_HARDWARE_FAILURE&&d.hash[0].length==0);
+  else assert(d.hash[0].hash_status==PSA_SUCCESS&&d.hash[0].length==31);
  }
 }
 static void Input(){
@@ -255,6 +273,32 @@ static void Lifecycle(){
  fail_create=create_calls+2;AudioService failure(codec);failure.StartC3Pcm();assert(failure.service_stopped_&&failure.c3_lifecycle_failed_&&!failure.audio_input_task_handle_&&!failure.audio_output_task_handle_);JoinTasks();
  const auto count=create_calls;failure.StartC3Pcm();assert(create_calls==count);
 }
+template<class C,class=void>struct HasStartupState:std::false_type{};
+template<class C>struct HasStartupState<C,std::void_t<decltype(std::declval<C>().c3_startup_)>>:std::true_type{};
+template<class C>static void StartupDiagnostics(){
+ if constexpr(!HasStartupState<C>::value)assert(!"PCM startup stage diagnostics are missing");
+ else {
+  AudioCodec codec;
+  C missing(codec);partition_missing=true;assert(!missing.InitializeC3CuePack());partition_missing=false;
+  using Step=decltype(missing.c3_startup_.pack_partition);
+  assert(missing.c3_startup_.pack_partition==Step::Failed&&missing.c3_startup_.map==Step::NotEntered);
+  C map(codec);map_result=-77;assert(!map.InitializeC3CuePack());map_result=0;
+  assert(map.c3_startup_.map==Step::Failed&&map.c3_startup_.map_result==-77&&map.c3_startup_.pack_open==Step::NotEntered);
+  C hash(codec);psa_initialized=false;psa_init_status=PSA_ERROR_HARDWARE_FAILURE;assert(!hash.InitializeC3CuePack());psa_init_status=PSA_SUCCESS;
+  assert(hash.c3_startup_.pack_open==Step::Failed&&hash.c3_startup_.hash_count==1);
+  assert(hash.c3_startup_.hash[0].state==Step::Failed&&hash.c3_startup_.hash[0].init_status==PSA_ERROR_HARDWARE_FAILURE&&hash.c3_startup_.hash[0].hash_status==INT32_MIN);
+  C good(codec);assert(good.InitializeC3CuePack());
+  assert(good.c3_startup_.pack_open==Step::Succeeded&&good.c3_startup_.pack_count==21&&good.c3_startup_.hash_count==2);
+  for(const auto& hash:good.c3_startup_.hash)assert(hash.state==Step::Succeeded&&hash.init_status==PSA_SUCCESS&&hash.hash_status==PSA_SUCCESS&&hash.length==32&&hash.matched==1);
+  const auto logs=logged_lines.size();good.PrintC3StartupDiagnostics();assert(logged_lines.size()==logs+6);
+  assert(logged_lines[logs].find("at_us=123456")!=std::string::npos&&logged_lines[logs+3].find("partition/map/open=2/2/2")!=std::string::npos);
+  C task(codec);fail_create=create_calls+1;task.StartC3Pcm();JoinTasks();fail_create=0;
+  assert(task.c3_startup_.input_task==Step::Failed&&task.c3_startup_.input_task_result==pdFAIL&&task.c3_startup_.output_task==Step::NotEntered&&task.c3_startup_.output_task_result==INT32_MIN);
+  C output(codec);fail_create=create_calls+2;output.StartC3Pcm();JoinTasks();fail_create=0;
+  assert(output.c3_startup_.input_task==Step::Succeeded&&output.c3_startup_.output_task==Step::Failed&&output.c3_startup_.output_task_result==pdFAIL);
+  assert(output.c3_startup_.heap_count>0);for(unsigned i=0;i<output.c3_startup_.heap_count;++i){const auto& heap=output.c3_startup_.heap[i];assert(heap.free==40000&&heap.largest==20000&&heap.minimum==15000&&heap.timestamp_us==123456);}
+ }
+}
 static void StopBarrier(){
  AudioCodec codec;AudioService audio(codec);audio.StartC3Pcm();std::promise<void> entered,release;auto wait=release.get_future().share();codec.output_hook=[&]{entered.set_value();wait.wait();};
  uint8_t frame[2880]{};audio.PushC3PcmOutput(frame,2880,{1,1,0,1});entered.get_future().wait();
@@ -276,6 +320,6 @@ static void Resources(){
 int main(int argc,char** argv){assert(argc==4);pack_bytes=Read(argv[2]);const std::string test=argv[1];
  if(test.rfind("hash-mapping",0)==0||test.rfind("hash-cue",0)==0)HashAdmission(test,argv[3]);
  else if(test.rfind("hash",0)==0)Hash(test);
- else if(test=="resources")Resources();else if(test=="input")Input();else if(test=="busy-full")BusyFull();else if(test=="mapping")Mapping();else if(test=="output-reset")OutputReset();
+ else if(test=="startup")StartupDiagnostics<AudioService>();else if(test=="resources")Resources();else if(test=="input")Input();else if(test=="busy-full")BusyFull();else if(test=="mapping")Mapping();else if(test=="output-reset")OutputReset();
  else if(test=="cues")Cues(argv[3]);else if(test=="lifecycle")Lifecycle();else if(test=="barrier")StopBarrier();else if(test=="timeout")Timeout();else assert(false);
 }

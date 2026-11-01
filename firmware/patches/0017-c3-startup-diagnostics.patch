@@ -1,0 +1,162 @@
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -12,6 +12,9 @@
+ 
+ #include "board.h"
+ #include "playback_progress.h"
++#if CONFIG_XMINI_C3_PCM
++#include "c3_startup_diagnostics.h"
++#endif
+ 
+ #define AUDIO_CODEC_DMA_DESC_NUM 6
+ #define AUDIO_CODEC_DMA_FRAME_NUM 240
+@@ -54,6 +57,7 @@
+ 
+ #if CONFIG_XMINI_C3_PCM
+     virtual void OutputTaggedSpan(const int16_t*,size_t,family_robot::PlaybackIdentity,uint64_t,uint32_t) {}
++    virtual family_robot::C3CodecStartupDiagnostics StartupDiagnostics() const {return {};}
+ #endif
+     // Optional software duplex experiment hooks. Ordinary codecs retain stock behavior.
+     virtual bool SoftwareReference() const { return false; }
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -165,6 +165,7 @@
+     void SetExperimentUplink(bool enabled, bool observer_tail = false);
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+ #if CONFIG_XMINI_C3_PCM
++    void PrintC3StartupDiagnostics();
+     bool PushC3PcmOutput(const uint8_t*,size_t,family_robot::C3PcmOutputMetadata);
+     void RequestC3PcmFault(uint32_t);
+     void WakeC3PcmOwner();
+@@ -193,6 +194,8 @@
+ private:
+ #if CONFIG_XMINI_C3_PCM
+     family_robot::C3PcmAudioState c3_pcm_;
++    family_robot::C3StartupDiagnostics c3_startup_;
++    void RecordC3StartupHeap(family_robot::C3StartupStage);
+     esp_partition_mmap_handle_t c3_cue_mmap_=0;
+     std::mutex c3_service_lifecycle_;
+     bool c3_lifecycle_failed_=false;
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -57,7 +57,13 @@
+ 
+ void AudioService::Initialize(AudioCodec* codec) {
+     codec_ = codec;
++#if CONFIG_XMINI_C3_PCM
++    RecordC3StartupHeap(family_robot::C3StartupStage::Initialize);
++#endif
+     codec_->Start();
++#if CONFIG_XMINI_C3_PCM
++    RecordC3StartupHeap(family_robot::C3StartupStage::CodecStarted);
++#endif
+ 
+ #if !CONFIG_XMINI_C3_PCM
+     esp_opus_dec_cfg_t opus_dec_cfg =
+@@ -83,18 +89,29 @@
+ 
+ #else
+     if(!InitializeC3CuePack())codec_->ReportReferenceFailure();
++    RecordC3StartupHeap(family_robot::C3StartupStage::PackComplete);
+ #endif
+ 
+     if (codec->input_sample_rate() != 16000) {
+         esp_ae_rate_cvt_cfg_t input_resampler_cfg = RATE_CVT_CFG(
+             codec->input_sample_rate(), ESP_AUDIO_SAMPLE_RATE_16K, codec->input_channels());
++#if CONFIG_XMINI_C3_PCM
++        c3_startup_.input_src=family_robot::C3StartupStep::Entered;
++#endif
+         auto resampler_ret = esp_ae_rate_cvt_open(&input_resampler_cfg, &input_resampler_);
++#if CONFIG_XMINI_C3_PCM
++        c3_startup_.input_src_result=resampler_ret;
++        c3_startup_.input_src=input_resampler_?family_robot::C3StartupStep::Succeeded:family_robot::C3StartupStep::Failed;
++#endif
+         if (input_resampler_ == nullptr) {
+             ESP_LOGE(TAG, "Failed to create input resampler, error code: %d", resampler_ret);
+             codec_->ReportReferenceFailure();
+         }
+     }
+ 
++#if CONFIG_XMINI_C3_PCM
++    RecordC3StartupHeap(family_robot::C3StartupStage::InputSrcComplete);
++#endif
+ #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+     audio_engine_ = std::make_unique<AfeAudioEngine>();
+ #else
+@@ -138,7 +155,19 @@
+     esp_timer_create(&audio_power_timer_args, &audio_power_timer_);
+ #if CONFIG_XMINI_C3_VOICE_BARGE
+     // Validate the scarce DSP allocation before activation can confirm OTA.
++#if CONFIG_XMINI_C3_PCM
++    c3_startup_.audio_engine=family_robot::C3StartupStep::Entered;
++    const bool c3_engine_ok=InitializeAudioEngine();
++    c3_startup_.audio_engine=c3_engine_ok?family_robot::C3StartupStep::Succeeded:family_robot::C3StartupStep::Failed;
++    c3_startup_.aec_create=static_cast<LiteAudioEngine*>(audio_engine_.get())->C3AecStartupResult();
++    RecordC3StartupHeap(family_robot::C3StartupStage::AecComplete);
++    if(!c3_engine_ok)codec_->ReportReferenceFailure();
++#else
+     if(!InitializeAudioEngine())codec_->ReportReferenceFailure();
++#endif
++#endif
++#if CONFIG_XMINI_C3_PCM
++    RecordC3StartupHeap(family_robot::C3StartupStage::InitializeComplete);
+ #endif
+ }
+ 
+--- a/main/audio/engines/lite_audio_engine.h
++++ b/main/audio/engines/lite_audio_engine.h
+@@ -12,6 +12,9 @@
+ #include "audio_engine.h"
+ 
+ #if CONFIG_XMINI_C3_VOICE_BARGE
++#if CONFIG_XMINI_C3_PCM
++#include "c3_startup_diagnostics.h"
++#endif
+ #include "c3_lite_aec.h"
+ #endif
+ class EspWakeWord;
+@@ -29,6 +29,7 @@
+ #endif
+ 
+ #if CONFIG_XMINI_C3_PCM
++    family_robot::C3StartupStep C3AecStartupResult() const {return c3_aec_startup_;}
+     void OnC3PcmSpan(std::function<bool(const int16_t*,size_t,uint32_t)> callback) {c3_output_span_=std::move(callback);}
+     family_robot::C3EchoStatistics C3Statistics() {std::lock_guard<std::mutex> lock(output_mutex_);return c3_aec_?c3_aec_->Statistics():family_robot::C3EchoStatistics{};}
+ #endif
+@@ -79,6 +80,7 @@
+     std::function<void(std::vector<int16_t>&&)> output_callback_;
+     std::function<void(bool)> vad_state_change_callback_;
+ #if CONFIG_XMINI_C3_PCM
++    family_robot::C3StartupStep c3_aec_startup_=family_robot::C3StartupStep::NotEntered;
+     std::function<bool(const int16_t*,size_t,uint32_t)> c3_output_span_;
+ #endif
+     std::string empty_wake_word_;
+--- a/main/audio/engines/lite_audio_engine.cc
++++ b/main/audio/engines/lite_audio_engine.cc
+@@ -22,7 +22,14 @@
+     output_buffer_.reserve(frame_samples_);
+ #endif
+ #if CONFIG_XMINI_C3_VOICE_BARGE
++#if CONFIG_XMINI_C3_PCM
++    const bool first_create=c3_aec_startup_==family_robot::C3StartupStep::NotEntered;
++    if(first_create)c3_aec_startup_=family_robot::C3StartupStep::Entered;
++#endif
+     if(!c3_aec_)c3_aec_=family_robot::C3LiteAec::Create();
++#if CONFIG_XMINI_C3_PCM
++    if(first_create)c3_aec_startup_=c3_aec_?family_robot::C3StartupStep::Succeeded:family_robot::C3StartupStep::Failed;
++#endif
+     if(!c3_aec_) {
+         ESP_LOGE(TAG,"C3 standalone AEC allocation or SDK contract failed");
+         codec_->ReportReferenceFailure();return false;
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -547,6 +547,9 @@
+ 
+ #if CONFIG_XMINI_C3_VOICE_BARGE
+         if(Board::GetInstance().GetAudioCodec()->ReferenceFaulted()) {
++#if CONFIG_XMINI_C3_PCM
++            audio_service_.PrintC3StartupDiagnostics();
++#endif
+             ESP_LOGE(TAG,"C3 audio initialization failed; refusing OTA confirmation");
+             esp_restart();return;
+         }

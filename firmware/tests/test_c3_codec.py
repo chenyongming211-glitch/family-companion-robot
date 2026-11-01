@@ -72,6 +72,11 @@ class C3CodecTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
                     self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+                    if enabled and not pcm:
+                        symbols = subprocess.run(['nm', '-C', str(obj)], capture_output=True, text=True)
+                        self.assertEqual(symbols.returncode, 0, symbols.stderr)
+                        self.assertNotIn('FamilyC3Codec::StartupDiagnostics', symbols.stdout)
+                        self.assertNotIn('FamilyC3Codec::RecordStartupFaultLocked', symbols.stdout)
                     if not enabled:
                         result = subprocess.run(['nm', '-C', str(obj)], capture_output=True, text=True)
                         self.assertEqual(result.returncode, 0, result.stderr)

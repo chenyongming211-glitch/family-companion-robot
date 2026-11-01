@@ -9,22 +9,23 @@ bool FamilyC3Codec::Complete(i2s_event_data_t* event) {
 #if CONFIG_XMINI_C3_VOICE_BARGE
         || reference_callbacks_armed_
 #endif
-        ) && !shape)FaultLocked();
+        ) && !shape)FaultLocked(StartupFaultSource::TxShape,now);
     if(shape) {
         auto* address=static_cast<int16_t*>(event->dma_buf);
         bool known=false;
         for(size_t i=0;i<known_descriptors_;++i)if(dma_addresses_[i]==address)known=true;
         if(!known && hardware_open_) {
-            if(known_descriptors_==family_robot::PlaybackProgress::kSlots)FaultLocked();
+            if(known_descriptors_==family_robot::PlaybackProgress::kSlots)FaultLocked(StartupFaultSource::TxDescriptors,now);
             else dma_addresses_[known_descriptors_++]=address;
         }
 #if CONFIG_XMINI_C3_VOICE_BARGE
         // Observe completed physical bytes BEFORE Complete overwrites this DMA.
         if(reference_callbacks_armed_ && pair_) {
+            const auto previous_us=reference_tx_us_;
             reference_tx_us_=now;
             if(discard_tx_)--discard_tx_;
             else pair_->Tx(pair_->tx_samples(),now,address,Pair::kBlock);
-            PublishReferenceLocked();
+            PublishReferenceLocked(StartupFaultSource::TxPair,now,previous_us);
         }
 #endif
         if(accepting_ && playback_) {
@@ -33,14 +34,14 @@ bool FamilyC3Codec::Complete(i2s_event_data_t* event) {
             playback_->Complete(address,family_robot::PlaybackProgress::kBlock,now);
             last_tx_us_=now;
             if(!playback_->Busy())pending_since_us_=0;
-            if(!playback_->HardwareHealthy())FaultLocked();
+            if(!playback_->HardwareHealthy())FaultLocked(StartupFaultSource::TxPlayback,now);
         }
         if(!accepting_) {
             std::memset(address,0,480);
             if(scrub_pending_ && !faulted_) {
                 bool repeated=false;
                 for(size_t i=0;i<scrubbed_;++i)if(scrub_addresses_[i]==address)repeated=true;
-                if(repeated)FaultLocked();
+                if(repeated)FaultLocked(StartupFaultSource::TxScrub,now);
                 else {
                     scrub_addresses_[scrubbed_++]=address;
                     if(scrubbed_==family_robot::PlaybackProgress::kSlots)scrub_pending_=false;
@@ -61,6 +62,7 @@ bool FamilyC3Codec::Received(i2s_chan_handle_t,i2s_event_data_t* event,void* con
     const auto now=esp_timer_get_time();
     portENTER_CRITICAL_ISR(&self->mux_);
     if(self->reference_callbacks_armed_ && self->pair_) {
+        const auto previous_us=self->reference_rx_us_;
         self->reference_rx_us_=now;
         if(!event || !event->dma_buf || event->size!=Pair::kBlock*sizeof(int16_t))
             self->pair_->Fail(Pair::Fault::Format);
@@ -75,7 +77,7 @@ bool FamilyC3Codec::Received(i2s_chan_handle_t,i2s_event_data_t* event,void* con
                 self->pair_->Capture(self->capture_active_);
             }
         }
-        self->PublishReferenceLocked();
+        self->PublishReferenceLocked(StartupFaultSource::RxPair,now,previous_us);
     }
     portEXIT_CRITICAL_ISR(&self->mux_);return false;
 }

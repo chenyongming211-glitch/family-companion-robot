@@ -39,6 +39,9 @@ class C3PcmMediaTests(unittest.TestCase):
             defaults.method((cls.source/'main/audio/audio_service.cc').read_text(),'void AudioService::PrintC3Resources() const')).replace('// PRODUCTION_OPEN_METHOD',defaults.method((cls.source/'main/audio/audio_service.cc').read_text(),'bool AudioService::OpenC3Uplink('))
         initialize=(FIRMWARE/'tests/c3_pcm_initialize_host.cc').read_text().replace('// PRODUCTION_INITIALIZE_METHOD',
             defaults.method((cls.source/'main/audio/audio_service.cc').read_text(),'void AudioService::Initialize('))
+        initialize=initialize.replace('// PRODUCTION_HEAP_METHOD',defaults.method((FIRMWARE/'overlays/main/audio/c3_pcm_audio.inc').read_text(),'void AudioService::RecordC3StartupHeap('))
+        lite_initialize=(FIRMWARE/'tests/c3_pcm_lite_initialize_host.cc').read_text().replace('// PRODUCTION_LITE_INITIALIZE_METHOD',
+            defaults.method((cls.source/'main/audio/engines/lite_audio_engine.cc').read_text(),'bool LiteAudioEngine::Initialize('))
         disconnect=(FIRMWARE/'tests/c3_pcm_disconnect_host.cc').read_text()
         playback=(FIRMWARE/'overlays/main/audio/playback_websocket.inc').read_text()
         pcm=(FIRMWARE/'overlays/main/audio/c3_pcm_protocol.inc').read_text()
@@ -56,7 +59,7 @@ class C3PcmMediaTests(unittest.TestCase):
         disconnect=disconnect.replace('// PRODUCTION_DISCONNECT_METHODS','\n'.join(disconnect_methods))
         cls.binaries={}
         for name,program,libs in [('media',media,['-lcrypto']),
-                ('assets',assets,[]),('disconnect',disconnect,[]),('initialize',initialize,[]),('ws',ws,[]),('unsupported',unsupported,[]),('revoke',(FIRMWARE/'tests/c3_pcm_revocation_host.cc').read_text(),[]),
+                ('assets',assets,[]),('disconnect',disconnect,[]),('initialize',initialize,[]),('lite-initialize',lite_initialize,[]),('ws',ws,[]),('unsupported',unsupported,[]),('revoke',(FIRMWARE/'tests/c3_pcm_revocation_host.cc').read_text(),[]),
                 ('lite',(FIRMWARE/'tests/c3_pcm_lite_host.cc').read_text(),[]),
                 ('protocol',(FIRMWARE/'tests/c3_pcm_protocol_host.cc').read_text(),[])]:
             source=cls.work/(name+'.cc');source.write_text(program)
@@ -86,6 +89,7 @@ class C3PcmMediaTests(unittest.TestCase):
         owner=defaults.method((self.source/'main/application.cc').read_text(),'void Application::Run(')
         self.assertLess(owner.index('protocol_->PollC3PcmDisconnect()'),owner.index('FinishC3PcmFault()'))
     def test_actual_initialize_uses_pcm_callback_and_input_src_with_no_opus_or_output_src_platform_api(self):self.run_case('initialize')
+    def test_actual_lite_initialize_retains_first_aec_create_result(self):self.run_case('lite-initialize')
     def test_pcm_flag_is_opt_in_and_enabled_only_for_family_c3(self):
         config=json.loads((self.source/'main/boards/xmini/c3/config.json').read_text())
         for variant in config['builds']:
@@ -114,6 +118,15 @@ class C3PcmMediaTests(unittest.TestCase):
     def test_inflight_output_counts_toward_five_and_survives_reset(self):self.run_case('media','output-reset')
     def test_cues_order_wait_for_server_drain_and_cancel_entire_old_tail(self):self.run_case('media','cues')
     def test_start_stop_and_task_creation_failure_unwind(self):self.run_case('media','lifecycle')
+    def test_startup_distinguishes_unobserved_partition_map_hash_and_task_failures(self):self.run_case('media','startup')
+    def test_startup_print_follows_failed_gate_and_precedes_restart(self):
+        source=(self.source/'main/application.cc').read_text()
+        gate=source.index('C3 audio initialization failed; refusing OTA confirmation')
+        snapshot=source.rindex('audio_service_.PrintC3StartupDiagnostics()',0,gate)
+        self.assertIn('#if CONFIG_XMINI_C3_PCM',source[snapshot-45:snapshot])
+        self.assertIn('ReferenceFaulted()',source[snapshot-150:snapshot])
+        self.assertIn('esp_restart();return;',source[gate:gate+120])
+        self.assertLess(gate,source.index('ota_->MarkCurrentVersionValid()',gate))
     def test_stop_waits_for_actual_output_completion(self):self.run_case('media','barrier')
     def test_stop_timeout_permanently_blocks_reusing_worker_state(self):self.run_case('media','timeout')
     def test_assets_validate_header_and_every_read_before_trailer_write(self):self.run_case('assets','download')

@@ -64,9 +64,45 @@ void FamilyC3Codec::InitializePlayback(int input_rate,int output_rate) {
     const auto tx_on=i2s_channel_enable(tx_handle_);
     const auto rx_on=i2s_channel_enable(rx_handle_);
     setup_failed_=!callbacks_ok_ || tx_on!=ESP_OK || rx_on!=ESP_OK;
-    if(setup_failed_) {portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);}
+    if(setup_failed_) {portENTER_CRITICAL(&mux_);FaultLocked(StartupFaultSource::Setup,DiagnosticNow());portEXIT_CRITICAL(&mux_);}
 }
-void FamilyC3Codec::FaultLocked() {
+int64_t FamilyC3Codec::DiagnosticNow() {
+#if CONFIG_XMINI_C3_PCM
+    return esp_timer_get_time(); // IDF timer read is ISR-safe; no heap/log/locks
+#else
+    return 0;
+#endif
+}
+#if CONFIG_XMINI_C3_PCM
+family_robot::C3CodecStartupDiagnostics FamilyC3Codec::StartupDiagnostics() const {
+    portENTER_CRITICAL(&mux_);const auto result=startup_fault_;portEXIT_CRITICAL(&mux_);return result;
+}
+void FamilyC3Codec::RecordHardwareCheck(const family_robot::C3HardwareCheck& check) {
+    portENTER_CRITICAL(&mux_);hardware_check_=check;portEXIT_CRITICAL(&mux_);
+}
+void FamilyC3Codec::RecordStartupFaultLocked(StartupFaultSource source,int64_t now,int64_t previous_us) {
+    if(startup_fault_.source!=StartupFaultSource::None)return;
+    startup_fault_.timestamp_us=now;startup_fault_.hardware_open=hardware_open_;
+    startup_fault_.callback_previous_us=previous_us;
+    auto& check=startup_fault_.hardware;
+    check.mask=hardware_check_.mask;check.channel=hardware_check_.channel;
+    check.tx_result=hardware_check_.tx_result;check.rx_result=hardware_check_.rx_result;check.state=hardware_check_.state;
+    for(unsigned i=0;i<14;++i)check.actual[i]=hardware_check_.actual[i];
+#if CONFIG_XMINI_C3_VOICE_BARGE
+    startup_fault_.pair_fault=pair_?static_cast<uint32_t>(pair_->fault()):UINT32_MAX;
+    startup_fault_.capture_active=capture_active_;startup_fault_.callbacks_armed=reference_callbacks_armed_;
+    startup_fault_.tx_us=reference_tx_us_;startup_fault_.rx_us=reference_rx_us_;
+    startup_fault_.tx_samples=pair_?pair_->tx_samples():0;startup_fault_.rx_samples=pair_?pair_->rx_samples():0;
+#endif
+    startup_fault_.source=source; // last store; every reader also owns mux_
+}
+#endif
+void FamilyC3Codec::FaultLocked(StartupFaultSource source,int64_t now,int64_t previous_us) {
+#if CONFIG_XMINI_C3_PCM
+    RecordStartupFaultLocked(source,now,previous_us);
+#else
+    (void)source;(void)now;(void)previous_us;
+#endif
 #if CONFIG_XMINI_C3_VOICE_BARGE
     if(!faulted_) {capture_active_=false;ResetCaptureLocked();}
     reference_callbacks_armed_=false;reference_valid_=false;aec_ready_generation_=UINT32_MAX;
@@ -76,7 +112,7 @@ void FamilyC3Codec::FaultLocked() {
     if(playback_)playback_->HardwareFault();
 }
 void FamilyC3Codec::AdvanceGenerationLocked() {
-    if(output_generation_>=UINT32_MAX-1) {output_generation_=UINT32_MAX;FaultLocked();}
+    if(output_generation_>=UINT32_MAX-1) {output_generation_=UINT32_MAX;FaultLocked(StartupFaultSource::OutputGeneration,DiagnosticNow());}
     else ++output_generation_;
 }
 void FamilyC3Codec::DisarmLocked() {
@@ -113,12 +149,51 @@ void FamilyC3Codec::StopFaultedOutput() {
 }
 bool FamilyC3Codec::VerifyHardware() {
     i2s_chan_info_t tx{},rx{};
+#if CONFIG_XMINI_C3_PCM
+    family_robot::C3HardwareCheck check;
+    check.tx_result=i2s_channel_get_info(tx_handle_,&tx);
+    if(check.tx_result!=ESP_OK || (check.rx_result=i2s_channel_get_info(rx_handle_,&rx))!=ESP_OK) {
+        check.mask=check.tx_result!=ESP_OK?1u:2u;RecordHardwareCheck(check);return false;
+    }
+#else
     if(i2s_channel_get_info(tx_handle_,&tx)!=ESP_OK || i2s_channel_get_info(rx_handle_,&rx)!=ESP_OK)
         return false;
+#endif
     const bool running=input_enabled_||output_enabled_;
     if(tx.dir!=I2S_DIR_TX || rx.dir!=I2S_DIR_RX || tx.mode!=I2S_COMM_MODE_STD || rx.mode!=I2S_COMM_MODE_STD ||
        tx.pair_chan!=rx_handle_ || rx.pair_chan!=tx_handle_ ||
-       tx.is_enabled!=running || rx.is_enabled!=running || !tx.mode_cfg || !rx.mode_cfg)return false;
+       tx.is_enabled!=running || rx.is_enabled!=running || !tx.mode_cfg || !rx.mode_cfg) {
+#if CONFIG_XMINI_C3_PCM
+        check.mask=(uint32_t(tx.dir!=I2S_DIR_TX)<<2)|(uint32_t(rx.dir!=I2S_DIR_RX)<<3)|
+            (uint32_t(tx.mode!=I2S_COMM_MODE_STD)<<4)|(uint32_t(rx.mode!=I2S_COMM_MODE_STD)<<5)|
+            (uint32_t(tx.pair_chan!=rx_handle_)<<6)|(uint32_t(rx.pair_chan!=tx_handle_)<<7)|
+            (uint32_t(tx.is_enabled!=running)<<8)|(uint32_t(rx.is_enabled!=running)<<9)|
+            (uint32_t(!tx.mode_cfg)<<10)|(uint32_t(!rx.mode_cfg)<<11);
+        check.state=(uint32_t(tx.dir)&15u)|((uint32_t(rx.dir)&15u)<<4)|
+            ((uint32_t(tx.mode)&15u)<<8)|((uint32_t(rx.mode)&15u)<<12)|
+            (uint32_t(tx.pair_chan==rx_handle_)<<16)|(uint32_t(rx.pair_chan==tx_handle_)<<17)|
+            (uint32_t(tx.is_enabled)<<18)|(uint32_t(rx.is_enabled)<<19)|
+            (uint32_t(tx.mode_cfg!=nullptr)<<20)|(uint32_t(rx.mode_cfg!=nullptr)<<21)|
+            (uint32_t(running)<<22);
+        RecordHardwareCheck(check);
+#endif
+        return false;
+    }
+#if CONFIG_XMINI_C3_PCM
+    const auto record_config_failure=[&](const i2s_chan_info_t* info) {
+        const auto& config=*static_cast<const i2s_std_config_t*>(info->mode_cfg);
+        check.channel=info==&tx?1u:2u;
+        const uint32_t actual[]={info->total_dma_buf_size,info->bclk_hz,info->mclk_hz,
+            config.clk_cfg.sample_rate_hz,uint32_t(config.slot_cfg.data_bit_width),uint32_t(config.slot_cfg.slot_bit_width),
+            uint32_t(config.slot_cfg.slot_mode),uint32_t(config.slot_cfg.slot_mask),uint32_t(config.slot_cfg.ws_width),
+            uint32_t(config.slot_cfg.ws_pol),uint32_t(config.slot_cfg.bit_shift),uint32_t(config.slot_cfg.left_align),
+            uint32_t(config.slot_cfg.big_endian),uint32_t(config.slot_cfg.bit_order_lsb)};
+        const uint32_t expected[]={family_robot::PlaybackProgress::kSlots*480,24000u*2u*16u,24000u*256u,24000,
+            I2S_DATA_BIT_WIDTH_16BIT,I2S_SLOT_BIT_WIDTH_16BIT,I2S_SLOT_MODE_MONO,I2S_STD_SLOT_LEFT,16,0,1,1,0,0};
+        for(unsigned i=0;i<14;++i) {check.actual[i]=actual[i];if(actual[i]!=expected[i])check.mask|=1u<<(i+12);}
+        RecordHardwareCheck(check);
+    };
+#endif
     // IDF6.1 readback is configured state/calculated clocks, not a physical
     // clock measurement. Pinned IDF C3 uses I2S HW2 (soc_caps.h), normalizes
     // AUTO to 16-bit slots. STD has two wire slots even though mono DMA
@@ -131,13 +206,26 @@ bool FamilyC3Codec::VerifyHardware() {
            config.slot_cfg.data_bit_width!=I2S_DATA_BIT_WIDTH_16BIT ||
            config.slot_cfg.slot_bit_width!=I2S_SLOT_BIT_WIDTH_16BIT ||
            config.slot_cfg.slot_mode!=I2S_SLOT_MODE_MONO || config.slot_cfg.slot_mask!=I2S_STD_SLOT_LEFT ||
-           config.slot_cfg.ws_width!=16 || config.slot_cfg.ws_pol || !config.slot_cfg.bit_shift)return false;
+           config.slot_cfg.ws_width!=16 || config.slot_cfg.ws_pol || !config.slot_cfg.bit_shift) {
+#if CONFIG_XMINI_C3_PCM
+            record_config_failure(info);
+#endif
+            return false;
+        }
 #if SOC_I2S_HW_VERSION_2
-        if(!config.slot_cfg.left_align || config.slot_cfg.big_endian || config.slot_cfg.bit_order_lsb)return false;
+        if(!config.slot_cfg.left_align || config.slot_cfg.big_endian || config.slot_cfg.bit_order_lsb) {
+#if CONFIG_XMINI_C3_PCM
+            record_config_failure(info);
+#endif
+            return false;
+        }
 #else
 #error "Family C3 playback is verified for the pinned C3 I2S HW2 configuration"
 #endif
     }
+#if CONFIG_XMINI_C3_PCM
+    RecordHardwareCheck(check);
+#endif
     return true;
 }
 void FamilyC3Codec::OnDeviceEpoch(bool opened) {
@@ -149,14 +237,14 @@ void FamilyC3Codec::OnDeviceEpoch(bool opened) {
         reference_tx_us_=reference_rx_us_=esp_timer_get_time();
         discard_tx_=discard_rx_=1; // first partial descriptors cannot anchor clocks
         reference_callbacks_armed_=true;
-    } else if(opened)FaultLocked();
+    } else if(opened)FaultLocked(StartupFaultSource::EpochArm,DiagnosticNow());
     else capture_active_=false;
 #endif
     portEXIT_CRITICAL(&mux_);
     if(!opened)return;
     const bool valid=VerifyHardware();
     portENTER_CRITICAL(&mux_);
-    if(!valid || !callbacks_ok_ || setup_failed_ || faulted_)FaultLocked();
+    if(!valid || !callbacks_ok_ || setup_failed_ || faulted_)FaultLocked(StartupFaultSource::HardwareEpoch,DiagnosticNow());
     else {verified_=true;accepting_=output_enabled_ && !scrub_pending_;}
     portEXIT_CRITICAL(&mux_);
 }
@@ -165,7 +253,7 @@ void FamilyC3Codec::ClearClosedDescriptors() {
     const bool stopped=i2s_channel_get_info(tx_handle_,&tx)==ESP_OK &&
         i2s_channel_get_info(rx_handle_,&rx)==ESP_OK && !tx.is_enabled && !rx.is_enabled;
     portENTER_CRITICAL(&mux_);
-    if(!stopped)FaultLocked();
+    if(!stopped)FaultLocked(StartupFaultSource::ClosedDescriptors,DiagnosticNow());
     else {
         // The SDK keeps DMA bytes across disable/enable. Neither callback nor
         // hardware owns these stopped descriptors; erase old PCM before reopen.
@@ -182,7 +270,7 @@ bool FamilyC3Codec::WaitForSilence() {
         if(fault)return false;
         if(!pending)return true;
         if(esp_timer_get_time()-started>200000) {
-            portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);return false;
+            portENTER_CRITICAL(&mux_);FaultLocked(StartupFaultSource::SilenceTimeout,DiagnosticNow());portEXIT_CRITICAL(&mux_);return false;
         }
         vTaskDelay(1);
     }
@@ -194,7 +282,7 @@ bool FamilyC3Codec::PrepareHardware() {
     if(!output_enabled_)Es8311AudioCodec::EnableOutput(true);
     const bool valid=VerifyHardware();
     portENTER_CRITICAL(&mux_);
-    if(!valid || !hardware_open_ || !input_enabled_ || !output_enabled_)FaultLocked();
+    if(!valid || !hardware_open_ || !input_enabled_ || !output_enabled_)FaultLocked(StartupFaultSource::PrepareHardware,DiagnosticNow());
     else accepting_=!faulted_ && !scrub_pending_;
     const bool ready=accepting_;portEXIT_CRITICAL(&mux_);return ready;
 }
@@ -216,7 +304,7 @@ void FamilyC3Codec::EnableOutput(bool enable) {
     if(!input_enabled_ && !output_enabled_) {ClearClosedDescriptors();return;}
     const bool valid=VerifyHardware();
     portENTER_CRITICAL(&mux_);
-    if(!valid)FaultLocked();else accepting_=enable && !faulted_ && !scrub_pending_;
+    if(!valid)FaultLocked(StartupFaultSource::OutputHardware,DiagnosticNow());else accepting_=enable && !faulted_ && !scrub_pending_;
     portEXIT_CRITICAL(&mux_);
 }
 int FamilyC3Codec::Read(int16_t* dest,int samples) {
@@ -224,12 +312,12 @@ int FamilyC3Codec::Read(int16_t* dest,int samples) {
     // read error. Its private dev_ is intentionally not accessed here.
     if(!input_enabled_ || samples<=0 || ReferenceFaulted())return 0;
     const int got=Es8311AudioCodec::Read(dest,samples);
-    if(got!=samples) {portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);return 0;}
+    if(got!=samples) {portENTER_CRITICAL(&mux_);FaultLocked(StartupFaultSource::Read,DiagnosticNow());portEXIT_CRITICAL(&mux_);return 0;}
     return got;
 }
 int FamilyC3Codec::Write(const int16_t*,int) {
     // No untracked writer may ever compete with callback-owned TX descriptors.
-    portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);return 0;
+    portENTER_CRITICAL(&mux_);FaultLocked(StartupFaultSource::Write,DiagnosticNow());portEXIT_CRITICAL(&mux_);return 0;
 }
 bool FamilyC3Codec::InputData(std::vector<int16_t>& data) {
 #if CONFIG_XMINI_C3_VOICE_BARGE
@@ -265,7 +353,7 @@ void FamilyC3Codec::CaptureBoundary() {
         const auto result=i2s_channel_read(rx_handle_,discard,sizeof(discard),&bytes,100);
         good=result==ESP_OK && bytes==sizeof(discard);
     }
-    if(!good) {portENTER_CRITICAL(&mux_);FaultLocked();portEXIT_CRITICAL(&mux_);}
+    if(!good) {portENTER_CRITICAL(&mux_);FaultLocked(StartupFaultSource::CaptureBoundary,DiagnosticNow());portEXIT_CRITICAL(&mux_);}
 #endif
 }
 bool FamilyC3Codec::ReferenceFaulted() const {
