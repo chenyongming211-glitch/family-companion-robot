@@ -1,8 +1,10 @@
 """Real host CMake graph tests; firmware target validation remains a CI gate."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -79,6 +81,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/family_c3_pcm.cmake")
 family_c3_pcm_build()
 get_target_property(selected network SOURCES)
 file(WRITE "${CMAKE_BINARY_DIR}/selected.txt" "${selected}")
+get_target_property(main_interface main INTERFACE_INCLUDE_DIRECTORIES)
+file(WRITE "${CMAKE_BINARY_DIR}/main-interface.txt" "${main_interface}")
 '''
 
     def configure(self, replacement=None):
@@ -121,6 +125,28 @@ file(WRITE "${CMAKE_BINARY_DIR}/selected.txt" "${selected}")
                 self.assertNotEqual(result.returncode, 0)
         (self.tree/'main/assets/locales/zh-CN/0.ogg').unlink()
         self.assertNotEqual(self.configure().returncode, 0)
+
+    def test_native_systimer_header_chain_is_private_to_pcm_main(self):
+        def includes(source):
+            entries = json.loads((self.root/'build/compile_commands.json').read_text())
+            command = next(entry['command'] for entry in entries
+                           if Path(entry['file']).name == source)
+            return {arg[2:] for arg in shlex.split(command) if arg.startswith('-I')}
+
+        systimer = self.tree/'sdk/components/esp_hal_systimer'
+        required = {str(systimer/'include'), str(systimer/'esp32c3/include')}
+        result = self.configure()
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertTrue(required <= includes('main.cc'),
+                        'native systimer_hal.h and its C3 systimer_ll.h must both resolve')
+        self.assertFalse(required & set((self.root/'build/main-interface.txt').read_text().split(';')),
+                         'native layout includes must not become a public main dependency')
+        self.assertFalse(required & includes('dummy.cc'), 'main private headers leaked to network')
+
+        disabled = self.cmake.replace('set(CONFIG_XMINI_C3_PCM ON)', 'set(CONFIG_XMINI_C3_PCM OFF)')
+        result = self.configure(disabled)
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertFalse(required & includes('main.cc'), 'PCM0 must not acquire native layout includes')
 
     def test_absent_duplicate_and_drifted_native_sources_fail_closed(self):
         source = '  managed_components/78__esp-ml307/src/web_socket.cc\n'
