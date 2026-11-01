@@ -1,6 +1,6 @@
 # 换电脑开发交接
 
-**C3启动修复继续，补原生包含依赖（2026-11-01）：** C3仍stable6b/app1、串口关闭，Go58/gateway未改，插话未验收。25f的IRAM/cache-span源码已规格与质量PASS；430af6c精确CI五目标success，C3在273项/194.643s（1项旧产物对照skip）和上游110项/7.248s通过后，原生layout C缺hal/systimer_hal.h失败，无新ELF。6d3cc197仅补C3 main两个PRIVATE固定SDK目录；58项/5.381s无skip和204源闭合通过，原规格与独立质量复审均PASS，之后须重新六目标实际构建/ELF与实机资源门禁。旧ee对照在云端带包运行已通过。私有安装工具单次16MiB新鲜备份、后续明确MD5与字节证据，仅容许phy/cal_data值变化且保护其余NVS，异常仍稳定回退；59项/14.862s及规格/质量PASS，尚需随最终CI源码显式重钉。见[报告](verification/2026-11-01-c3-bounded-pcm.md)。
+**C3继续修复，原生ldgen阻断待实际归档取证（2026-11-01）：** C3仍stable6b/app1、串口关闭，Go58/gateway未改，插话未修好。6d包含依赖修正经双审后推8ac44a7，五目标success；C3主机274项/196.239s（旧ee包对照1skip）及上游110项/7.094s通过，C/C++编译通过，随后固定SDK ldgen解析libmain.a节表在char664995/line9107col9失败，无ELF/可安装产物。现有空TU/COMDAT样本未复现，旧ELF不能还原归档，不能据此猜根因。d7c0f26仅给C3失败诊断保留真实libmain.a、同一CMAKE_OBJDUMP/LC_ALL=C的原始节表/版本/返回码及工具与输入摘要；18项/0.482s无skip和204源闭合通过，原规格与独立质量复核均PASS，随后须新CI取实际输入。没有放宽阈值或刷机；私有安装工具8ac重钉59项/14.886s及双审PASS，仍不能批准未知新来源。见[报告](verification/2026-11-01-c3-bounded-pcm.md)。
 
 **C3稳定版恢复与只读审计完成，下一步修IRAM闭包（2026-11-01）：** ee候选失败后13:53工具三域原字节恢复、eFuse/稳定路径及stable6b/app1 ready+15.014s通过，串口关闭；后续零Flash写审计确认前缀6593B变化全在NVS，仅27项实际值中的phy/cal_data变化，其余26项含Wi-Fi/身份/音量保持；再次stable ready+15.109s通过并关闭串口。固定SDK证明正常NVS/Flash会屏蔽当前非IRAM I2S IRQ，实际ee的完整应用ISR闭包在Flash；故障直接触发已定为RxPair/Cadence/25.873ms软件回调间隔，但尚未采到本次cache边沿，不能宣称唯一原因或物理DMA丢失。下一步按计划Task6做C3-only IRAM代码/数据闭包、四点同钟cache span和实际ELF审核的单候选假设检验，保留全部阈值/FD/启动顺序/M5与S3策略；重新验SRAM，仍无真人PCM/插话验收。Go58/gateway未改。见[报告](verification/2026-11-01-c3-bounded-pcm.md)和[计划](superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
 

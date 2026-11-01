@@ -1,5 +1,9 @@
 # C3有界PCM实施与验证
 
+最新阻断是原生ldgen：8ac44a7 experiment41285231710与stock41285231795共五目标success，C3 job124785076496在274项/196.239s `OK(skipped=1)`及上游110项/7.094s通过、C/C++编译完成后，于sections.ld生成阶段拒绝main/libmain.a的objdump节表。固定SDK parser报剥首行后的char664995、line9107col9冒号；没有新ELF或可安装C3产物。原debug13075621166仍仅191007B的配置和编译命令，未含归档。云端同一固定parser对真实host空TU/COMDAT归档均通过，常规空TU猜测未证；旧ee ELF/map不能恢复原归档成员和丢弃节。
+
+d7c0f26只增失败取证，保留libmain.a/CMakeCache/build.ninja，并用实际唯一CMAKE_OBJDUMP绝对路径、LC_ALL=C采集-h原文、版本、stdout/stderr/exit、工具path/SHA及输入/SOURCE摘要。缺库/配置/工具或命令失败明确记录，原job失败不被掩盖；仍是debug-only，无bin/pack/安装参数。RED2/0.014s到GREEN18/0.482s无skip，含5个执行真实workflow代码的行为分支及YAML检查；204源清单SHA `9dbb1f7a77ed12628f28e9fdec8512fb07c85ee0d7fa81932db336cef7401550`零漂移，既有双prepared18/64与锁保持。原规格与独立质量复核均PASS，推送后只取实际输入，不提前归因或宣称修复。证据在task6-cache-safe/ldgen-debug-*。C3仍stable6b/app1/串口关闭，Go58/gateway不改；8ac私有工具59/14.886s和双审PASS，但不得自动用于未知新来源。
+
 当前原生门槛：430af6c的experiment41284085679及stock41284085663共五目标成功、C3失败。C3 job124781728721主机273项/194.643s `OK(skipped=1)`，仅因CI不携带精确旧ee包跳过旧产物负对照；上游110项/7.248s通过。原生layout C因main未继承esp_timer的私有HAL依赖而缺头，无新ELF；debug-only artifact13074692995只有sdkconfig和compile_commands，不可安装。6d3cc197只补固定SDK systimer的公共和C3 LL两层PRIVATE包含目录及CMake图回归：RED1/0.828s，GREEN58/5.381s无skip（旧ee带包对照通过），204源清单SHA `7d3a17116554b844d1c34a4373c5105c4003a45321038504c9d8ab25048b3a87`与双prepared18/64、双锁保持，原规格与独立质量复审均PASS。证据为云端task6-cache-safe/native-include-*；仍待新精确六目标构建、实际ELF闭包和实机启动/内存验证。C3保持stable6b/app1、串口关闭，Go58/gateway不变，插话未修好。
 
 私有安装工具task6已完成单次完整16MiB新鲜备份和device MD5绑定，后续immutable补集只标MD5；NVS单独显式字节/CRC/库存/类型检查，仅允许phy/cal_data值变化。授权写和两boot之间仍字节回读+SHA；异常NVS不阻断稳定路径disarm/授权恢复，任何原始NVS差异仍使whole_flash_restored=false。IRAM helper已在verifier导入前绑定Git核验源码。59项/14.862s和规格→质量PASS；云端task6-installer/green-task6-final.log SHA `86f9c6baa176b47484388e9f9725a645df7ff9a25eb366752a9d0c3b13522eff`。工具仍显式固定430，使用前须重钉最终CI源码、检查实际产物并建立新binding；无新USB操作。
