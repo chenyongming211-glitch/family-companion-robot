@@ -1,6 +1,6 @@
 # C3有界PCM实施与验证
 
-当前状态：58c14cd六目标CI、实际六产物独立检查及私有安装工具复核已通过；Go58适配已受控部署。C3首次启动在音频初始化门禁拒绝OTA确认，已恢复稳定app1并完成15秒观察，随后只读NVS审计及再次启动观察通过，串口关闭。未做真人测试，尚无实机PCM负载或回声结果，自然插话尚未修好。正在补齐首次硬件/reference故障的定长数值诊断，不先定性OOM或改音频容错策略。M5/微雪保留Opus且未刷写。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
+当前状态：ee4249d首次实机启动再次被拒绝，已捕获RxPair/Cadence首次故障及25,873µs软件回调间隔；当时内部堆最低34,800B，pack/SRC/AEC/两个任务均成功。已恢复三个授权域和稳定6b/app1，独立只读审计确认仅PHY校准NVS值变化，其余配置保持；两次稳定启动观察通过，串口已关闭。下一步修C3完整IRAM闭包并用同钟cache-span检验Flash屏蔽假设，尚不放宽门禁或宣称唯一原因/已修复。Go58健康且未再重启，M5/微雪保留Opus且未刷写；仍无实机PCM负载或回声验收，自然插话未修好。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
 
 ## 已完成的源码和云端验证
 
@@ -90,6 +90,32 @@ bd0723f增加PCM专用的定长数值诊断：同一mux内保存不可覆盖的�
 规格复核发现的唯一范围缺口已由374ea95修正：PCM0移除DiagnosticNow及诊断参数求值，恢复FaultLocked()/PublishReferenceLocked()原私有签名。公共base virtual和诊断状态守卫保持，不涉及M5/S3运行行为或对象布局变化。云端旧源码nm回归的两个PCM0组合均失败（5.441s）；新源码codec2项/23.205s（57场景×4及符号断言）、startup2项/8.675s、duplex1项/5.314s通过。188项清单`c3-pcm0-source.sha256.json`自身SHA为`6fd473d3b717e29ef813f66268d9ff3ffbcb0d7ba099f49a121485628f7aacca`，本地冻结HEAD逐项相同，双目标依赖锁和提示音包保持；原规格复审PASS，独立质量复核进行中。
 
 374ea95随后通过独立质量复核，未见P1/P2或阻断项；该批准仅针对诊断代码，主机证据不能证明实机ISR时长或故障已修复。下一步推送精确源码并重跑六目标CI及实际产物检查，之前58的构建/安装结果不能替代新源码证据。当前没有再次USB操作；Go58/PID1304344及gateway4139310的`/healthz`只读复查正常、active0，不因固件诊断重启服务。
+
+### ee4249d六目标和实际产物通过，受控启动采集进行中
+
+已推送精确源码`ee4249da3a8628d7553579de9a7245d660d15e83`（诊断代码374ea95及交接文档）。[experiment41276195174](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41276195174)五目标及[stock41276195166](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41276195166)均success；独立核对push事件、head及workflow路径一致。C3 job124758740588的253项完整主机测试/154.487s、上游110项/5.467s均OK无skip，原生编译/链接/校验/打包通过。
+
+全部六份实际ZIP均经GitHub artifact ID/digest/字节数、CRC及全文件解包核对。五个非PCM产物沿用原验证逻辑，仅重钉source、目录和实际artifact ID/digest；云端`task4a-actual-artifacts-ee4249d/summary.json` SHA为`8f7c1ddfcc411344d761b779a6fa376f83cf019eec8e52f9ddf0bd0d484dfffc`，原网络双源、完整源库存/config、实际ESP镜像/分区/资源、flash/merged/release均通过。四patched S3仍为f0568dd锁，stock仍为原manifest的b26df81锁。
+
+C3 artifact13071118358为24262443B，ZIP SHA`d95f8ab8152ff83aebe85467c3142a75135ab4f69a2bd4b83d07302f881dcc56`。冻结检查器在云端2.70s/exit0完整重建121项保留输入；原assets/分区、e178原生锁、745提示音包保持。app2238880B、SHA`28bfee4b388143130d83b75eda994402611e561814d34fa0e8b420a216ffb520`；精确ELF SHA`b289999d59024331313670680b693b277b9c3e150f53fc073d2ea68e83b1af9b`等于app描述符。新增9份诊断源与reviewed374逐字节一致，8个overlay prepared副本、6个patched hook、精确ELF的6个实际符号及7条诊断格式串均核对，artifact库存221文件保持。`task4b-ee4249d/actual-c3-ee4249d.json` SHA为`b5e2d96ffcb9bcce6f4be6a95a440cea88bcbb191849e01180d892bbc96b2772`。
+
+私有安装工具仅SOURCE重钉及测试/README更新，检查器逐字节未改；51项/9.390s无skip通过，规格→质量均PASS。root依据独立run/artifact事实建立外部binding；文件SHA`9af3d57ae35995e806444c6c06e180a54109fa839f612d696432cc458d8c1fd8`，规范内容SHA`02fab7d6b7bb1280624b6ac9ea78a20fd1f39b46c0f485b92618eb21c914dc01`。云端带binding重构和Mac标准库client gate均通过。第一次未带install开关的命令仅完成只读检查，exit0且未开串口；随后13:28实际带install开始重新备份，唯一串口由该工具持有，不得另开或复位。私有目录`usb-ee4249d-20261101`、日志`install-ee4249d-usb.log`；本段不代表新候选启动成功或插话修复。
+
+#### 新诊断确认RxPair/Cadence，恢复进行中
+
+新鲜三域备份及写前补集MD5/字节SHA通过；只写app0 `0x20000+0x223000`、trailer `0x650000+0x16c000`、selector0 `0xd000+0x1000`，各域逐字节回读及写后补集通过后才首次复位。13:43的精确ELFb289999d启动中，首故障记录为source21/RxPair、pair3/Cadence，timestamp1,622,845µs，前次RX1,596,972µs，间隔25,873µs；active/armed/open=0/1/1，TX时间1,596,777µs，TX/RX均31,920样本。首次故障发生在没有业务capture时，原Pair原因已保存，未被后续Setup清理覆盖。
+
+提示音partition/map/open、两次真实PSA hash及32B匹配、SRC、FD AEC和两个xTaskCreate均成功。StartComplete1,529,950µs时内部free97,568B/largest86,016B；OTA拒绝打印时free45,900B/largest31,744B/min34,800B。没有panic、bad_alloc或已观察到的初始化分配失败；这只是启动资源证据，不是实际负载通过。硬件查询返回0/0、失败mask0；不把未采集的actual全0误当实际配置。
+
+日志1589ms Lite Initialized、1619ms PHY版本、1649ms Saving calibration，3289ms拒绝OTA确认并esp_restart，随后自动回退stable app1。ESP_LOG与esp_timer的时间原点不同，不能直接把log1649ms与fault1622ms比较；正核固定SDK的PHY→NVS/Flash保存和非IRAM中断路径，不仅凭时间相关认定因果。`first-boot.proof.json`记录8.144秒完整故障尾部、16056B，日志SHA`d259c460e61512c83034c9884b0ca6e7f636b66cbef7e19cd4a28d9e86a1dbdc`。未请求真人语音测试。
+
+13:53恢复工具已完成：`stable_restored=true`，三个授权域原字节恢复，eFuse/稳定路径通过，稳定app1 ready后15.014s观察无故障；候选失败exit1且finally关闭串口。保护0..0xd000有变化，明确`whole_flash_restored=false`，没有写回未授权NVS。
+
+随后独立零Flash写审计读取128KiB前缀，6593个变化字节全部在NVS9000..d000；35项含namespace记录前后相同（8个namespace头、27项实际值），仅phy/cal_data的逻辑值变化，其余26项含Wi-Fi/身份/音量值保持，不输出值。稳定app1再次ready后15.109s观察通过，审计exit0/finally关闭串口。私有证据在`nvs-read-audit-ee4249d/{logical-diff.json,result.json,stable-audit-boot.log}`；原始备份及日志均私有，无NVS值/音频/产物入Git。
+
+固定SDK源码已核闭PHY保存→NVS→esp_flash_write/erase→默认OS cache guard→禁非IRAM IRQ的可行链路；I2S_IRAM_SAFE=n使当前GDMA channel不带IRAM flag，底层GDMA handler位于IRAM不能弥补。精确ee ELF的Sent/Received/Complete及Pair/Playback/fault独立helper均在Flash，应用部分约3400B；另需SDK回调约316B与数据/包装，必须重新核SRAM。本次25.873ms仍是软件回调时间异常，不是物理DMA停止证明。
+
+下一步为C3-only完整IRAM闭包＋四点cache-span的单候选假设检验。拒绝旧spi_flash_guard_set观测：固定SDK新esp_flash OS函数直接调用disable/enable函数，不经过该guard。使用固定SDK私有linker包装，所有原调用保持、默认透明，记录同一esp_timer的保守cache-off内部区间与其中RX/TX次数；实际ELF的重定位/指令必须证明包装归向及代码/数据闭包。先源码和云端审查、六目标实际产物及新SRAM预算，再做受控实机；不改变门禁/阈值或提前宣称PHY保存是唯一根因。详见执行计划Task6。
 
 ## 构建接线与产物绑定进度
 
