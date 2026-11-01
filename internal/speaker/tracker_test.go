@@ -79,6 +79,22 @@ func TestTrackerGrayZoneAndAmbiguousCandidates(t *testing.T) {
 	})
 }
 
+func TestTrackerZeroMarginRejectsExactTie(t *testing.T) {
+	cfg := testConfig()
+	cfg.NewSpeakerThreshold, cfg.MatchThreshold, cfg.Margin = 0.5, 0.7, 0
+	tracker := newTestTracker(t, cfg)
+	observe(t, tracker, observation(cfg, 0, 1, 0, 0), StateTemporary, "guest_1")
+	prior := observe(t, tracker, observation(cfg, 100, 0, 1, 0), StateTemporary, "guest_2")
+	tied := observe(t, tracker, observation(cfg, 200, 1, 1, 0), StateUncertain, "")
+	if tied.Revision != prior.Revision+1 || tracker.IsCurrent(cfg.Scope, prior) || !tracker.IsCurrent(cfg.Scope, tied) {
+		t.Fatal("tied observation did not advance revision")
+	}
+	if _, err := tracker.Observe(observation(cfg, 200, 0, 0, 1)); !errors.Is(err, ErrInvalidObservation) {
+		t.Fatal("tied observation did not advance sample watermark")
+	}
+	observe(t, tracker, observation(cfg, 300, 0, 0, 1), StateTemporary, "guest_3")
+}
+
 func TestTrackerInsufficientQualityDoesNotAllocate(t *testing.T) {
 	for _, kind := range []string{"short", "mixed", "incomplete"} {
 		t.Run(kind, func(t *testing.T) {

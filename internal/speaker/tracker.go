@@ -124,7 +124,7 @@ func (t *Tracker) classify(vector []float64) (State, string) {
 		}
 	}
 	if bestIndex >= 0 && best >= t.config.MatchThreshold &&
-		(len(t.templates) == 1 || best-second >= t.config.Margin) {
+		(len(t.templates) == 1 || (best > second && best-second >= t.config.Margin)) {
 		return StateTemporary, guestLabel(bestIndex)
 	}
 	// Equality with the new-speaker threshold is deliberately a gray zone.
