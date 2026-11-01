@@ -140,8 +140,12 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		if err != nil || kind != websocket.TextMessage {
 			return
 		}
-		hello, err := protocol.ParseHello(b, int(version[0]-'0'))
-		if err != nil || !hello.Features["playback_progress_v1"] || !hello.Features["playback_drain_v1"] {
+		hello, err := protocol.ParseRealtimeHello(b, int(version[0]-'0'))
+		if err != nil {
+			ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, err.Error()), time.Now().Add(time.Second))
+			return
+		}
+		if !hello.Features["playback_progress_v1"] || !hello.Features["playback_drain_v1"] {
 			ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "playback_drain_required"), time.Now().Add(time.Second))
 			return
 		}
@@ -160,6 +164,7 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		session.inputFrame = hello.AudioParams.FrameDuration * 16
 		session.wire = newXiaozhiWire(ws, hello.Version, hello.AudioParams.FrameDuration, session.rec.owner.SessionID)
 		session.wire.(*xiaozhiWire).mcp = hello.Features["mcp"]
+		session.wire.(*xiaozhiWire).pcm = hello.AudioParams.Format == "pcm_s16le"
 		s.attachDiagnostics(session)
 		session.enableDeviceControls()
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }

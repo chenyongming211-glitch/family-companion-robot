@@ -32,6 +32,16 @@ type Control struct {
 }
 
 func ParseHello(data []byte, version int) (Hello, error) {
+	return parseHello(data, version, false)
+}
+
+// ParseRealtimeHello also accepts explicitly negotiated native PCM on the
+// Realtime device entry. Other entries retain ParseHello's Opus-only contract.
+func ParseRealtimeHello(data []byte, version int) (Hello, error) {
+	return parseHello(data, version, true)
+}
+
+func parseHello(data []byte, version int, allowPCM bool) (Hello, error) {
 	var h Hello
 	if len(data) > 16384 || json.Unmarshal(data, &h) != nil {
 		return h, errors.New("invalid hello JSON")
@@ -39,6 +49,12 @@ func ParseHello(data []byte, version int) (Hello, error) {
 	a := h.AudioParams
 	if h.Type != "hello" || h.Transport != "websocket" || h.Version < 1 || h.Version > 3 || h.Version != version {
 		return h, errors.New("unsupported hello protocol")
+	}
+	if allowPCM && a.Format == "pcm_s16le" {
+		if h.Version != 1 || !h.Features["pcm_s16le_v1"] || a.SampleRate != 16000 || a.Channels != 1 || a.FrameDuration != 60 {
+			return h, errors.New("expected v1 mono 16kHz pcm_s16le in 60ms frames with pcm_s16le_v1")
+		}
+		return h, nil
 	}
 	if a.Format != "opus" || a.SampleRate != 16000 || a.Channels != 1 || (a.FrameDuration != 20 && a.FrameDuration != 40 && a.FrameDuration != 60) {
 		return h, errors.New("expected mono 16kHz Opus in 20/40/60ms frames")

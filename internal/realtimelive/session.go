@@ -122,6 +122,10 @@ func (s *Session) send(event map[string]any) error {
 	defer s.mu.Unlock()
 	return s.sendLocked(event)
 }
+func (s *Session) pcmTransport() bool {
+	w, ok := s.wire.(*xiaozhiWire)
+	return ok && w.pcm
+}
 func (s *Session) binary(rt *liveTurn, packet []byte) (bool, error) {
 	return s.release(rt, packet, nil, nil)
 }
@@ -136,10 +140,14 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 	if e := s.wire.sendAudio(rt.turn.ID, packet); e != nil {
 		return true, e
 	}
-	if codec != nil {
-		decoded, e := codec.Decode(packet)
-		if e != nil {
-			return true, e
+	if codec != nil || (s.pcmTransport() && resampler != nil) {
+		decoded := packet
+		if codec != nil {
+			var e error
+			decoded, e = codec.Decode(packet)
+			if e != nil {
+				return true, e
+			}
 		}
 		converted, e := resampler.Process(decoded)
 		if e != nil {
@@ -300,9 +308,13 @@ func (s *Session) Run() (err error) {
 		}
 		s.spawn(s.runMemory)
 	}
-	codec, e := realtimeaudio.New(16000, s.inputFrame)
-	if e != nil {
-		return e
+	var codec *realtimeaudio.Codec
+	var e error
+	if !s.pcmTransport() {
+		codec, e = realtimeaudio.New(16000, s.inputFrame)
+		if e != nil {
+			return e
+		}
 	}
 	defer codec.Close()
 	_, device := s.wire.(*xiaozhiWire)
@@ -733,12 +745,23 @@ type encodedPacket struct {
 func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	ctx := rt.ctx
 	var asr *OutputASR
-	codec, e := realtimeaudio.New(24000, 1440)
-	if e != nil {
-		s.turnError(rt)
-		return
+	var codec *realtimeaudio.Codec
+	var e error
+	pcmTransport := s.pcmTransport()
+	if !pcmTransport {
+		codec, e = realtimeaudio.New(24000, 1440)
+		if e != nil {
+			s.turnError(rt)
+			return
+		}
 	}
 	defer codec.Close()
+	encodeFrame := func(pcm []byte) ([]byte, error) {
+		if pcmTransport {
+			return append([]byte(nil), pcm...), nil
+		}
+		return codec.Encode(pcm)
+	}
 	contextText, e := s.settle(ctx, rt)
 	if e != nil {
 		return
@@ -797,7 +820,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			pending = append(pending, value...)
 			total += len(value) / 2
 			for len(pending) >= 2880 {
-				packet, e := codec.Encode(pending[:2880])
+				packet, e := encodeFrame(pending[:2880])
 				if e != nil {
 					return e
 				}
@@ -810,13 +833,22 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			return nil
 		}
 		e := s.generate(producerCtx, rt.turn.ID, prompt, pcm, emit)
+		if e == nil && pcmTransport && total == 0 {
+			// There is no PCM packet to begin/seal. Resolve only this turn through
+			// the existing generation-error drain path; keep the Session usable.
+			e = errors.New("empty_pcm_output")
+		}
 		if e == nil {
-			target := (total + 312 + 1439) / 1440
+			tail := 312
+			if pcmTransport {
+				tail = 0 // Native PCM has no Opus encoder lookahead to flush.
+			}
+			target := (total + tail + 1439) / 1440
 			for frames < target {
 				chunk := make([]byte, 2880)
 				n := copy(chunk, pending)
 				pending = pending[n:]
-				packet, er := codec.Encode(chunk)
+				packet, er := encodeFrame(chunk)
 				if er != nil {
 					e = er
 					break

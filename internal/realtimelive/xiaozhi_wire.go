@@ -22,6 +22,7 @@ type xiaozhiWire struct {
 	scope            string
 	listening        bool // Read-loop owned; writes never consult it.
 	mcp              bool // Negotiated once from the authenticated hello.
+	pcm              bool // Explicit v1 pcm_s16le_v1 negotiation; no format fallback.
 	wakeSamples      int
 	startDeadline    time.Time
 	blocks           map[int64]*devicePlayback // Session mutex owns all playback access.
@@ -41,13 +42,21 @@ func (w *xiaozhiWire) readDeadline() time.Time {
 	return w.startDeadline
 }
 func (w *xiaozhiWire) decodeAudio(b []byte, codec *realtimeaudio.Codec) ([]byte, error) {
-	packet, _, err := protocol.Unwrap(w.version, b)
-	if err != nil {
-		return nil, err
-	}
-	pcm, err := codec.Decode(packet)
-	if err != nil {
-		return nil, err
+	var pcm []byte
+	if w.pcm {
+		if len(b) != 1920 {
+			return nil, errors.New("pcm_input_frame_size: expected 1920 bytes")
+		}
+		pcm = append([]byte(nil), b...)
+	} else {
+		packet, _, err := protocol.Unwrap(w.version, b)
+		if err != nil {
+			return nil, err
+		}
+		pcm, err = codec.Decode(packet)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !w.listening {
 		w.wakeSamples += len(pcm) / 2
@@ -131,7 +140,12 @@ func (w *xiaozhiWire) sendEvent(e map[string]any) error {
 		if w.mcp {
 			features["mcp"] = true
 		}
-		return w.ws.WriteJSON(protocol.Hello{Type: "hello", Version: w.version, Transport: "websocket", SessionID: w.scope, AudioParams: protocol.AudioParams{Format: "opus", SampleRate: 24000, Channels: 1, FrameDuration: 60}, Features: features})
+		format := "opus"
+		if w.pcm {
+			format = "pcm_s16le"
+			features["pcm_s16le_v1"] = true
+		}
+		return w.ws.WriteJSON(protocol.Hello{Type: "hello", Version: w.version, Transport: "websocket", SessionID: w.scope, AudioParams: protocol.AudioParams{Format: format, SampleRate: 24000, Channels: 1, FrameDuration: 60}, Features: features})
 	case "begin":
 		id, ok := wireInteger(e["id"])
 		if !ok || id < 1 || id > math.MaxUint32 {
@@ -176,6 +190,9 @@ func (w *xiaozhiWire) sendEvent(e map[string]any) error {
 	return w.ws.WriteJSON(scope)
 }
 func (w *xiaozhiWire) sendAudio(id int64, packet []byte) error {
+	if w.pcm && len(packet) != 2880 {
+		return errors.New("pcm_output_frame_size: expected 2880 bytes")
+	}
 	block := w.blocks[id]
 	if block == nil || block.sealed {
 		return errors.New("audio_outside_playback")
