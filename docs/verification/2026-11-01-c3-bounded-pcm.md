@@ -1,5 +1,7 @@
 # C3有界PCM实施与验证
 
+恢复后的源码进展：用户要求暂停后已重新要求继续。冻结代码8e777ec增加C3 PCM专用IRAM TU、精确COMDAT映射、920B cache-span和实际ELF审核；首次规格复核发现三项缺口，25f522e只修正常量有效访存地址/宽度、enable前计数停止顺序、字段JALR位移，并保留C3失败时的debug-only构建输入。原三项精确RED为4测试15失败断言；修正版98项/46.357s无skip通过，随后workflow两项结构测试通过。204源清单SHA为`4db5985175d499e5e4f20ce1479c152c4226fc3b5e689d360250a20b26d77a4d`，C3/S3各18patch/64overlay与双锁闭合；原规格与独立质量复核均PASS25f，无阻断项。云端证据在`task6-cache-safe/resume-*`；8e的137专项与full6历史失败记录保持分开，不冒充最终全量回归。新原生Kconfig/SDK layout编译、最终IRAM/访存/包装路径和真实内存仍待CI及实机，当前C3保持stable6b/app1、串口关闭。
+
 当前状态：ee4249d首次实机启动再次被拒绝，已捕获RxPair/Cadence首次故障及25,873µs软件回调间隔；当时内部堆最低34,800B，pack/SRC/AEC/两个任务均成功。已恢复三个授权域和稳定6b/app1，独立只读审计确认仅PHY校准NVS值变化，其余配置保持；两次稳定启动观察通过，串口已关闭。下一步修C3完整IRAM闭包并用同钟cache-span检验Flash屏蔽假设，尚不放宽门禁或宣称唯一原因/已修复。Go58健康且未再重启，M5/微雪保留Opus且未刷写；仍无实机PCM负载或回声验收，自然插话未修好。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
 
 ## 已完成的源码和云端验证

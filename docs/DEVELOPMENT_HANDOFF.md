@@ -1,5 +1,7 @@
 # 换电脑开发交接
 
+**C3修复已恢复，先验启动（2026-11-01）：** 用户停止后已重新要求继续。当前C3仍为已恢复的stable6b/app1，串口无占用，Go58健康/记忆就绪/active0。Task6源码8e777ec（仅本地）实现C3 PCM完整IRAM路径和定长cache-span；25f522e关闭三项规格缺口（常量访存/宽度、计数终点、JALR位移），旧版4项15断言RED、修正版98项/46.357s及CI结构2项通过，204源清单闭合，原规格与独立质量复核均PASS25f，无阻断项。新原生编译/实际ELF和实机启动仍未验证，不宣称插话修好。接下来只推进当前启动假设；CI若失败会保留debug-only符号，避免额外重建取证。安装工具还需区分唯一合法phy/cal_data自写与其他配置变化，保持稳定回退、身份和Wi-Fi保护。详见[报告](verification/2026-11-01-c3-bounded-pcm.md)。
+
 **C3稳定版恢复与只读审计完成，下一步修IRAM闭包（2026-11-01）：** ee候选失败后13:53工具三域原字节恢复、eFuse/稳定路径及stable6b/app1 ready+15.014s通过，串口关闭；后续零Flash写审计确认前缀6593B变化全在NVS，仅27项实际值中的phy/cal_data变化，其余26项含Wi-Fi/身份/音量保持；再次stable ready+15.109s通过并关闭串口。固定SDK证明正常NVS/Flash会屏蔽当前非IRAM I2S IRQ，实际ee的完整应用ISR闭包在Flash；故障直接触发已定为RxPair/Cadence/25.873ms软件回调间隔，但尚未采到本次cache边沿，不能宣称唯一原因或物理DMA丢失。下一步按计划Task6做C3-only IRAM代码/数据闭包、四点同钟cache span和实际ELF审核的单候选假设检验，保留全部阈值/FD/启动顺序/M5与S3策略；重新验SRAM，仍无真人PCM/插话验收。Go58/gateway未改。见[报告](verification/2026-11-01-c3-bounded-pcm.md)和[计划](superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
 
 **C3诊断捕获RxPair/Cadence，正在恢复（2026-11-01）：** ee4249d首次boot再次拒绝，首fault=RxPair21/Pair Cadence3，1,622,845µs时距前RX25,873µs，capture未开、参考已armed；pack/PSA/SRC/FD AEC/双任务均成功，拒绝时内部堆free45,900/largest31,744/min34,800B。本次未见内存分配失败，仍无实际负载或回声验收。8.144s/16056B尾部及精确ELFb289999d已绑定，随后自动回退stable。工具已disarm并恢复原app0/trailer/selector0，仍做恢复后补集和稳定启动检查，勿另开串口或复位。正在只读核对PHY校准NVS/Flash保存与CONFIG_I2S_ISR_IRAM_SAFE=n的因果链，须校正log/timer原点，不仅按日志邻近猜因果，不改门禁/阈值。Go58/gateway保持，插话未修好。见[首次故障实证](verification/2026-11-01-c3-bounded-pcm.md)。
