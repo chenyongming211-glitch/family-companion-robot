@@ -12,6 +12,9 @@ bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected, uint32_t* clo
     if (playback_connection_ != UINT32_MAX) ++playback_connection_;
     if (closed_epoch) *closed_epoch = playback_connection_;
     playback_negotiated_ = playback_receiving_ = playback_tracking_ = playback_drain_negotiated_ = false;
+#if CONFIG_XMINI_C3_PCM
+    Application::GetInstance().GetAudioService().SetC3ServerReceiving(false);
+#endif
     playback_id_ = {}; playback_first_ = 0;
     session_id_.clear();
     auto* codec = Board::GetInstance().GetAudioCodec();
@@ -63,6 +66,10 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
 #if CONFIG_XMINI_C3_BUTTON_ENTRY && !CONFIG_XMINI_C3_VOICE_BARGE
         Application::GetInstance().GetAudioService().SetExperimentUplink(false);
 #endif
+#if CONFIG_XMINI_C3_PCM
+        // Retire old cues even when the previous server identity is sealed.
+        Application::GetInstance().GetAudioService().SetC3ServerReceiving(true);
+#endif
         // Runs before the next binary frame on this ordered WebSocket. A later
         // scheduled UI start may not reset the decoder or relabel these frames.
         if (!playback_id_ || playback_receiving_)
@@ -91,6 +98,9 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
             codec->MarkOrbDraining(id); // only after the existing exact sent_samples validation
 #endif
         playback_receiving_ = false;
+#if CONFIG_XMINI_C3_PCM
+        Application::GetInstance().GetAudioService().SetC3ServerReceiving(false);
+#endif
         if (interrupted) {
             if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
             Application::GetInstance().GetAudioService().ResetDecoder();
@@ -211,11 +221,31 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root, uint32_t connection)
     }
 
     auto* features = cJSON_GetObjectItem(root, "features");
+#if CONFIG_XMINI_C3_PCM
+    const auto exact=[](const cJSON* value,int expected) {
+        return cJSON_IsNumber(value) && std::isfinite(value->valuedouble) && value->valuedouble==expected;
+    };
+    auto* format=cJSON_GetObjectItem(audio_params,"format");
+    if(!exact(cJSON_GetObjectItem(root,"version"),1) || !cJSON_IsObject(audio_params) ||
+       !cJSON_IsString(format) || std::strcmp(format->valuestring,"pcm_s16le") ||
+       !exact(cJSON_GetObjectItem(audio_params,"sample_rate"),24000) ||
+       !exact(cJSON_GetObjectItem(audio_params,"channels"),1) ||
+       !exact(cJSON_GetObjectItem(audio_params,"frame_duration"),60) ||
+       !cJSON_IsTrue(cJSON_GetObjectItem(features,"pcm_s16le_v1")) ||
+       !cJSON_IsTrue(cJSON_GetObjectItem(features,"playback_progress_v1")) ||
+       !cJSON_IsTrue(cJSON_GetObjectItem(features,"playback_drain_v1"))) {
+        playback_negotiated_=playback_drain_negotiated_=false;
+        return; // event remains clear: channel never opens with a partial hello
+    }
+#endif
     playback_negotiated_ = playback_connection_ != 0 && playback_connection_ != UINT32_MAX && cJSON_IsString(session_id) &&
         family_robot::PlaybackSessionSupported(session_id_.data(), session_id_.size()) && Board::GetInstance().GetAudioCodec()->PlaybackSupported() &&
         cJSON_IsTrue(cJSON_GetObjectItem(features, "playback_progress_v1"));
     playback_drain_negotiated_ = playback_negotiated_ &&
         cJSON_IsTrue(cJSON_GetObjectItem(features, "playback_drain_v1"));
+#if CONFIG_XMINI_C3_PCM
+    if(!playback_negotiated_ || !playback_drain_negotiated_)return;
+#endif
     Application::GetInstance().GetAudioService().PreserveServerPlayback(playback_negotiated_);
     xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
 }

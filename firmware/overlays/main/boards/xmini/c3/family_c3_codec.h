@@ -28,6 +28,9 @@ public:
     bool PlaybackBusy() const override;
     void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity id,
                       uint64_t first, uint32_t generation) override;
+#if CONFIG_XMINI_C3_PCM
+    void OutputTaggedSpan(const int16_t*,size_t,family_robot::PlaybackIdentity,uint64_t,uint32_t) override;
+#endif
     bool ReferenceFaulted() const override;
 #if CONFIG_XMINI_C3_VOICE_BARGE
     void SetCaptureActive(bool active) override;
@@ -45,6 +48,7 @@ protected:
     int Write(const int16_t* data, int samples) override;
 private:
     void InitializePlayback(int input_rate, int output_rate);
+    void OutputSpan(const int16_t*,size_t,family_robot::PlaybackIdentity,uint64_t,uint32_t);
     bool VerifyHardware(); // lifecycle_ held; mode_cfg belongs to mutable SDK state
     bool PrepareHardware();
     bool WaitForSilence(); // lifecycle_ held, never mux_ while waiting

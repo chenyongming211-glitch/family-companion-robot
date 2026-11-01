@@ -20,7 +20,7 @@ class C3CodecTests(unittest.TestCase):
                 path = work/relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('// SDK plumbing is supplied by the harness.\n')
-            (work/'sdkconfig.h').write_text('#define CONFIG_XMINI_C3_BUTTON_ENTRY 1\n')
+            (work/'sdkconfig.h').write_text('#define CONFIG_XMINI_C3_BUTTON_ENTRY 1\n#define CONFIG_XMINI_C3_PCM 1\n')
             base = ['c++', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
                     '-I', str(work), '-I', str(BOARD), '-I', str(FIRMWARE/'overlays/main/audio')]
             environment = dict(os.environ, ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',
@@ -28,8 +28,9 @@ class C3CodecTests(unittest.TestCase):
             if os.environ.get('FIRMWARE_HOST_ASAN_PRELOAD'):
                 environment['LD_PRELOAD'] = os.environ['FIRMWARE_HOST_ASAN_PRELOAD']
             for mode, extra in [('optimized', ['-O2']), ('sanitized', ['-O1', '-g',
-                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all'])]:
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all']), ('optimized-pcm', ['-O2']), ('sanitized-pcm', ['-O2', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all'])]:
                 with self.subTest(mode=mode):
+                    (work/'sdkconfig.h').write_text('#define CONFIG_XMINI_C3_BUTTON_ENTRY 1\n#define CONFIG_XMINI_C3_PCM '+str(int('pcm' in mode))+'\n')
                     binary = work/mode
                     compiled = subprocess.run(base+extra+[str(FIRMWARE/'tests/c3_codec_host.cc'),
                         '-o', str(binary)], capture_output=True, text=True)
@@ -54,9 +55,9 @@ class C3CodecTests(unittest.TestCase):
             flags = ['c++', '-O2', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror',
                      '-pedantic', '-include', str(work/'platform.h'), '-I', str(work),
                      '-I', str(BOARD), '-I', str(FIRMWARE/'overlays/main/audio')]
-            for enabled, voice in ((1, 0), (0, 0), (1, 1), (0, 1)):
-                with self.subTest(enabled=enabled, voice=voice):
-                    (work/'sdkconfig.h').write_text(f'#define CONFIG_XMINI_C3_BUTTON_ENTRY {enabled}\n#define CONFIG_XMINI_C3_VOICE_BARGE {voice}\n')
+            for enabled, voice, pcm in ((1, 0, 0), (0, 0, 0), (1, 1, 0), (0, 1, 0), (1, 1, 1)):
+                with self.subTest(enabled=enabled, voice=voice, pcm=pcm):
+                    (work/'sdkconfig.h').write_text(f'#define CONFIG_XMINI_C3_BUTTON_ENTRY {enabled}\n#define CONFIG_XMINI_C3_VOICE_BARGE {voice}\n#define CONFIG_XMINI_C3_PCM {pcm}\n')
                     obj = work/f'codec-{enabled}-{voice}.o'
                     result = subprocess.run(flags+['-c', str(BOARD/'family_c3_codec.cc'),
                         '-o', str(obj)], capture_output=True, text=True)

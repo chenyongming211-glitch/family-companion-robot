@@ -1,3 +1,4 @@
+#include "sdkconfig.h"
 #include "playback_progress.h"
 #include <algorithm>
 #include <cassert>
@@ -113,6 +114,9 @@ public:
     virtual bool PlaybackPoll(family_robot::PlaybackSnapshot&){return false;}
     virtual bool PlaybackBusy()const{return false;}
     virtual void OutputTagged(std::vector<int16_t>&,family_robot::PlaybackIdentity,uint64_t,uint32_t){}
+#if CONFIG_XMINI_C3_PCM
+    virtual void OutputTaggedSpan(const int16_t*,size_t,family_robot::PlaybackIdentity,uint64_t,uint32_t){}
+#endif
     virtual bool RealtimeEligible()const{return true;}
     virtual bool ReferenceFaulted()const{return false;}
     virtual void CaptureBoundary(){}
@@ -186,7 +190,12 @@ static void begin(FamilyC3Codec& c,Id id={1,1}){
 }
 static void queue(FamilyC3Codec& c,Id id,size_t n,uint64_t first=0,int16_t value=99){
     assert(c.PlaybackControl(Op::Admit,id,first,n));std::vector<int16_t> pcm(n,value);
-    c.OutputTagged(pcm,id,first,c.PlaybackGeneration());c.PlaybackControl(Op::Release,id);
+#if CONFIG_XMINI_C3_PCM
+    c.OutputTaggedSpan(pcm.data(),pcm.size(),id,first,c.PlaybackGeneration());
+#else
+    c.OutputTagged(pcm,id,first,c.PlaybackGeneration());
+#endif
+    c.PlaybackControl(Op::Release,id);
 }
 static Snapshot final(FamilyC3Codec& c){Snapshot s;for(int i=0;i<18;++i)if(c.PlaybackPoll(s)&&s.finished)return s;assert(false);return {};}
 int main(){

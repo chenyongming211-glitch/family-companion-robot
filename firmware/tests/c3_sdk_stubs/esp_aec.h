@@ -2,12 +2,17 @@
 #include <cassert>
 #include <cstdint>
 struct aec_handle_t { int calls=0; };
-enum { AEC_MODE_SR_LOW_COST=7 };
+enum { AEC_MODE_SR_LOW_COST=7, AEC_MODE_FD_LOW_COST=5 };
 inline int aec_created=0,aec_destroyed=0,aec_chunks=512;
 inline bool aec_fail=false;
 inline void (*aec_during_process)()=nullptr;
 inline aec_handle_t* aec_create(int rate,int channels,int ref,int mode) {
-    assert(rate==16000&&channels==2&&ref==1&&mode==AEC_MODE_SR_LOW_COST);
+#if CONFIG_XMINI_C3_PCM
+    constexpr int expected_mode=AEC_MODE_FD_LOW_COST;
+#else
+    constexpr int expected_mode=AEC_MODE_SR_LOW_COST;
+#endif
+    assert(rate==16000&&channels==2&&ref==1&&mode==expected_mode);
     if(aec_fail)return nullptr;
     ++aec_created;return new aec_handle_t;
 }

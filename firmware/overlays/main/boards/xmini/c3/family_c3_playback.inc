@@ -50,16 +50,25 @@ bool FamilyC3Codec::PlaybackBusy() const {
 }
 void FamilyC3Codec::OutputData(std::vector<int16_t>& data) {OutputTagged(data,{},0,PlaybackGeneration());}
 void FamilyC3Codec::OutputTagged(std::vector<int16_t>& pcm,family_robot::PlaybackIdentity id,uint64_t first,uint32_t generation) {
+    OutputSpan(pcm.data(),pcm.size(),id,first,generation);
+}
+#if CONFIG_XMINI_C3_PCM
+void FamilyC3Codec::OutputTaggedSpan(const int16_t* pcm,size_t count,family_robot::PlaybackIdentity id,uint64_t first,uint32_t generation) {
+    OutputSpan(pcm,count,id,first,generation);
+}
+#endif
+void FamilyC3Codec::OutputSpan(const int16_t* pcm,size_t count,family_robot::PlaybackIdentity id,uint64_t first,uint32_t generation) {
+    if(!pcm || !count)return;
     std::lock_guard<std::mutex> lock(lifecycle_);
     size_t offset=0;int64_t progress=esp_timer_get_time();
-    while(offset<pcm.size()) {
-        const size_t n=std::min(pcm.size()-offset,family_robot::PlaybackProgress::kBlock);
+    while(offset<count) {
+        const size_t n=std::min(count-offset,family_robot::PlaybackProgress::kBlock);
         portENTER_CRITICAL(&mux_);
         const bool current=playback_ && accepting_ && !faulted_ && generation!=UINT32_MAX && generation==output_generation_;
         const bool range=first<=family_robot::PlaybackProgress::kMaxSamples &&
             offset<=family_robot::PlaybackProgress::kMaxSamples-first;
         const bool was_busy=playback_ && playback_->Busy();
-        const auto result=current && range ? playback_->Submit(id,first+offset,pcm.data()+offset,n)
+        const auto result=current && range ? playback_->Submit(id,first+offset,pcm+offset,n)
             :family_robot::PlaybackProgress::SubmitResult::Rejected;
         if(result==family_robot::PlaybackProgress::SubmitResult::Accepted && !was_busy)
             pending_since_us_=esp_timer_get_time();

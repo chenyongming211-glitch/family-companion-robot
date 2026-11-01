@@ -4,11 +4,20 @@ void LiteAudioEngine::FeedCaptured(std::vector<int16_t>&& data, uint32_t generat
 #if CONFIG_XMINI_C3_VOICE_BARGE
     if(!codec_ || !c3_aec_ || !generation || !voice_processing_enabled_.load())return;
     if(frame_samples_<=0) {codec_->ReportReferenceFailure();return;}
+#if !CONFIG_XMINI_C3_PCM
     const auto frame_samples=static_cast<size_t>(frame_samples_);
+#endif
     std::lock_guard<std::mutex> lock(output_mutex_);
     const auto capture=codec_->CaptureGeneration();
+#if CONFIG_XMINI_C3_PCM
+    bool span_failed=false;
+#endif
     auto current=[&] {
-        return voice_processing_enabled_.load() && codec_->CaptureGeneration()==capture &&
+        return
+#if CONFIG_XMINI_C3_PCM
+            !span_failed &&
+#endif
+            voice_processing_enabled_.load() && codec_->CaptureGeneration()==capture &&
             codec_->ReferenceValid() && !codec_->ReferenceFaulted();
     };
     if(!current())return;
@@ -22,6 +31,11 @@ void LiteAudioEngine::FeedCaptured(std::vector<int16_t>&& data, uint32_t generat
         [&](const int16_t* output,size_t count) {
             if(!current())return;
             codec_->NotifyAecReady(true,capture);
+#if CONFIG_XMINI_C3_PCM
+            // Matched 512-sample DSP storage is borrowed until this callback returns.
+            // The fixed input pool consumes it directly, retaining the original epoch.
+            if(!c3_output_span_ || !c3_output_span_(output,count,generation))span_failed=true;
+#else
             while(count) {
                 if(!current()) {output_buffer_.clear();return;}
                 // AEC emits 512 samples; fill only the remaining Opus-frame
@@ -36,6 +50,7 @@ void LiteAudioEngine::FeedCaptured(std::vector<int16_t>&& data, uint32_t generat
                     output_buffer_.clear();
                 }
             }
+#endif
         });
     if(result!=family_robot::C3LiteAec::Result::Ok) {
         output_buffer_.clear();codec_->NotifyAecReady(false,capture);

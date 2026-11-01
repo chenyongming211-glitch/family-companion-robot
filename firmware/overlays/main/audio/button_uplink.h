@@ -12,10 +12,17 @@ public:
     uint32_t Revision() const { return epoch_.load(); }
     uint32_t Capture() const {
         const auto value = epoch_.load();
-        return (value & 1u) ? value : 0;
+        return (value & 1u) && value > revoked_.load() ? value : 0;
     }
     bool Allows(uint32_t token) const {
         return token != 0 && token == Capture();
+    }
+    // High-priority capture faults cannot wait behind synchronous transport.
+    // Monotonic max means a delayed old fault cannot un-revoke a newer epoch.
+    void Revoke(uint32_t token) {
+        if (!(token & 1u)) return;
+        auto previous = revoked_.load();
+        while (previous < token && !revoked_.compare_exchange_weak(previous, token)) {}
     }
     template <class Flush>
     void Close(Flush flush) {
@@ -25,6 +32,15 @@ public:
         // Even an already-closed receive event revokes a pending reopen ticket.
         epoch_.store(previous + ((previous & 1u) ? 1u : 2u));
         flush();
+    }
+    template <class Flush>
+    bool CloseRevoked(uint32_t token, Flush flush) {
+        std::lock_guard<std::mutex> lock(dispatch_);
+        if (epoch_.load() != token || token >= UINT32_MAX-1u ||
+            ((token & 1u) && revoked_.load() < token)) return false;
+        epoch_.store(token + ((token & 1u) ? 1u : 2u)); // Open never issues UINT32_MAX.
+        flush();
+        return true;
     }
     template <class Flush>
     bool Open(uint32_t expected, Flush flush) {
@@ -42,6 +58,7 @@ public:
         return Allows(token) ? transport() : true;
     }
 private:
+    std::atomic<uint32_t> revoked_{0};
     std::atomic<uint32_t> epoch_{0}; // odd=open, even=closed; never wraps
     std::mutex dispatch_;
 };

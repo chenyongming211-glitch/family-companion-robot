@@ -1,0 +1,699 @@
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1235,3 +1235,8 @@
+     help
+         Use matched completed-TX / physical-RX reference and standalone Lite AEC.
+         Keep the authorized button conversation uplink open through playback.
++
++config XMINI_C3_PCM
++    bool "Xmini C3 bounded PCM transport and streamed cues"
++    default n
++    depends on XMINI_C3_BUTTON_ENTRY && XMINI_C3_VOICE_BARGE
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -211,6 +211,9 @@
+             auto* playback_codec = Board::GetInstance().GetAudioCodec();
+             for (size_t i = 0; i < family_robot::PlaybackProgress::kRecords && playback_codec->PlaybackPoll(receipt); ++i)
+                 protocol_->SendPlayback(receipt);
++#if CONFIG_XMINI_C3_PCM
++            if(audio_service_.FinishC3PcmFault())protocol_->CloseAudioChannel();
++#endif
+             audio_service_.PollPlaybackDrained();
+         }
+ 
+@@ -630,6 +633,9 @@
+             return;
+         }
+         if (strcmp(type->valuestring, "notify") == 0) {
++#if CONFIG_XMINI_C3_PCM
++            ESP_LOGW(TAG,"C3 PCM remote Ogg notification unsupported");return;
++#endif
+             auto audio_url = cJSON_GetObjectItem(root, "audio_url");
+             if (!cJSON_IsString(audio_url) || audio_url->valuestring[0] == '\0') {
+                 ESP_LOGW(TAG, "Notify message requires audio_url");
+@@ -843,6 +849,9 @@
+         SetDeviceState(kDeviceStateIdle);
+         return;
+     } else if (state == kDeviceStateWifiConfiguring) {
++#if CONFIG_XMINI_C3_PCM
++        ESP_LOGW(TAG,"C3 PCM WiFi audio testing unsupported");return;
++#endif
+         audio_service_.EnableAudioTesting(true);
+         SetDeviceState(kDeviceStateAudioTesting);
+         return;
+@@ -917,6 +926,9 @@
+         SetDeviceState(kDeviceStateIdle);
+         return;
+     } else if (state == kDeviceStateWifiConfiguring) {
++#if CONFIG_XMINI_C3_PCM
++        ESP_LOGW(TAG,"C3 PCM WiFi audio testing unsupported");return;
++#endif
+         audio_service_.EnableAudioTesting(true);
+         SetDeviceState(kDeviceStateAudioTesting);
+         return;
+@@ -1313,6 +1325,9 @@
+ }
+ 
+ void Application::StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles) {
++#if CONFIG_XMINI_C3_PCM
++    (void)audio_url;(void)subtitles;ESP_LOGW(TAG,"C3 PCM remote Ogg notification unsupported");return;
++#else
+     if (GetDeviceState() != kDeviceStateIdle || notify_player_.IsBusy()) {
+         ESP_LOGW(TAG, "Ignoring notify message while device is busy");
+         return;
+@@ -1356,6 +1371,7 @@
+         ESP_LOGE(TAG, "Failed to start notification playback");
+         StopNotification();
+     }
++#endif
+ }
+ 
+ void Application::StopNotification() {
+--- a/main/assets.cc
++++ b/main/assets.cc
+@@ -168,6 +168,10 @@
+     uint32_t stored_chksum = *(uint32_t*)(header + 4);
+     uint32_t stored_len = *(uint32_t*)(header + 8);
+ 
++#if CONFIG_XMINI_C3_PCM
++    constexpr size_t kPrefix=0x50000;
++    if(assets->partition_->size<kPrefix || stored_len>kPrefix-12)return false;
++#endif
+     if (stored_len == 0 || stored_len > assets->partition_->size - 12) {
+         ESP_LOGD(TAG, "The stored_len (0x%lx) is greater than the partition size (0x%lx) - 12",
+                  stored_len, assets->partition_->size);
+@@ -199,6 +203,17 @@
+         return false;
+     }
+ 
++#if CONFIG_XMINI_C3_PCM
++    if(stored_files>stored_len/sizeof(mmap_assets_table)) {UnApplyPartition(assets);return false;}
++    const size_t data_start=12+size_t(stored_files)*sizeof(mmap_assets_table);
++    for(uint32_t i=0;i<stored_files;++i) {
++        mmap_assets_table item{};std::memcpy(&item,mmap_root_+12+size_t(i)*sizeof(item),sizeof(item));
++        const size_t end=12+stored_len;
++        if(!std::memchr(item.asset_name,0,sizeof(item.asset_name)) ||
++           data_start>end || item.asset_offset>end-data_start || end-data_start-item.asset_offset<2 ||
++           item.asset_size>end-data_start-item.asset_offset-2) {UnApplyPartition(assets);return false;}
++    }
++#endif
+     assets->partition_valid_ = true;
+ 
+     auto start_time = esp_timer_get_time();
+@@ -488,6 +503,9 @@
+ 
+ bool Assets::Download(std::string url,
+                       std::function<void(int progress, size_t speed)> progress_callback) {
++#if CONFIG_XMINI_C3_PCM
++    return DownloadC3Pcm(std::move(url),std::move(progress_callback));
++#endif
+     ESP_LOGI(TAG, "Downloading new version of assets from %s", url.c_str());
+ 
+     auto network = Board::GetInstance().GetNetwork();
+@@ -679,3 +697,7 @@
+ 
+     return true;
+ }
++
++#if CONFIG_XMINI_C3_PCM
++#include "audio/c3_pcm_assets.inc"
++#endif
+--- a/main/assets.h
++++ b/main/assets.h
+@@ -50,6 +50,9 @@
+     Assets(const Assets&) = delete;
+     Assets& operator=(const Assets&) = delete;
+ 
++#if CONFIG_XMINI_C3_PCM
++    bool DownloadC3Pcm(std::string,std::function<void(int,size_t)>);
++#endif
+     bool InitializePartition();
+     void UnApplyPartition();
+     static bool FindPartition(Assets* assets);
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -52,6 +52,9 @@
+                               uint64_t, uint32_t) { OutputData(pcm); }
+ 
+ 
++#if CONFIG_XMINI_C3_PCM
++    virtual void OutputTaggedSpan(const int16_t*,size_t,family_robot::PlaybackIdentity,uint64_t,uint32_t) {}
++#endif
+     // Optional software duplex experiment hooks. Ordinary codecs retain stock behavior.
+     virtual bool SoftwareReference() const { return false; }
+     // Epoch/quarantine support is independent of the physical MR source.
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -2,6 +2,10 @@
+ #include <esp_log.h>
+ #include <esp_heap_caps.h>
+ #include <cstring>
++#if CONFIG_XMINI_C3_PCM
++#include <mbedtls/sha256.h>
++#include "family_c3_pcm_cues_generated.h"
++#endif
+ 
+ #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
+     (esp_ae_rate_cvt_cfg_t) {                                                                \
+@@ -29,6 +33,11 @@
+ AudioService::AudioService() { event_group_ = xEventGroupCreate(); }
+ 
+ AudioService::~AudioService() {
++#if CONFIG_XMINI_C3_PCM
++    StopC3Pcm();
++    if(c3_lifecycle_failed_)std::terminate(); // no live worker may borrow dying state
++    if(c3_cue_mmap_)esp_partition_munmap(c3_cue_mmap_);
++#endif
+     if (event_group_ != nullptr) {
+         vEventGroupDelete(event_group_);
+     }
+@@ -50,6 +59,7 @@
+     codec_ = codec;
+     codec_->Start();
+ 
++#if !CONFIG_XMINI_C3_PCM
+     esp_opus_dec_cfg_t opus_dec_cfg =
+         OPUS_DEC_CFG(codec->output_sample_rate(), OPUS_FRAME_DURATION_MS);
+     auto ret = esp_opus_dec_open(&opus_dec_cfg, sizeof(esp_opus_dec_cfg_t), &opus_decoder_);
+@@ -71,6 +81,10 @@
+         encoder_frame_size_ = encoder_frame_size_ / sizeof(int16_t);
+     }
+ 
++#else
++    if(!InitializeC3CuePack())codec_->ReportReferenceFailure();
++#endif
++
+     if (codec->input_sample_rate() != 16000) {
+         esp_ae_rate_cvt_cfg_t input_resampler_cfg = RATE_CVT_CFG(
+             codec->input_sample_rate(), ESP_AUDIO_SAMPLE_RATE_16K, codec->input_channels());
+@@ -86,10 +100,16 @@
+ #else
+     audio_engine_ = std::make_unique<LiteAudioEngine>();
+ #endif
++#if CONFIG_XMINI_C3_PCM
++    static_cast<LiteAudioEngine*>(audio_engine_.get())->OnC3PcmSpan([this](const int16_t* samples,size_t count,uint32_t epoch) {
++        return FeedC3PcmSpan(samples,count,epoch);
++    });
++#else
+     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
+         NotifyCaptureReady();
+         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
+     });
++#endif
+     audio_engine_->OnVadStateChange([this](bool speaking) {
+         voice_detected_ = speaking;
+         if (callbacks_.on_vad_change) {
+@@ -123,6 +143,9 @@
+ }
+ 
+ void AudioService::Start() {
++#if CONFIG_XMINI_C3_PCM
++    StartC3Pcm();
++#else
+ #if CONFIG_XMINI_C3_VOICE_BARGE
+     // A failed OTA can restart the service while the main clock still reports
+     // resources. Retire old TCB pointers before publishing the running state.
+@@ -190,9 +213,13 @@
+ #else
+         "opus_codec", 2048 * 12, this, 2, &opus_codec_task_handle_);
+ #endif
++#endif
+ }
+ 
+ void AudioService::Stop() {
++#if CONFIG_XMINI_C3_PCM
++    StopC3Pcm();
++#else
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+     SetExperimentUplink(false);
+ #endif
+@@ -217,6 +244,7 @@
+     if (notify_drained && callbacks_.on_playback_drained) {
+         callbacks_.on_playback_drained();
+     }
++#endif
+ }
+ 
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+@@ -224,9 +252,15 @@
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+     audio_encode_queue_.clear();
+     audio_send_queue_.clear();
++#if CONFIG_XMINI_C3_PCM
++    c3_pcm_.input.Reset();
++#endif
+     audio_queue_cv_.notify_all();
+ }
+ bool AudioService::OpenC3Uplink(uint32_t revision) {
++#if CONFIG_XMINI_C3_PCM
++    if(service_stopped_.load() || c3_lifecycle_failed_ || !codec_ || codec_->ReferenceFaulted())return false;
++#endif
+     const bool opened=button_uplink_.Open(revision, [this] { ClearC3UplinkQueues(); });
+ #if CONFIG_XMINI_C3_VOICE_BARGE
+     if(codec_)UpdateCaptureActive();
+@@ -512,7 +546,14 @@
+             if (epoch != button_input_epoch_) {
+                 if (!codec_->input_enabled()) codec_->EnableInput(true);
+                 codec_->CaptureBoundary(); // discard playback-period RX backlog on this input task
+-                if (codec_->ReferenceFaulted()) { SetExperimentUplink(false); continue; }
++                if (codec_->ReferenceFaulted()) {
++#if CONFIG_XMINI_C3_PCM
++                    RequestC3PcmFault(epoch);
++#else
++                    SetExperimentUplink(false);
++#endif
++                    continue;
++                }
+                 button_input_epoch_ = epoch;
+             }
+ #endif
+@@ -528,7 +569,13 @@
+         }
+ 
+ #if CONFIG_XMINI_C3_VOICE_BARGE
+-        if(codec_->ReferenceFaulted())SetExperimentUplink(false);
++        if(codec_->ReferenceFaulted()) {
++#if CONFIG_XMINI_C3_PCM
++            RequestC3PcmFault(button_uplink_.Revision());
++#else
++            SetExperimentUplink(false);
++#endif
++        }
+ #endif
+         // Read timeout/error should not terminate the input task.
+         vTaskDelay(pdMS_TO_TICKS(10));
+@@ -871,6 +918,9 @@
+ }
+ 
+ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
++#if CONFIG_XMINI_C3_PCM
++    (void)packet;(void)wait;RequestC3PcmFault(button_uplink_.Capture());return false;
++#endif
+     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+     const uint32_t generation = playback_generation_;
+     if (packet->receipt_id.connection == 0) packet->output_generation = codec_->PlaybackGeneration();
+@@ -899,6 +949,9 @@
+ }
+ 
+ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
++#if CONFIG_XMINI_C3_PCM
++    return PopC3PcmPacket();
++#else
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+     if (!button_uplink_.Capture()) {
+@@ -918,6 +971,7 @@
+     audio_send_queue_.pop_front();
+     audio_queue_cv_.notify_all();
+     return packet;
++#endif
+ }
+ 
+ void AudioService::EncodeWakeWord() {
+@@ -1021,6 +1075,9 @@
+ }
+ 
+ void AudioService::EnableAudioTesting(bool enable) {
++#if CONFIG_XMINI_C3_PCM
++    (void)enable;ESP_LOGW(TAG,"C3 PCM audio testing unsupported");return;
++#else
+     ESP_LOGI(TAG, "%s audio testing", enable ? "Enabling" : "Disabling");
+     if (enable) {
+         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING);
+@@ -1047,6 +1104,7 @@
+         }
+         audio_queue_cv_.notify_all();
+     }
++#endif
+ }
+ 
+ void AudioService::EnableDeviceAec(bool enable) {
+@@ -1072,6 +1130,9 @@
+ void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) { callbacks_ = callbacks; }
+ 
+ void AudioService::PlaySound(const std::string_view& ogg) {
++#if CONFIG_XMINI_C3_PCM
++    PlayC3PcmCue(ogg);
++#else
+     if (!codec_->output_enabled()) {
+         esp_timer_stop(audio_power_timer_);
+         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+@@ -1093,11 +1154,17 @@
+         });
+     demuxer->Reset();
+     demuxer->Process(buf, size);
++#endif
+ }
+ 
+ bool AudioService::IsIdle() {
++#if CONFIG_XMINI_C3_PCM
++    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
++    return !c3_pcm_.input.occupied() && C3PcmPlaybackDrainedLocked();
++#else
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+     return audio_encode_queue_.empty() && IsPlaybackDrainedLocked() && audio_testing_queue_.empty();
++#endif
+ }
+ 
+ void AudioService::PollPlaybackDrained() {
+@@ -1126,6 +1193,9 @@
+             esp_opus_dec_reset(opus_decoder_);
+         }
+         decoder_lock.unlock();
++#if CONFIG_XMINI_C3_PCM
++        ResetC3PcmOutputLocked();
++#endif
+         timestamp_queue_.clear();
+         audio_decode_queue_.clear();
+         audio_playback_queue_.clear();
+@@ -1139,8 +1209,12 @@
+ }
+ 
+ bool AudioService::IsPlaybackDrainedLocked() const {
++#if CONFIG_XMINI_C3_PCM
++    return C3PcmPlaybackDrainedLocked();
++#else
+     return audio_decode_queue_.empty() && audio_playback_queue_.empty() && !decode_in_flight_ &&
+            !output_in_flight_ && !codec_->PlaybackBusy();
++#endif
+ }
+ 
+ bool AudioService::MarkPlaybackDrainedLocked() {
+@@ -1157,6 +1231,9 @@
+     // ESP-IDF reports stack highwater in bytes. Never pass NULL: that would
+     // report this calling main task rather than an audio task not yet started.
+     unsigned input_stack = 0, opus_stack = 0;
++#if CONFIG_XMINI_C3_PCM
++    unsigned output_stack = 0;
++#endif
+     // C3 is single-core. Stop sets service_stopped_ before either worker can
+     // exit; keep that lifetime check and TCB reads indivisible to task deletion.
+     // No heap query, logging or blocking API runs while scheduling is paused.
+@@ -1164,10 +1241,30 @@
+     if (!service_stopped_.load()) {
+         if (audio_input_task_handle_)
+             input_stack = static_cast<unsigned>(uxTaskGetStackHighWaterMark(audio_input_task_handle_));
++#if CONFIG_XMINI_C3_PCM
++        if (audio_output_task_handle_)
++            output_stack = static_cast<unsigned>(uxTaskGetStackHighWaterMark(audio_output_task_handle_));
++#endif
+         if (opus_codec_task_handle_)
+             opus_stack = static_cast<unsigned>(uxTaskGetStackHighWaterMark(opus_codec_task_handle_));
+     }
+     xTaskResumeAll();
++#if CONFIG_XMINI_C3_PCM
++    const auto stats=audio_engine_?static_cast<LiteAudioEngine*>(audio_engine_.get())->C3Statistics():family_robot::C3EchoStatistics{};
++    size_t input_high,output_high;uint32_t input_faults,output_faults,media_faults,reference_faults;
++    {std::lock_guard<std::mutex> lock(audio_queue_mutex_);
++        input_high=c3_pcm_.input.high_water();output_high=c3_pcm_.output.high_water();
++        input_faults=c3_pcm_.input_faults;output_faults=c3_pcm_.output_faults;media_faults=c3_pcm_.media_faults;reference_faults=c3_pcm_.reference_faults;}
++    ESP_LOGI(TAG,"C3 PCM output_stack_min=%u pools=%u/%u faults_pool_in_out_media_ref=%lu/%lu/%lu/%lu aec_blocks=%llu total_us=%llu max_us=%llu",
++        output_stack,unsigned(input_high),unsigned(output_high),static_cast<unsigned long>(input_faults),
++        static_cast<unsigned long>(output_faults),static_cast<unsigned long>(media_faults),static_cast<unsigned long>(reference_faults),
++        static_cast<unsigned long long>(stats.blocks),static_cast<unsigned long long>(stats.total_us),static_cast<unsigned long long>(stats.max_us));
++    ESP_LOGI(TAG,"C3 PCM mic/ref/out energy=%llu/%llu/%llu samples=%llu/%llu/%llu peak=%lu/%lu/%lu clip=%llu/%llu/%llu",
++        static_cast<unsigned long long>(stats.mic.energy),static_cast<unsigned long long>(stats.reference.energy),static_cast<unsigned long long>(stats.output.energy),
++        static_cast<unsigned long long>(stats.mic.samples),static_cast<unsigned long long>(stats.reference.samples),static_cast<unsigned long long>(stats.output.samples),
++        static_cast<unsigned long>(stats.mic.peak),static_cast<unsigned long>(stats.reference.peak),static_cast<unsigned long>(stats.output.peak),
++        static_cast<unsigned long long>(stats.mic.clipped),static_cast<unsigned long long>(stats.reference.clipped),static_cast<unsigned long long>(stats.output.clipped));
++#endif
+     ESP_LOGI(TAG, "C3 resources free=%u largest=%u min=%u input_stack_min=%u opus_stack_min=%u",
+         static_cast<unsigned>(heap_caps_get_free_size(caps)),
+         static_cast<unsigned>(heap_caps_get_largest_free_block(caps)),
+@@ -1228,3 +1325,7 @@
+ #if CONFIG_XIAOMAN_ORB_UI
+ #include "orb_audio_service.inc"
+ #endif
++
++#if CONFIG_XMINI_C3_PCM
++#include "c3_pcm_audio.inc"
++#endif
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -25,6 +25,10 @@
+ #include "experiment_gate.h"
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+ #include "button_uplink.h"
++#if CONFIG_XMINI_C3_PCM
++#include "c3_pcm_audio.h"
++#include <esp_partition.h>
++#endif
+ #endif
+ #include "fixed_queue.h"
+ #include "ogg_demuxer.h"
+@@ -57,6 +61,11 @@
+ #define AS_EVENT_WAKE_WORD_RUNNING (1 << 1)
+ #define AS_EVENT_AUDIO_PROCESSOR_RUNNING (1 << 2)
+ #define AS_EVENT_AUDIO_INPUT_STOP_REQUEST (1 << 4)
++#if CONFIG_XMINI_C3_PCM
++#define AS_C3_INPUT_EXIT (1 << 5)
++#define AS_C3_OUTPUT_EXIT (1 << 6)
++#define AS_C3_TASKS_GO (1 << 7)
++#endif
+ 
+ #define AS_OPUS_GET_FRAME_DRU_ENUM(duration_ms)                  \
+     ((duration_ms) == 5     ? ESP_OPUS_ENC_FRAME_DURATION_5_MS   \
+@@ -155,6 +164,12 @@
+     void EnableDeviceAec(bool enable);
+     void SetExperimentUplink(bool enabled, bool observer_tail = false);
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
++#if CONFIG_XMINI_C3_PCM
++    bool PushC3PcmOutput(const uint8_t*,size_t,family_robot::C3PcmOutputMetadata);
++    void RequestC3PcmFault(uint32_t);
++    bool FinishC3PcmFault();
++    void SetC3ServerReceiving(bool);
++#endif
+     family_robot::ButtonUplink& C3Uplink() { return button_uplink_; }
+     bool OpenC3Uplink(uint32_t revision);
+ #endif
+@@ -175,6 +190,22 @@
+     void SetModelsList(srmodel_list_t* models_list);
+ 
+ private:
++#if CONFIG_XMINI_C3_PCM
++    family_robot::C3PcmAudioState c3_pcm_;
++    esp_partition_mmap_handle_t c3_cue_mmap_=0;
++    std::mutex c3_service_lifecycle_;
++    bool c3_lifecycle_failed_=false;
++    bool InitializeC3CuePack();
++    bool FeedC3PcmSpan(const int16_t*,size_t,uint32_t);
++    std::unique_ptr<AudioStreamPacket> PopC3PcmPacket();
++    void PlayC3PcmCue(const std::string_view&);
++    void CancelC3PcmCuesLocked();
++    void ResetC3PcmOutputLocked();
++    bool C3PcmPlaybackDrainedLocked() const;
++    void C3PcmOutputTask();
++    void StartC3Pcm();
++    void StopC3Pcm();
++#endif
+     AudioCodec* codec_ = nullptr;
+     std::atomic<bool> preserve_server_playback_{false};
+     std::atomic<bool> capture_ready_waiting_{false};
+@@ -227,7 +258,7 @@
+     TaskHandle_t audio_input_task_handle_ = nullptr;
+     TaskHandle_t audio_output_task_handle_ = nullptr;
+     TaskHandle_t opus_codec_task_handle_ = nullptr;
+-    std::mutex audio_queue_mutex_;
++    mutable std::mutex audio_queue_mutex_;
+     std::condition_variable audio_queue_cv_;
+     // Testing records up to AUDIO_TESTING_MAX_DURATION_MS, then swaps into the
+     // decode queue. Both queues must share this capacity so swap() is valid.
+--- a/main/audio/engines/lite_audio_engine.cc
++++ b/main/audio/engines/lite_audio_engine.cc
+@@ -18,7 +18,9 @@
+     codec_ = codec;
+     models_list_ = models_list;
+     frame_samples_ = frame_duration_ms * 16000 / 1000;
++#if !CONFIG_XMINI_C3_PCM
+     output_buffer_.reserve(frame_samples_);
++#endif
+ #if CONFIG_XMINI_C3_VOICE_BARGE
+     if(!c3_aec_)c3_aec_=family_robot::C3LiteAec::Create();
+     if(!c3_aec_) {
+--- a/main/audio/engines/lite_audio_engine.h
++++ b/main/audio/engines/lite_audio_engine.h
+@@ -28,6 +28,10 @@
+     uint32_t OutputEpoch() const override { return capture_epoch_.load(); }
+ #endif
+ 
++#if CONFIG_XMINI_C3_PCM
++    void OnC3PcmSpan(std::function<bool(const int16_t*,size_t,uint32_t)> callback) {c3_output_span_=std::move(callback);}
++    family_robot::C3EchoStatistics C3Statistics() {std::lock_guard<std::mutex> lock(output_mutex_);return c3_aec_?c3_aec_->Statistics():family_robot::C3EchoStatistics{};}
++#endif
+     void EnableWakeWordDetection(bool enable) override;
+     void EnableVoiceProcessing(bool enable) override;
+     void EnableDeviceAec(bool enable) override;
+@@ -74,6 +78,9 @@
+     std::function<void(const std::string&)> wake_word_detected_callback_;
+     std::function<void(std::vector<int16_t>&&)> output_callback_;
+     std::function<void(bool)> vad_state_change_callback_;
++#if CONFIG_XMINI_C3_PCM
++    std::function<bool(const int16_t*,size_t,uint32_t)> c3_output_span_;
++#endif
+     std::string empty_wake_word_;
+ 
+     bool CreateWakeWordLocked();
+--- a/main/boards/xmini/c3/config.json
++++ b/main/boards/xmini/c3/config.json
+@@ -18,6 +18,7 @@
+                 "CONFIG_BOARD_TYPE_XMINI_C3=y",
+                 "CONFIG_XMINI_C3_BUTTON_ENTRY=y",
+                 "CONFIG_XMINI_C3_VOICE_BARGE=y",
++                "CONFIG_XMINI_C3_PCM=y",
+                 "CONFIG_PM_ENABLE=y",
+                 "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y",
+                 "CONFIG_OTA_URL=\"\"",
+--- a/main/notify/notify_player.cc
++++ b/main/notify/notify_player.cc
+@@ -30,6 +30,10 @@
+ bool NotifyPlayer::Start(std::string audio_url, std::vector<NotifySubtitle> subtitles,
+                          uint32_t playback_id, SubtitleCallback subtitle_callback,
+                          FinishedCallback finished_callback) {
++#if CONFIG_XMINI_C3_PCM
++    (void)audio_url;(void)subtitles;(void)playback_id;(void)subtitle_callback;(void)finished_callback;
++    return false;
++#else
+     if (playback_id == 0 || !IsSupportedUrl(audio_url)) {
+         return false;
+     }
+@@ -74,6 +78,7 @@
+         return false;
+     }
+     return true;
++#endif
+ }
+ 
+ void NotifyPlayer::Stop() {
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -28,9 +28,21 @@
+     return Application::GetInstance().GetAudioService().C3Uplink().Send(packet->uplink_epoch, [&] {
+ #endif
+     if (websocket_ == nullptr || !websocket_->IsConnected()) {
+-        return false;
+-    }
+-
++#if CONFIG_XMINI_C3_PCM
++        Application::GetInstance().GetAudioService().RequestC3PcmFault(packet->uplink_epoch);
++#endif
++        return false;
++    }
++
++#if CONFIG_XMINI_C3_PCM
++    auto& audio=Application::GetInstance().GetAudioService();
++    if(version_!=1 || packet->payload.size()!=1920 || !PlaybackNegotiated()) {
++        audio.RequestC3PcmFault(packet->uplink_epoch);return false;
++    }
++    const bool sent=websocket_->Send(packet->payload.data(),packet->payload.size(),true);
++    if(!sent)audio.RequestC3PcmFault(packet->uplink_epoch);
++    return sent;
++#else
+     if (version_ == 2) {
+         std::string serialized;
+         serialized.resize(sizeof(BinaryProtocol2) + packet->payload.size());
+@@ -56,6 +68,7 @@
+     } else {
+         return websocket_->Send(packet->payload.data(), packet->payload.size(), true);
+     }
++#endif
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+     });
+ #endif
+@@ -78,7 +91,11 @@
+ }
+ 
+ bool WebsocketProtocol::IsAudioChannelOpened() const {
+-    return websocket_ != nullptr && websocket_->IsConnected() && !error_occurred_ && !IsTimeout();
++    return websocket_ != nullptr && websocket_->IsConnected() && !error_occurred_ && !IsTimeout()
++#if CONFIG_XMINI_C3_PCM
++        && PlaybackNegotiated()
++#endif
++        ;
+ }
+ 
+ bool WebsocketProtocol::OpenAudioChannel() {
+@@ -91,6 +108,11 @@
+         version_ = version;
+     }
+ 
++#if CONFIG_XMINI_C3_PCM
++    // Reject before CreateWebSocket: this bounded transport is plain WS/v1 only.
++    if(version_!=1 || url.compare(0,5,"ws://")!=0)return false;
++#endif
++    xEventGroupClearBits(event_group_handle_,WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
+     error_occurred_ = false;
+ 
+     auto network = Board::GetInstance().GetNetwork();
+@@ -119,6 +141,9 @@
+     }
+     websocket_->OnData([this, connection](const char* data, size_t len, bool binary) {
+         if (binary) {
++#if CONFIG_XMINI_C3_PCM
++            DeliverC3PcmAudio(reinterpret_cast<const uint8_t*>(data),len,connection);
++#else
+             if (on_incoming_audio_ != nullptr) {
+                 if (version_ == 2) {
+                     BinaryProtocol2* bp2 = (BinaryProtocol2*)data;
+@@ -150,6 +175,7 @@
+                         .payload = std::vector<uint8_t>((uint8_t*)data, (uint8_t*)data + len)}), connection);
+                 }
+             }
++#endif
+         } else {
+             // Parse JSON data
+             auto root = cJSON_ParseWithLength(data, len);
+@@ -202,7 +228,11 @@
+     EventBits_t bits =
+         xEventGroupWaitBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT, pdTRUE,
+                             pdFALSE, pdMS_TO_TICKS(10000));
+-    if (!(bits & WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT)) {
++    if (!(bits & WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT)
++#if CONFIG_XMINI_C3_PCM
++        || !PlaybackNegotiated()
++#endif
++        ) {
+         ESP_LOGE(TAG, "Failed to receive server hello");
+         SetError(Lang::Strings::SERVER_TIMEOUT);
+         return false;
+@@ -225,6 +255,9 @@
+     cJSON_AddBoolToObject(features, "aec", true);
+ #endif
+     cJSON_AddBoolToObject(features, "mcp", true);
++#if CONFIG_XMINI_C3_PCM
++    cJSON_AddBoolToObject(features,"pcm_s16le_v1",true);
++#endif
+     if (Board::GetInstance().GetAudioCodec()->PlaybackSupported()) {
+         cJSON_AddBoolToObject(features, "playback_progress_v1", true);
+         cJSON_AddBoolToObject(features, "playback_drain_v1", true);
+@@ -233,7 +266,11 @@
+     AddTextFontCapabilities(root);
+     cJSON_AddStringToObject(root, "transport", "websocket");
+     cJSON* audio_params = cJSON_CreateObject();
++#if CONFIG_XMINI_C3_PCM
++    cJSON_AddStringToObject(audio_params,"format","pcm_s16le");
++#else
+     cJSON_AddStringToObject(audio_params, "format", "opus");
++#endif
+     cJSON_AddNumberToObject(audio_params, "sample_rate", 16000);
+     cJSON_AddNumberToObject(audio_params, "channels", 1);
+     cJSON_AddNumberToObject(audio_params, "frame_duration", OPUS_FRAME_DURATION_MS);
+@@ -246,3 +283,7 @@
+ }
+ 
+ #include "playback_websocket.inc"
++
++#if CONFIG_XMINI_C3_PCM
++#include "c3_pcm_protocol.inc"
++#endif
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -47,6 +47,9 @@
+     bool playback_drain_negotiated_ = false;
+     // Only the WebSocket receive task mutates ingress order. Main polls reports;
+     // this mutex protects connection/session checks, never taken in an ISR.
++#if CONFIG_XMINI_C3_PCM
++    void DeliverC3PcmAudio(const uint8_t*,size_t,uint32_t);
++#endif
+     void DeliverAudio(std::unique_ptr<AudioStreamPacket> packet, uint32_t connection);
+     bool HandlePlaybackTts(cJSON* root, uint32_t connection);
+     bool ResetPlaybackConnection(uint32_t expected = 0, uint32_t* closed_epoch = nullptr);
