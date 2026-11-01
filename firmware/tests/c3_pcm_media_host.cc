@@ -4,6 +4,7 @@
 #include "c3_echo_stats.h"
 #include "family_c3_pcm_cues_generated.h"
 #include <openssl/sha.h>
+#include <psa/crypto.h>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -18,7 +19,24 @@
 #include <thread>
 #include <vector>
 using namespace family_robot;
-static int mbedtls_sha256(const unsigned char* p,size_t n,unsigned char* out,int){return SHA256(p,n,out)?0:-1;}
+static bool psa_initialized=false;
+static psa_status_t psa_init_status=PSA_SUCCESS,psa_hash_status=PSA_SUCCESS;
+static size_t psa_reported_length=32;
+static unsigned psa_init_calls=0,psa_hash_calls=0;
+psa_status_t psa_crypto_init(void){
+ ++psa_init_calls;if(psa_initialized)return PSA_SUCCESS;
+ if(psa_init_status==PSA_SUCCESS)psa_initialized=true;
+ return psa_init_status;
+}
+psa_status_t psa_hash_compute(psa_algorithm_t alg,const uint8_t* input,size_t input_length,
+ uint8_t* hash,size_t hash_size,size_t* hash_length){
+ ++psa_hash_calls;*hash_length=0;assert(alg==PSA_ALG_SHA_256&&hash_size==32);
+ if(!psa_initialized)return PSA_ERROR_BAD_STATE;
+ if(psa_hash_status!=PSA_SUCCESS)return psa_hash_status;
+ if(hash_size<32)return PSA_ERROR_BUFFER_TOO_SMALL;
+ if(!SHA256(input,input_length,hash))return PSA_ERROR_HARDWARE_FAILURE;
+ *hash_length=psa_reported_length;return PSA_SUCCESS;
+}
 constexpr int ESP_OK=0,ESP_PARTITION_TYPE_DATA=1,ESP_PARTITION_SUBTYPE_ANY=0,ESP_PARTITION_MMAP_DATA=0;
 struct esp_partition_t {size_t address=0x600000,size=0x200000;};static esp_partition_t partition;
 static std::vector<uint8_t> pack_bytes;static int maps=0,unmaps=0;
@@ -118,6 +136,48 @@ public:
 // PRODUCTION_OPEN_METHOD
 static std::vector<uint8_t> Read(const std::string& path){std::ifstream f(path,std::ios::binary);assert(f);return {std::istreambuf_iterator<char>(f),{}};}
 template<class Check> static void Eventually(Check check){for(int i=0;i<1000&&!check();++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));assert(check());}
+static void Hash(const std::string& test){
+ const uint8_t message[]={0x61,0x62,0x63};uint8_t digest[32],expected[32];
+ assert(SHA256(message,sizeof(message),expected));
+ if(test=="hash-init-error"){
+  psa_init_status=PSA_ERROR_HARDWARE_FAILURE;
+  assert(!C3PcmSha256(message,sizeof(message),digest));assert(psa_init_calls==1&&psa_hash_calls==0);
+  psa_init_status=PSA_SUCCESS;
+ }else if(test=="hash-error"){
+  psa_hash_status=PSA_ERROR_HARDWARE_FAILURE;
+  assert(!C3PcmSha256(message,sizeof(message),digest));assert(psa_init_calls==1&&psa_hash_calls==1);
+  psa_hash_status=PSA_SUCCESS;
+ }else if(test=="hash-length"){
+  for(size_t length:{size_t(0),size_t(31),size_t(33)}){
+   psa_reported_length=length;assert(!C3PcmSha256(message,sizeof(message),digest));
+  }
+  psa_reported_length=32;
+ }
+ assert(C3PcmSha256(message,sizeof(message),digest));assert(!std::memcmp(digest,expected,32));
+ assert(psa_initialized&&psa_init_calls&&psa_hash_calls);
+ // Successful initialization is idempotent, including after an error is injected.
+ psa_init_status=PSA_ERROR_HARDWARE_FAILURE;
+ assert(C3PcmSha256(message,0,digest));assert(SHA256(message,0,expected));assert(!std::memcmp(digest,expected,32));
+ const uint8_t binary[]={0,0xff,0,0x80};assert(SHA256(binary,sizeof(binary),expected));
+ assert(C3PcmSha256(binary,sizeof(binary),digest));assert(!std::memcmp(digest,expected,32));
+}
+static void HashAdmission(const std::string& test,const std::string& source){
+ AudioCodec codec;AudioService audio(codec);
+ const bool cue_test=test=="hash-cue-error"||test=="hash-cue-length";
+ if(cue_test)assert(audio.InitializeC3CuePack());
+ if(test=="hash-mapping-init-error")psa_init_status=PSA_ERROR_HARDWARE_FAILURE;
+ else if(test=="hash-mapping-error"||test=="hash-cue-error")psa_hash_status=PSA_ERROR_HARDWARE_FAILURE;
+ else psa_reported_length=31;
+ if(cue_test){
+  audio.service_stopped_=false;assert(audio.button_uplink_.Open(0,[]{}));
+  const auto cue=Read(source+"/main/assets/common/popup.ogg");
+  audio.PlayC3PcmCue({reinterpret_cast<const char*>(cue.data()),cue.size()});
+  assert(!audio.button_uplink_.Capture()&&audio.c3_pcm_.fault_pending&&audio.c3_pcm_.cue_count==0);
+ }else{
+  assert(!audio.InitializeC3CuePack());
+  assert(maps==1&&unmaps==1&&audio.c3_cue_mmap_==0&&audio.c3_pcm_.pack.count()==0);
+ }
+}
 static void Input(){
  AudioCodec codec;AudioService audio(codec);audio.service_stopped_=false;assert(audio.button_uplink_.Open(0,[]{}));auto token=audio.button_uplink_.Capture();
  int16_t samples[512];for(int i=0;i<512;++i)samples[i]=i;
@@ -214,6 +274,8 @@ static void Resources(){
  audio.PrintC3Resources();assert(resource_task_reads==2&&!scheduler_depth);
 }
 int main(int argc,char** argv){assert(argc==4);pack_bytes=Read(argv[2]);const std::string test=argv[1];
- if(test=="resources")Resources();else if(test=="input")Input();else if(test=="busy-full")BusyFull();else if(test=="mapping")Mapping();else if(test=="output-reset")OutputReset();
+ if(test.rfind("hash-mapping",0)==0||test.rfind("hash-cue",0)==0)HashAdmission(test,argv[3]);
+ else if(test.rfind("hash",0)==0)Hash(test);
+ else if(test=="resources")Resources();else if(test=="input")Input();else if(test=="busy-full")BusyFull();else if(test=="mapping")Mapping();else if(test=="output-reset")OutputReset();
  else if(test=="cues")Cues(argv[3]);else if(test=="lifecycle")Lifecycle();else if(test=="barrier")StopBarrier();else if(test=="timeout")Timeout();else assert(false);
 }

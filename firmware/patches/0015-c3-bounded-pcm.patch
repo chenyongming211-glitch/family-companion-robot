@@ -156,7 +156,7 @@
  #include <esp_heap_caps.h>
  #include <cstring>
 +#if CONFIG_XMINI_C3_PCM
-+#include <mbedtls/sha256.h>
++#include <psa/crypto.h>
 +#include "family_c3_pcm_cues_generated.h"
 +#endif
  

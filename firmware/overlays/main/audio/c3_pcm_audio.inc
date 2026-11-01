@@ -1,7 +1,10 @@
 // The trailer owns a separate mmap handle: generic Assets::UnApplyPartition
 // cannot invalidate cue bytes while the output worker borrows the pack.
 static bool C3PcmSha256(const uint8_t* bytes,size_t size,uint8_t* digest) {
-    return mbedtls_sha256(bytes,size,digest,0)==0;
+    // IDF initializes PSA at startup; this public call is safely idempotent.
+    if(psa_crypto_init()!=PSA_SUCCESS)return false;
+    size_t length=0;
+    return psa_hash_compute(PSA_ALG_SHA_256,bytes,size,digest,32,&length)==PSA_SUCCESS && length==32;
 }
 static bool C3PcmVerifyHash(const uint8_t* bytes,size_t size,const uint8_t* expected,void*) {
     uint8_t digest[32];return C3PcmSha256(bytes,size,digest) && !std::memcmp(digest,expected,32);
