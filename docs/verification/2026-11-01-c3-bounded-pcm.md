@@ -1,6 +1,6 @@
 # C3有界PCM实施与验证
 
-当前状态：实现进行中，尚未完成精确目标构建、安装或声学验收。C3仍为稳定按键版6b79e4c/app1；自然插话尚未修好。正式服务未部署本轮PCM适配，M5/微雪保留Opus。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
+当前状态：实现进行中，109c92f首轮原生CI的四种S3定制与stock通过，C3因旧SHA接口编译失败。最小PSA接口修正32024dc已通过独立规格/质量复审，准备新六目标CI，尚无可安装候选。未安装或声学验收，C3仍为稳定按键版6b79e4c/app1；自然插话尚未修好。正式服务未部署本轮PCM适配，M5/微雪保留Opus。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
 
 ## 已完成的源码和云端验证
 
@@ -11,6 +11,7 @@
 | C3受限网络构建输入 | d9b4cac | 云端7项Python测试通过，实际生成WebSocket39、EspTcp12、辅助器14项分别在O2与ASan/UBSan通过；独立规格和质量复核通过 |
 | 实际PCM媒体、流式提示音、FD和资源观测接线 | d156e8d、d6c6ff3、14df705 | 最终25项源码摘要与云端一致；独立规格和质量复核均在14df705通过。d6完整206项/388.211s通过且无skip；最终PCM控制修正的20项专项/67.462s及4配置8次旧协议构建/运行通过。最终整合源码的完整回归仍属Task4/CI门槛 |
 | 构建接线与实际产物绑定 | 3ff3951、cbc49de | 3ff基线完整225项/1056.633s无skip通过，上游110项/7.581s通过；cbc修正后的114项专项与准备流程回归/17.988s、上游110项/7.396s通过。最新188项源码闭合前后一致，独立规格与质量复审均PASS；仍待六目标实际CI，不把3ff完整结果当作cbc完整回归 |
+| 固定SDK的公共PSA SHA适配 | 32024dc | 正确环境RED的30项专项中19个预期失败；GREEN30项/61.197s通过，O2及ASan/UBSan覆盖初始化、hash错误和错误长度。源码186项闭合、15项公共API证据摘要及锁/包保持经原规格→质量复审PASS；原生六目标构建仍待验证 |
 
 测试在云端独立目录`/opt/family-robot-validation/c3-pcm-product-20261101`执行，Mac未运行语音服务或运行时测试。Go日志保留在`logs/`，池/提示音日志保留在`primitives/`，网络日志保留在`network-bound/`。这些是私有执行证据路径，生成文件未进入Git。
 
@@ -56,7 +57,13 @@ Task4A已接入C3专用CMake生成依赖：生成header与独立trailer，且只
 
 验证目录为云端`task4a/`。`closed-full.log`、`closed-upstream.log`仅对应3ff3951基线；cbc49de对应`flash-fix-focused-final.log`、`flash-fix-upstream-green.log`及`flash-fix-provenance.json`。188项`flash-fix-source.sha256`清单SHA为`6d0c1f364a28d290ae56683cb117cfa820b800ade1a4ca564f5428d99cb7cd0c`，前后188/188一致。来源清单统一排除Python bytecode缓存，真实源码漂移仍拒绝；下载缓存只复用已验证SHA的原归档，各测试类仍重新准备源码。第一次上游运行因缺少已有任务目录的python别名出现6项exit127，补齐PATH后110项通过，期间未改源码。
 
-准备推送已复核源码以触发六目标CI；尚未运行这版原生构建，未部署、刷写或开始真人验收。
+已推送109c92f15c2fe0980b0b58b087ff14a3fd65fbd2触发六目标CI：[experiment41270102646](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41270102646)、[stock41270102652](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/41270102652)。四个S3 experiment及stock全部success；C3 job124740947461的完整238项主机测试/202.302s、上游110项/7.461s均OK且无skip，随后原生audio_service.cc:6找不到`mbedtls/sha256.h`而失败。实际编译行已包含mbedtls和tf-psa-crypto公共目录；冻结IDF的owning CMake明确mbedTLS4，原因是旧SHA API不再存在，不是缺少组件包含路径。正在核对公共PSA API并最小修正，不借用OpenThread内部旧库、不改变依赖锁/包格式。主机回归通过不代表C3原生构建通过。
+
+随后32024dc7693001652c90ca25086038f9f76c5579仅更换C3公共include和SHA适配器：显式检查`psa_crypto_init`、`psa_hash_compute`返回值及精确32B长度。固定IDF/mbedTLS owning sources确认重复init安全、系统启动初始化及`MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS`的借用输入路径，不为1.49MB映射包复制整包；adapter仅32B摘要和长度变量。真实OpenSSL SHA承接PSA契约，9种故障分别在O2/ASan测试。云端`task4a-native-fix/psa-red-sanitized.log`的30项/61.283s有19个预期失败，`psa-green.log`30项/61.197s全通过；首次缺少该云主机既有ASan preload的环境失败不计作RED。186项`source.sha256`清单SHA为`475805bda67505b69b46fb74f54ead0b46cef255ce54d59796a5e22fad1ae76a`，前后186/186一致，15项API证据摘要匹配，C3/S3原生锁和pack745保持。独立规格后质量均PASS，但没有云主机现成精确IDF工具链，故仍需新六目标CI实际验证，不将专项通过称为原生构建修复完成。
+
+USB仅做枚举，仍见`/dev/cu.usbmodem14201`及原C3 serial；没有开串口、复位或写入。Go新二进制已在云端独立`task5-go-build/`编译，SHA为`6ae8f8d86525247c5d87b57f03e4a667ecfbce64cc8677deb7a83bf19efbe46a`，110项Go/mod/sum输入与此前通过完整回归的server目录逐项一致；尚未替换正式二进制。正式配置、身份和记忆的摘要只保留云端私有目录，没有复制配置内容到Mac。
+
+Task4B私有工具30项云端失败注入/5.570s通过，独立规格复核仍要求修正：保护区漂移不能阻挡先disarm候选、loaded判定需要本会话前后累计统计的增量、完整性证明要标明最后实际回读在两次启动之间而非宣称覆盖后续监控。完整云端产物重建/转换与Mac标准库approved-client gate已拆开，后者须以root独立核验的外部binding和逐文件摘要批准，不能依赖Mac安装转换库。该工具尚未通过USB使用前置复核，实际新bundle检查仍待C3构建通过。
 
 ## 云端依赖安装附带重启核对
 
