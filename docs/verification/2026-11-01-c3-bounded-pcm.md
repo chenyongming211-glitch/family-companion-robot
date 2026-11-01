@@ -1,5 +1,11 @@
 # C3有界PCM实施与验证
 
+最新ldgen根因已有实际输入实证：c2efe3666497f332ace9a456efec9b55eb96e5d2的experiment41286464043与stock41286464042共五目标成功，C3 job124788657689主机275项/121.083s `OK(skipped=1)`、上游110项/3.876s通过后，重现同一ldgen错误。debug artifact13075198794为10771407B，ZIP SHA `8c344d74334b30c677f4ed9370b766aaa6043286aa70e3fcaa9ff872086c2085`，root独立核外部来源/大小/SHA/CRC/每文件解包和capture输入摘要。实际main archive SHA `e4ac62ffe43402c79aa7fee5a91adfeaeb4f97e052137ba6244d3a8bbe656dee`、dump SHA `7affc5d6b570d48da07047d374bde0b46ab474959a3d42409c69868b654dcba4`；objdump2.45/hash b50fabdf…/exit0，云端固定parser与pyparsing3.1.1精确复现char664995/line9107col9。
+
+原因是固定SDK section_entry的数字ID与点开头section之间无强制空白，前对象因此把下一对象名0.ogg.S.obj误吃为ID0/name .ogg.S.obj:，再把Sections当flag而留下冒号。真实前对象+0.ogg缩减同样失败，两者单独各通过；只为数字对象名加前缀，两对象或完整86对象均通过。实际归档副本只改10个member名称、86个body逐SHA保持，原archive未变；独立objdump→原parser解析86通过。这是归档名歧义实证，不是空TU/COMDAT猜测，未更改SDK。
+
+8e06e5a只改C3 PCM的生成ASM输出文件名，继续原SDK emitter、原DATA_FILE/BINARY、依赖/顺序/工作目录，完整ASM/全局符号/原ogg+长度数据保持；非数字资产走原API，PCM0/S3走原EMBED_FILES。真实prepared registrationblock、固定SDK脚本与21项实际资产的host构建证明10个旧numeric源/成员已消失，10个alpha替代，全ASM/nm/section bytes/顺序一致，删ASM可重生。最终旧图RED1/2.185s，修正版60/9.050s无skip，204源清单SHA `be4982c187783fd0a533c2878a780867f88a46ae518b1bb31da243dca4dfecbe`零漂移，fresh双prepared18/64及锁保持；原规格与独立质量复核均PASS。云端证据在task6-cache-safe/ldgen-fix-*及ldgen-investigation/actual-*。仍待新精确原生编译/链接/实际ELF闭包和实机；未刷机，C3稳定6b/app1/串口关闭，Go58/gateway未变，插话未修好。
+
 最新阻断是原生ldgen：8ac44a7 experiment41285231710与stock41285231795共五目标success，C3 job124785076496在274项/196.239s `OK(skipped=1)`及上游110项/7.094s通过、C/C++编译完成后，于sections.ld生成阶段拒绝main/libmain.a的objdump节表。固定SDK parser报剥首行后的char664995、line9107col9冒号；没有新ELF或可安装C3产物。原debug13075621166仍仅191007B的配置和编译命令，未含归档。云端同一固定parser对真实host空TU/COMDAT归档均通过，常规空TU猜测未证；旧ee ELF/map不能恢复原归档成员和丢弃节。
 
 d7c0f26只增失败取证，保留libmain.a/CMakeCache/build.ninja，并用实际唯一CMAKE_OBJDUMP绝对路径、LC_ALL=C采集-h原文、版本、stdout/stderr/exit、工具path/SHA及输入/SOURCE摘要。缺库/配置/工具或命令失败明确记录，原job失败不被掩盖；仍是debug-only，无bin/pack/安装参数。RED2/0.014s到GREEN18/0.482s无skip，含5个执行真实workflow代码的行为分支及YAML检查；204源清单SHA `9dbb1f7a77ed12628f28e9fdec8512fb07c85ee0d7fa81932db336cef7401550`零漂移，既有双prepared18/64与锁保持。原规格与独立质量复核均PASS，推送后只取实际输入，不提前归因或宣称修复。证据在task6-cache-safe/ldgen-debug-*。C3仍stable6b/app1/串口关闭，Go58/gateway不改；8ac私有工具59/14.886s和双审PASS，但不得自动用于未知新来源。
