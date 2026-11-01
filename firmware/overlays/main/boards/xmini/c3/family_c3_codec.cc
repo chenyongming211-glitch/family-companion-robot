@@ -7,12 +7,21 @@
 #include <cstring>
 #include <exception>
 #include <new>
+#if CONFIG_XMINI_C3_PCM
+#if !CONFIG_I2S_ISR_IRAM_SAFE
+#error "C3 PCM requires a cache-safe I2S interrupt"
+#endif
+#include "c3_cache_trace.h"
+#else
 #if CONFIG_I2S_ISR_IRAM_SAFE
-#error "C3 playback callback graph requires I2S_ISR_IRAM_SAFE disabled"
+#error "Legacy C3 playback callback graph requires I2S_ISR_IRAM_SAFE disabled"
+#endif
 #endif
 #include "family_c3_lifecycle.inc"
 #include "family_c3_playback.inc"
-#include "family_c3_dma.inc"
+#if !CONFIG_XMINI_C3_PCM
+#include "family_c3_isr.inc"
+#endif
 #if CONFIG_XMINI_C3_VOICE_BARGE
 #include "family_c3_capture.inc"
 #endif

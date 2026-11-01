@@ -1,3 +1,6 @@
+#if CONFIG_IDF_TARGET_ESP32C3
+#include "c3_cache_trace.h"
+#endif
 // The trailer owns a separate mmap handle: generic Assets::UnApplyPartition
 // cannot invalidate cue bytes while the output worker borrows the pack.
 static bool C3PcmSha256(const uint8_t* bytes,size_t size,uint8_t* digest,family_robot::C3StartupHash* diagnostic=nullptr) {
@@ -64,6 +67,9 @@ void AudioService::RecordC3StartupHeap(family_robot::C3StartupStage stage) {
     ++c3_startup_.heap_count;
 }
 void AudioService::PrintC3StartupDiagnostics() {
+#if CONFIG_IDF_TARGET_ESP32C3
+    family_c3_cache_report(); // task-only, same clock as first-fault timestamps
+#endif
     family_robot::C3StartupDiagnostics d;
     {std::lock_guard<std::mutex> lock(c3_service_lifecycle_);d=c3_startup_;}
     const auto f=codec_->StartupDiagnostics();

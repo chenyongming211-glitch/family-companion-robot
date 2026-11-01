@@ -25,6 +25,13 @@ function(family_c3_pcm_build)
     idf_component_get_property(main_lib main COMPONENT_LIB)
     idf_component_get_property(network_lib 78__esp-ml307 COMPONENT_LIB)
     idf_component_get_property(component 78__esp-ml307 COMPONENT_DIR)
+    idf_build_get_property(family_idf IDF_PATH)
+    target_include_directories("${main_lib}" PRIVATE
+        "${family_idf}/components/esp_driver_i2s" "${family_idf}/components/esp_driver_dma/src")
+    target_link_options("${main_lib}" INTERFACE
+        "-Wl,--emit-relocs" "-Wl,--undefined=family_c3_sdk_layout"
+        "-Wl,--wrap=spi_flash_disable_interrupts_caches_and_other_cpu"
+        "-Wl,--wrap=spi_flash_enable_interrupts_caches_and_other_cpu")
     if(NOT TARGET "${main_lib}" OR NOT TARGET "${network_lib}" OR NOT TARGET flash)
         message(FATAL_ERROR "C3 PCM hook must run after IDF component and flash target creation")
     endif()

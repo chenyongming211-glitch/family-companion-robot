@@ -8,6 +8,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -23,6 +24,7 @@ from prepare import is_source_input
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'overlays/scripts'))
 import family_c3_build as c3_build
 import family_c3_network as c3_network
+import family_c3_iram_audit as c3_iram
 
 FIRMWARE = Path(__file__).resolve().parents[1]
 WAVESHARE_VARIANT = 'esp32-s3-touch-amoled-2.16-xiaoman'
@@ -48,7 +50,9 @@ C3_BUILD_FILES = ('build/xiaozhi.elf', 'build/xiaozhi.map',
     'build/family_c3_pcm/family_c3_pcm_cues_generated.h',
     'build/family_c3_network/web_socket.cc', 'build/family_c3_network/esp_tcp.cc',
     'build/family_c3_network/family_c3_network.manifest.json',
-    'build/family_c3_network/LICENSE.esp-ml307', 'build/family_c3_network/compiled-sources.txt')
+    'build/family_c3_network/LICENSE.esp-ml307', 'build/family_c3_network/compiled-sources.txt',
+    'build/family_c3_cache/iram-audit.json', 'build/family_c3_cache/link-command.txt',
+    *('build/family_c3_cache/sdk/'+name for name in c3_iram.source_pins()))
 
 
 def read_regular(path):
@@ -212,6 +216,7 @@ def verify_c3_pcm(tree):
     build, generated = tree/'build', tree/'build/family_c3_network'
     for relative in C3_BUILD_FILES:
         c3_build.regular(tree/relative)
+    cache_audit=c3_iram.verify_report(tree)
     cues = c3_build.verify_cues(tree, build/'family_c3_pcm')
     prefix = c3_build.verify_prefix(build/'generated_assets.bin')
     elf = read_regular(build/'xiaozhi.elf')
@@ -293,7 +298,7 @@ def verify_c3_pcm(tree):
                 raise ValueError('C3 release merged image differs from verified build')
     except zipfile.BadZipFile as exc:
         raise ValueError('invalid C3 release ZIP') from exc
-    return dict(cues=cues, assets_prefix=prefix, elf_sha256=elf_sha.hex(), network=manifest,
+    return dict(cues=cues, assets_prefix=prefix, elf_sha256=elf_sha.hex(), network=manifest, cache_audit=cache_audit,
                 flash_inputs=flash,
                 compile_commands_sha256=digest(build/'compile_commands.json'),
                 merged_sha256=hashlib.sha256(merged).hexdigest(), release_sha256=digest(releases[0]))
@@ -626,7 +631,7 @@ def verify(firmware, tree, variant, idf_commit):
     if waveshare:
         required.update(CONFIG_ESPTOOLPY_FLASHSIZE_16MB='y', CONFIG_PARTITION_TABLE_CUSTOM='y')
     if c3:
-        required.update(CONFIG_IDF_TARGET='"esp32c3"', CONFIG_BOARD_TYPE_M5STACK_STOPWATCH='n',
+        required.update(CONFIG_IDF_TARGET='"esp32c3"', CONFIG_I2S_ISR_IRAM_SAFE='y', CONFIG_BOARD_TYPE_M5STACK_STOPWATCH='n',
                         CONFIG_BOARD_TYPE_XMINI_C3='y', CONFIG_XMINI_C3_BUTTON_ENTRY='y',
                         CONFIG_XMINI_C3_VOICE_BARGE='y',
                         CONFIG_LANGUAGE_ZH_CN='y', CONFIG_FLASH_DEFAULT_ASSETS='y',
@@ -804,6 +809,12 @@ def main():
     if args.baseline:
         bundle_baseline(FIRMWARE, args.tree, args.output, actual, args.idf_commit)
     else:
+        if args.variant == C3_VARIANT:
+            idf=os.environ.get('IDF_PATH')
+            if not idf:parser.error('C3 native evidence capture requires builder IDF_PATH')
+            c3_iram.capture_build(args.tree,idf)
+            report=c3_iram.audit_tree(args.tree)
+            (args.tree/'build/family_c3_cache/iram-audit.json').write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
         evidence = verify(FIRMWARE, args.tree, args.variant, args.idf_commit)
         bundle(FIRMWARE, args.tree, args.output, actual, evidence)
     print('Verified source and build evidence; acoustics pending')

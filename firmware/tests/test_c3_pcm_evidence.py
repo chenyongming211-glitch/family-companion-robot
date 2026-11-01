@@ -53,6 +53,13 @@ class PcmEvidence(unittest.TestCase):
                                         return_value={'fixture': True})
         self.prefix_check.start()
         self.addCleanup(self.prefix_check.stop)
+        # ELF closure has separate real ELF32 corruption tests. This suite
+        # keeps its synthetic image to isolate pack/network provenance.
+        self.cache_check = patch.object(self.verifier.c3_iram,'verify_report',return_value={'fixture':True})
+        self.cache_check.start();self.addCleanup(self.cache_check.stop)
+        for relative in self.verifier.C3_BUILD_FILES:
+            if '/family_c3_cache/' in relative:
+                path=self.tree/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'fixture')
         elf = self.tree/'build/xiaozhi.elf'; elf.write_bytes(b'\x7fELF fixture exact symbols')
         (self.tree/'build/xiaozhi.map').write_text('fixture map\n')
         app = flash_fixture.image(5)

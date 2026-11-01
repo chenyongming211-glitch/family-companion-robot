@@ -1,0 +1,19 @@
+{
+  "tools/cmake/component.cmake": "92dc36acf125680a12e85da8f0bb9ebe8cc26597f24b1bb880b31a9ed5c4452a",
+  "components/esp_system/app.lf": "9c7a3437e68e8d1463d7b88060ccfaf262845bec276e44d10ed9b19446d30e6b",
+  "components/esp_driver_i2s/i2s_common.c": "7bfc9633a327eb2b04b9c0b9d8c97bc387215ed32e9c3a19a0ca84f911b0a362",
+  "components/esp_driver_i2s/i2s_private.h": "a0caaa1e9b084c8788a30473d847057f5fc2baf17ecab60159977db498e7d3d7",
+  "components/esp_timer/src/esp_timer_impl_systimer.c": "1470fb34d1d8d0fb1028ea6a31ef0d82321fd2f374d4adaa6d65048c1962d739",
+  "components/esp_driver_dma/src/gdma.c": "60885758fc19ae899b69b39e64103235cd5ec983a675e5bd9a960fbb273729e0",
+  "components/esp_driver_dma/src/gdma_priv.h": "ea9a9f15ef1aabf2f5b72c92d968aa34a85e835d9f42c62ecc5d246df532767f",
+  "components/esp_hal_systimer/systimer_hal.c": "cf7b02bf85cd56a4114cabf950311b3625c3fa23f9fe5b7cdba3ceb4f2181664",
+  "components/esp_hal_systimer/include/hal/systimer_hal.h": "78ed9265703c93f3ccde51ec2a4d21099dd72cd142e0c5a4d1b0c3a3a747c6f4",
+  "components/spi_flash/cache_utils.c": "8067dbac2c92c70a5f6a07b0ac6b7a6dfdcd78f456430be35c6df815ecd440fe",
+  "components/spi_flash/spi_flash_os_func_app.c": "88ba993676ebd0349c4d94302bc098199a6d1dcea76fcda92dc649f1c7c6f966",
+  "components/esp_rom/esp32c3/ld/esp32c3.rom.libgcc.ld": "5f39f099ad408b7500408684be32f12e0a6b88a7cf2a6457597af81ab485c775",
+  "components/esp_rom/esp32c3/ld/esp32c3.rom.newlib.ld": "05a1fa10611476774602f1fabc064799ad8414cee8f4068449ecaa76f5f44e23",
+  "components/esp_driver_i2s/Kconfig": "782fc794171a9c1f932705360d8f05df59bc0e5e285b6ed4b648bca376205992",
+  "components/esp_driver_i2s/linker.lf": "14492cc6ca3b056e0ad781336e746eddf141ce4cb175e06bf7347477d871646c",
+  "components/esp_driver_dma/linker.lf": "74017b3838536d6aa78e23059381085c51a37ea066218be121c533b6c0abe899",
+  "components/esp_rom/esp32c3/ld/esp32c3.rom.libc.ld": "9af58c7604252949c7bc50765a952299e0b1c40c2dde4d724031b9c308e3ccfe"
+}

@@ -2,6 +2,9 @@ bool FamilyC3Codec::Sent(i2s_chan_handle_t,i2s_event_data_t* event,void* context
     return static_cast<FamilyC3Codec*>(context)->Complete(event);
 }
 bool FamilyC3Codec::Complete(i2s_event_data_t* event) {
+#if CONFIG_XMINI_C3_PCM && CONFIG_IDF_TARGET_ESP32C3
+    family_c3_cache_observe(false);
+#endif
     const auto now=esp_timer_get_time();
     portENTER_CRITICAL_ISR(&mux_);
     const bool shape=event && event->dma_buf && event->size==480;
@@ -60,6 +63,9 @@ bool FamilyC3Codec::Complete(i2s_event_data_t* event) {
 
 #if CONFIG_XMINI_C3_VOICE_BARGE
 bool FamilyC3Codec::Received(i2s_chan_handle_t,i2s_event_data_t* event,void* context) {
+#if CONFIG_XMINI_C3_PCM && CONFIG_IDF_TARGET_ESP32C3
+    family_c3_cache_observe(true);
+#endif
     auto* self=static_cast<FamilyC3Codec*>(context);
     const auto now=esp_timer_get_time();
     portENTER_CRITICAL_ISR(&self->mux_);

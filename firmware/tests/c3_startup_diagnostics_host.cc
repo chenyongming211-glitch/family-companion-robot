@@ -3,7 +3,7 @@
 #include "family_c3_codec.h"
 #include "family_c3_lifecycle.inc"
 #include "family_c3_playback.inc"
-#include "family_c3_dma.inc"
+#include "family_c3_isr.inc"
 #include "family_c3_capture.inc"
 template<class C,class=void>struct HasStartupDiagnostics:std::false_type{};
 template<class C>struct HasStartupDiagnostics<C,std::void_t<decltype(std::declval<C>().StartupDiagnostics())>>:std::true_type{};

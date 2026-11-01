@@ -16,7 +16,7 @@ class C3CodecTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             for relative in ['codecs/es8311_audio_codec.h', 'driver/i2s_std.h',
-                             'esp_heap_caps.h', 'esp_timer.h']:
+                             'esp_heap_caps.h', 'esp_timer.h', 'esp_attr.h']:
                 path = work/relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('// SDK plumbing is supplied by the harness.\n')
@@ -45,10 +45,10 @@ class C3CodecTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
             for relative in ['codecs/es8311_audio_codec.h', 'driver/i2s_std.h',
-                             'esp_heap_caps.h', 'esp_timer.h']:
+                             'esp_heap_caps.h', 'esp_timer.h', 'esp_attr.h']:
                 path = work/relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text('// SDK plumbing supplied by platform.h.\n')
+                path.write_text('#define DRAM_ATTR\n' if relative == 'esp_attr.h' else '// SDK plumbing supplied by platform.h.\n')
             plumbing = (FIRMWARE/'tests/c3_codec_host.cc').read_text().split(
                 '#include "family_c3_codec.h"', 1)[0]
             (work/'platform.h').write_text(re.sub(r'^static ', 'inline ', plumbing, flags=re.M))
@@ -57,7 +57,7 @@ class C3CodecTests(unittest.TestCase):
                      '-I', str(BOARD), '-I', str(FIRMWARE/'overlays/main/audio')]
             for enabled, voice, pcm in ((1, 0, 0), (0, 0, 0), (1, 1, 0), (0, 1, 0), (1, 1, 1)):
                 with self.subTest(enabled=enabled, voice=voice, pcm=pcm):
-                    (work/'sdkconfig.h').write_text(f'#define CONFIG_XMINI_C3_BUTTON_ENTRY {enabled}\n#define CONFIG_XMINI_C3_VOICE_BARGE {voice}\n#define CONFIG_XMINI_C3_PCM {pcm}\n')
+                    (work/'sdkconfig.h').write_text(f'#define CONFIG_XMINI_C3_BUTTON_ENTRY {enabled}\n#define CONFIG_XMINI_C3_VOICE_BARGE {voice}\n#define CONFIG_XMINI_C3_PCM {pcm}\n#define CONFIG_I2S_ISR_IRAM_SAFE {pcm}\n')
                     obj = work/f'codec-{enabled}-{voice}.o'
                     result = subprocess.run(flags+['-c', str(BOARD/'family_c3_codec.cc'),
                         '-o', str(obj)], capture_output=True, text=True)
@@ -67,7 +67,15 @@ class C3CodecTests(unittest.TestCase):
                     caller = work/f'caller-{enabled}-{voice}.cc'
                     caller.write_text('#include "family_c3_codec.h"\nint main(){'+body+'}\n')
                     binary = work/f'standalone-{enabled}-{voice}'
-                    result = subprocess.run(flags+[str(caller), str(obj), '-o', str(binary)],
+                    extra_objects=[]
+                    if pcm:
+                        isr=work/'isr.o'
+                        result=subprocess.run(flags+['-c', str(BOARD/'family_c3_isr.cc'), '-o', str(isr)], capture_output=True, text=True)
+                        self.assertEqual(result.returncode,0,result.stderr)
+                        # Flash originals are SDK plumbing; all wrapper calls stay real.
+                        caller.write_text(caller.read_text()+'\nextern \"C\" void __real_spi_flash_disable_interrupts_caches_and_other_cpu(){}\nextern \"C\" void __real_spi_flash_enable_interrupts_caches_and_other_cpu(){}\n')
+                        extra_objects=[str(isr)]
+                    result = subprocess.run(flags+[str(caller), str(obj), *extra_objects, '-o', str(binary)],
                                             capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
@@ -81,7 +89,22 @@ class C3CodecTests(unittest.TestCase):
                         self.assertIn('FamilyC3Codec::FaultLocked()', symbols.stdout)
                         if voice:
                             self.assertIn('FamilyC3Codec::PublishReferenceLocked()', symbols.stdout)
+                    if not pcm:
+                        for name in ('family_c3_isr.cc','family_c3_cache_report.cc','family_c3_sdk_layout.c'):
+                            empty=work/(name+'.o')
+                            empty_flags=flags.copy();forced=empty_flags.index('-include');del empty_flags[forced:forced+2]
+                            result=subprocess.run(empty_flags+['-c',str(BOARD/name),'-o',str(empty)],capture_output=True,text=True)
+                            self.assertEqual(result.returncode,0,result.stderr)
+                            symbols=subprocess.run(['nm','-C',str(empty)],capture_output=True,text=True)
+                            self.assertEqual(symbols.returncode,0,symbols.stderr)
+                            self.assertNotIn('family_c3_cache',symbols.stdout)
+                            self.assertNotIn('family_c3_sdk_layout',symbols.stdout)
                     if not enabled:
                         result = subprocess.run(['nm', '-C', str(obj)], capture_output=True, text=True)
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertNotIn('FamilyC3Codec', result.stdout)
+            for pcm,iram in ((0,1),(1,0)):
+                (work/'sdkconfig.h').write_text(f'#define CONFIG_XMINI_C3_BUTTON_ENTRY 1\n#define CONFIG_XMINI_C3_VOICE_BARGE 1\n#define CONFIG_XMINI_C3_PCM {pcm}\n#define CONFIG_I2S_ISR_IRAM_SAFE {iram}\n')
+                result=subprocess.run(flags+['-c',str(BOARD/'family_c3_codec.cc'),'-o',str(work/'rejected.o')],capture_output=True,text=True)
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn('requires',result.stderr)

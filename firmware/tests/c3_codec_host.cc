@@ -178,7 +178,7 @@ private:
 #include "family_c3_codec.h"
 #include "family_c3_lifecycle.inc"
 #include "family_c3_playback.inc"
-#include "family_c3_dma.inc"
+#include "family_c3_isr.inc"
 
 using Op=AudioCodec::PlaybackOp;
 using Id=family_robot::PlaybackIdentity;

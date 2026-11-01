@@ -1,18 +1,4 @@
 // Compiled by the production codec and the cloud fault harness.
-void FamilyC3Codec::ResetCaptureLocked() {
-    reference_valid_=false;aec_ready_generation_=UINT32_MAX;
-    if(capture_generation_>=UINT32_MAX-1) {
-#if CONFIG_XMINI_C3_PCM
-        RecordStartupFaultLocked(StartupFaultSource::CaptureGeneration,DiagnosticNow());
-#endif
-        capture_generation_=UINT32_MAX;faulted_=true;accepting_=false;
-        reference_callbacks_armed_=false;
-        if(playback_)playback_->HardwareFault();
-        if(pair_)pair_->Fail(Pair::Fault::Sequence);
-    } else ++capture_generation_;
-    capture_boundary_pending_=capture_active_ && !faulted_;
-    if(pair_)pair_->Capture(false); // preserve physical TX history and clocks
-}
 void FamilyC3Codec::CheckReferenceDeadlineLocked(int64_t now) {
     if(capture_active_ && reference_callbacks_armed_ && hardware_open_ &&
        (now-reference_tx_us_>Pair::kHoldbackUs || now-reference_rx_us_>Pair::kHoldbackUs ||
@@ -20,15 +6,6 @@ void FamilyC3Codec::CheckReferenceDeadlineLocked(int64_t now) {
         if(pair_)pair_->Fail(Pair::Fault::Timeout);
         FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::ReferenceDeadline,now));
     }
-}
-#if CONFIG_XMINI_C3_PCM
-void FamilyC3Codec::PublishReferenceLocked(StartupFaultSource source,int64_t now,int64_t previous_us)
-#else
-void FamilyC3Codec::PublishReferenceLocked()
-#endif
-{
-    if(!pair_ || pair_->fault()!=Pair::Fault::None) {FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(source,now,previous_us));return;}
-    reference_valid_=capture_active_ && !capture_boundary_pending_ && pair_->eligible() && !faulted_;
 }
 void FamilyC3Codec::SetCaptureActive(bool active) {
     portENTER_CRITICAL(&mux_);

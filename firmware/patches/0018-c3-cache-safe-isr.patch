@@ -1,0 +1,18 @@
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -1123,6 +1123,15 @@
+     )
+ endif()
++# Register with the component, before ldgen creates its executable target.
++# Only this PCM ISR object is noflash; task code and other boards keep placement.
++set(FAMILY_C3_ISR_LDFRAGMENTS "")
++if(CONFIG_XMINI_C3_PCM)
++    list(APPEND FAMILY_C3_ISR_LDFRAGMENTS "boards/xmini/c3/family_c3_isr.lf")
++    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/boards/xmini/c3/family_c3_isr.cc"
++        PROPERTIES COMPILE_OPTIONS "-fno-lto")
++endif()
+ idf_component_register(SRCS ${SOURCES}
++                    LDFRAGMENTS ${FAMILY_C3_ISR_LDFRAGMENTS}
+                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                     INCLUDE_DIRS ${INCLUDE_DIRS}
+                     WHOLE_ARCHIVE

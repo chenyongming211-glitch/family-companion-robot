@@ -67,49 +67,14 @@ void FamilyC3Codec::InitializePlayback(int input_rate,int output_rate) {
     if(setup_failed_) {portENTER_CRITICAL(&mux_);FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::Setup,DiagnosticNow()));portEXIT_CRITICAL(&mux_);}
 }
 #if CONFIG_XMINI_C3_PCM
-int64_t FamilyC3Codec::DiagnosticNow() {
-    return esp_timer_get_time(); // IDF timer read is ISR-safe; no heap/log/locks
-}
 family_robot::C3CodecStartupDiagnostics FamilyC3Codec::StartupDiagnostics() const {
     portENTER_CRITICAL(&mux_);const auto result=startup_fault_;portEXIT_CRITICAL(&mux_);return result;
 }
 void FamilyC3Codec::RecordHardwareCheck(const family_robot::C3HardwareCheck& check) {
     portENTER_CRITICAL(&mux_);hardware_check_=check;portEXIT_CRITICAL(&mux_);
 }
-void FamilyC3Codec::RecordStartupFaultLocked(StartupFaultSource source,int64_t now,int64_t previous_us) {
-    if(startup_fault_.source!=StartupFaultSource::None)return;
-    startup_fault_.timestamp_us=now;startup_fault_.hardware_open=hardware_open_;
-    startup_fault_.callback_previous_us=previous_us;
-    auto& check=startup_fault_.hardware;
-    check.mask=hardware_check_.mask;check.channel=hardware_check_.channel;
-    check.tx_result=hardware_check_.tx_result;check.rx_result=hardware_check_.rx_result;check.state=hardware_check_.state;
-    for(unsigned i=0;i<14;++i)check.actual[i]=hardware_check_.actual[i];
-#if CONFIG_XMINI_C3_VOICE_BARGE
-    startup_fault_.pair_fault=pair_?static_cast<uint32_t>(pair_->fault()):UINT32_MAX;
-    startup_fault_.capture_active=capture_active_;startup_fault_.callbacks_armed=reference_callbacks_armed_;
-    startup_fault_.tx_us=reference_tx_us_;startup_fault_.rx_us=reference_rx_us_;
-    startup_fault_.tx_samples=pair_?pair_->tx_samples():0;startup_fault_.rx_samples=pair_?pair_->rx_samples():0;
+
 #endif
-    startup_fault_.source=source; // last store; every reader also owns mux_
-}
-#endif
-#if CONFIG_XMINI_C3_PCM
-void FamilyC3Codec::FaultLocked(StartupFaultSource source,int64_t now,int64_t previous_us)
-#else
-void FamilyC3Codec::FaultLocked()
-#endif
-{
-#if CONFIG_XMINI_C3_PCM
-    RecordStartupFaultLocked(source,now,previous_us);
-#endif
-#if CONFIG_XMINI_C3_VOICE_BARGE
-    if(!faulted_) {capture_active_=false;ResetCaptureLocked();}
-    reference_callbacks_armed_=false;reference_valid_=false;aec_ready_generation_=UINT32_MAX;
-    if(pair_)pair_->Fail(Pair::Fault::Setup);
-#endif
-    faulted_=true;accepting_=false;
-    if(playback_)playback_->HardwareFault();
-}
 void FamilyC3Codec::AdvanceGenerationLocked() {
     if(output_generation_>=UINT32_MAX-1) {output_generation_=UINT32_MAX;FaultLocked(FAMILY_C3_DIAGNOSTIC_ARGS(StartupFaultSource::OutputGeneration,DiagnosticNow()));}
     else ++output_generation_;
@@ -286,6 +251,11 @@ bool FamilyC3Codec::PrepareHardware() {
     const bool ready=accepting_;portEXIT_CRITICAL(&mux_);return ready;
 }
 void FamilyC3Codec::Start() {
+#if CONFIG_XMINI_C3_PCM && CONFIG_IDF_TARGET_ESP32C3
+    // The timer and codec now exist. This only enables metadata observation;
+    // the existing hardware/arming/start sequence below stays unchanged.
+    family_c3_cache_enable();
+#endif
     std::lock_guard<std::mutex> lock(lifecycle_);AudioCodec::Start();PrepareHardware();
 }
 void FamilyC3Codec::EnableInput(bool enable) {

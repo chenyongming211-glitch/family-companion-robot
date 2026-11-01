@@ -1,0 +1,12 @@
+[mapping:family_c3_cache_safe]
+archive: libmain.a
+entries:
+    if XMINI_C3_PCM = y:
+        family_c3_isr (noflash)
+        family_c3_codec:_ZN12family_robot16PlaybackProgress13HardwareFaultEv (noflash)
+        family_c3_codec:_ZN12family_robot16PlaybackProgress4FindENS_16PlaybackIdentityE (noflash)
+        family_c3_codec:_ZN12family_robot16PlaybackProgress8CompleteEPsjx (noflash)
+        family_c3_codec:_ZNK12family_robot16PlaybackProgress4BusyEv (noflash)
+        family_c3_codec:_ZNK12family_robot16PlaybackIdentitycvbEv (noflash)
+        family_c3_codec:_ZN12family_robot22BoundedDuplexReferenceILj4096ELj8ELx75000EE4FailENS1_5FaultE (noflash)
+        family_c3_codec:_ZN12family_robot22BoundedDuplexReferenceILj4096ELj8ELx75000EE8ValidateERNS1_5ClockExxPKsj (noflash)

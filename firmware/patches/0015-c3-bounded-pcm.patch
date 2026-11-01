@@ -551,6 +551,15 @@
                  "CONFIG_PM_ENABLE=y",
                  "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y",
                  "CONFIG_OTA_URL=\"\"",
+@@ -40,7 +41,7 @@
+                 "CONFIG_USE_AUDIO_PROCESSOR=n",
+                 "CONFIG_USE_DEVICE_AEC=n",
+                 "CONFIG_USE_SERVER_AEC=n",
+-                "CONFIG_I2S_ISR_IRAM_SAFE=n",
++                "CONFIG_I2S_ISR_IRAM_SAFE=y",
+                 "CONFIG_XIAOMAN_ORB_UI=n",
+                 "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y",
+                 "CONFIG_ESP_CONSOLE_UART_DEFAULT=n",
 --- a/main/notify/notify_player.cc
 +++ b/main/notify/notify_player.cc
 @@ -30,6 +30,10 @@
