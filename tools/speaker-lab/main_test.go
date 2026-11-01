@@ -356,3 +356,62 @@ func TestParentCleanupWithoutVerifiedIdentityPreservesSocket(t *testing.T) {
 		t.Fatal("owned socket and empty directory not removed")
 	}
 }
+
+func TestColdStartupHelper(t *testing.T) {
+	mode := os.Getenv("SPEAKER_LAB_COLD_HELPER")
+	if mode == "" {
+		return
+	}
+	if mode == "never_listen" {
+		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	}
+	socket := os.Getenv("SPEAKER_LAB_HELPER_SOCKET")
+	l, e := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if e != nil {
+		os.Exit(2)
+	}
+	l.SetUnlinkOnClose(false)
+	c, e := l.Accept()
+	if e != nil {
+		os.Exit(3)
+	}
+	// A valid prefix followed by incomplete JSON must remain inside coldLimit.
+	c.Write([]byte{0, 0, 0, 20, '{'})
+	if os.Remove(socket) != nil || os.WriteFile(socket, []byte("unknown replacement"), 0600) != nil {
+		os.Exit(4)
+	}
+	time.Sleep(10 * time.Second)
+	os.Exit(0)
+}
+func TestColdStartupDeadlineKillsAndReaps(t *testing.T) {
+	for _, mode := range []string{"never_listen", "partial_ready"} {
+		t.Run(mode, func(t *testing.T) {
+			d := t.TempDir()
+			os.Chmod(d, 0700)
+			socket := filepath.Join(d, "worker.sock")
+			cmd := exec.Command(os.Args[0], "-test.run=^TestColdStartupHelper$")
+			cmd.Env = append(os.Environ(), "SPEAKER_LAB_COLD_HELPER="+mode, "SPEAKER_LAB_HELPER_SOCKET="+socket)
+			started := time.Now()
+			w, e := launchWorker(context.Background(), cmd, socket, testSHA, 300*time.Millisecond)
+			if w != nil {
+				w.Close()
+				t.Fatal("hung startup accepted")
+			}
+			if e == nil || time.Since(started) > 2*time.Second || cmd.ProcessState == nil {
+				t.Fatal("cold deadline did not bound and reap child")
+			}
+			status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+			if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+				t.Fatal("actual child not killed")
+			}
+			if mode == "partial_ready" {
+				cleanupWorkerDirectory(d, socket, nil)
+				b, e := os.ReadFile(socket)
+				if e != nil || string(b) != "unknown replacement" {
+					t.Fatal("startup cleanup removed unknown replacement")
+				}
+			}
+		})
+	}
+}

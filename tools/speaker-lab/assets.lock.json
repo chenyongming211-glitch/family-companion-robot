@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "purpose": "isolated_research_only",
+  "production_approved": false,
+  "license_assessment": {
+    "upstream_model_cards": "Apache-2.0 declared upstream; exact exported artifact redistribution and product-use permission not independently verified",
+    "campplus_card": "https://www.modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common",
+    "eres2net_card": "https://www.modelscope.cn/models/iic/speech_eres2net_base_sv_zh-cn_3dspeaker_16k",
+    "restriction": "Research evidence only; resolve exact weight license before product integration or redistribution"
+  },
+  "sdk": {
+    "module": "github.com/k2-fsa/sherpa-onnx-go-linux/v2",
+    "version": "v2.0.1",
+    "go_sum": "h1:lK8mB5JfJ9HnjXb8W05GfIC/7C3twvRfQzxQOobRxic=",
+    "go_mod_sum": "h1:zfoI5ANNAiKCZFyWC9NfZATijClmbT1UqZ+ycvcMKCY=",
+    "provider": "cpu",
+    "num_threads": 1,
+    "debug": 0
+  },
+  "models": [
+    {
+      "name": "CAM++",
+      "filename": "3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+      "sha256": "f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11",
+      "bytes": 28281138,
+      "dimension": 192,
+      "official_release_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+      "official_pointer_url": "https://huggingface.co/csukuangfj/speaker-embedding-models/blob/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+      "download_url": "https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+      "verification": "Downloaded mirror bytes match official Hugging Face pointer raw-file SHA256 and size; mirror alone is not a trust source"
+    },
+    {
+      "name": "ERes2Net",
+      "filename": "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+      "bytes": 39593761,
+      "dimension": 512,
+      "official_release_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "official_pointer_url": "https://huggingface.co/csukuangfj/speaker-embedding-models/blob/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "download_url": "https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "verification": "Downloaded mirror bytes match official Hugging Face pointer raw-file SHA256 and size; mirror alone is not a trust source"
+    }
+  ]
+}

@@ -98,3 +98,48 @@ go test -v -count=1 -run 'TestReal(ModelProbe|Worker.*)OptIn' ./...
 模型探测校验安全 JSON；真实 worker 另测环境隔离、SIGTERM 正常退出、socket 清理及替换 socket 保留。
 协议、WAV、路径权限、模型摘要和子进程超时测试独立运行；超时 fake extractor 只用于确定性控制协议/回收路径，
 不能代替真实 ONNX 探测或说话人质量评估。
+
+## 合成 fixture 基准（工程证据）
+
+```sh
+/private/evidence/speaker-lab benchmark \
+  --model /private/models/model.onnx \
+  --sha256 <64位小写SHA256> \
+  --manifest /private/synthetic/manifest.json
+```
+
+模型来源、SDK module 摘要、大小、维度和许可状态固定在 `assets.lock.json`。
+实际镜像下载须与官方 Hugging Face pointer 的原文件 SHA256／大小匹配；镜像本身不构成来源信任。
+上游声明 Apache-2.0，精确导出权重的许可未独立解决，当前仅隔离研究，不能作为已批准的产品依赖。
+
+manifest 必须是规范绝对路径的无符号链接 regular file，总计≤128 KiB；必填 schema：
+
+```json
+{"source_kind":"synthetic_tts","model":"test_tts","sample_rate":16000,"human_acceptance":false,"single_speaker_only":true,"cases":[{"id":"synthetic_1_1","speaker":"fixture_1","split":"calibration","path":"/private/synthetic/one.wav","samples":32000,"sha256":"<WAV原文件SHA256>","text_sha256":"<生成原文SHA256>"}]}
+```
+
+示例仅说明字段，实际要求3～8种匿名 `fixture_1`～`fixture_8`、6～128项，每种至少2项 calibration 和1项 holdout。
+拒绝未知／缺失／重复／null字段、重复ID/路径、跨split复用相同音频摘要或原文摘要。
+每项音频必须通过有界 WAV 解析、原文件摘要和样本数核对；原文只保留输入摘要，不进入输出。
+`single_speaker_only:true` 是合成来源的显式声明，须由生成流程保证单音色且无混音，不能靠模型推断。
+低于1.5秒或归一化 PCM RMS低于0.005的片段在提取前拒绝；此门禁只能检查时长／低能量，不是语音或重叠检测器。
+
+一个复用 worker 按严格递增请求ID串行提取所有合格片段，向量仅在父／子进程内存和受保护IPC存在。
+校准只取 manifest 首次出现的前两种音色、各自前两项 calibration，第三种及后续音色从不拟合阈值。
+令 gap=校准同音色最小余弦−异音色最大余弦，只有 gap>0 才使用
+new=maxDifferent+gap/4、match=maxDifferent+gap/2、margin=gap/8。
+非正间隙报告 `failed_nonseparable`，不使用任意回退阈值，也不从holdout调参。
+
+匿名序列用前两种音色的第一项calibration初始化Tracker，然后交错所有holdout两遍。
+独立容量2对照重复相同序列，明确计数第三种音色unknown／不确定／误归已知，以及前两种音色重获。
+Tracker在当前运行结束清除，不登记姓名、不保存模板；输出只有生成的fixture序号、guest标签和状态。
+所有holdout之间的同／异音色余弦仅报告聚合数量与范围，不输出完整配对矩阵。
+
+JSON还包含模型／manifest摘要、有效质量与CPU配置、冷加载耗时、首次推理和温态中位数／P95
+（原生推理与包含IPC的wall time分别计时），以及实际worker终止回收后的总CPU毫秒和Linux峰值RSS KiB。
+温态统计剔除第一项提取，P95采用nearest-rank；worker CPU包含加载／摘要校验和所有推理。
+校准失败仍输出工程报告，须读取calibration.status和逐例分类结果，不以CLI退出0代表质量通过。
+
+报告始终 `source_kind:synthetic`、`production_acceptance:false`、`human_acceptance:false`、
+`feature_enabled:false`；重叠与分段均为 `unavailable`。
+合成音色可分与guest标签稳定仅是工程／合成证据，不能替代真实家庭语音、重叠／换人降级或产品验收。

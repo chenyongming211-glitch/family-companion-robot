@@ -38,10 +38,12 @@ func runCLI(ctx context.Context, args []string, out, errOut io.Writer) int {
 	f.SetOutput(io.Discard)
 	model := f.String("model", "", "")
 	sha := f.String("sha256", "", "")
-	var socket, wav *string
+	var socket, wav, manifest *string
 	switch args[0] {
 	case "worker":
 		socket = f.String("socket", "", "")
+	case "benchmark":
+		manifest = f.String("manifest", "", "")
 	case "probe":
 		wav = f.String("wav", "", "")
 	default:
@@ -56,6 +58,19 @@ func runCLI(ctx context.Context, args []string, out, errOut io.Writer) int {
 		}
 		if runWorker(ctx, *socket, *model, *sha) != nil {
 			return fail("worker_failed")
+		}
+		return 0
+	}
+	if manifest != nil {
+		if *manifest == "" {
+			return fail("usage")
+		}
+		result, e := runBenchmark(ctx, *model, *sha, *manifest)
+		if e != nil {
+			return fail("benchmark_failed")
+		}
+		if json.NewEncoder(out).Encode(result) != nil {
+			return 1
 		}
 		return 0
 	}
