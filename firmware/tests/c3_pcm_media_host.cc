@@ -290,8 +290,9 @@ template<class C>static void StartupDiagnostics(){
   C good(codec);assert(good.InitializeC3CuePack());
   assert(good.c3_startup_.pack_open==Step::Succeeded&&good.c3_startup_.pack_count==21&&good.c3_startup_.hash_count==2);
   for(const auto& hash:good.c3_startup_.hash)assert(hash.state==Step::Succeeded&&hash.init_status==PSA_SUCCESS&&hash.hash_status==PSA_SUCCESS&&hash.length==32&&hash.matched==1);
-  const auto logs=logged_lines.size();good.PrintC3StartupDiagnostics();assert(logged_lines.size()==logs+6);
-  assert(logged_lines[logs].find("at_us=123456")!=std::string::npos&&logged_lines[logs+3].find("partition/map/open=2/2/2")!=std::string::npos);
+  const auto logs=logged_lines.size();const auto heaps=heap_reads;good.PrintC3StartupDiagnostics();assert(logged_lines.size()==logs+7&&heap_reads==heaps+3);
+  assert(logged_lines[logs].find("current at_us=123456 free/largest/min=40000/20000/15000")!=std::string::npos);
+  assert(logged_lines[logs+1].find("at_us=123456")!=std::string::npos&&logged_lines[logs+4].find("partition/map/open=2/2/2")!=std::string::npos);
   C task(codec);fail_create=create_calls+1;task.StartC3Pcm();JoinTasks();fail_create=0;
   assert(task.c3_startup_.input_task==Step::Failed&&task.c3_startup_.input_task_result==pdFAIL&&task.c3_startup_.output_task==Step::NotEntered&&task.c3_startup_.output_task_result==INT32_MIN);
   C output(codec);fail_create=create_calls+2;output.StartC3Pcm();JoinTasks();fail_create=0;

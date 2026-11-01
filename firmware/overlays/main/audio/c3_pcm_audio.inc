@@ -67,6 +67,12 @@ void AudioService::PrintC3StartupDiagnostics() {
     family_robot::C3StartupDiagnostics d;
     {std::lock_guard<std::mutex> lock(c3_service_lifecycle_);d=c3_startup_;}
     const auto f=codec_->StartupDiagnostics();
+    const auto current_us=esp_timer_get_time();
+    const auto current_free=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    const auto current_largest=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    const auto current_minimum=heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG,"C3 startup current at_us=%lld free/largest/min=%lu/%lu/%lu",
+        (long long)current_us,(unsigned long)current_free,(unsigned long)current_largest,(unsigned long)current_minimum);
     ESP_LOGI(TAG,"C3 startup at_us=%lld fault=%lu us=%lld pair=%lu active/armed/open=%lu/%lu/%lu tx/rx_us=%lld/%lld samples=%lld/%lld prev_us=%lld",
         (long long)esp_timer_get_time(),(unsigned long)f.source,(long long)f.timestamp_us,(unsigned long)f.pair_fault,
         (unsigned long)f.capture_active,(unsigned long)f.callbacks_armed,(unsigned long)f.hardware_open,
