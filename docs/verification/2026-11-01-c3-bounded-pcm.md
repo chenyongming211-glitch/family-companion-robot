@@ -1,5 +1,9 @@
 # C3有界PCM实施与验证
 
+当前原生门槛：430af6c的experiment41284085679及stock41284085663共五目标成功、C3失败。C3 job124781728721主机273项/194.643s `OK(skipped=1)`，仅因CI不携带精确旧ee包跳过旧产物负对照；上游110项/7.248s通过。原生layout C因main未继承esp_timer的私有HAL依赖而缺头，无新ELF；debug-only artifact13074692995只有sdkconfig和compile_commands，不可安装。6d3cc197只补固定SDK systimer的公共和C3 LL两层PRIVATE包含目录及CMake图回归：RED1/0.828s，GREEN58/5.381s无skip（旧ee带包对照通过），204源清单SHA `7d3a17116554b844d1c34a4373c5105c4003a45321038504c9d8ab25048b3a87`与双prepared18/64、双锁保持，原规格与独立质量复审均PASS。证据为云端task6-cache-safe/native-include-*；仍待新精确六目标构建、实际ELF闭包和实机启动/内存验证。C3保持stable6b/app1、串口关闭，Go58/gateway不变，插话未修好。
+
+私有安装工具task6已完成单次完整16MiB新鲜备份和device MD5绑定，后续immutable补集只标MD5；NVS单独显式字节/CRC/库存/类型检查，仅允许phy/cal_data值变化。授权写和两boot之间仍字节回读+SHA；异常NVS不阻断稳定路径disarm/授权恢复，任何原始NVS差异仍使whole_flash_restored=false。IRAM helper已在verifier导入前绑定Git核验源码。59项/14.862s和规格→质量PASS；云端task6-installer/green-task6-final.log SHA `86f9c6baa176b47484388e9f9725a645df7ff9a25eb366752a9d0c3b13522eff`。工具仍显式固定430，使用前须重钉最终CI源码、检查实际产物并建立新binding；无新USB操作。
+
 恢复后的源码进展：用户要求暂停后已重新要求继续。冻结代码8e777ec增加C3 PCM专用IRAM TU、精确COMDAT映射、920B cache-span和实际ELF审核；首次规格复核发现三项缺口，25f522e只修正常量有效访存地址/宽度、enable前计数停止顺序、字段JALR位移，并保留C3失败时的debug-only构建输入。原三项精确RED为4测试15失败断言；修正版98项/46.357s无skip通过，随后workflow两项结构测试通过。204源清单SHA为`4db5985175d499e5e4f20ce1479c152c4226fc3b5e689d360250a20b26d77a4d`，C3/S3各18patch/64overlay与双锁闭合；原规格与独立质量复核均PASS25f，无阻断项。云端证据在`task6-cache-safe/resume-*`；8e的137专项与full6历史失败记录保持分开，不冒充最终全量回归。新原生Kconfig/SDK layout编译、最终IRAM/访存/包装路径和真实内存仍待CI及实机，当前C3保持stable6b/app1、串口关闭。
 
 当前状态：ee4249d首次实机启动再次被拒绝，已捕获RxPair/Cadence首次故障及25,873µs软件回调间隔；当时内部堆最低34,800B，pack/SRC/AEC/两个任务均成功。已恢复三个授权域和稳定6b/app1，独立只读审计确认仅PHY校准NVS值变化，其余配置保持；两次稳定启动观察通过，串口已关闭。下一步修C3完整IRAM闭包并用同钟cache-span检验Flash屏蔽假设，尚不放宽门禁或宣称唯一原因/已修复。Go58健康且未再重启，M5/微雪保留Opus且未刷写；仍无实机PCM负载或回声验收，自然插话未修好。实施门槛见[设计](../superpowers/specs/2026-11-01-c3-bounded-pcm-design.md)和[计划](../superpowers/plans/2026-11-01-c3-bounded-pcm.md)。

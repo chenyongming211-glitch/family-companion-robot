@@ -1,6 +1,6 @@
 # 换电脑开发交接
 
-**C3修复已恢复，先验启动（2026-11-01）：** 用户停止后已重新要求继续。当前C3仍为已恢复的stable6b/app1，串口无占用，Go58健康/记忆就绪/active0。Task6源码8e777ec（仅本地）实现C3 PCM完整IRAM路径和定长cache-span；25f522e关闭三项规格缺口（常量访存/宽度、计数终点、JALR位移），旧版4项15断言RED、修正版98项/46.357s及CI结构2项通过，204源清单闭合，原规格与独立质量复核均PASS25f，无阻断项。新原生编译/实际ELF和实机启动仍未验证，不宣称插话修好。接下来只推进当前启动假设；CI若失败会保留debug-only符号，避免额外重建取证。安装工具还需区分唯一合法phy/cal_data自写与其他配置变化，保持稳定回退、身份和Wi-Fi保护。详见[报告](verification/2026-11-01-c3-bounded-pcm.md)。
+**C3启动修复继续，补原生包含依赖（2026-11-01）：** C3仍stable6b/app1、串口关闭，Go58/gateway未改，插话未验收。25f的IRAM/cache-span源码已规格与质量PASS；430af6c精确CI五目标success，C3在273项/194.643s（1项旧产物对照skip）和上游110项/7.248s通过后，原生layout C缺hal/systimer_hal.h失败，无新ELF。6d3cc197仅补C3 main两个PRIVATE固定SDK目录；58项/5.381s无skip和204源闭合通过，原规格与独立质量复审均PASS，之后须重新六目标实际构建/ELF与实机资源门禁。旧ee对照在云端带包运行已通过。私有安装工具单次16MiB新鲜备份、后续明确MD5与字节证据，仅容许phy/cal_data值变化且保护其余NVS，异常仍稳定回退；59项/14.862s及规格/质量PASS，尚需随最终CI源码显式重钉。见[报告](verification/2026-11-01-c3-bounded-pcm.md)。
 
 **C3稳定版恢复与只读审计完成，下一步修IRAM闭包（2026-11-01）：** ee候选失败后13:53工具三域原字节恢复、eFuse/稳定路径及stable6b/app1 ready+15.014s通过，串口关闭；后续零Flash写审计确认前缀6593B变化全在NVS，仅27项实际值中的phy/cal_data变化，其余26项含Wi-Fi/身份/音量保持；再次stable ready+15.109s通过并关闭串口。固定SDK证明正常NVS/Flash会屏蔽当前非IRAM I2S IRQ，实际ee的完整应用ISR闭包在Flash；故障直接触发已定为RxPair/Cadence/25.873ms软件回调间隔，但尚未采到本次cache边沿，不能宣称唯一原因或物理DMA丢失。下一步按计划Task6做C3-only IRAM代码/数据闭包、四点同钟cache span和实际ELF审核的单候选假设检验，保留全部阈值/FD/启动顺序/M5与S3策略；重新验SRAM，仍无真人PCM/插话验收。Go58/gateway未改。见[报告](verification/2026-11-01-c3-bounded-pcm.md)和[计划](superpowers/plans/2026-11-01-c3-bounded-pcm.md)。
 
