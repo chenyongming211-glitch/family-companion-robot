@@ -66,3 +66,14 @@ The upstream manifest pins ESP-SR==2.4.7 exactly. If the modern kernel/profile i
 - [x] Install with stable fallback and full panic-tail retention:2210797 app0/seq3 VALID, readbacks/preservation and two15s post-idle boots passed.
 - [ ] Complete actual conversation acceptance; first check one full non-repeating answer before speak-over-playback.
 - [ ] Recheck actual connection/full response, echo and speak-over-playback after the concrete candidate is installed. Prior failed user trials remain failed.
+
+## Task 5: Failed live acceptance and architecture review (2026-11-01)
+
+- [x] Reconcile user feedback against both actual sessions. First greeting fully played; later false inputs, interruption and the earlier final credit stall are separate findings. Do not label the earlier uncaptured failure as a proven panic/OOM.
+- [x] Capture one controlled single-question session with passive serial and no modem controls. Four inputs/three cancellations, including the just-played word “故事”; last122400 samples fully DMA played, no turn_error/panic/reboot in the covered test. User's requested outcome remains failed.
+- [x] Record actual internal-heap low watermark1412B and exact2210797 ELF mode0/FD NLP boundary. Do not change VAD, blindly select FD, call an ineffective mode0 NLP setter or shrink stacks.
+- [x] Close passive capture, disarm only selector0 and restore stable6b/app1. Verify full flash complement/NVS/eFuse, exact stable boot,15s post-ready gate and35s observation; close serial.
+- [ ] Discuss the architecture/resource boundary before another corrective candidate. PCM transport is a concrete assessment proposal, not an approved server change or guaranteed fix; preserve the common interruption/drain and other clients.
+- [ ] After selecting a direction, measure bounded acoustic/reference/processing statistics and real loaded resources before another physical acceptance request. No further repeated greeting test is pending.
+
+Current evidence and the proposed assessment boundary: [November1 retest](../../verification/2026-11-01-c3-barge-retest.md).
