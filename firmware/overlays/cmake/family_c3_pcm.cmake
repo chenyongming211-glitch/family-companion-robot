@@ -97,3 +97,29 @@ function(family_c3_pcm_build)
     file(GENERATE OUTPUT "${network}/compiled-sources.txt"
          CONTENT "$<JOIN:$<TARGET_PROPERTY:${network_lib},SOURCES>,\n>\n")
 endfunction()
+
+# Keep original DATA_FILE and SDK emitter semantics; only the numeric ASM output name changes.
+function(family_c3_pcm_embed_files target)
+    if(NOT CONFIG_XMINI_C3_PCM OR CMAKE_BUILD_EARLY_EXPANSION)
+        return()
+    endif()
+    idf_build_get_property(build_dir BUILD_DIR)
+    idf_build_get_property(idf_path IDF_PATH)
+    foreach(input IN LISTS ARGN)
+        get_filename_component(input "${input}" ABSOLUTE)
+        get_filename_component(name "${input}" NAME)
+        if(name MATCHES "^[0-9]+[.]ogg$")
+            set(assembly "${build_dir}/family_c3_embedded_${name}.S")
+            set(emitter "${idf_path}/tools/cmake/scripts/data_file_embed_asm.cmake")
+            add_custom_command(OUTPUT "${assembly}"
+                COMMAND "${CMAKE_COMMAND}" -D "DATA_FILE=${input}" -D "SOURCE_FILE=${assembly}"
+                    -D "FILE_TYPE=BINARY" -P "${emitter}"
+                MAIN_DEPENDENCY "${input}" DEPENDS "${emitter}"
+                WORKING_DIRECTORY "${build_dir}" VERBATIM)
+            set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" APPEND PROPERTY ADDITIONAL_CLEAN_FILES "${assembly}")
+            target_sources("${target}" PRIVATE "${assembly}")
+        else()
+            target_add_binary_data("${target}" "${input}" BINARY)
+        endif()
+    endforeach()
+endfunction()

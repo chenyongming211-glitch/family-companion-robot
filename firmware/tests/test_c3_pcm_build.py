@@ -1,10 +1,13 @@
 """Real host CMake graph tests; firmware target validation remains a CI gate."""
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
+import re
 import shlex
+import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -165,6 +168,93 @@ file(WRITE "${CMAKE_BINARY_DIR}/main-interface.txt" "${main_interface}")
         self.assertFalse((self.root/'build/family_c3_pcm').exists())
         self.assertFalse((self.root/'build/family_c3_network').exists())
         self.assertFalse((self.root/'build/registered.txt').exists())
+
+
+@unittest.skipUnless((os.environ.get('C3_LDGEN_SDK') or os.environ.get('IDF_PATH'))
+                     and os.environ.get('C3_PCM_CUE_ASSETS'), 'fixed SDK and real cue fixtures required')
+class C3EmbeddedArchiveTests(unittest.TestCase):
+    def test_actual_component_graph_keeps_embed_bytes_symbols_and_avoids_numeric_member_boundary(self):
+        sdk=Path(os.environ.get('C3_LDGEN_SDK') or os.environ['IDF_PATH'])
+        prepared=Path(os.environ['C3_PCM_CUE_ASSETS'])
+        text=(prepared/'main/CMakeLists.txt').read_text()
+        start=text.index('# Register with the component, before ldgen creates its executable target.')
+        registration=text[start:text.index('# Keep project-owned C++',start)]
+        utilities=(sdk/'tools/cmake/utilities.cmake').read_text()
+        start=utilities.index('function(target_add_binary_data ')
+        binary_function=utilities[start:utilities.index('endfunction()',start)+len('endfunction()')]
+        assets=sorted((prepared/'main/assets/locales/zh-CN').glob('*.ogg'))
+        assets+=sorted((prepared/'main/assets/common').glob('*.ogg'))
+        hashes={path:hashlib.sha256(path.read_bytes()).hexdigest() for path in assets}
+        numeric=[path for path in assets if re.fullmatch(r'[0-9]+\.ogg',path.name)]
+        self.assertEqual([path.name for path in numeric],[f'{i}.ogg' for i in range(10)])
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);source=root/'source';(source/'main').mkdir(parents=True)
+            (source/'cmake').mkdir();shutil.copyfile(HOOK,source/'cmake/family_c3_pcm.cmake')
+            (source/'dummy.c').write_text('int preceding_archive_member;\n')
+            (source/'main/CMakeLists.txt').write_text(registration)
+            cmake='''cmake_minimum_required(VERSION 3.20)
+project(embed_graph C ASM)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CONFIG_XMINI_C3_PCM @PCM@)
+set(LANG_SOUNDS "@ASSETS@")
+function(idf_build_get_property out property)
+  if(property STREQUAL "BUILD_DIR")
+    set(value "${CMAKE_BINARY_DIR}")
+  elseif(property STREQUAL "IDF_PATH")
+    set(value "@SDK@")
+  else()
+    message(FATAL_ERROR "unexpected build property")
+  endif()
+  set(${out} "${value}" PARENT_SCOPE)
+endfunction()
+@BINARY_FUNCTION@
+function(idf_component_register)
+  cmake_parse_arguments(_ "WHOLE_ARCHIVE" "" "SRCS;EMBED_FILES;INCLUDE_DIRS;LDFRAGMENTS;PRIV_REQUIRES" ${ARGN})
+  add_library(main STATIC "${CMAKE_SOURCE_DIR}/dummy.c")
+  foreach(file IN LISTS __EMBED_FILES)
+    target_add_binary_data(main "${file}" BINARY)
+  endforeach()
+  set(COMPONENT_LIB main PARENT_SCOPE)
+endfunction()
+add_subdirectory(main)
+'''.replace('@SDK@',str(sdk)).replace('@ASSETS@',';'.join(map(str,assets))).replace('@BINARY_FUNCTION@',binary_function)
+            builds={};members={}
+            for pcm in ('OFF','ON'):
+                build=root/pcm;builds[pcm]=build
+                (source/'CMakeLists.txt').write_text(cmake.replace('@PCM@',pcm))
+                for command in (['cmake','-G','Unix Makefiles','-S',str(source),'-B',str(build)],
+                                ['cmake','--build',str(build),'--parallel','8']):
+                    result=subprocess.run(command,text=True,capture_output=True,timeout=60)
+                    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                archive=build/'main/libmain.a'
+                members[pcm]=subprocess.check_output(['ar','t',str(archive)],text=True).splitlines()
+                commands=json.loads((build/'compile_commands.json').read_text())
+                asm=[Path(row['file']).name for row in commands if row['file'].endswith('.S')]
+                if pcm=='ON':
+                    self.assertFalse(any(re.match(r'^[0-9]+\.ogg\.S',name) for name in asm+members[pcm]))
+                    self.assertEqual(len([name for name in asm if name.startswith('family_c3_embedded_')]),10)
+                else:self.assertEqual(len([name for name in asm if re.match(r'^[0-9]+\.ogg\.S$',name)]),10)
+            expected=['family_c3_embedded_'+name if re.match(r'^[0-9]+\.ogg\.S[.]',name) else name
+                      for name in members['OFF']]
+            self.assertEqual(members['ON'],expected)
+            assembly=builds['ON']/'family_c3_embedded_0.ogg.S';expected_assembly=assembly.read_bytes()
+            assembly.unlink()
+            subprocess.run(['cmake','--build',str(builds['ON']),'--parallel','8'],check=True,capture_output=True)
+            self.assertEqual(assembly.read_bytes(),expected_assembly)
+            for asset in assets:
+                original=asset.name+'.S';renamed=('family_c3_embedded_' if asset in numeric else '')+original
+                self.assertEqual((builds['OFF']/original).read_bytes(),(builds['ON']/renamed).read_bytes())
+                objects=[]
+                for pcm,name in [('OFF',original),('ON',renamed)]:
+                    member=next(name_ for name_ in members[pcm] if name_.startswith(name+'.'))
+                    obj=root/(pcm+'-'+asset.name+'.o');objects.append(obj)
+                    obj.write_bytes(subprocess.check_output(['ar','p',str(builds[pcm]/'main/libmain.a'),member]))
+                    data=root/(pcm+'-'+asset.name+'.data')
+                    subprocess.run(['objcopy','--dump-section',f'.data={data}',str(obj)],check=True,capture_output=True)
+                    self.assertEqual(data.read_bytes(),asset.read_bytes()+struct.pack('<I',asset.stat().st_size))
+                self.assertEqual(subprocess.check_output(['nm','-g','--defined-only',str(objects[0])]),
+                                 subprocess.check_output(['nm','-g','--defined-only',str(objects[1])]))
+            self.assertEqual(hashes,{path:hashlib.sha256(path.read_bytes()).hexdigest() for path in assets})
 
 
 class C3FixtureTests(unittest.TestCase):

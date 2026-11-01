@@ -1,18 +1,38 @@
 --- a/main/CMakeLists.txt
 +++ b/main/CMakeLists.txt
-@@ -1123,6 +1123,15 @@
+@@ -1123,8 +1123,22 @@
+         sdmmc
      )
  endif()
 +# Register with the component, before ldgen creates its executable target.
 +# Only this PCM ISR object is noflash; task code and other boards keep placement.
 +set(FAMILY_C3_ISR_LDFRAGMENTS "")
++set(FAMILY_EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS})
 +if(CONFIG_XMINI_C3_PCM)
 +    list(APPEND FAMILY_C3_ISR_LDFRAGMENTS "boards/xmini/c3/family_c3_isr.lf")
 +    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/boards/xmini/c3/family_c3_isr.cc"
 +        PROPERTIES COMPILE_OPTIONS "-fno-lto")
 +endif()
++if(CONFIG_XMINI_C3_PCM AND NOT CMAKE_BUILD_EARLY_EXPANSION)
++    set(FAMILY_EMBED_FILES "")
++    include("${CMAKE_CURRENT_LIST_DIR}/../cmake/family_c3_pcm.cmake")
++endif()
  idf_component_register(SRCS ${SOURCES}
+-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
 +                    LDFRAGMENTS ${FAMILY_C3_ISR_LDFRAGMENTS}
-                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
++                    EMBED_FILES ${FAMILY_EMBED_FILES}
                      INCLUDE_DIRS ${INCLUDE_DIRS}
                      WHOLE_ARCHIVE
+                     PRIV_REQUIRES
+@@ -1153,6 +1167,10 @@
+                         ${MAIN_PRIV_REQUIRES_EXTRA}
+                     )
+-
++
++if(CONFIG_XMINI_C3_PCM AND NOT CMAKE_BUILD_EARLY_EXPANSION)
++    family_c3_pcm_embed_files("${COMPONENT_LIB}" ${LANG_SOUNDS} ${COMMON_SOUNDS})
++endif()
++
+ # Keep project-owned C++ on GNU C++23. ESP-IDF 6 may default to a newer
+ # dialect; pin the baseline so main/ does not depend on it.
+ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
