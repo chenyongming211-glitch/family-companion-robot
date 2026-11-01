@@ -94,6 +94,13 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
                 static_cast<uint64_t>(sent->valuedouble) % 1440 != 0 ||
                 static_cast<uint64_t>(sent->valuedouble) != playback_first_ || interrupted) {
                 codec->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, id);
+#if CONFIG_XMINI_C3_PCM
+                // Invalid current control ends PCM ingress immediately. Keep
+                // local cues held until the main owner resets/closes the session.
+                playback_receiving_ = false;
+                auto& audio = Application::GetInstance().GetAudioService();
+                audio.RequestC3PcmFault(audio.C3Uplink().Capture());
+#endif
                 return false;
             }
         }

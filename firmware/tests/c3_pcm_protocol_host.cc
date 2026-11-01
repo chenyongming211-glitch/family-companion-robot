@@ -80,7 +80,13 @@ class AudioService {public:
  void RequestC3PcmFault(uint32_t token){gate.Revoke(token);++faults;}
  void SetC3ServerReceiving(bool b){receiving=b;}
  bool PushC3PcmOutput(const uint8_t* p,size_t n,family_robot::C3PcmOutputMetadata m){return output.Push(p,n,m)==family_robot::C3PcmResult::Ok;}
-bool preserve=false,uplink=true;int resets=0;void SetExperimentUplink(bool b){uplink=b;}void PreserveServerPlayback(bool b){preserve=b;}void ResetDecoder(){++resets;codec.PlaybackControl(AudioCodec::PlaybackOp::Reset);}};
+bool preserve=false,uplink=true;int resets=0;
+ void SetExperimentUplink(bool b){uplink=b;if(!b)gate.Close([]{});}
+ void PreserveServerPlayback(bool b){preserve=b;}
+ void ResetDecoder(){++resets;codec.PlaybackControl(AudioCodec::PlaybackOp::Reset);
+  family_robot::C3PcmOutputPool::Lease lease;
+  while(output.Acquire(lease)==family_robot::C3PcmResult::Ok){codec.PlaybackControl(AudioCodec::PlaybackOp::Release,{lease.metadata.connection,lease.metadata.playback});output.Release(lease);}
+  output.Reset();}};
 enum AbortReason {kAbortReasonNone};
 class Protocol {public:virtual ~Protocol()=default;virtual void SendAbortSpeaking(AbortReason) {}
     virtual bool PlaybackNegotiated()const{return false;}
@@ -151,7 +157,56 @@ static std::unique_ptr<cJSON> Hello(){
  cJSON_AddNumberToObject(params.get(),"sample_rate",24000);cJSON_AddNumberToObject(params.get(),"channels",1);cJSON_AddNumberToObject(params.get(),"frame_duration",60);hello->children["audio_params"]=std::move(params);
  auto features=std::unique_ptr<cJSON>(cJSON_CreateObject());for(const char* key:{"pcm_s16le_v1","playback_progress_v1","playback_drain_v1"})cJSON_AddBoolToObject(features.get(),key,true);hello->children["features"]=std::move(features);return hello;
 }
-int main(){
+static void CurrentInvalidStopFaults(){
+ auto& audio=Application::GetInstance().audio_service_;
+ for(unsigned invalid=0;invalid<9;++invalid){
+  WebsocketProtocol ws;assert(ws.ResetPlaybackConnection());auto hello=Hello();ws.ParseServerHello(hello.get(),ws.playback_connection_);
+  ws.websocket_=std::make_unique<TestSocket>();ws.socket_connection_=ws.playback_connection_;
+  assert(audio.gate.Open(audio.gate.Revision(),[]{}));const auto token=audio.gate.Capture();
+  assert(ws.HandlePlaybackTts(tts("start").get(),ws.playback_connection_));uint8_t frame[2880]{};
+  ws.DeliverC3PcmAudio(frame,sizeof(frame),ws.playback_connection_);const auto old=ws.playback_id_;
+  assert(ws.playback_first_==1440&&audio.output.occupied()==1&&audio.receiving);
+  auto stop=tts("stop");
+  switch(invalid){
+   case 0:break; // missing sent_samples
+   case 1:cJSON_AddNumberToObject(stop.get(),"sent_samples",-1440);break;
+   case 2:cJSON_AddNumberToObject(stop.get(),"sent_samples",1440.5);break;
+   case 3:cJSON_AddNumberToObject(stop.get(),"sent_samples",0);cJSON_GetObjectItem(stop.get(),"sent_samples")->valuedouble=NAN;break;
+   case 4:cJSON_AddNumberToObject(stop.get(),"sent_samples",0);cJSON_GetObjectItem(stop.get(),"sent_samples")->valuedouble=double(UINT32_MAX)+1;break;
+   case 5:cJSON_AddNumberToObject(stop.get(),"sent_samples",1);break;
+   case 6:cJSON_AddNumberToObject(stop.get(),"sent_samples",0);break;
+   case 7:cJSON_AddNumberToObject(stop.get(),"sent_samples",1440);cJSON_AddBoolToObject(stop.get(),"interrupted",true);break;
+   case 8:cJSON_AddNumberToObject(stop.get(),"sent_samples",1440);cJSON_AddStringToObject(stop.get(),"reason","interrupted");break;
+  }
+  const auto faults=audio.faults;
+  assert(!ws.HandlePlaybackTts(stop.get(),ws.playback_connection_));
+  assert(!audio.gate.Allows(token)&&audio.faults==faults+1&&!ws.playback_receiving_);
+  assert(audio.receiving&&audio.output.occupied()==1); // local cues stay held until owner cleanup
+  ws.DeliverC3PcmAudio(frame,sizeof(frame),ws.playback_connection_);
+  assert(ws.playback_first_==1440&&audio.output.occupied()==1&&!codec.core.Snapshot(old).valid);
+  ws.CloseAudioChannel(); // actual owner close/flush; no callback-side reset
+  assert(!audio.gate.Capture()&&!audio.receiving&&audio.output.occupied()==0&&!codec.core.Snapshot(old).identity);
+  assert(ws.ResetPlaybackConnection());hello=Hello();ws.ParseServerHello(hello.get(),ws.playback_connection_);
+  ws.websocket_=std::make_unique<TestSocket>();ws.socket_connection_=ws.playback_connection_;
+  assert(audio.gate.Open(audio.gate.Revision(),[]{}));const auto newer=audio.gate.Capture();assert(newer>token);
+  assert(ws.HandlePlaybackTts(tts("start",3).get(),ws.playback_connection_));ws.DeliverC3PcmAudio(frame,sizeof(frame),ws.playback_connection_);
+  const auto healthy_faults=audio.faults;const auto connection=ws.playback_connection_;
+  auto stale=tts("stop",1);cJSON_AddNumberToObject(stale.get(),"sent_samples",0);
+  assert(!ws.HandlePlaybackTts(stale.get(),old.connection));
+  assert(!ws.HandlePlaybackTts(stale.get(),connection));
+  auto wrong_session=tts("stop",3,"old-session");cJSON_AddNumberToObject(wrong_session.get(),"sent_samples",0);
+  assert(!ws.HandlePlaybackTts(wrong_session.get(),connection));
+  assert(audio.gate.Allows(newer)&&audio.faults==healthy_faults&&ws.playback_receiving_&&audio.output.occupied()==1);
+  auto valid=tts("stop",3);cJSON_AddNumberToObject(valid.get(),"sent_samples",1440);cJSON_AddStringToObject(valid.get(),"reason","drain");
+  assert(ws.HandlePlaybackTts(valid.get(),connection));
+  const auto healthy=codec.core.Snapshot({connection,3});
+  assert(audio.gate.Allows(newer)&&audio.faults==healthy_faults&&!ws.playback_receiving_&&!audio.receiving);
+  assert(audio.output.occupied()==1&&healthy.identity&&healthy.valid&&!healthy.finished); // Seal preserves admitted tail
+  ws.CloseAudioChannel();
+ }
+}
+int main(int argc,char** argv){
+ if(argc==2&&std::string(argv[1])=="invalid-stop"){CurrentInvalidStopFaults();return 0;}
  auto& audio=Application::GetInstance().audio_service_;
  for(unsigned test=0;test<9;++test){WebsocketProtocol ws;ws.ResetPlaybackConnection();auto hello=Hello();
   auto* params=cJSON_GetObjectItem(hello.get(),"audio_params");auto* features=cJSON_GetObjectItem(hello.get(),"features");
@@ -163,7 +218,7 @@ int main(){
  }
  WebsocketProtocol ws;ws.ResetPlaybackConnection();auto hello=Hello();ws.ParseServerHello(hello.get(),ws.playback_connection_);assert(ws.PlaybackNegotiated());
  auto start=tts("start");assert(ws.HandlePlaybackTts(start.get(),ws.playback_connection_)&&audio.receiving);
- assert(audio.gate.Open(0,[]{}));uint8_t frame[2880]{};frame[0]=0x23;frame[1]=0x81;
+ assert(audio.gate.Open(audio.gate.Revision(),[]{}));uint8_t frame[2880]{};frame[0]=0x23;frame[1]=0x81;
  const auto faults=audio.faults;ws.DeliverC3PcmAudio(frame,2879,ws.playback_connection_);assert(audio.faults==faults+1&&audio.output.occupied()==0&&ws.playback_first_==0);
  ws.DeliverC3PcmAudio(frame,2880,ws.playback_connection_-1);assert(audio.output.occupied()==0);
  ws.DeliverC3PcmAudio(frame,2880,ws.playback_connection_);assert(audio.output.occupied()==1&&ws.playback_first_==1440);

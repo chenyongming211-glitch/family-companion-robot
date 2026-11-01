@@ -106,6 +106,7 @@ class C3PcmMediaTests(unittest.TestCase):
     def test_actual_lvgl_method_rejects_bad_length_count_name_and_entry_ranges(self):self.run_case('assets','table')
     def test_unsupported_recording_and_notification_methods_return_before_state_or_power_changes(self):self.run_case('unsupported')
     def test_actual_open_rejects_wss_and_version_before_connection_and_emits_pcm_hello(self):self.run_case('ws')
+    def test_current_invalid_stop_revokes_without_follow_on_admission_and_stale_or_valid_controls_are_safe(self):self.run_case('protocol','invalid-stop')
     def test_strict_pcm_hello_and_borrowed_ingress_keep_original_identity(self):self.run_case('protocol')
 
 if __name__=='__main__':unittest.main()
