@@ -23,7 +23,8 @@ static C3CacheSpan family_c3_cache_trace;
 static int64_t clock_us=0;
 static unsigned timer_calls=0,disable_calls=0,enable_calls=0;
 static std::function<void()> enable_hook;
-static int64_t esp_timer_get_time() {++timer_calls;return ++clock_us;}
+static std::function<void()> clock_return_hook;
+static int64_t esp_timer_get_time() {++timer_calls;const auto stamp=++clock_us;if(clock_return_hook)clock_return_hook();return stamp;}
 extern "C" void __real_spi_flash_disable_interrupts_caches_and_other_cpu() {++disable_calls;}
 extern "C" void __real_spi_flash_enable_interrupts_caches_and_other_cpu() {++enable_calls;if(enable_hook)enable_hook();}
 #include "../overlays/main/boards/xmini/c3/family_c3_flash_wrap.inc"
@@ -65,7 +66,8 @@ int main() {
     for(unsigned i=0;i<C3CacheSpan::kSlots;++i) {
         in_flight[i]=delayed.EnterBefore(1000+i*100);assert(in_flight[i].valid());
         delayed.DisableAfter(in_flight[i],1001+i*100);
-        assert(delayed.BeginEnable(1050+i*100).valid()); // after point delayed by scheduler
+        const auto ending=delayed.BeginEnable();assert(ending.valid());
+        delayed.EnableBefore(ending,1050+i*100); // after point delayed by scheduler
     }
     auto excess=delayed.EnterBefore(9999);delayed.DisableAfter(excess,10000);
     assert(!excess.valid() && delayed.overflowed());
@@ -131,5 +133,17 @@ int main() {
     __wrap_spi_flash_enable_interrupts_caches_and_other_cpu();
     __wrap_spi_flash_enable_interrupts_caches_and_other_cpu();
     assert(disable_calls==5 && enable_calls==5 && family_c3_cache_trace.Read(2,record) && !record.proven);
+    __wrap_spi_flash_disable_interrupts_caches_and_other_cpu();
+    const auto before_enable=clock_us;
+    clock_return_hook=[] {
+        // This IRQ is AFTER the returned clock stamp. It must be outside the
+        // conservative inner interval and must not increment either counter.
+        ++clock_us;
+        assert(!family_c3_cache_trace.Observe(true));
+        assert(!family_c3_cache_trace.Observe(false));
+    };
+    __wrap_spi_flash_enable_interrupts_caches_and_other_cpu();clock_return_hook=nullptr;
+    assert(family_c3_cache_trace.Read(3,record) && record.proven && record.rx==0 && record.tx==0);
+    assert(record.enable_before==before_enable+1);
     std::cout << "cache span: passthrough, four points, RX/TX, busy, delayed completion, nesting, budget, timestamp overflow passed\n";
 }

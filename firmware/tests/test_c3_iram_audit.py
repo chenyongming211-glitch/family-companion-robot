@@ -128,12 +128,99 @@ class IramAuditTests(unittest.TestCase):
                 report.write_text('{"verified":2}')
                 with self.assertRaisesRegex(ValueError,'recomputation'):self.module.verify_report(tree)
 
+    def test_failed_c3_job_retains_only_debug_inputs(self):
+        workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/firmware-experiment.yml').read_text()
+        marker='      - name: Retain failed C3 build diagnostics only\n'
+        self.assertIn(marker,workflow)
+        step=workflow.split(marker,1)[1].split('\n      - ',1)[0]
+        self.assertIn("if: ${{ failure() && matrix.variant == 'xmini-c3-family' }}",step)
+        self.assertIn('uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9',step)
+        self.assertIn('name: c3-build-debug-only-${{ github.sha }}',step)
+        self.assertIn('if-no-files-found: warn',step)
+        paths={line.strip() for line in step.split('path: |\n',1)[1].splitlines() if line.strip()}
+        self.assertEqual(paths,{'firmware/.cache/experiment/build/xiaozhi.elf',
+            'firmware/.cache/experiment/build/xiaozhi.map','firmware/.cache/experiment/sdkconfig',
+            'firmware/.cache/experiment/build/compile_commands.json','firmware/.cache/experiment/build/family_c3_cache/'})
+        for forbidden in ('xiaozhi.bin','merged-binary.bin','flash_args','family_c3_pcm/'):
+            self.assertNotIn(forbidden,step)
+
     def test_flash_code_and_unknown_indirect_fail_closed(self):
         code=struct.pack('<II',0x420002b7,0x000280e7)+b'\x82\x80'
         with self.assertRaisesRegex(ValueError,'Flash|unsafe'):
             self.module.Audit(self.module.ELF(elf_fixture(code,callee=0x42000000,target_section='.flash.text',reloc_type=19))).closure(['entry'])
         with self.assertRaisesRegex(ValueError,'indirect'):
             self.module.Audit(self.module.ELF(elf_fixture(b'\x02\x95',reloc_type=51))).closure(['entry'])
+
+    @staticmethod
+    def access(address,width,store=False,unsigned=False):
+        high=(address+0x800)&0xfffff000;low=address-high
+        first=high|(5<<7)|0x37
+        funct={1:0,2:1,4:2}[width]+(4 if unsigned and width<4 else 0)
+        if store:
+            second=((low&0xfe0)<<20)|(15<<20)|(5<<15)|(funct<<12)|((low&31)<<7)|0x23
+        else:second=((low&0xfff)<<20)|(5<<15)|(funct<<12)|(15<<7)|3
+        return struct.pack('<II',first,second)+b'\x82\x80'
+
+    def test_actual_constant_memory_accesses_reject_flash_without_relocations(self):
+        for address in (0x3c000000,0x42000000):
+            for width in (1,2,4):
+                for store in (False,True):
+                    with self.subTest(address=hex(address),width=width,store=store),self.assertRaisesRegex(ValueError,'memory|data|Flash'):
+                        self.module.Audit(self.module.ELF(elf_fixture(self.access(address,width,store),reloc_type=51))).closure(['entry'])
+                if width<4:
+                    with self.assertRaises(ValueError):
+                        self.module.Audit(self.module.ELF(elf_fixture(self.access(address,width,unsigned=True),reloc_type=51))).closure(['entry'])
+
+    def test_memory_width_boundaries_compressed_and_pcrel_are_checked(self):
+        for address,width in ((0x3fc80000,1),(0x3fcdffff,1),(0x3fcdfffe,2),(0x3fcdfffc,4)):
+            result=self.module.Audit(self.module.ELF(elf_fixture(self.access(address,width),reloc_type=51))).closure(['entry'])
+            self.assertEqual([(item['address'],item['width']) for item in result['memory_accesses']],[(address,width)])
+        for address,width in ((0x3fc7ffff,1),(0x3fce0000,1),(0x3fcdffff,2),(0x3fcdfffe,4),(0xfffffffe,4)):
+            with self.assertRaises(ValueError):
+                self.module.Audit(self.module.ELF(elf_fixture(self.access(address,width),reloc_type=51))).closure(['entry'])
+        for base,half in ((8,0x4004),(8,0xc004),(2,0x4782),(2,0xc03e)):
+            code=struct.pack('<IH',0x3c000037|(base<<7),half)+b'\x82\x80'
+            with self.assertRaises(ValueError):self.module.Audit(self.module.ELF(elf_fixture(code,reloc_type=51))).closure(['entry'])
+        # AUIPC-derived DROM address with no address relocation is still unsafe.
+        code=struct.pack('<II',0xfbc80297,0x0002a783)+b'\x82\x80'
+        with self.assertRaises(ValueError):self.module.Audit(self.module.ELF(elf_fixture(code,reloc_type=51))).closure(['entry'])
+        for code in (struct.pack('<III',0x3c0002b7,0x00428293,0x0002a783)+b'\x82\x80',
+                     struct.pack('<IHH',0x3c000437,0x0411,0x4004)+b'\x82\x80'):
+            with self.assertRaises(ValueError):self.module.Audit(self.module.ELF(elf_fixture(code,reloc_type=51))).closure(['entry'])
+        pcrel=struct.pack('<II',0xff900297,0x0002a783)+b'\x82\x80'
+        result=self.module.Audit(self.module.ELF(elf_fixture(pcrel,data_pointer=0x40380100,pcrel=True))).closure(['entry'])
+        self.assertEqual([(item['address'],item['width']) for item in result['memory_accesses']],[(0x3fc80000,4)])
+
+    def test_mmio_and_unknown_bases_require_specific_contracts(self):
+        address=0x60023000;code=self.access(address,4)
+        with self.assertRaises(ValueError):self.module.Audit(self.module.ELF(elf_fixture(code,reloc_type=51))).closure(['entry'])
+        contract={('entry',address,4,'load'):'fixture exact register'}
+        self.module.Audit(self.module.ELF(elf_fixture(code,reloc_type=51)),mmio_contracts=contract).closure(['entry'])
+        for wrong in (self.access(address+4,4),self.access(address,2),self.access(address,4,store=True)):
+            with self.assertRaises(ValueError):self.module.Audit(self.module.ELF(elf_fixture(wrong,reloc_type=51)),mmio_contracts=contract).closure(['entry'])
+        # Unsupported pointer arithmetic loses its model; a source contract
+        # cannot turn an unmodelled register into a claimed internal address.
+        unknown=struct.pack('<II',0x00b502b3,0x0002a783)+b'\x82\x80'
+        with self.assertRaisesRegex(ValueError,'addressing model'):
+            self.module.Audit(self.module.ELF(elf_fixture(unknown,reloc_type=51)),memory_contracts={'entry':'fixture internal context'}).closure(['entry'])
+
+    def test_unsupported_memory_encodings_are_rejected(self):
+        for instruction in (0x0002b783,0x00f2b023,0x0002a787,0x00f2a027,0x0002a7af):
+            with self.subTest(instruction=hex(instruction)),self.assertRaisesRegex(ValueError,'unsupported.*memory'):
+                self.module.Audit(self.module.ELF(elf_fixture(struct.pack('<I',instruction)+b'\x82\x80',reloc_type=51))).closure(['entry'])
+
+    def test_callback_contract_requires_word_load_and_zero_jalr_immediate(self):
+        policy={('entry',repr(('load',('argument',2),16))):(0x40380100,'fixture exact callback field')}
+        for immediate in (2,4,-2):
+            code=struct.pack('<II',0x01062783,((immediate&0xfff)<<20)|0x000780e7)+b'\x82\x80'
+            for target in (0x40380100,None):
+                with self.subTest(immediate=immediate,target=target),self.assertRaisesRegex(ValueError,'JALR.*immediate'):
+                    self.module.Audit(self.module.ELF(elf_fixture(code,reloc_type=51)),{next(iter(policy)):(target,'fixture field')}).closure(['entry'])
+        for load in (0x01064783,0x01065783): # LBU/LHU cannot supply a callback pointer
+            code=struct.pack('<II',load,0x000780e7)+b'\x82\x80'
+            with self.assertRaisesRegex(ValueError,'indirect'):
+                self.module.Audit(self.module.ELF(elf_fixture(code,reloc_type=51)),policy,
+                    memory_contracts={'entry':'fixture checked internal context'}).closure(['entry'])
 
     def test_malformed_headers_and_missing_relocations_are_rejected(self):
         for source in [b'ELF',elf_fixture()[:100],b'\x7fELF\x02'+elf_fixture()[5:]]:

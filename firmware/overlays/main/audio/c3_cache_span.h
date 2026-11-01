@@ -78,13 +78,14 @@ public:
         const auto index=Load(current_);
         return index<Slots?Token{index,Load(slots_[index].generation)}:Token{};
     }
-    Token BeginEnable(int64_t now) {
+    Token BeginEnable() {
+        Publish(active_,UINT32_MAX); // stop counting BEFORE reading enable-before time
         const auto depth=Load(depth_);
         if(!depth)return {};
         Store(depth_,depth-1);
         if(depth!=1)return {};
         const auto token=Current();
-        EnableBefore(token,now);return token;
+        Store(current_,UINT32_MAX);Store(depth_,0);return token;
     }
     void EnableBefore(Token token,int64_t now) {
         if(!Matches(token)) {if(token.staged)Store(overflow_,1);return;}

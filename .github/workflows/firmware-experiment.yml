@@ -90,3 +90,17 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           path: firmware/.cache/evidence/
+      - name: Retain failed C3 build diagnostics only
+        if: ${{ failure() && matrix.variant == 'xmini-c3-family' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: c3-build-debug-only-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            firmware/.cache/experiment/build/xiaozhi.elf
+            firmware/.cache/experiment/build/xiaozhi.map
+            firmware/.cache/experiment/sdkconfig
+            firmware/.cache/experiment/build/compile_commands.json
+            firmware/.cache/experiment/build/family_c3_cache/

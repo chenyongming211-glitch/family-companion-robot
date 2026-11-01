@@ -165,15 +165,15 @@ def decode(data,pc):
                 d.update(kind='addi',rd=2,rs=2,imm=signed(imm,10),writes=2)
             else:d.update(writes=rd)
         elif group==0 and op==2:
-            d.update(kind='load',rd=8+((h>>2)&7),rs=8+((h>>7)&7),
+            d.update(kind='load',width=4,rd=8+((h>>2)&7),rs=8+((h>>7)&7),
                      imm=((h>>10&7)<<3)|((h>>6&1)<<2)|((h>>5&1)<<6),writes=8+((h>>2)&7))
         elif group==2 and op==2:
-            d.update(kind='load',rd=(h>>7)&31,rs=2,
+            d.update(kind='load',width=4,rd=(h>>7)&31,rs=2,
                      imm=((h>>12&1)<<5)|((h>>4&7)<<2)|((h>>2&3)<<6),writes=(h>>7)&31)
         elif group==2 and op==6:
-            d.update(kind='store',rs=2,value_rs=(h>>2)&31,imm=((h>>9&15)<<2)|((h>>7&3)<<6))
+            d.update(kind='store',width=4,rs=2,value_rs=(h>>2)&31,imm=((h>>9&15)<<2)|((h>>7&3)<<6))
         elif group==0 and op==6:
-            d.update(kind='store',rs=8+((h>>7)&7),value_rs=8+((h>>2)&7),
+            d.update(kind='store',width=4,rs=8+((h>>7)&7),value_rs=8+((h>>2)&7),
                      imm=((h>>10&7)<<3)|((h>>6&1)<<2)|((h>>5&1)<<6))
         # Other compressed arithmetic may change a register: invalidate it.
         elif group==1 and op==4:
@@ -183,6 +183,8 @@ def decode(data,pc):
         elif group==0 and op==0:
             d.update(kind='addi',rd=8+((h>>2)&7),rs=2,writes=8+((h>>2)&7),
                      imm=((h>>7&15)<<6)|((h>>11&3)<<4)|((h>>5&1)<<3)|((h>>6&1)<<2))
+        elif group in (0,2) and op in (1,3,4,5,7):
+            raise ValueError('unsupported compressed memory encoding at '+hex(pc))
         return d
     if len(data)<4:
         raise ValueError('truncated 32-bit RISC-V instruction')
@@ -202,18 +204,23 @@ def decode(data,pc):
     elif op==0x13 and f==0:
         d.update(kind='addi',rd=rd,rs=rs,imm=signed(w>>20,12),writes=rd)
     elif op==3:
-        d.update(kind='load' if f==2 else 'other',rd=rd,rs=rs,imm=signed(w>>20,12),writes=rd)
+        if f not in (0,1,2,4,5):raise ValueError('unsupported load memory width at '+hex(pc))
+        d.update(kind='load',width={0:1,1:2,2:4,4:1,5:2}[f],rd=rd,rs=rs,imm=signed(w>>20,12),writes=rd)
     elif op==0x23:
-        d.update(kind='store' if f==2 else 'store_other',rs=rs,value_rs=(w>>20)&31,imm=signed(((w>>25)<<5)|((w>>7)&31),12))
-    elif op in (0x13,0x33,0x2f,0x73):
+        if f not in (0,1,2):raise ValueError('unsupported store memory width at '+hex(pc))
+        d.update(kind='store',width={0:1,1:2,2:4}[f],rs=rs,value_rs=(w>>20)&31,imm=signed(((w>>25)<<5)|((w>>7)&31),12))
+    elif op in (0x07,0x27,0x2f):
+        raise ValueError('unsupported floating/atomic memory encoding at '+hex(pc))
+    elif op in (0x13,0x33,0x73):
         d.update(writes=rd)
     return d
 
 
 class Audit:
-    def __init__(self,elf,indirect=None,boundaries=None):
+    def __init__(self,elf,indirect=None,boundaries=None,memory_contracts=None,mmio_contracts=None):
         self.elf=elf;self.indirect=indirect or {};self.boundaries=boundaries or {}
         self.code={};self.data={};self.edges=[];self.dynamic=[];self.exclusions=[]
+        self.memory_contracts=memory_contracts or {};self.mmio_contracts=mmio_contracts or {};self.memory=[]
 
     def safe(self,address,size=1,code=False):
         start,end=IRAM if code else DRAM
@@ -237,10 +244,10 @@ class Audit:
             raise ValueError('code target has no sized function: '+hex(address))
         self.function(symbol)
 
-    def data_target(self,address):
-        self.safe(address)
+    def data_target(self,address,width=4):
+        self.safe(address,width)
         symbol=self.elf.containing(address,1)
-        start=symbol['address'] if symbol else address;size=symbol['size'] if symbol else 4
+        start=symbol['address'] if symbol else address;size=symbol['size'] if symbol else width
         self.safe(start,size)
         if start in self.data:
             return
@@ -248,6 +255,39 @@ class Audit:
         for rel in self.elf.relocs:
             if start<=rel['address']<start+size:
                 self.reference(rel)
+
+    @staticmethod
+    def memory_base(registers,ins):
+        base=registers.get(ins['rs']);offset=ins['imm']
+        while base and base[0]=='offset':offset+=base[2];base=base[1]
+        return base,offset
+
+    def memory_access(self,owner,pc,ins,registers):
+        base,offset=self.memory_base(registers,ins);width=ins['width'];direction=ins['kind']
+        record=dict(owner=owner,pc=pc,direction=direction,width=width,base=repr(base),offset=offset)
+        if base and base[0]=='constant':
+            address=base[1]+offset
+            if not 0<=address or address+width>0x100000000:
+                raise ValueError('memory access wraps RV32 address space at '+hex(pc))
+            record['address']=address
+            mmio=self.mmio_contracts.get((owner,address,width,direction))
+            if mmio:record['proof']='specific SDK MMIO contract: '+mmio
+            else:
+                self.safe(address,width);self.data_target(address,width)
+                record['proof']='actual constant effective address and full width in internal SRAM'
+        elif base and base[0]=='stack':
+            record['proof']='C3 internal ISR/task stack ABI contract; no whole-program bounds claim'
+        elif base:
+            # A field callback contract permits only a complete pointer word.
+            expr=('load',base,offset)
+            field=self.indirect.get((owner,repr(expr))) if direction=='load' and width==4 else None
+            source=self.memory_contracts.get(owner)
+            if not source and not field:
+                raise ValueError('unexplained dynamic memory access '+owner+' at '+hex(pc)+' '+repr(base))
+            record['proof']='source contract (not a pointer analysis proof): '+(source or field[1])
+        else:
+            raise ValueError('unexplained memory addressing model '+owner+' at '+hex(pc))
+        self.memory.append(record)
 
     def reference(self,rel):
         typ,symbol=rel['type'],rel['symbol']
@@ -323,21 +363,18 @@ class Audit:
                 else:value=None
                 registers[ins['rd']]=value
             elif kind=='load':
-                base=registers.get(ins['rs']);offset=ins['imm']
-                while base and base[0]=='offset':offset+=base[2];base=base[1]
+                base,offset=self.memory_base(registers,ins)
                 if base and base[0]=='constant':base=('constant',(base[1]+offset)&0xffffffff);offset=0
-                if base and base[0]=='stack':value=registers.get(('stackword',base[1]+offset))
+                if ins['width']!=4:value=None
+                elif base and base[0]=='stack':value=registers.get(('stackword',base[1]+offset))
                 else:value=('load',base,offset) if base and len(repr(base))<160 else None
                 registers[ins['rd']]=value
             elif kind=='store':
                 base=registers.get(ins['rs'])
-                if base and base[0]=='stack':registers[('stackword',base[1]+ins['imm'])]=registers.get(ins['value_rs'])
+                if base and base[0]=='stack' and ins['width']==4:registers[('stackword',base[1]+ins['imm'])]=registers.get(ins['value_rs'])
                 else:
                     for key in list(registers):
                         if isinstance(key,tuple):registers.pop(key,None)
-            elif kind=='store_other':
-                for key in list(registers):
-                    if isinstance(key,tuple):registers.pop(key,None)
             elif ins.get('writes') is not None:registers.pop(ins['writes'],None)
             if kind in ('direct','indirect') and ins.get('rd',0):
                 # ABI-preserved caller stack slots are usable only while their
@@ -363,12 +400,15 @@ class Audit:
         pc=start
         while pc<start+size:
             ins=instructions[pc];kind=ins['kind'];registers=states.get(pc,{})
+            if kind in ('load','store'):self.memory_access(symbol['name'],pc,ins,registers)
             if kind in ('direct','branch','indirect'):
                 target=ins.get('target');expr=None
                 if kind=='indirect':
                     expr=registers.get(ins['rs'])
                     if expr and expr[0]=='constant':target=(expr[1]+ins['imm'])&0xfffffffe
                     else:
+                        if ins['imm']!=0:
+                            raise ValueError('JALR field contract requires zero immediate at '+hex(pc))
                         key=(symbol['name'],repr(expr))
                         if key not in self.indirect:
                             raise ValueError('unexplained indirect callsite '+symbol['name']+'+'+hex(pc-start)+' '+repr(expr))
@@ -394,7 +434,7 @@ class Audit:
         for name in roots:self.code_target(self.elf.symbol(name)['address'])
         return dict(code=sorted(self.code.values(),key=lambda x:x['address']),
                     data=sorted(self.data.values(),key=lambda x:x['address']),edges=self.edges,
-                    indirect=self.dynamic,boundaries=self.exclusions)
+                    indirect=self.dynamic,boundaries=self.exclusions,memory_accesses=self.memory)
 
 
 def baseline_rejections(tree):
@@ -447,6 +487,25 @@ def verify_report(tree):
     return report
 
 
+def irq_memory_contracts(elf):
+    """Retain existing source-proven internal storage boundaries, not a
+    whole-program proof of arbitrary pointers. Constant addresses are always
+    checked separately. Any unmodelled base or unlisted helper remains a fail.
+    """
+    contracts={}
+    owned=re.compile(r'^_ZNK?(?:13FamilyC3Codec(?:4Sent|8Received|8Complete|11FaultLocked|18ResetCaptureLocked|22PublishReferenceLocked|24RecordStartupFaultLocked|13DiagnosticNow)|12family_robot(?:16PlaybackProgress|16PlaybackIdentity|22BoundedDuplexReferenceILj4096ELj8ELx75000EE|30BoundedPlaybackReferenceBufferILj4096EE|16C3CacheSpanStateILj16ELj4294967295EE))')
+    for symbol in elf.symbols:
+        if owned.match(symbol['name']):
+            contracts[symbol['name']]='reviewed C3 IRQ graph: SDK-checked internal codec context, internal-cap Pair/Playback, fixed DRAM trace, SDK internal DMA and ISR stack'
+    for name in ('gdma_default_rx_isr','gdma_default_tx_isr','i2s_dma_rx_callback','i2s_dma_tx_callback',
+                 'xQueueGenericSendFromISR','xQueueReceiveFromISR','xQueueIsQueueFullFromISR'):
+        contracts[name]='fixed SDK I2S_IRAM_SAFE allocations: internal GDMA/channel/queue/context and DMA storage'
+    for name in ('esp_timer_get_time','esp_timer_impl_get_time','systimer_hal_get_counter_value'):
+        contracts[name]='fixed timer/HAL source: internal systimer_hal; dev installed as SYSTIMER, ESP timer counter 0; HAL register accesses are a source contract, not inferred pointer ranges'
+    contracts['memcpy']='IRQ callers copy bounded internal Pair/Playback/DMA/trace records and internal ISR stack'
+    return contracts
+
+
 def audit_tree(tree):
     tree=Path(tree);build=tree/'build';inputs=build/'family_c3_cache'
     failures=baseline_rejections(tree)
@@ -494,7 +553,7 @@ def audit_tree(tree):
             'fixed timer init installs systimer_ticks_to_us; native offsetof(ticks_to_us)')
     boundaries={DISABLE:'fixed SDK cache guard owns interrupt/cache transition; original invocation and IRAM placement separately verified',
                 ENABLE:'fixed SDK cache guard restores scheduler; enable_after intentionally follows its return'}
-    audit=Audit(elf,indirect,boundaries)
+    audit=Audit(elf,indirect,boundaries,memory_contracts=irq_memory_contracts(elf))
     roots=[*CALLBACKS,'__wrap_'+DISABLE,'__wrap_'+ENABLE,'gdma_default_rx_isr','gdma_default_tx_isr']
     closure=audit.closure(roots)
     # Prove wrapper interposition on the real flash OS path, not flag strings.
@@ -516,7 +575,7 @@ def audit_tree(tree):
                 sdkconfig_sha256=sha(config.encode()),link_command_sha256=sha(link.encode()),sdk_source_sha256=pins,
                 application_inputs_sha256=sources,native_invocations=invocations,
                 native_layout=layout,closure=closure,observer_bytes_budget=1024,
-                guarantees='cache-off IRQ code/data placement; conservative observed spans only; no acoustic or physical DMA claim')
+                guarantees='IRQ code/relocation closure and decoded constant memory effective-address/width checks; dynamic context/heap/DMA/stack/HAL accesses use listed source contracts, not whole-program pointer proof; conservative observed spans only; no acoustic or physical DMA claim')
 
 
 def main():
