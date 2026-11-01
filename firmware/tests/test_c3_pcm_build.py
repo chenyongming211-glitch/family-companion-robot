@@ -173,17 +173,37 @@ file(WRITE "${CMAKE_BINARY_DIR}/main-interface.txt" "${main_interface}")
 @unittest.skipUnless((os.environ.get('C3_LDGEN_SDK') or os.environ.get('IDF_PATH'))
                      and os.environ.get('C3_PCM_CUE_ASSETS'), 'fixed SDK and real cue fixtures required')
 class C3EmbeddedArchiveTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp=tempfile.TemporaryDirectory(prefix='c3-embed-source-')
+        cls.addClassCleanup(cls.temp.cleanup)
+        work=Path(cls.temp.name)
+        sys.path.insert(0,str(FIRMWARE/'tools'))
+        try:
+            import prepare
+            import prepare_experiment
+            lock=json.loads((FIRMWARE/'upstream.lock.json').read_text())
+            archive=FIRMWARE.parent/'.superpowers/firmware-baseline/xiaozhi-v2.5.2.tar.gz'
+            if not archive.exists():
+                archive=work/'locked.tar.gz'
+                prepare.download_archive(lock['archive_url'],archive,lock['archive_sha256'])
+            cls.prepared=prepare_experiment.prepare_experiment(
+                archive,work/'source',lock,FIRMWARE/'patches',FIRMWARE/'overlays',
+                FIRMWARE/'dependencies.esp32c3.lock',target='esp32c3')
+        finally:
+            sys.path.pop(0)
+
     def test_actual_component_graph_keeps_embed_bytes_symbols_and_avoids_numeric_member_boundary(self):
         sdk=Path(os.environ.get('C3_LDGEN_SDK') or os.environ['IDF_PATH'])
-        prepared=Path(os.environ['C3_PCM_CUE_ASSETS'])
-        text=(prepared/'main/CMakeLists.txt').read_text()
+        cue_root=Path(os.environ['C3_PCM_CUE_ASSETS'])
+        text=(self.prepared/'main/CMakeLists.txt').read_text()
         start=text.index('# Register with the component, before ldgen creates its executable target.')
         registration=text[start:text.index('# Keep project-owned C++',start)]
         utilities=(sdk/'tools/cmake/utilities.cmake').read_text()
         start=utilities.index('function(target_add_binary_data ')
         binary_function=utilities[start:utilities.index('endfunction()',start)+len('endfunction()')]
-        assets=sorted((prepared/'main/assets/locales/zh-CN').glob('*.ogg'))
-        assets+=sorted((prepared/'main/assets/common').glob('*.ogg'))
+        assets=sorted((cue_root/'main/assets/locales/zh-CN').glob('*.ogg'))
+        assets+=sorted((cue_root/'main/assets/common').glob('*.ogg'))
         hashes={path:hashlib.sha256(path.read_bytes()).hexdigest() for path in assets}
         numeric=[path for path in assets if re.fullmatch(r'[0-9]+\.ogg',path.name)]
         self.assertEqual([path.name for path in numeric],[f'{i}.ogg' for i in range(10)])
