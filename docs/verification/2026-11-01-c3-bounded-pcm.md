@@ -1,5 +1,7 @@
 # C3有界PCM实施与验证
 
+**已停止：用户选择 C3 稳定按键/半双工策略（2026-11-01）。** 继续修复自然插话的目标已被用户替换。实际C3仍为已验收6b/app1；本次零写核对镜像/选择记录/安全身份一致，boot ELFbf00948a1、激活/idle后15.166s通过，串口关闭。工具Flash/eFuse写入均0，不表示正常启动时设备绝无自身NVS更新。5文件未完成审核器/IRAM改动以私有patch及逐文件快照保留，未安装或完成验收；不再启动其预检或新候选CI。正常默认配置的稳定回退另见[回退记录](2026-11-01-c3-button-rollback.md)与设备策略。本文后续为历史证据，不代表继续开发授权。
+
 最新ldgen根因已有实际输入实证：c2efe3666497f332ace9a456efec9b55eb96e5d2的experiment41286464043与stock41286464042共五目标成功，C3 job124788657689主机275项/121.083s `OK(skipped=1)`、上游110项/3.876s通过后，重现同一ldgen错误。debug artifact13075198794为10771407B，ZIP SHA `8c344d74334b30c677f4ed9370b766aaa6043286aa70e3fcaa9ff872086c2085`，root独立核外部来源/大小/SHA/CRC/每文件解包和capture输入摘要。实际main archive SHA `e4ac62ffe43402c79aa7fee5a91adfeaeb4f97e052137ba6244d3a8bbe656dee`、dump SHA `7affc5d6b570d48da07047d374bde0b46ab474959a3d42409c69868b654dcba4`；objdump2.45/hash b50fabdf…/exit0，云端固定parser与pyparsing3.1.1精确复现char664995/line9107col9。
 
 原因是固定SDK section_entry的数字ID与点开头section之间无强制空白，前对象因此把下一对象名0.ogg.S.obj误吃为ID0/name .ogg.S.obj:，再把Sections当flag而留下冒号。真实前对象+0.ogg缩减同样失败，两者单独各通过；只为数字对象名加前缀，两对象或完整86对象均通过。实际归档副本只改10个member名称、86个body逐SHA保持，原archive未变；独立objdump→原parser解析86通过。这是归档名歧义实证，不是空TU/COMDAT猜测，未更改SDK。

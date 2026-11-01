@@ -1,5 +1,7 @@
 # C3 Bounded PCM Implementation Plan
 
+**当前状态：已按用户决定停止（2026-11-01）。** C3 产品回到稳定 Opus 按键/半双工模式，关闭播放中的语音插话；微雪/M5 保持现有能力。本文件以下内容只保留研发历史，不再作为继续开发、构建实验候选或刷机的授权。未完成的 IRAM/审核工具改动已私有保存，未刷入设备。当前决策以[按设备选择音频传输与插话能力](../specs/2026-11-01-device-audio-transport-policy.md)为准。
+
 > Use subagent-driven-development task by task with spec review followed by quality review. All workers use main; no branches/worktrees. User has authorized this design direction and physical validation after the build/resource gates.
 
 **Goal:** Replace C3 Opus media with bounded PCM and streamed cues, enable full residual echo processing, and validate the actual device without losing its working fallback.
