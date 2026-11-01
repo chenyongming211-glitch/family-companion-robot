@@ -9,8 +9,13 @@
 | Go显式PCM协商与共同Session接线 | 5d90ef7 | 全仓376主测试/869含子用例通过，2可选skip；PCM及race各10主测试/30含子用例通过；独立规格和质量复核通过 |
 | 固定PCM池与提示音包基础 | f0ef155 | 云端16项测试通过，包含O2、ASan/UBSan、全部21项真实源提示音及517帧读取；独立规格和质量复核通过 |
 | C3受限网络构建输入 | d9b4cac | 云端7项Python测试通过，实际生成WebSocket39、EspTcp12、辅助器14项分别在O2与ASan/UBSan通过；独立规格和质量复核通过 |
+| 实际PCM媒体、流式提示音、FD和资源观测接线 | d156e8d、d6c6ff3、14df705 | 最终25项源码摘要与云端一致；独立规格和质量复核均在14df705通过。d6完整206项/388.211s通过且无skip；最终PCM控制修正的20项专项/67.462s及4配置8次旧协议构建/运行通过。最终整合源码的完整回归仍属Task4/CI门槛 |
 
 测试在云端独立目录`/opt/family-robot-validation/c3-pcm-product-20261101`执行，Mac未运行语音服务或运行时测试。Go日志保留在`logs/`，池/提示音日志保留在`primitives/`，网络日志保留在`network-bound/`。这些是私有执行证据路径，生成文件未进入Git。
+
+Task3精确证据按源码区分：`task3/logs/all-firmware-final-v4.log`对应d156e8d，205项/440.789s、1项提示音夹具skip另行通过，上游脚本110项/7.991s通过；`task3-disconnect/all-firmware-final.log`对应d6c6ff3，206项/388.211s通过且无skip，包含21项提示音/517帧和实际网络封装测试；`task3-control/`对应14df705，`source-final.sha256`的25项与本机逐文件一致，`focused-green.log`20项/67.462s及`legacy-protocol-green.log`4配置8次构建/运行通过。目录`task3/`下无版本后缀的`all-firmware-final.log`是更早候选，不能混用作最新源码证据。
+
+独立复核发现并完成两处带RED→GREEN的修正：网络接收断开回调只做连接专属的非阻塞撤销/通知，main轮询关闭，销毁时先停止并等待socket回调再删除协议event group；匹配当前播放的错误stop样本数立即关闭PCM入口并请求owner清理，避免继续接纳后续PCM。旧连接、session或播放identity的迟到控制不撤销新会话；正常stop仍仅Seal并保留已接收尾音。两项已通过原复核者复查，尚不能代替精确目标构建及实机验收。
 
 Go新入口仅在version1、pcm_s16le及pcm_s16le_v1明确协商时接受PCM，旧共享ParseHello仍只接受Opus。输入恰1920B、输出恰2880B，沿用鉴权、归属、记忆、设备控制、取消和drain策略。PCM零输出不伪造静音或无begin的stop，会话仍可接下一次输入。
 
@@ -34,7 +39,7 @@ Go新入口仅在version1、pcm_s16le及pcm_s16le_v1明确协商时接受PCM，�
 
 ## 尚未通过的门槛
 
-- 实际媒体任务、提示音调度、退出屏障、资源下载保护和FD数值观测接线。
+- 整合构建接线后的精确源码完整回归；媒体任务、提示音调度、退出屏障、资源下载保护和FD数值观测已完成源码接线与主机复核。
 - CMake受控源替换、精确五variant与stock构建，以及实际app/trailer/ELF/map的独立核验。
 - 带trailer范围的安装与恢复工具、失败注入、USB补集回读和稳定app1保护。
 - 实机网络/SRC/FD/PCM同时负载下内部堆最低值至少16KiB、最大连续块至少8KiB，任务栈/处理时限有余量且无积压或参考故障。
