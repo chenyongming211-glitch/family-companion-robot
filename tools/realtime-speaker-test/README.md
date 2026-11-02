@@ -21,7 +21,7 @@ SPEAKER_SSH_KEY='/现有SSH私钥的绝对路径' \
 ```bash
 xcrun swiftc -parse-as-library \
   tools/realtime-output-live/SpeakerObservation.swift \
-  tools/realtime-output-live/Tests/SpeakerObservationTests.swift \
+  tools/realtime-output-live/tests/SpeakerObservationTests.swift \
   -o /tmp/realtime-speaker-parser-tests
 /tmp/realtime-speaker-parser-tests
 OUTPUT_LIVE_SPEAKER_BUILD=1 tools/realtime-output-live/build.command
@@ -29,3 +29,7 @@ bash -n tools/realtime-speaker-test/open.command
 ```
 
 SDK 构建和解析测试只证明客户端接线；真人听感、多人轮流标签一致性和重叠能力需要单独现场验证。
+
+试点边界：每个完整发言片段需1.5～8秒，短句、长句或坐标不可靠时显示不确定；这不妨碍普通回答。识别最多运行5分钟／32片段，达到后显示不可用、聊天继续；重新开始会话会清空访客标签。整场测试连接最长15分钟。现阶段只在话尾观测，未实现连续流中的可靠换人／重叠检测，也未把候选加入模型上下文。
+
+云端命令为`cmd/realtime-speaker-test`，两入口使用相同模型API配置、相同资源限制与独立的新设备配置；原产品不切换。部署和回归依据见[验证报告](../../docs/verification/2026-11-03-realtime-speaker-observation.md)。
