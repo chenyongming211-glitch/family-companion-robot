@@ -26,13 +26,14 @@ type sessionEvent struct {
 }
 
 type sessionOptions struct {
+	realtime bool
 	validate func(string, string) error
 	extract  func(context.Context, requestHeader, []byte) ([]float32, error)
 	lifetime time.Duration
 }
 
-// A fresh child is intentional: a human's four-second capture exceeds the
-// private worker's two-second idle deadline. Only the Tracker survives a clip.
+// A fresh child is intentional: capture and source gaps can exceed the private
+// worker's two-second idle deadline. Only the Tracker survives a clip.
 func extractSessionClip(ctx context.Context, model, sha string, h requestHeader, pcm []byte) ([]float32, error) {
 	w, err := startWorker(ctx, model, sha)
 	if err != nil {
@@ -66,8 +67,12 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 	if ctx.Err() != nil {
 		return errWorker
 	}
+	scope, evidence, maxClipSamples := "manual-test", "user_declared_test", uint64(sessionMaxSamples)
+	if opt.realtime {
+		scope, evidence, maxClipSamples = "realtime-test", "turn_taking_test", 8*sampleRate
+	}
 	encode := func(event string, id uint64, label string, duration int64) error {
-		fields := map[string]any{"event": event, "evidence": "user_declared_test"}
+		fields := map[string]any{"event": event, "evidence": evidence}
 		if event == "observation" {
 			fields["id"] = id
 			fields["label"] = label
@@ -105,7 +110,11 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 			clear(pcm)
 			return errProtocol
 		}
-		if ctx.Err() != nil || h.Scope != "manual-test" || h.End-h.Start > sessionMaxSamples || h.ID <= lastID || h.Start != end || count > 0 && (h.Session != first.Session || h.Generation != first.Generation) {
+		invalidStart := h.Start != end
+		if opt.realtime {
+			invalidStart = count > 0 && h.Start < end
+		}
+		if ctx.Err() != nil || h.Scope != scope || h.End-h.Start > maxClipSamples || h.ID <= lastID || invalidStart || count > 0 && (h.Session != first.Session || h.Generation != first.Generation) {
 			clear(pcm)
 			return errProtocol
 		}

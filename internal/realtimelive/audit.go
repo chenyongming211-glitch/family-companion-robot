@@ -23,14 +23,15 @@ func privateJSON(path string, v any) error {
 }
 
 type intent struct {
-	path  string
-	data  map[string]any
-	start time.Time
-	owner Ownership
+	path       string
+	data       map[string]any
+	start      time.Time
+	owner      Ownership
+	memoryOnly bool
 }
 
-func newIntent(dir, stage string, synthetic bool) (*intent, error) {
-	i := &intent{filepath.Join(dir, stage+"-"+randomID()+".json"), map[string]any{"stage": stage, "state": "intent_saved", "synthetic_only": synthetic}, time.Now(), Ownership{}}
+func newIntent(dir, stage string, synthetic bool, memoryOnly ...bool) (*intent, error) {
+	i := &intent{path: filepath.Join(dir, stage+"-"+randomID()+".json"), data: map[string]any{"stage": stage, "state": "intent_saved", "synthetic_only": synthetic}, start: time.Now(), memoryOnly: len(memoryOnly) > 0 && memoryOnly[0]}
 	info, e := ReadSessionInfo(dir)
 	if e != nil && !os.IsNotExist(e) {
 		return nil, e
@@ -40,6 +41,9 @@ func newIntent(dir, stage string, synthetic bool) (*intent, error) {
 	return i, i.update(nil)
 }
 func (i *intent) update(fields map[string]any) error {
+	if i.memoryOnly {
+		return nil
+	}
 	for k, v := range fields {
 		i.data[k] = v
 	}
@@ -49,12 +53,16 @@ func (i *intent) update(fields map[string]any) error {
 }
 
 type recorder struct {
-	mu    sync.Mutex
-	dir   string
-	owner Ownership
+	mu         sync.Mutex
+	dir        string
+	owner      Ownership
+	memoryOnly bool
 }
 
 func (r *recorder) add(event string, fields map[string]any) error {
+	if r.memoryOnly {
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	m := map[string]any{"event": event, "at": float64(time.Now().UnixNano()) / 1e9}

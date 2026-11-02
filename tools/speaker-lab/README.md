@@ -92,7 +92,7 @@ SPEAKER_LAB_TEST_MODEL=/private/models/model.onnx \
 SPEAKER_LAB_TEST_SHA256=<64位小写SHA256> \
 SPEAKER_LAB_TEST_WAV=/private/synthetic/fixture.wav \
 SPEAKER_LAB_TEST_BINARY=/private/evidence/speaker-lab \
-go test -v -count=1 -run 'TestReal(ModelProbe|Worker.*)OptIn' ./...
+go test -v -count=1 -run 'TestReal(ModelProbe|Worker.*|SessionBridge|RealtimeSessionBridge)OptIn' ./...
 ```
 
 模型探测校验安全 JSON；真实 worker 另测环境隔离、SIGTERM 正常退出、socket 清理及替换 socket 保留。
@@ -166,3 +166,18 @@ stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `
 低于1.5秒／RMS低于0.005直接 observation uncertain、不会生成身份。单人状态来自参与者显式声明，非算法验证；门禁不检测语音／换人／重叠。ERes2Net研究阈值 new=0.622530、match=0.682987、margin=0.030229来自既有合成基准，未经家庭真人校准，不作身份认证或登记依据。单人多句实测不能宣称多人验收。
 
 新增 `TestRealSessionBridgeOptIn` 使用显式合成 WAV，经实际 stdin CLI→新 worker→Tracker，间隔超过 worker idle deadline 后检查同标签再获和 EOF 关闭。与既有3项原生opt-in同样通过显式模型／摘要／fixture／binary环境运行。应用内存处理不证明系统／内核所有副本或既有 swap 的状态；不改系统 swap。
+
+## Realtime 轮流发言测试输入
+
+```sh
+/private/evidence/speaker-lab session \
+  --model /private/models/eres2net.onnx \
+  --sha256 <64位小写SHA256> \
+  --declared-single-speaker --realtime-test
+```
+
+`--realtime-test` 仅适用于 `session`，仍必须显式声明测试片段为单人。stdin 保持严格协议 v1，scope 固定为 `realtime-test`，同一连接的 session／generation／模型固定、ID 严格递增。完整片段最多128000 samples（8秒）；首段可从非零源采样坐标开始，后段 start 必须大于等于上段 end，允许真实静音／播放期间的坐标间隙，拒绝重叠或倒序。该模式不填补间隙、不裁切长片段。
+
+输出字段、32段／5分钟上限、质量门禁、临时数据清零及子进程回收规则与上述手动模式相同；所有事件的 evidence 改为 `turn_taking_test`。默认手动模式仍使用 `manual-test`、从0连续相接、4秒上限及 `user_declared_test`。`TestRealRealtimeSessionBridgeOptIn` 在内存重复显式合成 fixture，验证两个完整8秒片段、非零起点／源坐标间隙、标签保留及 EOF 回收，不保存新增音频。
+
+该入口供受控轮流发言观测，未接正式 Realtime。单人来自人工声明，匿名候选不能用于身份认证或登记；不提供连续流分段、换人或重叠检测证据，合成测试也不等于家庭真人准确率或多人验收。

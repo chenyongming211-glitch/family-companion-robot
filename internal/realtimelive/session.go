@@ -6,6 +6,7 @@ import (
 	"errors"
 	"familyrobot/internal/realtimeaudio"
 	"familyrobot/internal/realtimestate"
+	"familyrobot/internal/speakerlive"
 	"github.com/gorilla/websocket"
 	"os"
 	"path/filepath"
@@ -41,6 +42,11 @@ type Session struct {
 	diag              *audioDiagnostics
 	memory            *sessionMemory
 	memoryFloor       int64 // Protected by mu; old playback state remains intact.
+	speaker           speakerObserver
+	speakerLatest     int64
+	speakerFailed     bool
+	providerEnd       int64
+	speakerStartValid bool
 	speechStart       *int64
 	seq               int64
 	output, lastInput *liveTurn
@@ -61,11 +67,15 @@ type Session struct {
 
 func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimestate.Product) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
+	if cfg.MemoryOnly {
+		cancel()
+		ctx, cancel = context.WithTimeout(context.Background(), 15*time.Minute)
+	}
 	cfg = cfg.snapshot()
 	lc := cfg
 	off := false
 	lc.Search = &off
-	s := &Session{ws: ws, cfg: cfg, directory: dir, product: product, ctx: ctx, cancel: cancel, ring: realtimestate.NewAudioRing(16000 * 35), input: make(chan []byte, 100), listener: NewNative(lc, dir), items: map[string]*liveTurn{}, changed: make(chan struct{}, 1), rec: recorder{dir: dir}}
+	s := &Session{ws: ws, cfg: cfg, directory: dir, product: product, ctx: ctx, cancel: cancel, ring: realtimestate.NewAudioRing(16000 * 35), input: make(chan []byte, 100), listener: NewNative(lc, dir), items: map[string]*liveTurn{}, changed: make(chan struct{}, 1), rec: recorder{dir: dir, memoryOnly: cfg.MemoryOnly}}
 	s.wire = &macWire{ws: ws}
 	s.inputFrame = 320
 	info, err := ReadSessionInfo(dir)
@@ -256,11 +266,18 @@ func (s *Session) Run() (err error) {
 		go s.diag.run()
 		defer s.diag.stop()
 	}
+	if s.cfg.MemoryOnly {
+		stop := context.AfterFunc(s.ctx, func() { s.ws.Close() })
+		defer stop()
+	}
 	reason := "session_error"
 	defer func() {
 		s.cancel()
 		s.listener.Close()
 		s.ws.Close()
+		if s.speaker != nil {
+			s.speaker.Close()
+		}
 		s.wg.Wait()
 		s.mu.Lock()
 		history := append([]*liveTurn(nil), s.history...)
@@ -319,6 +336,10 @@ func (s *Session) Run() (err error) {
 	defer codec.Close()
 	_, device := s.wire.(*xiaozhiWire)
 	ready := map[string]any{"type": "ready", "model": s.cfg.Model, "voice": s.cfg.Voice}
+	if s.cfg.MemoryOnly {
+		ready["speaker_test"] = true
+		ready["speaker_enabled"] = s.cfg.Speaker != nil
+	}
 	// Firmware waits for server hello before enabling capture. Send it before
 	// the provider handshake; the Mac retains its original ready ordering.
 	if device {
@@ -335,6 +356,15 @@ func (s *Session) Run() (err error) {
 	if !device {
 		if e = s.send(ready); e != nil {
 			return e
+		}
+	}
+	if s.cfg.Speaker != nil {
+		observer, err := speakerlive.New(s.ctx, s.rec.owner.SessionID, *s.cfg.Speaker, s.speakerResult)
+		s.mu.Lock()
+		s.speaker = observer
+		s.mu.Unlock()
+		if err != nil {
+			s.speakerResult(speakerlive.Result{State: "unavailable"})
 		}
 	}
 	s.spawn(func() {
@@ -539,6 +569,11 @@ func (s *Session) microphone() error {
 			if e != nil {
 				return e
 			}
+			if s.cfg.Speaker != nil {
+				s.mu.Lock()
+				s.providerEnd += int64(len(pcm) / 2)
+				s.mu.Unlock()
+			}
 		}
 	}
 }
@@ -569,7 +604,9 @@ func (s *Session) listen() error {
 				start = int64(pos * 16)
 			}
 			s.speechStart = &start
+			s.speakerStartValid = valid && pos >= 0 && pos*16 <= float64(s.providerEnd)
 			s.mu.Unlock()
+			s.beginSpeaker()
 			if e = s.record("speech_started", map[string]any{"sample": start, "received_end": end, "provider_timestamp": valid}); e != nil {
 				return e
 			}
@@ -588,9 +625,17 @@ func (s *Session) listen() error {
 				start = *s.speechStart
 			}
 			pcm := s.ring.Slice(start, end)
+			speakerComplete := s.speakerStartValid && valid && pos > 0 && pos*16 <= float64(s.providerEnd) && int64(pos*16) == end
 			s.speechStart = nil
+			s.speakerStartValid = false
 			s.mu.Unlock()
 			if pcm == nil || len(pcm) > 16000*2*25 {
+				if s.cfg.Speaker != nil {
+					s.mu.Lock()
+					id := s.speakerLatest
+					s.mu.Unlock()
+					s.observeSpeaker(id, start, end, nil, false)
+				}
 				if e = s.send(map[string]any{"type": "status", "code": "input_too_long"}); e != nil {
 					return e
 				}
@@ -600,6 +645,7 @@ func (s *Session) listen() error {
 				return e
 			}
 			rt := s.addTurn()
+			s.observeSpeaker(rt.turn.ID, start, end, pcm, speakerComplete)
 			if e = s.record("input_segment", map[string]any{"id": rt.turn.ID, "samples": len(pcm) / 2}); e != nil {
 				return e
 			}

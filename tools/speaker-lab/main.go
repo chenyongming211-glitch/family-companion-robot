@@ -42,10 +42,11 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 	model := f.String("model", "", "")
 	sha := f.String("sha256", "", "")
 	var socket, wav, manifest *string
-	var declared *bool
+	var declared, realtime *bool
 	switch args[0] {
 	case "session":
 		declared = f.Bool("declared-single-speaker", false, "")
+		realtime = f.Bool("realtime-test", false, "")
 	case "worker":
 		socket = f.String("socket", "", "")
 	case "benchmark":
@@ -59,7 +60,7 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 		return fail("usage")
 	}
 	if declared != nil {
-		if runSession(ctx, input, out, *model, *sha, *declared, sessionOptions{}) != nil {
+		if runSession(ctx, input, out, *model, *sha, *declared, sessionOptions{realtime: *realtime}) != nil {
 			return fail("session_failed")
 		}
 		return 0

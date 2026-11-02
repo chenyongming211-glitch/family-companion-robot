@@ -45,6 +45,12 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 	if cfg.MaxSessions < 1 || cfg.MaxSessions > 8 {
 		initErr = errors.New("invalid_max_sessions")
 	}
+	if cfg.MemoryOnly && (cfg.MemoryEnabled || cfg.DiagnosticsDevice != "") {
+		initErr = errors.New("memory_only_policy_conflict")
+	}
+	if cfg.Speaker != nil && !cfg.MemoryOnly {
+		initErr = errors.New("speaker_test_requires_memory_only")
+	}
 	if cfg.DiagnosticsDevice != "" {
 		if cfg.DiagnosticsDuration == 0 {
 			cfg.DiagnosticsDuration = diagnosticWindow
@@ -54,7 +60,7 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 		}
 	}
 	s := &Server{leases: map[string]*sessionLease{}, tickets: map[string]ticketBinding{}, devices: devices, initErr: initErr, cfg: cfg, product: product, root: root, build: build}
-	if cfg.MemoryEnabled {
+	if cfg.MemoryEnabled && !cfg.MemoryOnly {
 		s.memory, s.memoryErr = recordstore.Open(recordstore.Options{Directory: filepath.Join(root, ".memory"), Retention: memoryRetention})
 	}
 	s.run = func(ws *websocket.Conn, dir string) {
@@ -161,7 +167,7 @@ func (s *Server) Handler() http.Handler {
 		if s.initErr != nil {
 			status = 503
 		}
-		respond(w, status, map[string]any{"device_identity": 1, "device_memory": s.memory != nil, "memory_ready": s.cfg.MemoryEnabled && s.memoryErr == nil, "ready": s.initErr == nil, "busy": active > 0, "active_sessions": active, "max_sessions": s.cfg.MaxSessions, "capacity_full": active >= s.cfg.MaxSessions, "experiment": "output-asr-live", "backend": "go", "build": s.build, "diagnostics_armed": diagnosticArmed, "diagnostics_claimed": diagnosticClaimed, "diagnostics_active": diagnosticActive})
+		respond(w, status, map[string]any{"device_identity": 1, "device_memory": s.memory != nil, "memory_ready": s.cfg.MemoryEnabled && s.memoryErr == nil, "ready": s.initErr == nil, "busy": active > 0, "active_sessions": active, "max_sessions": s.cfg.MaxSessions, "capacity_full": active >= s.cfg.MaxSessions, "experiment": "output-asr-live", "backend": "go", "build": s.build, "speaker_test": s.cfg.MemoryOnly, "speaker_enabled": s.cfg.Speaker != nil, "diagnostics_armed": diagnosticArmed, "diagnostics_claimed": diagnosticClaimed, "diagnostics_active": diagnosticActive})
 	})
 	mux.HandleFunc("POST /devices", s.enrollDevice)
 	mux.HandleFunc("POST /pair", func(w http.ResponseWriter, r *http.Request) {

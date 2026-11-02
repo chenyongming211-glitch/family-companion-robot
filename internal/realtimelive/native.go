@@ -112,7 +112,7 @@ func (n *Native) Open(ctx context.Context, prompt string, listener bool) (err er
 	if n.cfg.Search != nil && *n.cfg.Search && len(n.cfg.Tools) > 0 {
 		return errors.New("search_tools_incompatible")
 	}
-	audit, e := newIntent(n.dir, "native_session", n.cfg.Synthetic)
+	audit, e := newIntent(n.dir, "native_session", n.cfg.Synthetic, n.cfg.MemoryOnly)
 	if e != nil {
 		return e
 	}
@@ -170,7 +170,7 @@ func (n *Native) cancel() {
 	n.conn.WriteJSON(map[string]any{"type": "response.cancel"})
 }
 func (n *Native) Stream(ctx context.Context, pcm []byte, emit func(string, []byte) error) (err error) {
-	audit, e := newIntent(n.dir, "live_native_turn", n.cfg.Synthetic)
+	audit, e := newIntent(n.dir, "live_native_turn", n.cfg.Synthetic, n.cfg.MemoryOnly)
 	if e != nil {
 		return e
 	}

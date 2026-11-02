@@ -5,16 +5,20 @@ final class LiveClient: @unchecked Sendable {
     let queue = DispatchQueue(label: "family.output.live")
     let url: URL, plan: String?
     let ownsIdentity: Bool, deviceProfile: String
+    let speakerTest: Bool, speakerEnabled: Bool
     private var sessionID: String?
     var status: ((String) -> Void)?, ended: ((Bool) -> Void)?
+    var speakerStatus: ((String) -> Void)?
+    private var speakerObservation = SpeakerObservationState()
     private var session: URLSession?, socket: URLSessionWebSocketTask?, audio: AudioPipeline?, encoder: OpusEncoder?
     private var closed = false, ready = false, sending = false
     private var active = false, sealed = false, identity = 0, accepted = 0, completed = 0
     private var draining = false, drainStarted = 0.0
     private var outgoing: [URLSessionWebSocketTask.Message] = [], input: [Int16] = []
     private var fixture: RealtimeFixture?, outputIndex = -1, transcript = ""
-    init(url: URL, plan: String? = nil, ownsIdentity: Bool = true, deviceProfile: String = "default") {
+    init(url: URL, plan: String? = nil, ownsIdentity: Bool = true, deviceProfile: String = "default", speakerTest: Bool = false, speakerEnabled: Bool = true) {
         self.url = url; self.plan = plan; self.ownsIdentity = ownsIdentity; self.deviceProfile = deviceProfile
+        self.speakerTest = speakerTest; self.speakerEnabled = speakerEnabled
     }
     func start() { queue.async { self.pair() } }
     func stop() { queue.async { self.finish(true) } }
@@ -111,6 +115,10 @@ final class LiveClient: @unchecked Sendable {
             switch event["type"] as? String {
             case "ready":
                 guard !ready else { throw ClientFailure("duplicate_ready") }
+                if speakerTest {
+                    guard ownsIdentity else { throw ClientFailure("speaker_identity_required") }
+                    try SpeakerObservationState.validateReady(event, enabled: speakerEnabled)
+                }
                 let audio = AudioPipeline(queue: queue, diagnosticSessionID: sessionID); self.audio = audio; encoder = try OpusEncoder(rate: 16000)
                 audio.onPCM = { [weak self] in self?.inputPCM($0) }
                 audio.onFailure = { [weak self] _ in self?.fail("音频设备发生变化，请重新开始。") }
@@ -123,6 +131,9 @@ final class LiveClient: @unchecked Sendable {
                     fixture.done = { [weak self] success in self?.queue.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.finish(success) } }
                     fixture.start()
                 }
+            case "speaker_observation":
+                guard speakerTest, ready, speakerEnabled else { throw ClientFailure("unexpected_speaker_observation") }
+                if let value = try speakerObservation.apply(event) { speakerStatus?(value) }
             case "begin":
                 guard ready, !active, let id = event["id"] as? Int, id > identity else { throw ClientFailure("begin_identity") }
                 identity = id; accepted = 0; completed = 0; active = true; sealed = false; draining = false; transcript = ""
@@ -195,6 +206,7 @@ final class LiveClient: @unchecked Sendable {
     private func fail(_ message: String) { guard !closed else { return }; status?(message); finish(false) }
     private func finish(_ success: Bool) {
         guard !closed else { return }; closed = true; ready = false
+        speakerObservation = SpeakerObservationState(); if speakerTest { speakerStatus?("") }
         fixture?.stop(); audio?.stop(); outgoing.removeAll(); input.removeAll()
         socket?.cancel(with: .normalClosure, reason: nil); session?.invalidateAndCancel()
         metadata("live.client_closed", ["success": success]); ended?(success)

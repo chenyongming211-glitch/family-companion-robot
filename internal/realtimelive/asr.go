@@ -64,7 +64,7 @@ func (a *OutputASR) InputSamples() int64 { a.mu.Lock(); defer a.mu.Unlock(); ret
 func (a *OutputASR) run(ctx context.Context, cfg Config, dir string, onFinal func(map[string]any, int64) error) {
 	failed := true
 	defer func() { a.cancel(); a.mu.Lock(); a.failed = a.failed || failed; a.mu.Unlock(); close(a.Done) }()
-	audit, e := newIntent(dir, "live_output_asr", cfg.Synthetic)
+	audit, e := newIntent(dir, "live_output_asr", cfg.Synthetic, cfg.MemoryOnly)
 	if e != nil {
 		return
 	}

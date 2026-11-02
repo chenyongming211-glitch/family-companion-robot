@@ -3,6 +3,7 @@ package realtimelive
 
 import (
 	"errors"
+	"familyrobot/internal/speakerlive"
 	"net/url"
 	"os"
 	"strings"
@@ -16,6 +17,8 @@ type Config struct {
 	Synthetic                      bool
 	MaxSessions                    int
 	MemoryEnabled                  bool
+	MemoryOnly                     bool
+	Speaker                        *speakerlive.Config
 	DiagnosticsDevice              string
 	DiagnosticsDuration            time.Duration
 }
@@ -102,5 +105,9 @@ func (c Config) snapshot() Config {
 		c.Search = &value
 	}
 	c.Tools = append([]any(nil), c.Tools...)
+	if c.Speaker != nil {
+		value := *c.Speaker
+		c.Speaker = &value
+	}
 	return c
 }
