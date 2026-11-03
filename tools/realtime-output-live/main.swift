@@ -10,6 +10,9 @@ final class LiveApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let button = NSButton(title: "开始对话", target: nil, action: nil)
     let label = NSTextField(wrappingLabelWithString: "点一次开始，自由聊天。播放中直接插问，听听旧尾音和新回复的间隔。")
     let speakerLabel = NSTextField(wrappingLabelWithString: "本次发言：—")
+    var speakerGuide = SpeakerGuide()
+    let guideLabel = NSTextField(wrappingLabelWithString: "")
+    let prepareButton = NSButton(title: "准备本步／记录下一句", target: nil, action: nil)
     let speakerSwitch = NSButton(checkboxWithTitle: "本会话开启声纹观测", target: nil, action: nil)
     init(url: URL, backend: String, remotePort: Int?, deviceProfile: String, speakerTest: Bool = false, speakerOffURL: URL? = nil) {
         self.url = url; self.backend = backend; self.remotePort = remotePort; self.deviceProfile = deviceProfile
@@ -19,7 +22,7 @@ final class LiveApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var endpointName: String { remotePort.map { "云端 \($0)" } ?? "本机端口 \(url.port ?? 0)" }
     var accent: NSColor { backend == "go" ? .systemBlue : backend == "python" ? .systemOrange : .secondaryLabelColor }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let height: CGFloat = speakerTest ? 450 : 310
+        let height: CGFloat = speakerTest ? 720 : 310
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: height),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = speakerTest ? "小满 · Realtime 声纹聊天测试" : "小满 · \(backendName)（\(endpointName)）"; window.delegate = self
@@ -31,13 +34,13 @@ final class LiveApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let x = backend == "go" ? frame.midX - window.frame.width - 12 : frame.midX + 12
             window.setFrameOrigin(NSPoint(x: max(frame.minX, x), y: frame.midY - window.frame.height / 2))
         }
-        let badge = NSTextField(labelWithString: speakerTest ? "正常聊天 · 观察说话人候选" : "\(backendName)  ·  \(endpointName)")
+        let badge = NSTextField(labelWithString: speakerTest ? "单人三句 · 标签一致性测试" : "\(backendName)  ·  \(endpointName)")
         badge.font = .systemFont(ofSize: 22, weight: .bold); badge.textColor = accent
         badge.alignment = .center
         button.target = self; button.action = #selector(toggle); button.bezelStyle = .rounded
         button.font = .systemFont(ofSize: 21, weight: .medium)
         label.alignment = .center; label.font = .systemFont(ofSize: 15)
-        let note = NSTextField(wrappingLabelWithString: speakerTest ? "请轮流说话，重叠发言尚未验证。访客标签仅为本会话临时候选，不保存声纹；小满不会因此知道你的姓名。开始前选择开关，结束后可切换再试。" : "先结束另一个窗口的对话，再开始这个窗口。关窗退出。")
+        let note = NSTextField(wrappingLabelWithString: speakerTest ? "同一位参与者、保持同一连接、一次一句、正常语速。等回答和原因结果后再进行下一步，三步之间不要点结束。访客标签是临时候选，不保存声纹，不代表真人姓名；多人及重叠尚未验证。" : "先结束另一个窗口的对话，再开始这个窗口。关窗退出。")
         note.textColor = .secondaryLabelColor
         note.alignment = .center
         let content = window.contentView!
@@ -54,39 +57,66 @@ final class LiveApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             note.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             note.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24)])
         if speakerTest {
-            label.stringValue = "点击开始后正常聊天，同步观察本次发言的候选标签。"
+            label.stringValue = "点击开始后才连接和收音，三步引导不会自动操作麦克风。"
             speakerSwitch.state = .on
             speakerLabel.alignment = .center; speakerLabel.font = .systemFont(ofSize: 18, weight: .medium)
-            [speakerSwitch, speakerLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
+            speakerSwitch.target = self; speakerSwitch.action = #selector(speakerModeChanged)
+            prepareButton.target = self; prepareButton.action = #selector(prepareSpeakerStep)
+            prepareButton.bezelStyle = .rounded
+            guideLabel.alignment = .center; guideLabel.font = .systemFont(ofSize: 15)
+            [speakerSwitch, speakerLabel, guideLabel, prepareButton].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; content.addSubview($0) }
             NSLayoutConstraint.activate([
                 speakerSwitch.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 22),
                 speakerSwitch.centerXAnchor.constraint(equalTo: content.centerXAnchor),
                 speakerLabel.topAnchor.constraint(equalTo: speakerSwitch.bottomAnchor, constant: 20),
                 speakerLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
                 speakerLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-                speakerLabel.bottomAnchor.constraint(lessThanOrEqualTo: note.topAnchor, constant: -20)
+                prepareButton.topAnchor.constraint(equalTo: speakerLabel.bottomAnchor, constant: 16),
+                prepareButton.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+                prepareButton.heightAnchor.constraint(equalToConstant: 36),
+                guideLabel.topAnchor.constraint(equalTo: prepareButton.bottomAnchor, constant: 16),
+                guideLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+                guideLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+                guideLabel.bottomAnchor.constraint(lessThanOrEqualTo: note.topAnchor, constant: -20)
             ])
+            renderSpeakerGuide()
         }
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
+    @objc func speakerModeChanged() { renderSpeakerGuide() }
+    @objc func prepareSpeakerStep() { client?.prepareSpeakerStep() }
+    func renderSpeakerGuide() {
+        guard speakerTest else { return }
+        let enabled = speakerSwitch.state == .on
+        prepareButton.isHidden = !enabled; guideLabel.isHidden = !enabled
+        prepareButton.isEnabled = enabled && speakerGuide.canPrepare
+        guard speakerGuide.isConnected else { guideLabel.stringValue = speakerGuide.message; return }
+        let step = speakerGuide.step <= 3 ? "第\(speakerGuide.step)／3步\n\(speakerGuide.prompt)\n\n" : ""
+        guideLabel.stringValue = step + speakerGuide.instruction + "\n\n" + speakerGuide.message
+    }
     @objc func toggle() {
         speakerLabel.stringValue = "本次发言：—"
-        if let client { button.isEnabled = false; client.stop(); return }
+        if let client { button.isEnabled = false; prepareButton.isEnabled = false; client.stop(); return }
         generation += 1; let token = generation; button.isEnabled = false
         speakerSwitch.isEnabled = false
         let enabled = speakerSwitch.state == .on
+        if speakerTest { speakerGuide.connect(generation: token, enabled: enabled); renderSpeakerGuide() }
         let sessionURL = speakerTest && !enabled ? speakerOffURL! : url
         let profile = speakerTest ? deviceProfile + (enabled ? "-on" : "-off") : deviceProfile
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in DispatchQueue.main.async {
             guard let self, token == self.generation else { return }
-            guard granted else { self.label.stringValue = "请在系统设置中允许麦克风后重新打开。"; self.button.isEnabled = true; self.speakerSwitch.isEnabled = true; return }
-            let client = LiveClient(url: sessionURL, ownsIdentity: self.backend != "python", deviceProfile: profile, speakerTest: self.speakerTest, speakerEnabled: enabled); self.client = client
+            guard granted else { self.label.stringValue = "请在系统设置中允许麦克风后重新打开。"; self.button.isEnabled = true; self.speakerSwitch.isEnabled = true; self.speakerGuide.disconnect(generation: token); self.renderSpeakerGuide(); return }
+            let client = LiveClient(url: sessionURL, ownsIdentity: self.backend != "python", deviceProfile: profile, speakerTest: self.speakerTest, speakerEnabled: enabled, generation: token); self.client = client
             client.status = { [weak self] value in DispatchQueue.main.async {
                 guard let self, token == self.generation else { return }; self.label.stringValue = value
             } }
             client.speakerStatus = { [weak self] value in DispatchQueue.main.async {
                 guard let self, token == self.generation else { return }
                 self.speakerLabel.stringValue = value.isEmpty ? "本次发言：—" : value
+            } }
+            client.speakerGuideEvent = { [weak self] event, eventGeneration in DispatchQueue.main.async {
+                guard let self, eventGeneration == self.generation else { return }
+                self.speakerGuide.handle(event, generation: eventGeneration); self.renderSpeakerGuide()
             } }
             client.ended = { [weak self] success in DispatchQueue.main.async {
                 guard let self, token == self.generation else { return }

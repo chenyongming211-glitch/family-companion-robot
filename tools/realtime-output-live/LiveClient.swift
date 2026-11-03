@@ -9,6 +9,10 @@ final class LiveClient: @unchecked Sendable {
     private var sessionID: String?
     var status: ((String) -> Void)?, ended: ((Bool) -> Void)?
     var speakerStatus: ((String) -> Void)?
+    // All guide events, including prepare, are ordered on queue. UI callbacks carry
+    // the connection generation, never parsed presentation text.
+    var speakerGuideEvent: ((SpeakerGuide.Event, Int) -> Void)?
+    let generation: Int
     private var speakerObservation = SpeakerObservationState()
     private var session: URLSession?, socket: URLSessionWebSocketTask?, audio: AudioPipeline?, encoder: OpusEncoder?
     private var closed = false, ready = false, sending = false
@@ -16,12 +20,16 @@ final class LiveClient: @unchecked Sendable {
     private var draining = false, drainStarted = 0.0
     private var outgoing: [URLSessionWebSocketTask.Message] = [], input: [Int16] = []
     private var fixture: RealtimeFixture?, outputIndex = -1, transcript = ""
-    init(url: URL, plan: String? = nil, ownsIdentity: Bool = true, deviceProfile: String = "default", speakerTest: Bool = false, speakerEnabled: Bool = true) {
+    init(url: URL, plan: String? = nil, ownsIdentity: Bool = true, deviceProfile: String = "default", speakerTest: Bool = false, speakerEnabled: Bool = true, generation: Int = 0) {
         self.url = url; self.plan = plan; self.ownsIdentity = ownsIdentity; self.deviceProfile = deviceProfile
-        self.speakerTest = speakerTest; self.speakerEnabled = speakerEnabled
+        self.speakerTest = speakerTest; self.speakerEnabled = speakerEnabled; self.generation = generation
     }
     func start() { queue.async { self.pair() } }
     func stop() { queue.async { self.finish(true) } }
+    func prepareSpeakerStep() { queue.async {
+        guard self.speakerTest, self.speakerEnabled, self.ready, !self.closed else { return }
+        self.speakerGuideEvent?(.prepare, self.generation)
+    } }
     private func pair() {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.connectionProxyDictionary = [:]; cfg.httpCookieStorage = nil; cfg.urlCache = nil
@@ -124,6 +132,7 @@ final class LiveClient: @unchecked Sendable {
                 audio.onFailure = { [weak self] _ in self?.fail("音频设备发生变化，请重新开始。") }
                 try audio.start(microphone: plan == nil)
                 ready = true; status?("对话中 · 插话后播完已收到的尾音，再接新回复")
+                if speakerTest { speakerGuideEvent?(.ready, generation) }
                 metadata("live.client_ready", ["microphone": plan == nil, "basis": "CoreAudio_dataPlayedBack"])
                 if let plan {
                     let fixture = try RealtimeFixture(path: plan, queue: queue); self.fixture = fixture
@@ -133,12 +142,15 @@ final class LiveClient: @unchecked Sendable {
                 }
             case "speaker_observation":
                 guard speakerTest, ready, speakerEnabled else { throw ClientFailure("unexpected_speaker_observation") }
-                if let value = try speakerObservation.apply(event) { speakerStatus?(value) }
+                let observation = try SpeakerObservation.validate(event)
+                speakerGuideEvent?(.observation(observation), generation)
+                if let value = speakerObservation.apply(observation) { speakerStatus?(value) }
             case "begin":
                 guard ready, !active, let id = event["id"] as? Int, id > identity else { throw ClientFailure("begin_identity") }
                 identity = id; accepted = 0; completed = 0; active = true; sealed = false; draining = false; transcript = ""
                 outputIndex = fixture?.index ?? -1
                 try audio?.begin(diagnosticID: id); let token = id
+                if speakerTest { speakerGuideEvent?(.playback(true), generation) }
                 audio?.onCompleted = { [weak self] samples in
                     guard let self, !self.closed, self.active, self.identity == token else { return }
                     guard samples >= self.completed, samples <= self.accepted else { self.fail("播放回报异常，可重新开始。"); return }
@@ -169,8 +181,12 @@ final class LiveClient: @unchecked Sendable {
             case "status":
                 switch event["code"] as? String {
                 case "listening": status?("正在听…")
-                case "thinking": status?("正在回应…")
-                case "turn_failed": status?("这次回复未完成，可以继续说话。")
+                case "thinking":
+                    if speakerTest { speakerGuideEvent?(.responseWaiting(true), generation) }
+                    status?("正在回应…")
+                case "turn_failed":
+                    if speakerTest { speakerGuideEvent?(.responseWaiting(false), generation) }
+                    status?("这次回复未完成，可以继续说话。")
                 case "drain_failed": status?("未收到播放完成确认，请结束后重新开始。")
                 case "input_too_long": status?("这句话较长，请分几句说。")
                 default: break
@@ -186,6 +202,7 @@ final class LiveClient: @unchecked Sendable {
     }
     private func played() {
         receipt(terminal: draining ? "drained" : "played"); active = false; audio?.end()
+        if speakerTest { speakerGuideEvent?(.playback(false), generation) }
         metadata(draining ? "live.output_drained" : "live.output_played", ["id": identity, "samples": completed,
             "drain_ms": draining ? Int((ProcessInfo.processInfo.systemUptime - drainStarted) * 1000) : 0])
         status?("对话中 · 可以自由说话和插话")
@@ -206,7 +223,8 @@ final class LiveClient: @unchecked Sendable {
     private func fail(_ message: String) { guard !closed else { return }; status?(message); finish(false) }
     private func finish(_ success: Bool) {
         guard !closed else { return }; closed = true; ready = false
-        speakerObservation = SpeakerObservationState(); if speakerTest { speakerStatus?("") }
+        speakerObservation = SpeakerObservationState()
+        if speakerTest { speakerStatus?(""); speakerGuideEvent?(.disconnected, generation) }
         fixture?.stop(); audio?.stop(); outgoing.removeAll(); input.removeAll()
         socket?.cancel(with: .normalClosure, reason: nil); session?.invalidateAndCancel()
         metadata("live.client_closed", ["success": success]); ended?(success)

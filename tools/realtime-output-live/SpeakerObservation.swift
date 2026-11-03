@@ -1,9 +1,19 @@
 import Foundation
 import CoreFoundation
 
-// Session-only presentation state. No audio, vectors, names or result logging.
-struct SpeakerObservationState {
-    private var latestInputID = -1
+// Validated session-only protocol value; construction always validates the wire event.
+struct SpeakerObservation {
+    enum State: String { case pending, temporary, uncertain, unknown, unavailable }
+    let inputID: Int
+    let state: State
+    let label: String
+    let reason: String
+    let audioMS: Int
+    let display: String
+    private init(inputID: Int, state: State, label: String, reason: String, audioMS: Int, display: String) {
+        self.inputID = inputID; self.state = state; self.label = label
+        self.reason = reason; self.audioMS = audioMS; self.display = display
+    }
     enum InvalidEvent: Error { case malformed, incompatibleReady }
     private static let uncertainDescriptions = [
         "": "证据不足", "incomplete_span": "片段边界未确认",
@@ -19,7 +29,7 @@ struct SpeakerObservationState {
         }
     }
 
-    mutating func apply(_ event: [String: Any]) throws -> String? {
+    static func validate(_ event: [String: Any]) throws -> SpeakerObservation {
         guard event["type"] as? String == "speaker_observation",
               event["evidence"] as? String == "turn_taking_test",
               let id = Self.nonnegativeInteger(event["input_id"]),
@@ -61,9 +71,8 @@ struct SpeakerObservationState {
             display = "声纹观测暂不可用，可以继续聊天"
         default: throw InvalidEvent.malformed
         }
-        guard id >= latestInputID else { return nil }
-        latestInputID = id
-        return display
+        return SpeakerObservation(inputID: id, state: State(rawValue: state)!, label: label,
+                                  reason: reason, audioMS: audioMS, display: display)
     }
 
     private static func nonnegativeInteger(_ value: Any?) -> Int? {
@@ -74,5 +83,22 @@ struct SpeakerObservationState {
     private static func strictBoolean(_ value: Any?) -> Bool? {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
         return number.boolValue
+    }
+}
+
+// Compatibility presentation API; validation occurs before retiring an input ID.
+struct SpeakerObservationState {
+    typealias InvalidEvent = SpeakerObservation.InvalidEvent
+    private var latestInputID = -1
+    static func validateReady(_ event: [String: Any], enabled: Bool) throws {
+        try SpeakerObservation.validateReady(event, enabled: enabled)
+    }
+    mutating func apply(_ observation: SpeakerObservation) -> String? {
+        guard observation.inputID >= latestInputID else { return nil }
+        latestInputID = observation.inputID
+        return observation.display
+    }
+    mutating func apply(_ event: [String: Any]) throws -> String? {
+        apply(try SpeakerObservation.validate(event))
     }
 }
