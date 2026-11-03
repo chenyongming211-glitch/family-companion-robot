@@ -46,20 +46,22 @@ xcrun swiftc -swift-version 5 tools/realtime-output-live/SpeakerObservation.swif
 **Interfaces:**
 `evaluate --model ABS --sha256 SHA --manifest ABS` 返回固定公开真人评测报告；清单来源、独立划分、输出字段遵照设计第4节。复用 `boundedFile`、`loadFixture`、`startWorker`、`similarity` 与 `summarizeTimes`，不调用 `runBenchmark` 冒用 synthetic 标签。原`calibrate`仅使用首两音色四条样本，不能直接作为公开真人校准；新增评价器使用所有合格校准片段的同／异人对，冻结后才评分。建模板只用 enrollment，计分只用 evaluation；不更改 `session` 固定研究阈值。
 
-- [ ] 先写云端测试：严格字段／来源／HTTPS参考、至少3人、划分最小数、跨划分原录音／文字／音频泄漏、重复、无效向量、不能分离拒绝、评价集不影响校准、误归／拒识分别计数、报告不泄漏、CLI错误固定。新源码复制到独立云端目录后运行并记录 RED。
+- [x] 先写云端测试：严格字段／来源／HTTPS参考、至少3人、划分最小数、跨划分原录音／文字／音频泄漏、重复、无效向量、不能分离拒绝、评价集不影响校准、误归／拒识分别计数、报告不泄漏、CLI错误固定。新源码复制到独立云端目录后运行并记录 RED。
 
 ```sh
 cd /private/source/tools/speaker-lab
 go test -run 'TestEvaluation|TestEvaluateCLI' -count=1 ./...
 ```
 
-- [ ] 实现清单、独立校准／建模板／评分、受控 worker 和 CLI。相同专项 GREEN，再完整 lab 普通／race／vet／build；相关原生用例使用云端已锁定模型，不获取真人麦克风。
-- [ ] 用服务器现有合成 fixture 验证 CLI 的工程链路，报告标记为工程检查，不以伪造 `public_human` 来源冒充公开真人基准。实际公开真人语料运行另行真实记账。
-- [ ] 独立规格／质量 review，修复阻断项，限定文件提交 main。
+- [x] 实现清单、独立校准／建模板／评分、受控 worker 和 CLI。相同专项 GREEN，再完整 lab 普通／race／vet／build；相关原生用例使用云端已锁定模型，不获取真人麦克风。
+- [x] 用服务器现有合成 fixture 验证 CLI 的工程链路，报告标记为工程检查，不以伪造 `public_human` 来源冒充公开真人基准。实际公开真人语料运行另行真实记账。
+- [x] 独立规格／质量 review，修复阻断项，限定文件提交 main。
 
 ### Task 3: 首包收尾与后续证据
 
-- [ ] 记录源码绑定、命令／结果／skip、客户端构建、正式保护检查；云端恢复／获取公开真人语料未完成时明确列为待做。
-- [ ] 更新开发交接及11月1日声纹设计入口，避免旧段落冒作当前结论。
+- [x] 记录源码绑定、命令／结果／skip、客户端构建、正式保护检查；云端恢复／获取公开真人语料未完成时明确列为待做。
+- [x] 更新开发交接及11月1日声纹设计入口，避免旧段落冒作当前结论。
 - [ ] 全改动审查、文档链接／差异检查，提交推送 main 并核对远端与干净工作区。
-- [ ] 公开真人模型基准、Diart／pyannote分段对照、两人及实体播放验收继续按设计分期，完成对应证据后再选择模型和接入产品。
+## 后续独立阶段（不计首包完成条件）
+
+- [ ] 扩大公开真人模型基准、候选ERes2NetV2与Diart／pyannote分段对照、两人及实体播放验收继续按设计分期，完成对应证据后再选择模型和接入产品。本轮已完成既有两模型的首组公开真人基线。
