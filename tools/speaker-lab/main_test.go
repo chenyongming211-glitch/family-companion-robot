@@ -415,3 +415,20 @@ func TestColdStartupDeadlineKillsAndReaps(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluateCLI(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		code string
+	}{
+		{[]string{"evaluate"}, "usage"},
+		{[]string{"evaluate", "--model", "/secret/model", "--sha256", testSHA}, "usage"},
+		{[]string{"evaluate", "--model", "/secret/model", "--sha256", testSHA, "--manifest", "/secret/missing.json"}, "evaluate_failed"},
+		{[]string{"evaluate", "--model", "/secret/model", "--sha256", testSHA, "--manifest", "/secret/missing.json", "extra"}, "usage"},
+	} {
+		var out, errOut bytes.Buffer
+		if runCLI(context.Background(), tc.args, &out, &errOut) != 1 || out.Len() != 0 || errOut.String() != fmt.Sprintf("{\"error\":\"%s\"}\n", tc.code) {
+			t.Fatalf("unsafe CLI output %q %q", out.String(), errOut.String())
+		}
+	}
+}

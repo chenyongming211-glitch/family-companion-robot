@@ -80,7 +80,7 @@ payload 为最多 1024 个 little-endian float32。特征不可用时为固定 `
 不提供无限队列或并发 goroutine 推理。处理失败后应重新创建 worker，不能复用被退休的连接。
 
 CLI 父进程和 worker 均要求 core dump 上限为 0。现有服务器 swap 不改变，因此 RAM 处理不等于已证明不会进入 swap；
-当前实验仅用明确的合成 fixture，不处理真人声纹。
+合成 benchmark 只使用明确的合成 fixture；另行获准的公开真人语料仅由下述 evaluate 离线入口处理。
 
 ## 模型 opt-in 检查
 
@@ -193,3 +193,53 @@ stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `
 `duration_ms` 仍由完整输入的样本数换算，不等于有效人声时长。原因码不含相似度、分数、向量、转写或音频，也不能追溯此前未携带原因的uncertain结果。
 
 该入口供受控轮流发言观测，未接正式 Realtime。单人来自人工声明，匿名候选不能用于身份认证或登记；不提供连续流分段、换人或重叠检测证据，合成测试也不等于家庭真人准确率或多人验收。
+
+## 公开真人离线评测（闭集研究证据）
+
+`evaluate` 与只接受 `synthetic_tts` 的 `benchmark` 分开。只在云端执行，
+清单和 WAV 均留在私有目录，不将真人文件、清单或向量提交 Git：
+
+```sh
+/private/evidence/speaker-lab evaluate \
+  --model /private/models/model.onnx \
+  --sha256 <64位小写SHA256> \
+  --manifest /private/public/manifest.json
+```
+
+公开真人 manifest 的完整字段如下（示例只展示一项；真实清单须满足下述人数与划分）：
+
+```json
+{"source_kind":"public_human","source_id":"public_corpus","source_url":"https://example.org/corpus","license_url":"https://example.org/license","single_speaker_basis":"source_annotations","sample_rate":16000,"cases":[{"id":"case_1","speaker":"fixture_1","split":"enrollment","path":"/private/public/one.wav","samples":48000,"sha256":"<WAV原文件SHA256>","recording_sha256":"<原录音SHA256>","text_sha256":"<语句摘要SHA256>"}]}
+```
+
+来源 ID 为1～64位字母、数字、下划线或连字符；来源及许可参考必须是无凭据 HTTPS URL，
+只校验格式、不在运行时下载或证明许可。`source_annotations` 表示单人片段依据是数据集标注，
+不表示程序已检测单人或完成分段。应先独立核对数据来源、许可与原录音／文字摘要的生成过程。
+不接受把合成 fixture 改写为 `public_human`。
+
+清单最多128 KiB、12～128项、3～8位 `fixture_1`～`fixture_8`；每位至少1条 enrollment、
+2条 calibration、1条 evaluation。每项所有字段必需，未知、重复、null、重复 ID／路径／WAV摘要均拒绝；
+路径须为规范绝对路径，无符号链接 regular file。原录音摘要或相同文字摘要不可跨划分，
+同一录音切片不能分别充当登记与验收。沿用16kHz mono PCM16、有界8秒 WAV、文件摘要及样本数核验。
+时长／RMS门禁仍为1.5秒及0.005，只能发现过短／低能量，不能识别语音或重叠。
+
+每位首条合格 enrollment 仅在内存建模板，不更新。阈值只使用所有人的所有合格 calibration
+片段及全部无序同人／异人对；每位须至少2条合格校准。令 gap=最小同人余弦−最大异人余弦，
+仅 gap>0 时冻结 match=maxDifferent+gap/2、margin=gap/8。
+任何合格片段的无效向量都是固定失败；无合格模板、校准不足或不可分离则报告
+`failed_missing_enrollment`／`failed_insufficient_calibration`／`failed_nonseparable`，
+`evaluation.status=not_run`，不回退默认阈值，也不从 evaluation 调参。
+
+只有独立 evaluation 计分一次：最佳模板低于 match、与次佳差距小于 margin 或并列时拒识；
+通过后分别计正确匹配与误归。质量拒绝也计入 evaluation 拒识及分母。
+`accuracy=正确数/全部evaluation`，`effective_rate=(正确数+误归数)/全部evaluation`；
+校准失败时这两项为0且 `status=not_run`，不能当作实际评分。
+所有人均有模板，因此只评闭集；开放集明确 `open_set_assessment:unavailable`。
+
+报告仅含来源类别、模型／清单摘要、维度、用例与质量计数、聚合校准及计分结果、独立evaluation的原生／IPC耗时。
+耗时剔除首个evaluation推理后计算温态中位与P95（仍采用现有 nearest-rank）；不包含模型加载、
+登记或校准推理。即使校准失败，已发生的独立evaluation提取耗时仍会报告，不表示已评分。
+报告不含逐人结果、路径、原录音／文字摘要、原文或向量，错误只有固定 `evaluate_failed`／`usage`。
+始终 `human_acceptance:false`、`production_acceptance:false`、`feature_enabled:false`，
+分段及重叠均 `unavailable`。离线公开语料结果不证明家庭现场、连续流、多人重叠或产品实时效果，
+不修改 session／试点／产品阈值。原有合成基准仍只代表工程证据。
