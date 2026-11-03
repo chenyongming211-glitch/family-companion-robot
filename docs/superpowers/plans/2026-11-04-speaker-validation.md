@@ -26,16 +26,16 @@
 **Interfaces:**
 消费已校验的结构化 observation（input_id、state、label、reason、audio_ms），按会话 generation 交付。Guide 输出提示文字、当前步骤和能否准备下一步；提供新连接、ready、播放忙／空闲、准备本步、结果、断开入口。保留原 `SpeakerObservationState.apply` 兼容行为。
 
-- [ ] 先写无麦克风 SDK 测试：未 ready／关闭／播放中不能准备；第一条新 pending 绑定步骤；仅 final 可判定；重复／迟到不可推进；短／长／弱声／不完整／匹配不确定给具体建议；失败重试需新 input_id；断开与新连接清除身份；三句通过仅限一致性。以类型缺失或预期断言失败取得 RED。
+- [x] 先写无麦克风 SDK 测试：未 ready／关闭／播放中不能准备；第一条新 pending 绑定步骤；仅 final 可判定；重复／迟到不可推进；短／长／弱声／不完整／匹配不确定给具体建议；失败重试需新 input_id；断开与新连接清除身份；三句通过仅限一致性。以类型缺失或预期断言失败取得 RED。
 
 ```sh
 xcrun swiftc -swift-version 5 tools/realtime-output-live/SpeakerObservation.swift tools/realtime-output-live/SpeakerGuide.swift tools/realtime-output-live/tests/SpeakerGuideTests.swift -o /tmp/speaker-guide-tests
 /tmp/speaker-guide-tests
 ```
 
-- [ ] 实现状态机与最小 UI 接线；SDK测试 GREEN，原 observation 测试保持通过。保留正常窗口，三个构建入口均包含新增文件。
-- [ ] 构建普通／试点／soak，检查签名和脚本；不启动 App，不申请麦克风。
-- [ ] 独立规格／质量 review，修复阻断项，限定文件提交 main。
+- [x] 实现状态机与最小 UI 接线；SDK测试 GREEN，原 observation 测试保持通过。保留正常窗口，三个构建入口均包含新增文件。
+- [x] 构建普通／试点／soak，检查签名和脚本；不启动 App，不申请麦克风。
+- [x] 独立规格／质量 review，修复阻断项，限定文件提交 main。
 
 ### Task 2: 公开真人离线评测
 
@@ -44,7 +44,7 @@ xcrun swiftc -swift-version 5 tools/realtime-output-live/SpeakerObservation.swif
 - Modify: `tools/speaker-lab/main.go`、`main_test.go`、`README.md`
 
 **Interfaces:**
-`evaluate --model ABS --sha256 SHA --manifest ABS` 返回固定公开真人评测报告；清单来源、独立划分、输出字段遵照设计第4节。复用 `boundedFile`、`loadFixture`、`startWorker`、`calibrate` 与 `summarizeTimes`，不调用 `runBenchmark` 冒用 synthetic 标签。评分只消费冻结校准值、登记模板和 evaluation；不更改 `session` 固定研究阈值。
+`evaluate --model ABS --sha256 SHA --manifest ABS` 返回固定公开真人评测报告；清单来源、独立划分、输出字段遵照设计第4节。复用 `boundedFile`、`loadFixture`、`startWorker`、`similarity` 与 `summarizeTimes`，不调用 `runBenchmark` 冒用 synthetic 标签。原`calibrate`仅使用首两音色四条样本，不能直接作为公开真人校准；新增评价器使用所有合格校准片段的同／异人对，冻结后才评分。建模板只用 enrollment，计分只用 evaluation；不更改 `session` 固定研究阈值。
 
 - [ ] 先写云端测试：严格字段／来源／HTTPS参考、至少3人、划分最小数、跨划分原录音／文字／音频泄漏、重复、无效向量、不能分离拒绝、评价集不影响校准、误归／拒识分别计数、报告不泄漏、CLI错误固定。新源码复制到独立云端目录后运行并记录 RED。
 
