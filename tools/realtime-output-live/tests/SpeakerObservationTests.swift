@@ -7,6 +7,72 @@ import Foundation
   func event(_ id: Int, _ state: String, _ label: String = "", _ start: Int = 0, _ end: Int = 0) -> [String: Any] {
    ["type":"speaker_observation","input_id":id,"state":state,"label":label,"start_sample":start,"end_sample":end,"elapsed_ms":10,"evidence":"turn_taking_test"]
   }
+  // Use only synthetic protocol values; never print an upstream reason or result.
+  var reasonChecks = 0, reasonFailures = 0, failuresByName: [String: Int] = [:]
+  func reasonCheck(_ value: Bool, _ name: String) {
+   reasonChecks += 1
+   if !value { reasonFailures += 1; failuresByName[name,default:0] += 1 }
+  }
+  func diagnosed(_ state: String, _ reason: Any?, _ audioMS: Any? = nil, id: Int = 1) -> [String: Any] {
+   var value = state == "temporary" ? event(id,state,"guest_1",0,32000) : event(id,state)
+   if let reason { value["reason"] = reason }
+   if let audioMS { value["audio_ms"] = audioMS }
+   return value
+  }
+  func reasonReject(_ value: [String: Any], _ name: String) {
+   var fresh = SpeakerObservationState()
+   do { _ = try fresh.apply(value); reasonCheck(false,name) }
+   catch { reasonCheck(true,name) }
+  }
+  let descriptions = [
+   "": "证据不足", "incomplete_span": "片段边界未确认", "too_short": "声音片段不足1.5秒",
+   "too_long": "片段超过8秒", "not_queued": "本段未送入识别",
+   "match_uncertain": "声音特征匹配证据不足", "low_energy": "收到的声音较弱"
+  ]
+  for (reason, description) in descriptions {
+   var fresh = SpeakerObservationState()
+   reasonCheck(try fresh.apply(diagnosed("uncertain",reason)) == "本次发言：不确定（\(description)）", "static uncertain explanation")
+   reasonCheck(try fresh.apply(diagnosed("uncertain",reason,2340)) == "本次发言：不确定（\(description)，片段2.34秒）", "uncertain audio duration")
+  }
+  for (state, allowed) in ["pending":[""], "temporary":["","candidate"], "uncertain":Array(descriptions.keys), "unknown":["","capacity"], "unavailable":["","observer_unavailable"]] {
+   let all = ["", "candidate", "capacity", "observer_unavailable", "incomplete_span", "too_short", "too_long", "not_queued", "match_uncertain", "low_energy", "untrusted_upstream_text"]
+   for reason in all {
+    let value = diagnosed(state,reason,2000)
+    if allowed.contains(reason) {
+     var fresh = SpeakerObservationState()
+     reasonCheck(try fresh.apply(value) != nil, "accepted known state/reason pair")
+    } else { reasonReject(value,"rejected incompatible or unknown reason") }
+   }
+   for invalid: Any in [NSNull(), 1, true, ["code":"too_short"], ["too_short"]] {
+    reasonReject(diagnosed(state,invalid),"rejected non-string reason")
+   }
+   for audioMS: Any in [NSNull(), -1, 35001, true, false, 1.5, "2000", [2000], ["value":2000]] {
+    reasonReject(diagnosed(state,"",audioMS),"rejected malformed audio duration")
+   }
+  }
+  for audioMS in [0, 1, 35000] {
+   var fresh = SpeakerObservationState()
+   let suffix = audioMS == 0 ? "" : audioMS == 1 ? "，片段0.00秒" : "，片段35.00秒"
+   reasonCheck(try fresh.apply(diagnosed("uncertain",nil,audioMS)) == "本次发言：不确定（证据不足\(suffix)）", "duration boundaries and missing reason")
+  }
+  var compatibility = SpeakerObservationState()
+  reasonCheck(try compatibility.apply(diagnosed("uncertain",nil)) == "本次发言：不确定（证据不足）", "old event remains valid")
+  reasonCheck(try compatibility.apply(diagnosed("temporary","candidate",2000)) == "本次发言：访客 A（候选）", "temporary text remains exact")
+  // Neither invalid optional field may retire a valid lower ID.
+  for invalid in [diagnosed("uncertain","bogus",2000,id:99), diagnosed("uncertain","too_short",true,id:99)] {
+   var fresh = SpeakerObservationState()
+   _ = try fresh.apply(diagnosed("pending","",id:2))
+   do { _ = try fresh.apply(invalid); reasonCheck(false,"invalid optional field rejected before ID retirement") }
+   catch { reasonCheck(true,"invalid optional field rejected before ID retirement") }
+   reasonCheck(try fresh.apply(diagnosed("uncertain","match_uncertain",2100,id:2)) == "本次发言：不确定（声音特征匹配证据不足，片段2.10秒）", "invalid event does not retire valid input")
+  }
+  let diagnosedWire = try JSONSerialization.data(withJSONObject: diagnosed("uncertain","low_energy",1780))
+  var jsonState = SpeakerObservationState()
+  reasonCheck(try jsonState.apply(JSONSerialization.jsonObject(with: diagnosedWire) as! [String: Any]) == "本次发言：不确定（收到的声音较弱，片段1.78秒）", "JSON round trip")
+  for name in failuresByName.keys.sorted() {
+   FileHandle.standardError.write(Data("FAIL \(name): \(failuresByName[name]!)\n".utf8))
+  }
+  precondition(reasonFailures == 0, "reason/audio_ms checks failed: \(reasonFailures) of \(reasonChecks)")
   check(try view.apply(event(1,"pending")) == "正在识别本次发言…")
   check(try view.apply(event(1,"temporary","guest_1",16000,48000)) == "本次发言：访客 A（候选）")
   check(try view.apply(event(2,"pending")) != nil)
@@ -33,7 +99,7 @@ import Foundation
   var bounds = SpeakerObservationState()
   check(try bounds.apply(event(0,"temporary","guest_8",0,24000)) == "本次发言：访客 H（候选）")
   check(try bounds.apply(event(1,"temporary","guest_1",16000,144000)) != nil)
-  check(try bounds.apply(event(2,"uncertain")) == "本次发言：不确定（请轮流说话）")
+  check(try bounds.apply(event(2,"uncertain")) == "本次发言：不确定（证据不足）")
   check(try bounds.apply(event(3,"unknown")) == "本次发言：未知说话人")
   check(try bounds.apply(event(4,"unavailable")) == "声纹观测暂不可用，可以继续聊天")
   // A rejected higher ID must not retire the current valid input.
@@ -50,6 +116,6 @@ import Foundation
     do { try SpeakerObservationState.validateReady(wrong, enabled: enabled); fatalError("accepted incompatible ready") } catch {}
    }
   }
-  print("Speaker observation parser: PASS")
+  print("Speaker observation parser: PASS (\(reasonChecks) reason/audio_ms checks plus existing schema/integer cases)")
  }
 }

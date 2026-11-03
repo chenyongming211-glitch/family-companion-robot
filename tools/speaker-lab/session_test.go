@@ -276,9 +276,11 @@ func testRealSessionBridge(t *testing.T, realtime bool) {
 	defer cancel()
 	args := []string{"session", "--model", model, "--sha256", sha, "--declared-single-speaker"}
 	evidence := "user_declared_test"
+	reason := ""
 	if realtime {
 		args = append(args, "--realtime-test")
 		evidence = "turn_taking_test"
+		reason = "candidate"
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
 	stdin, err := cmd.StdinPipe()
@@ -303,7 +305,7 @@ func testRealSessionBridge(t *testing.T, realtime bool) {
 	}()
 	decoder := json.NewDecoder(stdout)
 	var ready sessionEvent
-	if decoder.Decode(&ready) != nil || ready.Event != "ready" || ready.Evidence != evidence {
+	if decoder.Decode(&ready) != nil || ready.Event != "ready" || ready.Evidence != evidence || ready.Reason != "" {
 		t.Fatal("session not ready")
 	}
 	// Human capture takes longer than the worker idle deadline. The second
@@ -323,13 +325,13 @@ func testRealSessionBridge(t *testing.T, realtime bool) {
 			t.Fatal(err)
 		}
 		var event sessionEvent
-		if decoder.Decode(&event) != nil || event.Event != "observation" || event.ID != h.ID || event.Label != "guest_1" || event.Evidence != evidence || event.DurationMS != int64(len(pcm)/2*1000/16000) {
+		if decoder.Decode(&event) != nil || event.Event != "observation" || event.ID != h.ID || event.Label != "guest_1" || event.Evidence != evidence || event.DurationMS != int64(len(pcm)/2*1000/16000) || event.Reason != reason {
 			t.Fatalf("bad session result %+v", event)
 		}
 	}
 	_ = stdin.Close()
 	var closed sessionEvent
-	if decoder.Decode(&closed) != nil || closed.Event != "closed" || closed.Evidence != evidence {
+	if decoder.Decode(&closed) != nil || closed.Event != "closed" || closed.Evidence != evidence || closed.Reason != "" {
 		t.Fatal("missing close")
 	}
 	if err = cmd.Wait(); err != nil || stderr.Len() != 0 {
@@ -417,7 +419,11 @@ func TestSessionCLIRealtimeCoordinatesAndSchema(t *testing.T) {
 					t.Fatalf("invalid event %s", line)
 				}
 				if i == 1 || i == 2 {
-					if len(fields) != 5 || fields["event"] != "observation" || fields["id"] != float64(i) || fields["label"] != "uncertain" || fields["duration_ms"] != float64(tc.n*1000/16000) {
+					reason := "low_energy"
+					if tc.n < 24000 {
+						reason = "too_short"
+					}
+					if len(fields) != 6 || fields["event"] != "observation" || fields["id"] != float64(i) || fields["label"] != "uncertain" || fields["duration_ms"] != float64(tc.n*1000/16000) || fields["reason"] != reason {
 						t.Fatalf("invalid observation %s", line)
 					}
 				} else if len(fields) != 2 {
@@ -532,6 +538,112 @@ func TestSessionRealtimeTrackerRetainsLabelsAcrossSourceGaps(t *testing.T) {
 			if b != 0 {
 				t.Fatal("temporary PCM retained")
 			}
+		}
+	}
+}
+
+func TestSessionObservationReasonsAndManualCompatibility(t *testing.T) {
+	var capacityVectors [][]float32
+	var capacityLabels, capacityReasons []string
+	for i := 0; i < 9; i++ {
+		v := make([]float32, 9)
+		v[i] = 1
+		capacityVectors = append(capacityVectors, v)
+		if i < 8 {
+			capacityLabels = append(capacityLabels, "guest_"+string(rune('1'+i)))
+			capacityReasons = append(capacityReasons, "candidate")
+		} else {
+			capacityLabels = append(capacityLabels, "unknown")
+			capacityReasons = append(capacityReasons, "capacity")
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		pcm     [][]byte
+		vectors [][]float32
+		labels  []string
+		reasons []string
+	}{
+		{"short_before_low_energy", [][]byte{make([]byte, 23999*2)}, nil, []string{"uncertain"}, []string{"too_short"}},
+		{"low_energy_at_minimum", [][]byte{make([]byte, 24000*2)}, nil, []string{"uncertain"}, []string{"low_energy"}},
+		{"low_energy_longer", [][]byte{make([]byte, 32000*2)}, nil, []string{"uncertain"}, []string{"low_energy"}},
+		{"candidate_and_match", nil, [][]float32{{1, 0}, {1, 0}}, []string{"guest_1", "guest_1"}, []string{"candidate", "candidate"}},
+		{"match_gray_zone", nil, [][]float32{{1, 0}, {.65, .76}}, []string{"guest_1", "uncertain"}, []string{"candidate", "match_uncertain"}},
+		{"capacity", nil, capacityVectors, capacityLabels, capacityReasons},
+	} {
+		for _, realtime := range []bool{false, true} {
+			mode := "manual"
+			if realtime {
+				mode = "realtime"
+			}
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				var in, out bytes.Buffer
+				var start uint64
+				for i := range tc.labels {
+					pcm := sessionPCM(32000)
+					if tc.pcm != nil {
+						pcm = tc.pcm[i]
+					}
+					h := sessionFrame(uint64(i+1), start, len(pcm)/2)
+					if realtime {
+						h.Scope = "realtime-test"
+					}
+					start = h.End
+					if err := writeRequest(&in, h, pcm); err != nil {
+						t.Fatal(err)
+					}
+				}
+				calls := 0
+				opt := sessionOptions{realtime: realtime, validate: func(string, string) error { return nil }, extract: func(context.Context, requestHeader, []byte) ([]float32, error) {
+					if calls >= len(tc.vectors) {
+						t.Fatal("quality gate extracted an unqualified clip")
+					}
+					v := append([]float32(nil), tc.vectors[calls]...)
+					calls++
+					return v, nil
+				}, lifetime: time.Second}
+				if err := runSession(context.Background(), io.NopCloser(&in), &out, "model", strings.Repeat("a", 64), true, opt); err != nil {
+					t.Fatal(err)
+				}
+				if calls != len(tc.vectors) {
+					t.Fatalf("extract calls=%d want=%d", calls, len(tc.vectors))
+				}
+				lines := bytes.Split(bytes.TrimSpace(out.Bytes()), []byte("\n"))
+				if len(lines) != len(tc.labels)+2 {
+					t.Fatalf("event count=%d", len(lines))
+				}
+				for i, line := range lines {
+					var fields map[string]any
+					if err := json.Unmarshal(line, &fields); err != nil {
+						t.Fatal(err)
+					}
+					if i == 0 || i == len(lines)-1 {
+						want := "ready"
+						if i > 0 {
+							want = "closed"
+						}
+						if len(fields) != 2 || fields["event"] != want {
+							t.Fatalf("lifecycle schema changed: %s", line)
+						}
+						continue
+					}
+					j := i - 1
+					n := 32000
+					if tc.pcm != nil {
+						n = len(tc.pcm[j]) / 2
+					}
+					if fields["event"] != "observation" || fields["id"] != float64(i) || fields["label"] != tc.labels[j] || fields["duration_ms"] != float64(n*1000/16000) {
+						t.Fatalf("observation changed: %s", line)
+					}
+					if realtime {
+						if len(fields) != 6 || fields["evidence"] != "turn_taking_test" || fields["reason"] != tc.reasons[j] {
+							t.Fatalf("missing or incorrect fixed reason: %s", line)
+						}
+					} else if len(fields) != 5 || fields["evidence"] != "user_declared_test" {
+						t.Fatalf("manual schema changed: %s", line)
+					}
+				}
+			})
 		}
 	}
 }

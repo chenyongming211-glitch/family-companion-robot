@@ -45,9 +45,10 @@ type Job struct {
 // Result contains no audio, feature vectors, paths, or user text. ElapsedMS is
 // wall time spent transporting and observing this request.
 type Result struct {
-	ID, Start, End int64
-	State, Label   string
-	ElapsedMS      int64
+	ID, Start, End       int64
+	State, Label, Reason string
+	ElapsedMS            int64
+	AudioMS              int64
 }
 
 type observerLimits struct{ startup, request, lifetime time.Duration }
@@ -62,6 +63,7 @@ type helperEvent struct {
 	Label      string `json:"label"`
 	DurationMS int64  `json:"duration_ms"`
 	Evidence   string `json:"evidence"`
+	Reason     string `json:"reason,omitempty"`
 }
 type helperOutput struct {
 	event helperEvent
@@ -321,7 +323,7 @@ func (o *Observer) request(parent context.Context, job Job) (Result, error) {
 		if e.Event != "observation" || e.ID != job.ID || e.DurationMS != (job.End-job.Start)*1000/sampleRate {
 			return Result{}, errUnavailable
 		}
-		result := Result{ID: job.ID, Start: job.Start, End: job.End, State: e.Label, ElapsedMS: time.Since(started).Milliseconds()}
+		result := Result{ID: job.ID, Start: job.Start, End: job.End, State: e.Label, Reason: e.Reason, AudioMS: e.DurationMS, ElapsedMS: time.Since(started).Milliseconds()}
 		if len(e.Label) == 7 && e.Label[:6] == "guest_" {
 			result.State = "temporary"
 			result.Label = e.Label
@@ -400,7 +402,7 @@ func decodeEvent(line []byte) (helperEvent, error) {
 			return event, errUnavailable
 		}
 		fields[key] = value
-		if len(fields) > 5 {
+		if len(fields) > 6 {
 			return event, errUnavailable
 		}
 	}
@@ -420,6 +422,12 @@ func decodeEvent(line []byte) (helperEvent, error) {
 	case "ready", "closed":
 	case "observation":
 		required = append(required, "id", "label", "duration_ms")
+		if _, present := fields["reason"]; present {
+			required = append(required, "reason")
+			if !validHelperReason(event.Label, event.Reason) {
+				return event, errUnavailable
+			}
+		}
 		if event.ID <= 0 || event.DurationMS < 0 || event.DurationMS > 8000 {
 			return event, errUnavailable
 		}
@@ -438,4 +446,15 @@ func decodeEvent(line []byte) (helperEvent, error) {
 		}
 	}
 	return event, nil
+}
+
+// Only fixed branch names cross IPC; no arbitrary worker/provider error text.
+func validHelperReason(label, reason string) bool {
+	if label == "uncertain" {
+		return reason == "too_short" || reason == "low_energy" || reason == "match_uncertain"
+	}
+	if label == "unknown" {
+		return reason == "capacity"
+	}
+	return len(label) == 7 && label[:6] == "guest_" && label[6] >= '1' && label[6] <= '8' && reason == "candidate"
 }

@@ -146,8 +146,13 @@ func fakeSession(args []string) int {
 			label = "unknown"
 		case "uncertain":
 			label = "uncertain"
+		case "reason":
+			label = "uncertain"
 		}
 		line := fmt.Sprintf(`{"event":"observation","id":%d,"label":%q,"duration_ms":%d,"evidence":%q}`, id, label, duration, evidence)
+		if mode == "reason" {
+			line = strings.TrimSuffix(line, "}") + `,"reason":"match_uncertain"}`
+		}
 		switch mode {
 		case "extra":
 			line = strings.TrimSuffix(line, "}") + `,"text":"private-secret"}`

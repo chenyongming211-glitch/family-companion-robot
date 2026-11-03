@@ -178,6 +178,18 @@ stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `
 
 `--realtime-test` 仅适用于 `session`，仍必须显式声明测试片段为单人。stdin 保持严格协议 v1，scope 固定为 `realtime-test`，同一连接的 session／generation／模型固定、ID 严格递增。完整片段最多128000 samples（8秒）；首段可从非零源采样坐标开始，后段 start 必须大于等于上段 end，允许真实静音／播放期间的坐标间隙，拒绝重叠或倒序。该模式不填补间隙、不裁切长片段。
 
-输出字段、32段／5分钟上限、质量门禁、临时数据清零及子进程回收规则与上述手动模式相同；所有事件的 evidence 改为 `turn_taking_test`。默认手动模式仍使用 `manual-test`、从0连续相接、4秒上限及 `user_declared_test`。`TestRealRealtimeSessionBridgeOptIn` 在内存重复显式合成 fixture，验证两个完整8秒片段、非零起点／源坐标间隙、标签保留及 EOF 回收，不保存新增音频。
+32段／5分钟上限、质量门禁、临时数据清零及子进程回收规则与上述手动模式相同；所有事件的 evidence 改为 `turn_taking_test`。Realtime 的 observation 在原5字段上增加固定 `reason`，共6字段；ready／closed仍恰为2字段。默认手动模式仍使用 `manual-test`、从0连续相接、4秒上限及 `user_declared_test`，observation保持原5字段、不增加reason。`TestRealRealtimeSessionBridgeOptIn` 在内存重复显式合成 fixture，验证两个完整8秒片段、非零起点／源坐标间隙、标签／原因及 EOF 回收，不保存新增音频。
+
+`reason` 只区分现有判定来源，不改变模型、阈值或质量门禁：
+
+| reason | 原有结果与判定来源 |
+| --- | --- |
+| `candidate` | Tracker返回临时候选，label为`guest_1`～`guest_8` |
+| `match_uncertain` | 通过时长／能量门禁，人工单人及完整片段声明为真，Tracker返回uncertain |
+| `capacity` | Tracker容量已满，返回unknown |
+| `too_short` | 输入总片段不足24000 samples（1.5秒），不调用提取器 |
+| `low_energy` | 输入总片段达到1.5秒，但未通过既有RMS门禁，不调用提取器 |
+
+`duration_ms` 仍由完整输入的样本数换算，不等于有效人声时长。原因码不含相似度、分数、向量、转写或音频，也不能追溯此前未携带原因的uncertain结果。
 
 该入口供受控轮流发言观测，未接正式 Realtime。单人来自人工声明，匿名候选不能用于身份认证或登记；不提供连续流分段、换人或重叠检测证据，合成测试也不等于家庭真人准确率或多人验收。

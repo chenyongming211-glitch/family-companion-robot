@@ -634,7 +634,7 @@ func (s *Session) listen() error {
 					s.mu.Lock()
 					id := s.speakerLatest
 					s.mu.Unlock()
-					s.observeSpeaker(id, start, end, nil, false)
+					s.observeSpeaker(id, start, end, pcm, speakerComplete)
 				}
 				if e = s.send(map[string]any{"type": "status", "code": "input_too_long"}); e != nil {
 					return e

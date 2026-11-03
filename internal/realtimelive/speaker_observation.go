@@ -24,7 +24,10 @@ func (s *Session) beginSpeaker() {
 	s.mu.Unlock()
 }
 func speakerEvent(r speakerlive.Result) map[string]any {
-	return map[string]any{"type": "speaker_observation", "input_id": r.ID, "state": r.State, "label": r.Label, "start_sample": r.Start, "end_sample": r.End, "elapsed_ms": r.ElapsedMS, "evidence": "turn_taking_test"}
+	if r.State == "unavailable" {
+		r.Reason = "observer_unavailable"
+	}
+	return map[string]any{"type": "speaker_observation", "input_id": r.ID, "state": r.State, "label": r.Label, "start_sample": r.Start, "end_sample": r.End, "elapsed_ms": r.ElapsedMS, "evidence": "turn_taking_test", "reason": r.Reason, "audio_ms": r.AudioMS}
 }
 func (s *Session) speakerResult(r speakerlive.Result) {
 	if s.cfg.Speaker == nil {
@@ -47,6 +50,7 @@ func (s *Session) speakerResult(r speakerlive.Result) {
 	if s.speakerFailed {
 		r.State = "unavailable"
 		r.Label = ""
+		r.Reason = "observer_unavailable"
 	}
 	// A slow/closed observer cannot cancel the normal speech/model pipeline.
 	_ = s.sendLocked(speakerEvent(r))
@@ -62,15 +66,28 @@ func (s *Session) observeSpeaker(id, start, end int64, pcm []byte, complete bool
 		s.speakerResult(speakerlive.Result{ID: id, State: "unavailable"})
 		return
 	}
-	if !complete || start < 0 || end <= start || end-start < 24000 || end-start > 128000 || int64(len(pcm)) != (end-start)*2 {
-		s.speakerResult(speakerlive.Result{ID: id, State: "uncertain"})
+	ms := min(int64(len(pcm)/32), int64(35000))
+	reject := func(state, reason string) {
+		s.speakerResult(speakerlive.Result{ID: id, State: state, Reason: reason, AudioMS: ms})
+	}
+	if !complete || start < 0 || end <= start || int64(len(pcm)) != (end-start)*2 {
+		reject("uncertain", "incomplete_span")
+		return
+	}
+	if end-start < 24000 {
+		reject("uncertain", "too_short")
+		return
+	}
+	if end-start > 128000 {
+		reject("uncertain", "too_long")
 		return
 	}
 	if observer == nil {
-		s.speakerResult(speakerlive.Result{ID: id, State: "unavailable"})
+		reject("unavailable", "observer_unavailable")
 		return
 	}
 	if !observer.Offer(speakerlive.Job{ID: id, Start: start, End: end, PCM: pcm}) {
-		s.speakerResult(speakerlive.Result{ID: id, State: "uncertain"})
+		reject("uncertain", "not_queued")
 	}
+
 }

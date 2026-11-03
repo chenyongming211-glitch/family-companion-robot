@@ -214,6 +214,11 @@ func TestSpeakerLongRejectedInputClearsPending(t *testing.T) {
 	if len(states) != 2 || states[0] != "pending" || states[1] != "uncertain" || len(o.jobs) != 0 {
 		t.Fatal("rejected long input left a pending observation", states)
 	}
+	for _, event := range w.events {
+		if event["type"] == "speaker_observation" && event["state"] == "uncertain" && (event["reason"] != "too_long" || event["audio_ms"] != int64(26000)) {
+			t.Fatal("complete long input lost known duration", event)
+		}
+	}
 }
 
 type failingOfferObserver struct{ session *Session }
@@ -232,5 +237,60 @@ func TestSpeakerFailureDuringOfferCannotBeOverwritten(t *testing.T) {
 		if event["state"] != "unavailable" {
 			t.Fatal("terminal state overwritten during Offer", w.events)
 		}
+	}
+}
+
+func TestSpeakerRejectionReasonAndAudioLength(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		start, end int64
+		bytes      int
+		complete   bool
+		reason     string
+		ms         int64
+	}{
+		{"source", 0, 32000, 64000, false, "incomplete_span", 2000},
+		{"short", 0, 16000, 32000, true, "too_short", 1000},
+		{"long", 0, 128001, 256002, true, "too_long", 8000},
+		{"missing", 0, 32000, 48000, true, "incomplete_span", 1500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, w, _ := observationSession(t)
+			s.speakerLatest = 1
+			s.observeSpeaker(1, tc.start, tc.end, make([]byte, tc.bytes), tc.complete)
+			if len(w.events) != 1 || w.events[0]["reason"] != tc.reason || w.events[0]["audio_ms"] != tc.ms {
+				t.Fatal("rejection reason missing or incorrect", w.events)
+			}
+		})
+	}
+	s, w, o := observationSession(t)
+	s.speakerLatest = 1
+	o.accept = false
+	s.observeSpeaker(1, 0, 32000, make([]byte, 64000), true)
+	if len(w.events) != 1 || w.events[0]["reason"] != "not_queued" {
+		t.Fatal(w.events)
+	}
+}
+func TestSpeakerUnavailableHasUnambiguousReason(t *testing.T) {
+	s, w, _ := observationSession(t)
+	s.speakerLatest = 1
+	s.speakerFailed = true
+	s.observeSpeaker(1, 0, 16000, make([]byte, 32000), false)
+	if len(w.events) != 1 || w.events[0]["reason"] != "observer_unavailable" {
+		t.Fatal(w.events)
+	}
+}
+
+func TestSpeakerReasonReachesCurrentWindow(t *testing.T) {
+	s, w, _ := observationSession(t)
+	s.speakerLatest = 1
+	s.speakerResult(speakerlive.Result{ID: 1, Start: 16000, End: 48000, State: "uncertain", Reason: "match_uncertain", AudioMS: 2000})
+	if len(w.events) != 1 || w.events[0]["reason"] != "match_uncertain" || w.events[0]["audio_ms"] != int64(2000) {
+		t.Fatal(w.events)
+	}
+	s.speakerResult(speakerlive.Result{State: "unavailable"})
+	s.speakerResult(speakerlive.Result{ID: 1, State: "uncertain", Reason: "low_energy", AudioMS: 2000})
+	if last := w.events[len(w.events)-1]; last["state"] != "unavailable" || last["reason"] != "observer_unavailable" {
+		t.Fatal(last)
 	}
 }

@@ -23,6 +23,7 @@ type sessionEvent struct {
 	Label      string `json:"label,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Evidence   string `json:"evidence"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 type sessionOptions struct {
@@ -71,16 +72,19 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 	if opt.realtime {
 		scope, evidence, maxClipSamples = "realtime-test", "turn_taking_test", 8*sampleRate
 	}
-	encode := func(event string, id uint64, label string, duration int64) error {
+	encode := func(event string, id uint64, label string, duration int64, reason string) error {
 		fields := map[string]any{"event": event, "evidence": evidence}
 		if event == "observation" {
 			fields["id"] = id
 			fields["label"] = label
 			fields["duration_ms"] = duration
+			if opt.realtime {
+				fields["reason"] = reason
+			}
 		}
 		return json.NewEncoder(out).Encode(fields)
 	}
-	if err := encode("ready", 0, "", 0); err != nil {
+	if err := encode("ready", 0, "", 0, ""); err != nil {
 		return err
 	}
 	var tracker *speaker.Tracker
@@ -88,7 +92,7 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 		if tracker != nil {
 			tracker.Close()
 		}
-		_ = encode("closed", 0, "", 0)
+		_ = encode("closed", 0, "", 0, "")
 	}()
 	if opt.extract == nil {
 		opt.extract = func(ctx context.Context, h requestHeader, p []byte) ([]float32, error) {
@@ -122,8 +126,9 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 			first = h
 		}
 		lastID, end = h.ID, h.End
-		label := "uncertain"
-		if qualityReason(pcm) == "qualified" {
+		label, reason := "uncertain", "match_uncertain"
+		quality := qualityReason(pcm)
+		if quality == "qualified" {
 			v, err := opt.extract(ctx, h, pcm)
 			clear(pcm)
 			if err != nil || ctx.Err() != nil {
@@ -149,16 +154,24 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 			}
 			if result.State == speaker.StateTemporary {
 				label = result.Label
+				reason = "candidate"
 			} else {
 				label = string(result.State)
+				if result.State == speaker.StateUnknown {
+					reason = "capacity"
+				}
 			}
 		} else {
 			clear(pcm)
+			reason = "low_energy"
+			if quality == "short" {
+				reason = "too_short"
+			}
 		}
 		if ctx.Err() != nil {
 			return errWorker
 		}
-		if err := encode("observation", h.ID, label, int64((h.End-h.Start)*1000/sampleRate)); err != nil {
+		if err := encode("observation", h.ID, label, int64((h.End-h.Start)*1000/sampleRate), reason); err != nil {
 			return err
 		}
 	}

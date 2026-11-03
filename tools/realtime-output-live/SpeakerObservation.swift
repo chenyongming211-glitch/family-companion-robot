@@ -5,6 +5,12 @@ import CoreFoundation
 struct SpeakerObservationState {
     private var latestInputID = -1
     enum InvalidEvent: Error { case malformed, incompatibleReady }
+    private static let uncertainDescriptions = [
+        "": "证据不足", "incomplete_span": "片段边界未确认",
+        "too_short": "声音片段不足1.5秒", "too_long": "片段超过8秒",
+        "not_queued": "本段未送入识别", "match_uncertain": "声音特征匹配证据不足",
+        "low_energy": "收到的声音较弱"
+    ]
 
     static func validateReady(_ event: [String: Any], enabled: Bool) throws {
         guard strictBoolean(event["speaker_test"]) == true,
@@ -22,24 +28,36 @@ struct SpeakerObservationState {
               Self.nonnegativeInteger(event["elapsed_ms"]) != nil,
               let state = event["state"] as? String,
               let label = event["label"] as? String else { throw InvalidEvent.malformed }
+        // Older servers omit these fields. Explicit null or wrong types are invalid.
+        var reason = "", audioMS = 0
+        if let value = event["reason"] {
+            guard let code = value as? String else { throw InvalidEvent.malformed }
+            reason = code
+        }
+        if let value = event["audio_ms"] {
+            guard let duration = Self.nonnegativeInteger(value), duration <= 35000 else { throw InvalidEvent.malformed }
+            audioMS = duration
+        }
         let display: String
         switch state {
         case "pending":
-            guard label.isEmpty else { throw InvalidEvent.malformed }
+            guard label.isEmpty, reason.isEmpty else { throw InvalidEvent.malformed }
             display = "正在识别本次发言…"
         case "temporary":
-            guard let index = (1...8).first(where: { label == "guest_\($0)" }),
+            guard reason.isEmpty || reason == "candidate",
+                  let index = (1...8).first(where: { label == "guest_\($0)" }),
                   end > start, (24000...128000).contains(end - start) else { throw InvalidEvent.malformed }
             let letter = String(UnicodeScalar(64 + index)!)
             display = "本次发言：访客 \(letter)（候选）"
         case "uncertain":
-            guard label.isEmpty else { throw InvalidEvent.malformed }
-            display = "本次发言：不确定（请轮流说话）"
+            guard label.isEmpty, let explanation = Self.uncertainDescriptions[reason] else { throw InvalidEvent.malformed }
+            let duration = audioMS > 0 ? "，片段" + String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), Double(audioMS) / 1000) + "秒" : ""
+            display = "本次发言：不确定（\(explanation)\(duration)）"
         case "unknown":
-            guard label.isEmpty else { throw InvalidEvent.malformed }
+            guard label.isEmpty, reason.isEmpty || reason == "capacity" else { throw InvalidEvent.malformed }
             display = "本次发言：未知说话人"
         case "unavailable":
-            guard label.isEmpty else { throw InvalidEvent.malformed }
+            guard label.isEmpty, reason.isEmpty || reason == "observer_unavailable" else { throw InvalidEvent.malformed }
             display = "声纹观测暂不可用，可以继续聊天"
         default: throw InvalidEvent.malformed
         }
