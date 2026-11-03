@@ -76,7 +76,7 @@ import Foundation
             check(guide.message.contains("1.23秒"), "validated duration displayed")
             id += 1
         }
-        for state in ["unknown", "unavailable"] {
+        for state in ["unknown"] {
             check(guide.prepare(generation: 1), "arm noncandidate")
             guide.receive(try observation(id, "pending"), generation: 1)
             guide.receive(try observation(id, state), generation: 1)
@@ -145,6 +145,63 @@ import Foundation
         relayed.handle(.prepare, generation: 10)
         relayed.handle(.observation(try observation(2, "temporary", label: "guest_1")), generation: 10)
         check(relayed.message == closedMessage && !relayed.canPrepare, "closed connection rejects all late callbacks")
+        // A permanently failed observer may omit pending on its next input.
+        for priorSuccess in [false, true] {
+            var unavailable = SpeakerGuide()
+            unavailable.connect(generation: 20, enabled: true)
+            unavailable.handle(.ready, generation: 20)
+            if priorSuccess {
+                unavailable.handle(.prepare, generation: 20)
+                unavailable.handle(.observation(try observation(1, "pending")), generation: 20)
+                unavailable.handle(.observation(try observation(1, "temporary", label: "guest_1")), generation: 20)
+                unavailable.handle(.playback(false), generation: 20)
+            }
+            let currentStep = unavailable.step
+            unavailable.handle(.prepare, generation: 20)
+            unavailable.handle(.observation(try observation(2, "unavailable", reason: "observer_unavailable")), generation: 19)
+            check(!unavailable.message.contains("重新开始三步测试"), "stale unavailable ignored")
+            unavailable.handle(.observation(try observation(2, "unavailable", reason: "observer_unavailable")), generation: 20)
+            check(unavailable.step == currentStep && unavailable.message.contains("本步未通过") && unavailable.message.contains("结束后重新开始三步测试"), "direct unavailable terminates round with actionable restart")
+            check(unavailable.instruction.contains("重新开始三步测试"), "terminal instruction replaces record-next prompt")
+            unavailable.handle(.playback(false), generation: 20)
+            unavailable.handle(.responseWaiting(false), generation: 20)
+            check(!unavailable.canPrepare && !unavailable.prepare(generation: 20), "unavailable cannot be released by reply completion")
+            unavailable.handle(.observation(try observation(3, "pending")), generation: 20)
+            unavailable.handle(.observation(try observation(3, "temporary", label: "guest_1")), generation: 20)
+            check(unavailable.step == currentStep, "terminal round ignores further results")
+            unavailable.connect(generation: 21, enabled: true)
+            unavailable.handle(.ready, generation: 21)
+            check(unavailable.canPrepare && unavailable.step == 1, "new connection resets unavailable terminal state")
+            unavailable.handle(.prepare, generation: 21)
+            unavailable.handle(.observation(try observation(1, "temporary", label: "guest_1")), generation: 21)
+            check(unavailable.step == 1, "recovery still rejects final-only candidate")
+        }
+        var noReply = SpeakerGuide()
+        noReply.connect(generation: 30, enabled: true)
+        noReply.handle(.ready, generation: 30)
+        noReply.handle(.prepare, generation: 30)
+        noReply.handle(.observation(try observation(1, "pending")), generation: 30)
+        noReply.handle(.observation(try observation(1, "uncertain", reason: "too_long", audioMS: 26000)), generation: 30)
+        noReply.handle(.inputTooLong, generation: 29)
+        check(!noReply.message.contains("重新开始三步测试"), "stale no-reply rejection ignored")
+        noReply.handle(.inputTooLong, generation: 30)
+        check(noReply.step == 1 && noReply.message.contains("本步未通过") && noReply.message.contains("结束后重新开始三步测试"), "no-reply rejection terminates with restart guidance")
+        check(noReply.instruction.contains("重新开始三步测试"), "no-reply terminal instruction")
+        noReply.handle(.playback(false), generation: 30)
+        noReply.handle(.responseWaiting(false), generation: 30)
+        check(!noReply.canPrepare && !noReply.prepare(generation: 30), "no-reply round cannot retry in same connection")
+        noReply.handle(.observation(try observation(1, "pending")), generation: 30)
+        noReply.handle(.observation(try observation(1, "temporary", label: "guest_1")), generation: 30)
+        check(noReply.step == 1, "producer reused ID cannot pass terminal round")
+        noReply.disconnect(generation: 30)
+        check(noReply.message.contains("本步未通过"), "no-reply short conclusion survives close")
+        noReply.connect(generation: 31, enabled: true)
+        noReply.handle(.ready, generation: 31)
+        check(noReply.canPrepare && noReply.step == 1, "new connection resets no-reply terminal state")
+        noReply.handle(.prepare, generation: 31)
+        noReply.handle(.observation(try observation(1, "pending")), generation: 31)
+        noReply.handle(.observation(try observation(1, "temporary", label: "guest_8")), generation: 31)
+        check(noReply.step == 2, "new pending after reconnect establishes fresh baseline")
         var malformed = ["type":"speaker_observation", "input_id":99] as [String: Any]
         malformed["reason"] = "untrusted"
         do { _ = try SpeakerObservation.validate(malformed); preconditionFailure("invalid structured event") } catch {}

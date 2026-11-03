@@ -188,7 +188,9 @@ final class LiveClient: @unchecked Sendable {
                     if speakerTest { speakerGuideEvent?(.responseWaiting(false), generation) }
                     status?("这次回复未完成，可以继续说话。")
                 case "drain_failed": status?("未收到播放完成确认，请结束后重新开始。")
-                case "input_too_long": status?("这句话较长，请分几句说。")
+                case "input_too_long":
+                    if speakerTest { speakerGuideEvent?(.inputTooLong, generation) }
+                    status?("这句话较长，请分几句说。")
                 default: break
                 }
             default: throw ClientFailure("unknown_control")

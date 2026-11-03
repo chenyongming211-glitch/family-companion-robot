@@ -3,7 +3,7 @@ import Foundation
 // In-memory single-participant consistency guide. No identity claim or persistence.
 struct SpeakerGuide {
     enum Event {
-        case ready, playback(Bool), responseWaiting(Bool), prepare, observation(SpeakerObservation), disconnected
+        case ready, playback(Bool), responseWaiting(Bool), prepare, observation(SpeakerObservation), inputTooLong, disconnected
     }
     mutating func handle(_ event: Event, generation: Int) {
         switch event {
@@ -13,6 +13,9 @@ struct SpeakerGuide {
             guard self.generation == generation else { return }; awaitingResponse = waiting
         case .prepare: prepare(generation: generation)
         case .observation(let value): receive(value, generation: generation)
+        case .inputTooLong:
+            guard self.generation == generation, enabled, isReady, !requiresRestart, step <= 3 else { return }
+            requireRestart("本次输入被拒绝且不会产生回答，无法继续本轮引导。")
         case .disconnected: disconnect(generation: generation)
         }
     }
@@ -23,7 +26,7 @@ struct SpeakerGuide {
     ]
     private var generation: Int?
     private var enabled = false, isReady = false, busy = false, armed = false
-    private var awaitingResponse = false
+    private var awaitingResponse = false, requiresRestart = false
     private var latestInputID = -1
     private var boundInputID: Int?
     private var baseline: String?
@@ -33,11 +36,12 @@ struct SpeakerGuide {
     var isConnected: Bool { generation != nil }
     var prompt: String { step <= 3 ? Self.prompts[step - 1] : "" }
     var canPrepare: Bool {
-        generation != nil && enabled && isReady && !busy && !awaitingResponse && !armed && boundInputID == nil && step <= 3
+        generation != nil && enabled && isReady && !requiresRestart && !busy && !awaitingResponse && !armed && boundInputID == nil && step <= 3
     }
     var instruction: String {
         if !enabled && generation != nil { return "声纹已关闭：本连接仅作聊天对照，不执行三步测试。" }
         if !isReady { return "等待连接就绪；三步须由同一位参与者在同一连接完成。" }
+        if requiresRestart { return "请结束后重新开始三步测试；本轮不再记录下一句，聊天仍可继续。" }
         if step > 3 { return "仅证明本次三句标签一致，不代表人物身份、多人与重叠能力通过。" }
         if busy || awaitingResponse { return "请等待小满播完回答和本句原因结果，再准备下一步。" }
         if boundInputID != nil { return "已记录本句，等待最终原因结果；请先不要继续说下一句。" }
@@ -61,7 +65,11 @@ struct SpeakerGuide {
         return true
     }
     mutating func receive(_ observation: SpeakerObservation, generation: Int) {
-        guard self.generation == generation, isReady, enabled else { return }
+        guard self.generation == generation, isReady, enabled, !requiresRestart, step <= 3 else { return }
+        if observation.state == .unavailable && observation.inputID >= latestInputID {
+            requireRestart("声纹观测已不可用，无法继续本轮引导。")
+            return
+        }
         let isNew = observation.inputID > latestInputID
         latestInputID = max(latestInputID, observation.inputID)
         if let boundInputID, observation.inputID > boundInputID {
@@ -98,6 +106,11 @@ struct SpeakerGuide {
         let lastConclusion = conclusion
         self = SpeakerGuide()
         message = lastConclusion + " · 连接已关闭，临时候选与事件状态已清除。"
+    }
+    private mutating func requireRestart(_ reason: String) {
+        requiresRestart = true; armed = false; boundInputID = nil; baseline = nil; awaitingResponse = false
+        conclusion = "本步未通过"
+        message = conclusion + " · " + reason + " 请结束后重新开始三步测试；这是流程恢复要求，不代表人物识别准确率。"
     }
     private func advice(_ value: SpeakerObservation) -> String {
         let duration = value.audioMS > 0 ? "（片段" + String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), Double(value.audioMS) / 1000) + "秒）" : ""
