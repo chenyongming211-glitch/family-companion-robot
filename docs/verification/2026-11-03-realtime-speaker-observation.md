@@ -1,6 +1,6 @@
 # 正常Realtime聊天中的匿名说话人观测试点
 
-日期：2026-11-03（Asia/Shanghai）。代码：`6b5c63d`；状态：**隔离部署及合成联调完成，原生聊天窗口已就绪；真人现场结果待反馈。**
+日期：2026-11-03（Asia/Shanghai）。代码：`6b5c63d`；状态：**入口过期原因已确认并恢复；现场已建立会话并返回候选，识别准确性及听感待用户反馈。**
 
 用户已明确选择正常与小满聊天时同步识别，而非每句点击采样。本轮落实[已确认的识别规则](../superpowers/specs/2026-11-01-go-realtime-speaker-identity-design.md#81-单人多人场景的识别触发规则2026-11-02用户确认)，按[实施计划](../superpowers/plans/2026-11-03-realtime-speaker-observation.md)执行。
 
@@ -20,7 +20,7 @@
 
 识别上限5分钟／32片段；失效后不悄悄重建Tracker，显示不可用、普通聊天继续。单次helper请求3秒、启动15秒的上限在后台执行。每片段仍新建受控模型子进程，因此约0.6～0.7秒的观测墙钟耗时包含冷启动，不能当作产品最终推理指标。
 
-整场测试连接最长15分钟；两个服务使用相同CPUQuota=100%、MemoryMax=768MiB、TasksMax=96、LimitCORE=0及私有临时目录。临时服务最多保留12小时。资源限制不是容量或长稳验收。
+整场测试连接最长15分钟；两个服务使用相同CPUQuota=100%、MemoryMax=768MiB、TasksMax=96、LimitCORE=0及私有临时目录。最初部署的服务级12小时上限已因等待测试期间到期而取消，当前明确设置`RuntimeMaxSec=infinity`；每次识别及连接的上述边界保留。资源限制不是容量或长稳验收。
 
 ## 3. 自动化测试和审查
 
@@ -67,13 +67,13 @@
 systemctl stop family-robot-speaker-pilot-on.service family-robot-speaker-pilot-off.service
 ```
 
-关Mac窗口会停止自己的App/SSH，云端临时单元另有12小时上限；下次打开前需检查是否仍存活。两种停用均不回退或重启原产品服务。
+关Mac窗口会停止自己的App/SSH；云端不再设置服务累计运行上限，人工停止或服务器重启后仍须重新部署/核验。这不是系统启动持久单元，下次打开前仍需检查存活和ready。停用试点不回退或重启原产品服务。
 
 保护快照前后：原Go服务PID1304344、网关PID4139310、NRestarts均0；两二进制、两env及产品身份5项摘要保持。原18040/18041、固件、设备网络和声学策略未改。
 
 ## 6. 真人现场状态
 
-已通过AX核对“小满 · Realtime 声纹聊天测试”：开始按钮可用、识别开关已勾选、候选为空，代理未点击开始或麦克风权限。已请用户直接正常问3个不同问题，每句约2～5秒，等回答后问下一句，最后结束，再反馈自然交流和标签情况。**当前等待该结果。**
+已通过AX核对“小满 · Realtime 声纹聊天测试”：开始按钮可用、识别开关已勾选、候选为空，代理未点击开始或麦克风权限。首次请用户直接正常问3题后，用户反馈“无法开始聊天，提示连接未成功”；没有取得有效真人识别或听感结果。服务恢复后再次核对窗口为开始按钮可用、开关勾选、候选为空，已请用户先问“小满，给我推荐一种简单的运动”核实连接及标签，随后只读AX确认开始按钮已变为“结束对话”、状态为“对话中”、识别开关活动期间禁用，并已有候选返回；云端开启组active_sessions=1。这证明连接已经建立，不证明候选对应正确人物。**当前等待用户对准确性和听感的反馈。**
 
 多人A→B→A、短语、连续流中换人/重叠、噪声/距离/儿童、微雪/M5/C3、开关实际流畅度和长期运行均未验收；不能因为此窗口可用就宣布人物登记、按人记忆或完整多人产品交付。
 
@@ -82,3 +82,15 @@ systemctl stop family-robot-speaker-pilot-on.service family-robot-speaker-pilot-
 云端`evidence/`：`final-root-race.jsonl`、`final-root-vet.txt`、`final-root-build.txt`、`final-lab-race.jsonl`、`final-lab-vet.txt`、`source.sha256`（26个变化源文件与云端匹配）、`binaries.sha256`、`pilot-probe-both.json`、`protection-{before,after}.json`及各状态问题RED/GREEN。旁路及lab独立证据分别在兄弟`transport-evidence/`、`lab-evidence/`；原生模型opt-in结果亦在lab证据目录。
 
 这些证据不包含真实声音片段、向量或聊天正文，不作为Git附件提交。
+
+## 8. 首轮无法连接的诊断与恢复（2026-11-03）
+
+用户明确反馈无法开始聊天、提示连接未成功。现场核对：两个试点单元已被collect回收、回环18052/18053连接被拒绝、Mac试点App及其转发进程已退出；原产品18040仍ready。试点目录此前仅有合成探针的mac_fixture会话，没有真人已建立会话的证据。
+
+服务日志绑定同日时间：00:30:02启动，12:30:02记录`Service reached runtime time limit. Stopping.`和`result=timeout`，对应原部署的12小时上限。这解释当时入口不可连接，不能把它记为声纹模型误识别或真人识别失败。
+
+恢复仅使用摘要核验一致的6b5c63d服务器及原helper/模型，保留设备认证元数据与所有语音参数。首次把取消上限写成`RuntimeMaxSec=0`，12:54:41再次立即到期；该恢复错误未掩盖。最终显式改为`RuntimeMaxSec=infinity`，并从实际unit属性读取`RuntimeMaxUSec=infinity`与active状态后才继续。
+
+恢复后逐个验证两入口：health、设备测试身份登记、鉴权pair、WebSocket及提供方模型会话ready全部通过，随后正常stop。核验没有采集麦克风、没有发送任何上行音频，也不代表真人语音效果已通过。原生客户端已通过规范启动器重开；用户随后建立会话，只读AX确认“对话中”和候选返回，云端active_sessions=1。未由代理开启麦克风，也未记录真实片段、文本或候选序列。候选是否正确、回答是否正常仍待用户确认。
+
+私有证据在原`evidence/`：`reconnect-units.json`、`reconnect-handshake.json`、`reconnect-protection-{before,after}.json`；服务停止原因保留在对应systemd journal。永久运行上限取消后仍只监听回环，内存/CPU/任务数/核心转储保护、5分钟识别/32片段及15分钟单连接上限保持。
