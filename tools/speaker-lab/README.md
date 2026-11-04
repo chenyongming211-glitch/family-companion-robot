@@ -300,3 +300,47 @@ segmentation／overlap／open_set均unavailable。这里只是离线旁路实验
 只在云端独立实验进程运行。调用方必须为**整个 CLI 进程树**设置有界外层超时并在超时后终止、回收，不能只依赖 Go context 中断同步 native 调用，例如 `timeout --kill-after=5s 600s speaker-lab ...`；更大清单由实验控制器按已冻结总预算设置。CLI 在片段/窗口之间检查取消并释放 native 对象与拥有的缓冲。原 SDK、服务/session 配置、正式阈值、VAD/AEC、固件和麦克风均不改变。连续流、重叠、重放、家庭现场和生产验收保持 unavailable/false；有限公开语料陌生人观测不能外推访客保证。
 
 可选原生 VAD 回归使用 `SPEAKER_LAB_TEST_VAD_MODEL` 加既有 `SPEAKER_LAB_TEST_WAV`（合成 fixture）和 `SPEAKER_LAB_TEST_BINARY` 显式开启 `TestRealVADOptIn`；普通测试默认跳过。所有 Go/ONNX 测试、构建和运行均在云端。
+
+## 独立评分后端研究 backend-study
+
+```sh
+# 仅云端；外层控制器须对整个进程组设置 TERM/KILL 超时并回收。
+timeout --kill-after=5s 900s ./speaker-lab backend-study \
+  --model /private/models/eres2net.onnx --sha256 <64位小写SHA256> \
+  --manifest /private/backend/device03-manifest.json
+```
+
+该入口比较 R0 余弦、R1 AS-Norm、R2 低维质量校准；普通 evaluate、evaluate-large、quality-audit、enrollment-study 和 session 的清单限制、JSON 和行为保持。不得把离线研究门槛用于产品。一次调用对应一个冻结条件，共享一次 energy 合格特征提取；查询不以 VAD 硬过滤、不裁剪音频。所有向量仅 RAM，由提取结果的唯一所有者清理，融合模板另行清理。
+
+新清单最多 4 MiB／4096 条／240 人。全部 header 必需：`source_kind:"public_human", source_id, source_url, license_url, single_speaker_basis:"source_annotations", sample_rate:16000, condition, audits, cases`；URL 为 HTTPS，`condition` 只允许 `device03` 或 `device06`。这是实验条件标识，具体来源设备组合与距离须另查冻结资料，不能由标签推出物理近远场或纯设备效应。`audits` 为 1～4 个 `{path,sha256}`；每个审计仍限 2 MiB／2048 条，固定 Silero SHA／config／三个 false 旗标。审计 ID 只在各自文件内唯一，跨文件以 WAV SHA 绑定，重复引用／WAV SHA 拒绝；未入选审计记录可以保留。
+
+每个 case 必需 `id,speaker,role,path,samples,sha256,recording_sha256,source_group_sha256,text_sha256`。逐层拒绝未知／重复／缺失／null 字段、重复 ID／路径／WAV／录音摘要、无效编号或角色；路径须为无 symlink 的规范绝对路径，实际 PCM16 mono 16k WAV、SHA 与 samples 当场核验。人物／角色如下，编号均从 1 连续：
+
+| 人物 | 人数 | role |
+| --- | --- | --- |
+| train_N | 10 | train_enrollment／train_query |
+| validation_N | 50 | validation_enrollment／validation_query |
+| validation_unknown_N | 5 | validation_unknown |
+| cohort_N | 30 | cohort |
+| test_N | 实际 1～5 | test_enrollment／test_query |
+| test_unknown_N | 20 | test_unknown |
+
+各登记人物至少两条查询；陌生人物各 2～5 条。cohort 恰好两条，同时通过 energy（RMS≥0.005，samples≥24000）及 VAD（speech_samples≥16000）；所有登记按清单顺序累计首次达到 320000 samples 后停止，总长 320000～448000、至少两段且每段通过两个门禁。每段逐一 L2、等权平均、再 L2 形成模板。查询保留所有格式合格输入，energy 失败计入总分母并拒识；VAD 长度仅作 R2 特征。
+
+同一人物不得重复文字；登记／查询不得共享文字或源录音组，源录音组与录音摘要不得重复。不同人物允许相同文字，cohort 的文字摘要可为空，但源录音组必须不同。匿名清单不能自行证明源人物纯度、真正独立内容或未接触资格，冻结前数据审查负责这些证据。
+
+R1 固定 30 个背景模板、top-k=10；分别对登记和查询取背景余弦最高十项的均值与**总体**标准差，标准差下限 1e-6；输出两侧 z-score 的均值。报告实际标准差下限替换次数。R2 特征仅为 `[AS-Norm, log1p(querySpeechSamples/16000)]`，均值／总体标准差仅来自 train 查询×10 模板配对，下限 1e-6；加未正则化截距。同／异人损失权重各半，非截距 L2 正则 λ=.01，稳定 softplus；全批梯度下降初始步长 1，最多 50 次折半回溯、2000 步，目标改善≤1e-8 收敛。非有限、未收敛或分数权重≤0 显式失败。输出训练人物／查询／同异人对数、均值／标准差、参数／初终目标和迭代；分数不是身份概率。成功时逐查询核对 R2 与 R1 排名完全一致。
+
+`methods[].pools[]` 固定包含 validation 的实际 test 候选数 N、validation50，以及 testN。validation 按**数字编号**连续分 N 人组，末组从开头补齐 N 个候选；每条已知查询只在所属组计一次。陌生人物 j 只进入 `(j-1)%groupCount` 组；test 使用全部实际 N 个模板。N=1 无次佳间距，margin 固定 0；多候选最高分并列拒识。
+
+每个池的 `rules` 前两项为陌生目标 1%／5%，只使用相应 validation 池标定，budget=floor(全部陌生查询×target)。阈值候选包含有限 best 分数、Nextafter 向上边界和两端边界；R0 margin 候选 0/.01/.030229/.05/.1，R1/R2 为 0/.1/.25/.5/1。只接受 validation 已知误归为零且陌生误接纳不超预算的组合，依次最大化正确接纳、最小化陌生误接纳、取较高 threshold、较高 margin。全拒识允许。R0 validation50 另外输出 current_session=.682987／legacy_base_far001=.4499944095418535，margin=.030229，作为旧 B 的兼容诊断。test 不参与选方法或调阈值。
+
+每项规则含全量／energy 合格分母、已知正确／误归／拒识、陌生误接纳／拒识、匿名组及逐人计数。`macro` 的全量正确接纳与 Top-1 对各已知人物等权；合格宏平均只包含至少一条 energy 合格查询的人，另报此人数。陌生人物报告逐人计数及 `unknown_people_with_any_false_accept`。Top-1 只作无门槛诊断；质量失败保留全分母。`not_run` 保留真实人数／样本／合格分母，所有决策为零，不能读成全拒识。
+
+`template_pair_diagnostic` 只使用 energy 合格查询的 own-template 正对和已知其他模板／陌生模板负对，提供成组同分 ROC/DET、线性插值 EER、原始最小 `.01*FRR+.99*FAR` 成本与除以 `.01` 的标准 normalized minDCF。配对**不是独立观测**，点列是诊断，不能从 test 最佳点选部署策略。
+
+角色质量统计分列全部／energy／VAD／两者；报告匿名登记长度、模型／清单／审计 SHA。native/IPC 时间覆盖所有 energy 合格角色，剔除首个请求后取温态 P50/P95；与旧只计 evaluation 的结果不可直接作纯速度比。冷启动、worker 总 CPU／峰值 RSS、parent 峰值 RSS 分列；背景统计只计算一次并记入 R1，R2 标记复用，拟合、门槛标定、评分和方法总耗时另列。两个 RSS 峰值不能相加当瞬时并发内存。
+
+输出不包含路径、源人物、正文、录音／文字／源组摘要或向量。`human_acceptance`、`production_acceptance`、`feature_enabled` 均 false；`open_set_assessment:limited_public_unknown_cohort`，连续分段、重叠、重放和家庭现场 unavailable。错误仅 `usage`／`backend_study_failed`。首次真人身份评分须在代码与冻结数据审查通过后进行。
+
+只验证冻结输入合同、不加载模型的可选检查：`SPEAKER_LAB_BACKEND_MANIFEST=/private/backend/device03-manifest.json go test -run '^TestBackendFrozenManifestOptIn$'`。默认跳过；不构成身份准确率或模型原生验证。所有 Go 测试／构建／运行均在云端。
