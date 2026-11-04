@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/url"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -43,9 +44,22 @@ func httpsReference(s string) bool {
 	u, e := url.Parse(s)
 	return e == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Opaque == ""
 }
+
+type evaluationLimits struct {
+	manifestBytes                                int64
+	minCases, maxCases, minSpeakers, maxSpeakers int
+	minSplits                                    [3]int
+	validSpeaker                                 func(string) bool
+}
+
 func loadEvaluationManifest(path string) (evaluationManifest, string, error) {
+	return loadEvaluationManifestWithLimits(path, evaluationLimits{maxManifestBytes, 12, 128, 3, 8, [3]int{1, 2, 1}, fixtureSpeakerPattern.MatchString})
+}
+
+// Limits belong to the explicit command, never global or user-supplied flags.
+func loadEvaluationManifestWithLimits(path string, limits evaluationLimits) (evaluationManifest, string, error) {
 	var m evaluationManifest
-	b, e := boundedFile(path, maxManifestBytes)
+	b, e := boundedFile(path, limits.manifestBytes)
 	if e != nil {
 		return m, "", e
 	}
@@ -60,7 +74,7 @@ func loadEvaluationManifest(path string) (evaluationManifest, string, error) {
 		SampleRate         int               `json:"sample_rate"`
 		Cases              []json.RawMessage `json:"cases"`
 	}
-	if strictHeader(b, &raw) != nil || raw.SourceKind != "public_human" || !tokenPattern.MatchString(raw.SourceID) || !httpsReference(raw.SourceURL) || !httpsReference(raw.LicenseURL) || raw.SingleSpeakerBasis != "source_annotations" || raw.SampleRate != sampleRate || len(raw.Cases) < 12 || len(raw.Cases) > 128 {
+	if strictHeader(b, &raw) != nil || raw.SourceKind != "public_human" || !tokenPattern.MatchString(raw.SourceID) || !httpsReference(raw.SourceURL) || !httpsReference(raw.LicenseURL) || raw.SingleSpeakerBasis != "source_annotations" || raw.SampleRate != sampleRate || len(raw.Cases) < limits.minCases || len(raw.Cases) > limits.maxCases {
 		return m, "", errProtocol
 	}
 	m = evaluationManifest{SourceKind: raw.SourceKind, SourceID: raw.SourceID, SourceURL: raw.SourceURL, LicenseURL: raw.LicenseURL, SingleSpeakerBasis: raw.SingleSpeakerBasis, SampleRate: raw.SampleRate}
@@ -69,7 +83,7 @@ func loadEvaluationManifest(path string) (evaluationManifest, string, error) {
 	counts := map[string][3]int{}
 	for _, r := range raw.Cases {
 		var c evaluationCase
-		if strictHeader(r, &c) != nil || !tokenPattern.MatchString(c.ID) || ids[c.ID] || !fixtureSpeakerPattern.MatchString(c.Speaker) || !filepath.IsAbs(c.Path) || filepath.Clean(c.Path) != c.Path || paths[c.Path] || c.Samples < 1 || c.Samples > maxSamples || !shaPattern.MatchString(c.SHA) || audio[c.SHA] || !shaPattern.MatchString(c.RecordingSHA) || !shaPattern.MatchString(c.TextSHA) {
+		if strictHeader(r, &c) != nil || !tokenPattern.MatchString(c.ID) || ids[c.ID] || !limits.validSpeaker(c.Speaker) || !filepath.IsAbs(c.Path) || filepath.Clean(c.Path) != c.Path || paths[c.Path] || c.Samples < 1 || c.Samples > maxSamples || !shaPattern.MatchString(c.SHA) || audio[c.SHA] || !shaPattern.MatchString(c.RecordingSHA) || !shaPattern.MatchString(c.TextSHA) {
 			return evaluationManifest{}, "", errProtocol
 		}
 		var index int
@@ -96,11 +110,11 @@ func loadEvaluationManifest(path string) (evaluationManifest, string, error) {
 		counts[c.Speaker] = n
 		m.Cases = append(m.Cases, c)
 	}
-	if len(counts) < 3 || len(counts) > 8 {
+	if len(counts) < limits.minSpeakers || len(counts) > limits.maxSpeakers {
 		return evaluationManifest{}, "", errProtocol
 	}
 	for _, n := range counts {
-		if n[0] < 1 || n[1] < 2 || n[2] < 1 {
+		if n[0] < limits.minSplits[0] || n[1] < limits.minSplits[1] || n[2] < limits.minSplits[2] {
 			return evaluationManifest{}, "", errProtocol
 		}
 	}
@@ -138,6 +152,9 @@ type evaluationAnalysis struct {
 // All qualified calibration clips and all unordered pairs participate. No
 // enrollment or evaluation vector affects the frozen threshold or margin.
 func fitEvaluation(cases []embeddedCase, groups []string) evaluationCalibration {
+	return fitEvaluationMinimum(cases, groups, 2)
+}
+func fitEvaluationMinimum(cases []embeddedCase, groups []string, minimum int) evaluationCalibration {
 	r := evaluationCalibration{Status: "failed_insufficient_calibration"}
 	var fit []embeddedCase
 	counts := map[string]int{}
@@ -150,7 +167,7 @@ func fitEvaluation(cases []embeddedCase, groups []string) evaluationCalibration 
 	r.FittedCases = len(fit)
 	r.FittedSpeakers = len(counts)
 	for _, g := range groups {
-		if counts[g] < 2 {
+		if counts[g] < minimum {
 			return r
 		}
 	}
@@ -246,7 +263,7 @@ func analyzeEvaluation(cases []embeddedCase, dimension int) (evaluationAnalysis,
 	return r, nil
 }
 
-type evaluationReport struct {
+type evaluationMetadata struct {
 	SourceKind             string        `json:"source_kind"`
 	HumanAcceptance        bool          `json:"human_acceptance"`
 	ProductionAcceptance   bool          `json:"production_acceptance"`
@@ -264,35 +281,55 @@ type evaluationReport struct {
 	RejectedSilence        int           `json:"rejected_silence"`
 	Native                 timingSummary `json:"native_inference"`
 	Wall                   timingSummary `json:"wall_ipc_inference"`
+}
+
+type evaluationReport struct {
+	evaluationMetadata
 	evaluationAnalysis
 }
 
 func newEvaluationReport(sha string) evaluationReport {
-	return evaluationReport{SourceKind: "public_human", ModelSHA: sha, SingleSpeakerBasis: "source_annotations", SegmentationAssessment: "unavailable", OverlapAssessment: "unavailable", OpenSetAssessment: "unavailable"}
+	return evaluationReport{evaluationMetadata: evaluationMetadata{SourceKind: "public_human", ModelSHA: sha, SingleSpeakerBasis: "source_annotations", SegmentationAssessment: "unavailable", OverlapAssessment: "unavailable", OpenSetAssessment: "unavailable"}}
 }
-func runEvaluation(ctx context.Context, model, sha, manifest string) (evaluationReport, error) {
-	r := newEvaluationReport(sha)
-	m, digest, e := loadEvaluationManifest(manifest)
-	if e != nil {
-		return r, e
+
+// Successful extraction transfers vector ownership to the caller. Errors clear
+// every accumulated vector here; PCM is cleared before advancing or returning.
+type evaluationExtraction struct {
+	cases                                []embeddedCase
+	dimension, qualified, short, silence int
+	native, wall                         timingSummary
+	coldMS, cpuMS                        float64
+	workerRSS                            int64
+}
+
+func (r *evaluationExtraction) clearVectors() {
+	for i := range r.cases {
+		clear(r.cases[i].vector)
 	}
-	r.ManifestSHA = digest
-	r.CaseCount = len(m.Cases)
-	var cases []embeddedCase
+}
+
+type evaluationWorkerStart func(context.Context, string, string) (*workerProcess, error)
+
+func extractEvaluation(ctx context.Context, m evaluationManifest, model, sha string, start evaluationWorkerStart) (r evaluationExtraction, err error) {
 	defer func() {
-		for i := range cases {
-			clear(cases[i].vector)
+		if err != nil {
+			r.clearVectors()
+			r.cases = nil
 		}
 	}()
-	w, e := startWorker(ctx, model, sha)
+	w, e := start(ctx, model, sha)
 	if e != nil {
 		return r, e
 	}
 	defer w.Close()
-	r.Dimension = w.dimension
+	r.dimension = w.dimension
+	r.coldMS = float64(w.coldStart.Microseconds()) / 1000
 	var native, wall []float64
 	var id, end uint64
 	for _, c := range m.Cases {
+		if ctx.Err() != nil {
+			return r, errWorker
+		}
 		pcm, e := loadFixture(c.fixture())
 		if e != nil {
 			return r, e
@@ -302,11 +339,11 @@ func runEvaluation(ctx context.Context, model, sha, manifest string) (evaluation
 		if quality != "qualified" {
 			clear(pcm)
 			if quality == "short" {
-				r.RejectedShort++
+				r.short++
 			} else {
-				r.RejectedSilence++
+				r.silence++
 			}
-			cases = append(cases, item)
+			r.cases = append(r.cases, item)
 			continue
 		}
 		id++
@@ -321,17 +358,46 @@ func runEvaluation(ctx context.Context, model, sha, manifest string) (evaluation
 			return r, e
 		}
 		item.vector = v
-		cases = append(cases, item)
-		r.QualifiedCases++
-		// Independent evaluation timings exclude enrollment/calibration inference.
+		r.cases = append(r.cases, item)
+		r.qualified++
 		if c.Split == "evaluation" {
 			native = append(native, float64(us)/1000)
 			wall = append(wall, elapsed)
 		}
 	}
 	w.Close()
-	r.Native = summarizeTimes(native)
-	r.Wall = summarizeTimes(wall)
-	r.evaluationAnalysis, e = analyzeEvaluation(cases, w.dimension)
+	if w.cmd.ProcessState == nil {
+		return r, errWorker
+	}
+	usage, ok := w.cmd.ProcessState.SysUsage().(*syscall.Rusage)
+	if !ok {
+		return r, errWorker
+	}
+	r.cpuMS = float64(usage.Utime.Sec+usage.Stime.Sec)*1000 + float64(usage.Utime.Usec+usage.Stime.Usec)/1000
+	r.workerRSS = usage.Maxrss
+	r.native = summarizeTimes(native)
+	r.wall = summarizeTimes(wall)
+	return r, nil
+}
+func runEvaluation(ctx context.Context, model, sha, manifest string) (evaluationReport, error) {
+	r := newEvaluationReport(sha)
+	m, digest, e := loadEvaluationManifest(manifest)
+	if e != nil {
+		return r, e
+	}
+	r.ManifestSHA = digest
+	r.CaseCount = len(m.Cases)
+	extracted, e := extractEvaluation(ctx, m, model, sha, startWorker)
+	if e != nil {
+		return r, e
+	}
+	defer extracted.clearVectors()
+	r.Dimension = extracted.dimension
+	r.QualifiedCases = extracted.qualified
+	r.RejectedShort = extracted.short
+	r.RejectedSilence = extracted.silence
+	r.Native = extracted.native
+	r.Wall = extracted.wall
+	r.evaluationAnalysis, e = analyzeEvaluation(extracted.cases, extracted.dimension)
 	return r, e
 }

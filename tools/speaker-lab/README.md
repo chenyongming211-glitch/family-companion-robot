@@ -243,3 +243,40 @@ stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `
 始终 `human_acceptance:false`、`production_acceptance:false`、`feature_enabled:false`，
 分段及重叠均 `unavailable`。离线公开语料结果不证明家庭现场、连续流、多人重叠或产品实时效果，
 不修改 session／试点／产品阈值。原有合成基准仍只代表工程证据。
+
+## 独立50人离线实验 evaluate-large
+
+```sh
+./speaker-lab evaluate-large --model /private/models/eres2net.onnx \
+  --sha256 <64位小写SHA256> --manifest /private/public/manifest.json
+```
+
+该显式命令复用 public_human 严格清单、受控 worker 和有界WAV／摘要校验；要求恰好50人，
+编号仅 `fixture_1`～`fixture_50`，400～2048项、清单≤2MiB，每人至少1条 enrollment、
+3条 calibration、4条 evaluation。普通 evaluate 的3～8人／128项／128KiB、合成入口和在线
+session 的阈值及8人上限保持。数据准备另行保证2～8秒、独立原录音／原句与三划分冻结。
+音频摘要不得重复；原录音和文字摘要不得跨划分。低质量 evaluation 仍计入拒识和总分母。
+
+每种条件只提取一次特征，首条合格 enrollment 是模板，全部合格 calibration 的所有无序对
+参与拟合。任一人缺少合格登记或3条合格校准，则全部规则 `not_run`，保留失败原因。
+四项规则全部报告：`current_session` 固定 match=0.682987、margin=0.030229；
+`strict_separation` 沿用同人最小值与异人最大值间隙的 match=异人最大值+gap/2、margin=gap/8，
+不可分离只将本项记为 `not_run`；`calibration_far_001` 和 `calibration_far_01` 分别固定
+经验配对FAR预算0.1%和1%，margin=0.030229。FAR拟合只读取校准异人配对，允许误接纳数
+为 floor(配对数×目标)，阈值相等接纳；排除边界用 `Nextafter(score,+Inf)`，再实际计数。
+同分整体排除，[-1,1]内无法满足目标则 `unreachable`，不回退也不从evaluation调参。
+
+每项规则同时输出50候选池和固定10组×5候选池：按匿名数字1～5、6～10直到46～50分组，
+后者含匿名组号1～10的聚合指标。`accuracy`=正确／全部evaluation，`effective_rate`=
+（正确+误归）／全部evaluation；同分、阈值不足、间距不足和质量拒绝均计为拒识。
+`evaluation_template_pairs` 分别统计同人／异人分数≥阈值的接纳及拒绝，不使用候选间距；
+质量拒绝视为其全部模板配对被拒绝。`top1_diagnostic` 单独统计正确、同分、质量拒绝和总量，
+不应用阈值或间距；仅是特征诊断，不能用来授予身份。四规则和两候选池复用同一批样本，
+评分次数不构成独立样本数，校准配对FAR也不等于多候选误认率或家庭现场保证。
+
+输出只含聚合指标、匿名组号和模型／清单摘要；不输出路径、原文、姓名、逐句特征或原生错误。
+原生／IPC计时只统计evaluation推理；worker冷启动、总CPU和峰值RSS含登记／校准与加载，
+主进程峰值RSS独立列出，不能将两个峰值相加当作同一时刻并发内存。
+`human_acceptance`／`production_acceptance`／`feature_enabled` 始终false，
+segmentation／overlap／open_set均unavailable。这里只是离线旁路实验，在线人数、设备声学和
+完整Realtime时延需要各自验证。

@@ -49,7 +49,7 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 		realtime = f.Bool("realtime-test", false, "")
 	case "worker":
 		socket = f.String("socket", "", "")
-	case "benchmark", "evaluate":
+	case "benchmark", "evaluate", "evaluate-large":
 		manifest = f.String("manifest", "", "")
 	case "probe":
 		wav = f.String("wav", "", "")
@@ -77,6 +77,16 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 	if manifest != nil {
 		if *manifest == "" {
 			return fail("usage")
+		}
+		if args[0] == "evaluate-large" {
+			result, e := runLargeEvaluation(ctx, *model, *sha, *manifest)
+			if e != nil {
+				return fail("evaluate_large_failed")
+			}
+			if json.NewEncoder(out).Encode(result) != nil {
+				return 1
+			}
+			return 0
 		}
 		if args[0] == "evaluate" {
 			result, e := runEvaluation(ctx, *model, *sha, *manifest)
