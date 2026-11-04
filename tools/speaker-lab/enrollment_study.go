@@ -117,33 +117,50 @@ func unknownRates(c *unknownCounts) {
 		c.QualifiedFalseAcceptRate = float64(c.FalseAccept) / float64(c.QualifiedTotal)
 	}
 }
-func scoreStudyUnknown(cases []embeddedCase, groups []string, templates map[string][]float32, size int, threshold, margin float64) unknownPool {
-	r := unknownPool{Candidates: size, GroupCount: 1, unknownCounts: unknownCounts{Status: "evaluated"}}
+
+// Unknown denominators describe the inputs, independently of whether a policy
+// can run. Each group owns its counts; no decision is invented for not_run.
+func newStudyUnknown(cases []embeddedCase, size int) unknownPool {
+	r := unknownPool{Candidates: size, GroupCount: 1, unknownCounts: unknownCounts{Status: "not_run"}}
 	if size == 5 {
 		r.GroupCount = 5
 		for i := 1; i <= 5; i++ {
-			r.Groups = append(r.Groups, unknownGroup{Group: i, unknownCounts: unknownCounts{Status: "evaluated"}})
+			r.Groups = append(r.Groups, unknownGroup{Group: i, unknownCounts: unknownCounts{Status: "not_run"}})
 		}
 	}
 	for _, c := range cases {
-		_, n := studySpeaker(c.Speaker)
-		index := n - 1
-		candidates := groups
-		if size == 5 {
-			candidates = groups[index*5 : index*5+5]
-		}
 		r.Total++
+		if c.quality == "qualified" {
+			r.QualifiedTotal++
+		}
+		if size == 5 {
+			_, n := studySpeaker(c.Speaker)
+			g := &r.Groups[n-1]
+			g.Total++
+			if c.quality == "qualified" {
+				g.QualifiedTotal++
+			}
+		}
+	}
+	return r
+}
+func scoreStudyUnknown(cases []embeddedCase, groups []string, templates map[string][]float32, size int, threshold, margin float64) unknownPool {
+	r := newStudyUnknown(cases, size)
+	r.Status = "evaluated"
+	for i := range r.Groups {
+		r.Groups[i].Status = "evaluated"
+	}
+	for _, c := range cases {
+		candidates := groups
 		var g *unknownCounts
 		if size == 5 {
+			_, n := studySpeaker(c.Speaker)
+			index := n - 1
+			candidates = groups[index*5 : index*5+5]
 			g = &r.Groups[index].unknownCounts
-			g.Total++
 		}
 		accepted := false
 		if c.quality == "qualified" {
-			r.QualifiedTotal++
-			if g != nil {
-				g.QualifiedTotal++
-			}
 			best, second, _ := bestLarge(c, candidates, templates)
 			accepted = best >= threshold && best-second >= margin && best != second
 		}
@@ -165,6 +182,7 @@ func scoreStudyUnknown(cases []embeddedCase, groups []string, templates map[stri
 	}
 	return r
 }
+
 func analyzeStudy(m studyManifest, a qualityAudit, cases []embeddedCase, dimension int) ([]studyView, error) {
 	if len(cases) != len(m.Cases) {
 		return nil, errProtocol
@@ -269,7 +287,7 @@ func analyzeStudy(m studyManifest, a qualityAudit, cases []embeddedCase, dimensi
 					}
 				}
 				for index, name := range []string{"current_session", "legacy_base_far001", "condition_far001", "condition_far01"} {
-					rule := studyRule{Name: name, Status: "not_run", CalibrationStatus: view.CalibrationStatus, Margin: largeSessionMargin, DifferentPairs: len(negatives), SamePairs: same, Known: newLargePools(len(known)), Unknown: []unknownPool{{Candidates: 50, GroupCount: 1, unknownCounts: unknownCounts{Status: "not_run", Total: len(unknown)}}, {Candidates: 5, GroupCount: 5, unknownCounts: unknownCounts{Status: "not_run", Total: len(unknown)}}}}
+					rule := studyRule{Name: name, Status: "not_run", CalibrationStatus: view.CalibrationStatus, Margin: largeSessionMargin, DifferentPairs: len(negatives), SamePairs: same, Known: newLargePools(len(known)), Unknown: []unknownPool{newStudyUnknown(unknown, 50), newStudyUnknown(unknown, 5)}}
 					switch index {
 					case 0:
 						rule.Threshold = largeSessionMatch
@@ -346,6 +364,9 @@ type studyReport struct {
 
 func runEnrollmentStudy(ctx context.Context, model, sha, manifest, auditPath string) (studyReport, error) {
 	r := studyReport{evaluationMetadata: newEvaluationReport(sha).evaluationMetadata, Provider: "cpu", Threads: 1, SampleRate: 16000, VADModelSHA: sileroSHA, VADConfig: fixedVADConfig()}
+	// This scope describes the independent public unknown cohort only. Household
+	// and general-population acceptance remain unverified; all flags stay false.
+	r.OpenSetAssessment = "limited_public_unknown_cohort"
 	m, a, digest, e := loadStudyManifest(manifest, auditPath)
 	if e != nil {
 		return r, e

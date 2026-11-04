@@ -233,3 +233,104 @@ func TestStudyCalibrationRetainsQualityDenominator(t *testing.T) {
 		}
 	}
 }
+
+func TestStudyUnreachableUnknownDenominators(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mixed_%v", mixed), func(t *testing.T) {
+			m, a := studyFixture(t)
+			var cases []embeddedCase
+			for i, c := range m.Cases {
+				v := make([]float32, 65)
+				group, n := studySpeaker(c.Speaker)
+				offset := 0
+				if group == "calibration" {
+					offset = 50
+				}
+				if group == "unknown" {
+					offset = 60
+				}
+				v[offset+n-1] = 1
+				if group == "calibration" {
+					clear(v)
+					v[50] = 1
+				}
+				cases = append(cases, embeddedCase{fixtureCase: c.fixture(), vector: v, quality: "qualified"})
+				if mixed && group == "unknown" && i%2 == 0 {
+					a.Cases[i].RMS = 0
+					a.Cases[i].SpeechSamples = 0
+				}
+			}
+			views, e := analyzeStudy(m, a, cases, 65)
+			if e != nil {
+				t.Fatal(e)
+			}
+			qualified := 10
+			if mixed {
+				qualified = 5
+			}
+			for _, view := range views {
+				for _, r := range view.Rules[2:] {
+					if r.Status != "not_run" || r.CalibrationStatus != "unreachable" {
+						t.Fatal(r)
+					}
+					for _, p := range r.Unknown {
+						if p.Status != "not_run" || p.Total != 10 || p.QualifiedTotal != qualified || p.FalseAccept != 0 || p.Rejected != 0 {
+							t.Fatalf("unscored denominators %+v", p)
+						}
+						if p.Candidates == 5 {
+							if len(p.Groups) != 5 {
+								t.Fatal("missing fixed groups")
+							}
+							total, q := 0, 0
+							for i, g := range p.Groups {
+								wantQ := 2
+								if mixed {
+									wantQ = 1
+								}
+								if g.Group != i+1 || g.Total != 2 || g.QualifiedTotal != wantQ || g.Status != "not_run" || g.FalseAccept != 0 || g.Rejected != 0 {
+									t.Fatalf("unscored group %+v", g)
+								}
+								total += g.Total
+								q += g.QualifiedTotal
+							}
+							if total != p.Total || q != p.QualifiedTotal {
+								t.Fatal("group denominator inflation")
+							}
+						}
+					}
+				}
+				// Fixed policies still score exactly one decision per clip, including quality
+				// rejects; grouping must preserve totals when calibration policies cannot run.
+				for _, r := range view.Rules[:2] {
+					for _, p := range r.Unknown {
+						if p.Status != "evaluated" || p.Total != 10 || p.QualifiedTotal != qualified || p.FalseAccept+p.Rejected != 10 {
+							t.Fatal("evaluated denominator inflation", p)
+						}
+						if p.Candidates == 5 {
+							total, q, decisions := 0, 0, 0
+							for _, g := range p.Groups {
+								total += g.Total
+								q += g.QualifiedTotal
+								decisions += g.FalseAccept + g.Rejected
+							}
+							if total != 10 || q != qualified || decisions != 10 {
+								t.Fatal("evaluated group inflation")
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+}
+func TestStudyObservationScopeKeepsLegacyMetadata(t *testing.T) {
+	r, _ := runEnrollmentStudy(context.Background(), "/missing-model", testSHA, "/missing-manifest", "/missing-audit")
+	if r.OpenSetAssessment != "limited_public_unknown_cohort" || r.HumanAcceptance || r.ProductionAcceptance || r.FeatureEnabled {
+		t.Fatal("study observation scope", r.evaluationMetadata)
+	}
+	for _, m := range []evaluationMetadata{newEvaluationReport(testSHA).evaluationMetadata, newLargeEvaluationReport(testSHA).evaluationMetadata} {
+		if m.OpenSetAssessment != "unavailable" || m.HumanAcceptance || m.ProductionAcceptance || m.FeatureEnabled {
+			t.Fatal("legacy metadata changed", m)
+		}
+	}
+}
