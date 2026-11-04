@@ -151,6 +151,7 @@ func readRequest(r io.Reader, sha string) (requestHeader, []byte, error) {
 	}
 	p := make([]byte, h.PCMBytes)
 	if _, e := io.ReadFull(r, p); e != nil {
+		clear(p)
 		return h, nil, errProtocol
 	}
 	return h, p, nil
@@ -190,6 +191,7 @@ func writeResponse(w io.Writer, h responseHeader, v []float32) error {
 		return errProtocol
 	}
 	p := make([]byte, len(v)*4)
+	defer clear(p)
 	for i, f := range v {
 		binary.LittleEndian.PutUint32(p[i*4:], math.Float32bits(f))
 	}
@@ -214,17 +216,29 @@ func readResponse(r io.Reader, req requestHeader, dim int) ([]float32, int64, er
 		return nil, 0, errProtocol
 	}
 	p := make([]byte, h.VectorBytes)
+	defer clear(p)
 	if _, e := io.ReadFull(r, p); e != nil {
 		return nil, 0, errProtocol
 	}
 	v := make([]float32, dim)
-	for i := range v {
-		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(p[i*4:]))
-	}
-	if !validVector(v, dim) {
+	if decodeResponseVector(v, p) != nil {
 		return nil, 0, errProtocol
 	}
 	return v, h.InferenceUS, nil
+}
+func decodeResponseVector(v []float32, p []byte) error {
+	if len(p) != len(v)*4 {
+		clear(v)
+		return errProtocol
+	}
+	for i := range v {
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(p[i*4:]))
+	}
+	if !validVector(v, len(v)) {
+		clear(v)
+		return errProtocol
+	}
+	return nil
 }
 func writeReady(w io.Writer, sha string, dim int) error {
 	if !shaPattern.MatchString(sha) || dim < 1 || dim > maxDimension {

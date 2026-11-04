@@ -407,7 +407,13 @@ func cleanupWorkerDirectory(dir, socket string, identity os.FileInfo) {
 	}
 	_ = os.Remove(dir)
 }
+
+type workerResponseDecoder func(io.Reader, requestHeader, int) ([]float32, int64, error)
+
 func (w *workerProcess) request(ctx context.Context, h requestHeader, pcm []byte) ([]float32, int64, error) {
+	return w.requestWithDecoder(ctx, h, pcm, readResponse)
+}
+func (w *workerProcess) requestWithDecoder(ctx context.Context, h requestHeader, pcm []byte, decode workerResponseDecoder) ([]float32, int64, error) {
 	if !validRequest(h, w.sha) || len(pcm) != h.PCMBytes {
 		w.Close()
 		return nil, 0, errProtocol
@@ -430,8 +436,9 @@ func (w *workerProcess) request(ctx context.Context, h requestHeader, pcm []byte
 		w.Close()
 		return nil, 0, errWorker
 	}
-	v, us, e := readResponse(w.conn, h, w.dimension)
+	v, us, e := decode(w.conn, h, w.dimension)
 	if e != nil || ctx.Err() != nil {
+		clear(v)
 		w.Close()
 		if e == errUnavailable {
 			return nil, 0, errUnavailable

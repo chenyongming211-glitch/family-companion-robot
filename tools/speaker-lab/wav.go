@@ -11,8 +11,34 @@ import (
 // one data chunk. Metadata/padding are bounded by 64 KiB in addition to PCM.
 func readWAV(r io.Reader) ([]byte, error) {
 	const maxWAVBytes = maxPCMBytes + 65536
-	b, e := io.ReadAll(io.LimitReader(r, maxWAVBytes+1))
-	if e != nil || len(b) < 44 || len(b) > maxWAVBytes {
+	// One bounded private allocation avoids the unowned intermediate copies
+	// created when io.ReadAll grows. Clear its full backing store on every exit.
+	b := make([]byte, maxWAVBytes+1)
+	defer clear(b)
+	used, emptyReads := 0, 0
+	for used < len(b) {
+		n, e := r.Read(b[used:])
+		if n < 0 || n > len(b)-used {
+			return nil, errProtocol
+		}
+		used += n
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			return nil, errProtocol
+		}
+		if n == 0 {
+			emptyReads++
+			if emptyReads >= 100 {
+				return nil, errProtocol
+			}
+		} else {
+			emptyReads = 0
+		}
+	}
+	b = b[:used]
+	if len(b) < 44 || len(b) > maxWAVBytes {
 		return nil, errProtocol
 	}
 	if string(b[:4]) != "RIFF" || string(b[8:12]) != "WAVE" || uint64(binary.LittleEndian.Uint32(b[4:8]))+8 != uint64(len(b)) {
