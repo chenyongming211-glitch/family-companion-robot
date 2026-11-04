@@ -39,6 +39,39 @@
       "official_pointer_url": "https://huggingface.co/csukuangfj/speaker-embedding-models/blob/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
       "download_url": "https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
       "verification": "Downloaded mirror bytes match official Hugging Face pointer raw-file SHA256 and size; mirror alone is not a trust source"
+    },
+    {
+      "name": "ERes2NetV2",
+      "filename": "3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+      "sha256": "bf1a75b9930474cf3389ef415e6e5d38ca96fea4a3a00f7e301d080a58ee2239",
+      "bytes": 71441526,
+      "dimension": 192,
+      "official_release_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+      "official_pointer_url": "https://huggingface.co/csukuangfj/speaker-embedding-models/blob/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+      "pointer_blob": "c1d75fbfbe02f3f1dbca3450c2a99c71139ef8f1",
+      "verification": "Official pinned Git commit/tree/pointer verified with git fsck; mirrored transport bytes match pinned LFS SHA256 and size; exact original checkpoint and evaluation-person training exclusion unverified",
+      "training_source_boundary": "Approximately 200000 Chinese training speakers declared upstream; model and training data both differ from base; no independently audited training-person exclusion"
     }
-  ]
+  ],
+  "vad": {
+    "name": "Silero",
+    "filename": "silero_vad.onnx",
+    "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+    "bytes": 643854,
+    "official_release_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+    "official_release_asset_id": 271935959,
+    "verification": "Exact bytes and SHA256 match official GitHub release API digest; upstream semantic version not asserted",
+    "purpose": "Isolated offline quality-audit only; no production VAD change",
+    "config": {
+      "provider": "cpu",
+      "threads": 1,
+      "sample_rate": 16000,
+      "threshold": 0.5,
+      "window_size": 512,
+      "min_silence_seconds": 0.1,
+      "min_speech_seconds": 0.25,
+      "max_speech_seconds": 8,
+      "buffer_seconds": 10
+    }
+  }
 }

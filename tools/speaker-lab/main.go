@@ -41,7 +41,7 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 	f.SetOutput(io.Discard)
 	model := f.String("model", "", "")
 	sha := f.String("sha256", "", "")
-	var socket, wav, manifest *string
+	var socket, wav, manifest, audit *string
 	var declared, realtime *bool
 	switch args[0] {
 	case "session":
@@ -49,7 +49,10 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 		realtime = f.Bool("realtime-test", false, "")
 	case "worker":
 		socket = f.String("socket", "", "")
-	case "benchmark", "evaluate", "evaluate-large":
+	case "enrollment-study":
+		audit = f.String("audit", "", "")
+		manifest = f.String("manifest", "", "")
+	case "benchmark", "evaluate", "evaluate-large", "quality-audit":
 		manifest = f.String("manifest", "", "")
 	case "probe":
 		wav = f.String("wav", "", "")
@@ -77,6 +80,29 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 	if manifest != nil {
 		if *manifest == "" {
 			return fail("usage")
+		}
+		if args[0] == "quality-audit" {
+			result, e := runQualityAudit(ctx, *model, *sha, *manifest)
+			if e != nil {
+				return fail("quality_audit_failed")
+			}
+			if json.NewEncoder(out).Encode(result) != nil {
+				return 1
+			}
+			return 0
+		}
+		if audit != nil {
+			if *audit == "" {
+				return fail("usage")
+			}
+			result, e := runEnrollmentStudy(ctx, *model, *sha, *manifest, *audit)
+			if e != nil {
+				return fail("enrollment_study_failed")
+			}
+			if json.NewEncoder(out).Encode(result) != nil {
+				return 1
+			}
+			return 0
 		}
 		if args[0] == "evaluate-large" {
 			result, e := runLargeEvaluation(ctx, *model, *sha, *manifest)

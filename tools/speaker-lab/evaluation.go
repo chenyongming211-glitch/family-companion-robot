@@ -310,7 +310,13 @@ func (r *evaluationExtraction) clearVectors() {
 
 type evaluationWorkerStart func(context.Context, string, string) (*workerProcess, error)
 
-func extractEvaluation(ctx context.Context, m evaluationManifest, model, sha string, start evaluationWorkerStart) (r evaluationExtraction, err error) {
+func extractEvaluation(ctx context.Context, m evaluationManifest, model, sha string, start evaluationWorkerStart) (evaluationExtraction, error) {
+	return extractEvaluationWithGate(ctx, m, model, sha, start, nil)
+}
+
+// A private gate belongs only to enrollment-study; nil preserves every old
+// command's quality decision and report semantics.
+func extractEvaluationWithGate(ctx context.Context, m evaluationManifest, model, sha string, start evaluationWorkerStart, gate func(evaluationCase, []byte) bool) (r evaluationExtraction, err error) {
 	defer func() {
 		if err != nil {
 			r.clearVectors()
@@ -336,7 +342,7 @@ func extractEvaluation(ctx context.Context, m evaluationManifest, model, sha str
 		}
 		quality := qualityReason(pcm)
 		item := embeddedCase{fixtureCase: c.fixture(), quality: quality}
-		if quality != "qualified" {
+		if quality != "qualified" && (gate == nil || !gate(c, pcm)) {
 			clear(pcm)
 			if quality == "short" {
 				r.short++

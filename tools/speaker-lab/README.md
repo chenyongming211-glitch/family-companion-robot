@@ -280,3 +280,23 @@ session 的阈值及8人上限保持。数据准备另行保证2～8秒、独立
 `human_acceptance`／`production_acceptance`／`feature_enabled` 始终false，
 segmentation／overlap／open_set均unavailable。这里只是离线旁路实验，在线人数、设备声学和
 完整Realtime时延需要各自验证。
+
+## 独立离线优化研究（不改变普通命令）
+
+`quality-audit --model ABS --sha256 SHA --manifest ABS` 只审计波形，不计算身份分数。模型必须是资产锁中的 Silero SHA；清单沿用 `evaluate` 的完整 public_human header 和 case 字段，但所有 `split` 必须为 `evaluation`，匿名人物只允许 `fixture_1` 至 `fixture_80`，1–80 人、1–2048 条、文件最多 2 MiB。旧 evaluate/evaluate-large/synthetic/session 的边界与默认策略保持。
+
+输出为 `source_kind, model_sha256, manifest_sha256, config, cases, human_acceptance, production_acceptance, feature_enabled`。三个旗标始终 false；每行只有 `id, sha256, samples, speech_samples, rms, clipped_samples`。config 固定为 `provider:"cpu", threads:1, sample_rate:16000, threshold:0.5, window_size:512, min_silence_seconds:0.1, min_speech_seconds:0.25, max_speech_seconds:8, buffer_seconds:10`。每条独立 Reset/Clear，Flush 后把 SDK 人声片段裁切到原音频区间并计算并集。`speech_samples >= 16000` 只是估计的人声长度门禁，不是人工标注或重叠检测；RMS 与旧 qualityReason 使用相同 PCM16/32768 计算，clipped_samples 统计两个满幅端点。
+
+`enrollment-study --model ABS --sha256 SHA --manifest ABS --audit ABS` 使用另一个严格清单：沿用 public_human header，增加 `quality_audit_sha256`（audit 文件原始字节的 SHA）；case 沿用 `id,speaker,path,samples,sha256,recording_sha256,text_sha256`，把 split 替换为 role。role 只能为 `known_enrollment, known_evaluation, calibration_enrollment, calibration_query, unknown_evaluation`；匿名人物恰好为连续 `fixture_1..50, calibration_1..10, unknown_1..5`。一个清单代表一个设备条件；跨条件配对完整性由冻结前数据审查验证。两种输入和 audit 均最多 2 MiB／2048 条，禁止未知/重复/缺失/null 字段、非绝对或含 symlink 的路径。audit 可为更大的资格池，但每条研究 case 必须匹配其 id、WAV SHA 与 samples；audit 原始摘要、固定模型 SHA、全部 config 及三个 false 旗标也核对。
+
+登记每条 2–8 秒，至少两条，按输入顺序累计首次达到 20 秒后停止，总原始长度 20–28 秒，同时满足 RMS≥0.005 与 VAD≥1秒；至少保留两条不同句 query。校准每人至少两条 query 同时通过两个门禁；已知人物的低质量 query 全部保留在失败分母，不能因质量全部失败而换人。陌生人物每人 2–5 条。音频与录音不可重复，文字不可跨角色；同一人物不能重复同句。资格选择及设备配对是数据冻结责任，不从 embedding 结果选择人物或句子。
+
+短模板取首条登记；长模板先逐条 L2 归一化、等权平均、再归一化，非法或零和向量拒绝。本命令每模型/设备条件仅用 energy OR vad 并集提取一次，以同一原始 PCM 复用 short/multi × energy/vad 四个视图，绝不根据 VAD 裁剪或拼接声纹输入。新的融合模板与提取向量分别由唯一所有者清理；普通 worker 的自有 float PCM 和失败向量也会清理。SDK/OS 内部临时副本不宣称已取证擦除。
+
+每个视图只用独立 10 位校准人物的 query×10 登记模板计算同人/异人对，冻结 condition_far001/condition_far01 门槛：预算 floor(N×target)，Nextafter 整组排除同分边界，重新计数，超过 [-1,1] 则 not_run。还报告 current_session=0.682987 与 legacy_base_far001=0.4499944095418535；全部 margin=0.030229，旧 base 门槛对 V2 仅为参考。报告实际对数和预算；小样本经验 FAR 不是总体保证。
+
+每条政策报告已知 50 人池及连续 10×5 人组、包含质量拒绝的总量/正确/误归/拒识和模板配对；Top-1 同时报告合格与全分母。陌生 5 人各只进入一个预定 5 人组（unknown_1→组1，…，unknown_5→组5），并报告 50 人池，包含全部/合格分母 false_accept；不计算未知人物 Top-1。研究报告包含全部音频时长、逐人原始登记与 VAD 估计长度、native/IPC 时间、cold start、worker CPU/RSS 和主进程 RSS。向量只留 RAM，不输出来源路径、原文或向量。
+
+只在云端独立实验进程运行。调用方必须为**整个 CLI 进程树**设置有界外层超时并在超时后终止、回收，不能只依赖 Go context 中断同步 native 调用，例如 `timeout --kill-after=5s 600s speaker-lab ...`；更大清单由实验控制器按已冻结总预算设置。CLI 在片段/窗口之间检查取消并释放 native 对象与拥有的缓冲。原 SDK、服务/session 配置、正式阈值、VAD/AEC、固件和麦克风均不改变。连续流、重叠、重放、家庭现场和生产验收保持 unavailable/false；有限公开语料陌生人观测不能外推访客保证。
+
+可选原生 VAD 回归使用 `SPEAKER_LAB_TEST_VAD_MODEL` 加既有 `SPEAKER_LAB_TEST_WAV`（合成 fixture）和 `SPEAKER_LAB_TEST_BINARY` 显式开启 `TestRealVADOptIn`；普通测试默认跳过。所有 Go/ONNX 测试、构建和运行均在云端。

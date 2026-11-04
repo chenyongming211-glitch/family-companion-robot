@@ -43,6 +43,7 @@ func (n *nativeExtractor) Dimension() int { return n.dim }
 func (n *nativeExtractor) Close()         { sherpa.DeleteSpeakerEmbeddingExtractor(n.native) }
 func (n *nativeExtractor) Extract(pcm []byte) ([]float32, error) {
 	samples := make([]float32, len(pcm)/2)
+	defer clear(samples)
 	for i := range samples {
 		samples[i] = float32(int16(binary.LittleEndian.Uint16(pcm[i*2:]))) / 32768
 	}
@@ -58,6 +59,7 @@ func (n *nativeExtractor) Extract(pcm []byte) ([]float32, error) {
 	}
 	v := n.native.Compute(stream)
 	if !validVector(v, n.dim) {
+		clear(v)
 		return nil, errUnavailable
 	}
 	return v, nil
