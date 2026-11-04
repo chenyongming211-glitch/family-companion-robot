@@ -229,4 +229,4 @@ R2复用R1背景统计；方法总耗时还包含模板配对诊断／组装，�
 - Device03清单SHA256 a4cee902c9835910c2619a043725683fa56cd75173d5b5f86461d8469f7fc04d；Device06清单29c054a30db23d0cf3ec465d270d2cb63118514f20c242e52c089f553d6c3745；冻结摘要8e56de66b5470eb6e0cfdb8abfbd520f0703390896cfc2e3c5697d703540fee5。四审计摘要和每条输入绑定保留云端，Git仅有源码、调研／设计／计划与匿名汇总。
 - 私有完整证据位于云端/opt/family-robot-validation/speakerb-20261105-ba0ce90/；原始WAV、JSON、模型和向量未复制到Mac或Git。向量只在隔离进程RAM内使用；不宣称取证证明OS无临时副本。
 - 前后正式两服务PID／active／NRestarts及5项保护摘要完全一致，实验进程已回收。没有安装运行依赖、部署／重启正式服务、修改正式阈值、env／unit、设备VAD／AEC／固件或开启麦克风。human_acceptance、production_acceptance、feature_enabled均false，open_set_assessment仅limited_public_unknown_cohort，家庭现场与生产未验收。
-- 2026-11-05最终整体独立复核通过，规格符合、离线研究可发布，无Critical／Important问题；一项validation“拟合”用语已改为“开发标定”，未改数据或重跑实验。原执行汇总脚本另存保留，仅修正复用生成器的同一句文案。main推送及临时SSH关闭随后记录。
+- 2026-11-05最终整体独立复核通过，规格符合、离线研究可发布，无Critical／Important问题；一项validation“拟合”用语已改为“开发标定”，未改数据或重跑实验。原执行汇总脚本另存保留，仅修正复用生成器的同一句文案。完整源码／报告已推送main（2981f89），远端HEAD精确匹配、checkout干净、分歧0/0；本轮临时SSH master及目录已关闭清除。随后仅提交本收尾记录，不改模型、规则或结果。

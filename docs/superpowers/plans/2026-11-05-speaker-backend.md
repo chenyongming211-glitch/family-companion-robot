@@ -47,7 +47,7 @@ func backendSoftplus(x float64) float64 {
 - [x] Pin reviewedbinary/source/model/manifests/audits; two sequential bounded1200s commands onceeach, preserveexit/stderr/failures, no outcome-basedretry.
 - [x] Check totals/rates/groups/fittedbudgets/ranks/R0legacy50/resource scopes and protectedservices; reclaimprocesses.
 - [x] Report smallindependenttest separatelyfromold50development and previousB onlymatchedinputs, actualdenominators/uncertainty; no unseen50 or productionclaims.
-- [ ] Whole-change independentreview, closefindings, handoff/spec/planupdate, mainpush/exactremote/cleancheckout, temporarySSHclose.
+- [x] Whole-change independentreview, closefindings, handoff/spec/planupdate, mainpush/exactremote/cleancheckout, temporarySSHclose.
 
 
 ## 执行记录
@@ -56,4 +56,4 @@ func backendSoftplus(x float64) float64 {
 
 两条件各一次实际推理exit0/stderr0，聚合1362项核对通过，R0旧B语义重现；正式两PID／5摘要保持，实验进程回收。新测试1%验证目标下B为Device03 13/14正确、0/100陌生误接纳；PC 2/14、0/100。R1为14/14和11/14，但陌生13/100和27/100；R2为14/14和11/14，陌生9/100和26/100。本轮不支持采用R1/R2，B跨设备拒识仍待优化；没有调参重跑或正式部署。
 
-完整结果见[报告](../../verification/2026-11-05-speaker-backend.md)。最终整体独立复核已通过，规格符合／离线研究可发布，无Critical／Important问题；仅validation用语细节已关闭。识别效果目标未通过，保留负面结果。剩余main推送及临时SSH关闭，不因文档收尾重跑模型。
+完整结果见[报告](../../verification/2026-11-05-speaker-backend.md)。最终整体独立复核已通过，规格符合／离线研究可发布，无Critical／Important问题；仅validation用语细节已关闭。识别效果目标未通过，保留负面结果。完整源码／报告已推送main（2981f89），远端HEAD精确一致、checkout干净、分歧0/0，临时SSH及目录已关闭清除。Task3完成，随后仅提交本收尾记录，未因文档收尾重跑模型。
