@@ -23,9 +23,9 @@ type backendManifest struct { SourceKind, SourceID, SourceURL, LicenseURL, Singl
 func loadBackendManifest(path string) (backendManifest, map[string]auditCase, string, error)
 func runBackendStudy(ctx context.Context, model, sha, manifest string) (backendReport, error)
 ~~~
-- [ ] Cloud RED strict-schema/bounds/audit/config/SHA/samples/role/sourcegroup/text/20s-first-crossing tests; independentCLI/old limits unchanged.
-- [ ] Cloud RED hand-computed AS-Norm/top-k/populationstd floor, fusion, tied and singlecandidate, wrappinggroups/count-once; full/qualified/not_run counts; threshold/margin/budget/zero-wrong tieobjective; train-only standardization/stable loss/fitting failure; R2 rankinvariance/privacy.
-- [ ] GREEN exact design. Stable softplus and deterministic regularized fit:
+- [x] Cloud RED strict-schema/bounds/audit/config/SHA/samples/role/sourcegroup/text/20s-first-crossing tests; independentCLI/old limits unchanged.
+- [x] Cloud RED hand-computed AS-Norm/top-k/populationstd floor, fusion, tied and singlecandidate, wrappinggroups/count-once; full/qualified/not_run counts; threshold/margin/budget/zero-wrong tieobjective; train-only standardization/stable loss/fitting failure; R2 rankinvariance/privacy.
+- [x] GREEN exact design. Stable softplus and deterministic regularized fit:
 ~~~go
 func backendSoftplus(x float64) float64 {
     if x > 0 { return x + math.Log1p(math.Exp(-x)) }
@@ -35,16 +35,25 @@ func backendSoftplus(x float64) float64 {
 // Loss class-balanced logistic + .01/2*(wScore*wScore+wDuration*wDuration), interceptfree.
 // max2000, objective delta1e-8, step1/backtracking50; explicitnot_run on fitfailure.
 ~~~
-- [ ] Cloud GOMAXPROCS2 ordinary/race go test -p1 -json -count1, vet/build; focusedRED/GREEN logs and source/binarySHA, no unnecessary repeatednative/oldfullruns.
-- [ ] Main commit limitedfiles, private report commands/counts/hashlineage; independent spec+quality review, one consolidatedfixwave and coveringtests ifneeded.
+- [x] Cloud GOMAXPROCS2 ordinary/race go test -p1 -json -count1, vet/build; focusedRED/GREEN logs and source/binarySHA, no unnecessary repeatednative/oldfullruns.
+- [x] Main commit limitedfiles, private report commands/counts/hashlineage; independent spec+quality review, one consolidatedfixwave and coveringtests ifneeded.
 
 ### Task 2: Source freeze and independent review
-- [ ] Full officialstream MD5/bytes, actualWAV and signal-only audits; source-order first<=5newknown/20newunknown/30background; oldS10train/50+5validation transferred.
-- [ ] Freeze two backendmanifests and anonymous actual role/count/duration summary with SHA; independent source/WAV/sample/quality/text/paireddevice/70-old exclusion/role-disjoint review.
-- [ ] Record actualtestN before firstidentityscore. Old50developed-on/backgroundcontentunverified/validationunknown5 disclosed; sourcefailure notsilentlydowngraded.
+- [x] Full officialstream MD5/bytes, actualWAV and signal-only audits; source-order first<=5newknown/20newunknown/30background; oldS10train/50+5validation transferred.
+- [x] Freeze two backendmanifests and anonymous actual role/count/duration summary with SHA; independent source/WAV/sample/quality/text/paireddevice/70-old exclusion/role-disjoint review.
+- [x] Record actualtestN before firstidentityscore. Old50developed-on/backgroundcontentunverified/validationunknown5 disclosed; sourcefailure notsilentlydowngraded.
 
 ### Task 3: Run, compare and publish
-- [ ] Pin reviewedbinary/source/model/manifests/audits; two sequential bounded1200s commands onceeach, preserveexit/stderr/failures, no outcome-basedretry.
-- [ ] Check totals/rates/groups/fittedbudgets/ranks/R0legacy50/resource scopes and protectedservices; reclaimprocesses.
-- [ ] Report smallindependenttest separatelyfromold50development and previousB onlymatchedinputs, actualdenominators/uncertainty; no unseen50 or productionclaims.
+- [x] Pin reviewedbinary/source/model/manifests/audits; two sequential bounded1200s commands onceeach, preserveexit/stderr/failures, no outcome-basedretry.
+- [x] Check totals/rates/groups/fittedbudgets/ranks/R0legacy50/resource scopes and protectedservices; reclaimprocesses.
+- [x] Report smallindependenttest separatelyfromold50development and previousB onlymatchedinputs, actualdenominators/uncertainty; no unseen50 or productionclaims.
 - [ ] Whole-change independentreview, closefindings, handoff/spec/planupdate, mainpush/exactremote/cleancheckout, temporarySSHclose.
+
+
+## 执行记录
+
+数据可行性按用户选择保持普通话，新增4已知／20陌生、背景30，旧S10训练／50已知5陌生开发验证。两条件各971条输入，数据独立审查PASS。cb7e597工具规格／质量PASS，325普通／race通过、8 opt-in skip、vet/build；92e25a5仅强化数值测试助手，定向51通过／1 skip，运行二进制未变。
+
+两条件各一次实际推理exit0/stderr0，聚合1362项核对通过，R0旧B语义重现；正式两PID／5摘要保持，实验进程回收。新测试1%验证目标下B为Device03 13/14正确、0/100陌生误接纳；PC 2/14、0/100。R1为14/14和11/14，但陌生13/100和27/100；R2为14/14和11/14，陌生9/100和26/100。本轮不支持采用R1/R2，B跨设备拒识仍待优化；没有调参重跑或正式部署。
+
+完整结果见[报告](../../verification/2026-11-05-speaker-backend.md)。剩余整体独立复核、main推送及临时SSH关闭；不因文档收尾重跑模型。
