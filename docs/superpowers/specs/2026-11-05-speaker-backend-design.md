@@ -45,6 +45,16 @@ backend-study --model ABS --sha256 SHA --manifest ABS。清单≤4MiB／4096条�
 
 case必填id、speaker、role、path、samples、sha256、recording_sha256、source_group_sha256、text_sha256。人物前缀／角色：cohort_N(cohort)、train_N(train_enrollment/train_query)、validation_N(validation_enrollment/validation_query)、validation_unknown_N(validation_unknown)、test_N(test_enrollment/test_query)、test_unknown_N(test_unknown)。各前缀从1连续；text_sha256仅cohort可空。train10、validation50/5、cohort30、test已知1～5／陌生20。cohort每人2条、登记首次跨20秒且20～28秒、各登记人物至少2查询。必需资格不足显式失败，不自动降格或扩大旧入口限制。
 
-新增测试已知人物查询数为2／2／2／8时，不能把14句当14人；输出按匿名人物的质量／正确／误归／拒识／Top-1总量及等人物权重宏平均。陌生人物单列每人误接纳／总数和至少一次被误接纳的人数。分组采用人物编号数字顺序，不用字符串字典序。\n\n匿名输出模型／清单／审计SHA、每角色总数／质量分母、R0/R1/R2及池／政策正确／误归／拒识、陌生误接纳／总数／组计数、合格及全分母Top-1、模板配对。not_run保留真实分母而决策0。不得输出路径／正文／源人物／向量。human_acceptance、production_acceptance、feature_enabled均false，open_set_assessment=limited_public_unknown_cohort；连续／重叠／重放／家庭现场仍unavailable。
+新增测试已知人物查询数为2／2／2／8时，不能把14句当14人；输出按匿名人物的质量／正确／误归／拒识／Top-1总量及等人物权重宏平均。陌生人物单列每人误接纳／总数和至少一次被误接纳的人数。分组采用人物编号数字顺序，不用字符串字典序。
+
+匿名输出模型／清单／审计SHA、每角色总数／质量分母、R0/R1/R2及池／政策正确／误归／拒识、陌生误接纳／总数／组计数、合格及全分母Top-1、模板配对。not_run保留真实分母而决策0。不得输出路径／正文／源人物／向量。human_acceptance、production_acceptance、feature_enabled均false，open_set_assessment=limited_public_unknown_cohort；连续／重叠／重放／家庭现场仍unavailable。
 
 报告原生／IPC温态P50/P95、冷启动、输入数／音频时长、workerCPU/RSS、parentRSS；背景统计／拟合／标定／评分耗时分列。native延时覆盖所有合格角色，与旧仅evaluation计时不可直接作纯速度比。前后5项保护摘要／2PID/NRestarts/active核对；外层进程组超时TERM/KILL回收。两设备各执行一次，旧50 R0兼容诊断复用本轮共享提取，不另重复模型。最终代码／数据／整体独立审查、main推送、关闭临时SSH，不部署产品。
+
+## 身份评分前的实际输入冻结
+
+波形／信号资格审核后，最终test为4位新已知、20位新陌生，背景30人；旧10人训练／旧50已知5陌生开发验证。首次40位背景候选只有26位合格，已在无身份分数时将读取候选上限扩至全部70位，仍取原顺序前30位、同一质量资格；不是按结果更换人物。三批新审计覆盖1,831份唯一WAV，官方完整归档两次流式MD5及字节数一致。
+
+两条件各971条、119人物；其中登记／背景共享521条，450条查询各有Device03／06版本，合计1,421份不同设备录音。test新登记25段，平均20.5813秒原录音／15.936秒VAD估计段；已知14查询／条件（2/2/2/8），陌生100查询／条件。energy通过：Device03已知14／14、陌生100／100，Device06已知13／14、陌生69／100；失败仍留全分母。旧开发集与新集的采集条件也不同，不能跨集直接计算优化增益。
+
+冻结清单SHA256：Device03 a4cee902c9835910c2619a043725683fa56cd75173d5b5f86461d8469f7fc04d；Device06 29c054a30db23d0cf3ec465d270d2cb63118514f20c242e52c089f553d6c3745。匿名冻结摘要SHA256 8e56de66b5470eb6e0cfdb8abfbd520f0703390896cfc2e3c5697d703540fee5。输入独立审查及代码审查通过后才执行身份评分；本节尚无身份结果。
