@@ -10,7 +10,7 @@ import (
 
 func closeBackend(t *testing.T, got, want float64) {
 	t.Helper()
-	if math.Abs(got-want) > 1e-7 {
+	if math.IsNaN(got) || math.IsInf(got, 0) || math.IsNaN(want) || math.IsInf(want, 0) || math.Abs(got-want) > 1e-7 {
 		t.Fatalf("got %.12g want %.12g", got, want)
 	}
 }
