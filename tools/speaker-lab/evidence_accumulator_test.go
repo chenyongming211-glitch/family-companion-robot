@@ -34,7 +34,8 @@ func evidenceNearVector(t *testing.T, v []float32, w ...float64) {
 		t.Fatal(v, w)
 	}
 	for i := range v {
-		if math.Abs(float64(v[i])-w[i]) > 1e-6 {
+		observed, expected := float64(v[i]), w[i]
+		if math.IsNaN(observed) || math.IsInf(observed, 0) || math.IsNaN(expected) || math.IsInf(expected, 0) || math.Abs(observed-expected) > 1e-6 {
 			t.Fatal(v, w)
 		}
 	}

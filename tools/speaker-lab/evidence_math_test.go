@@ -37,7 +37,7 @@ func TestEvidencePolicyNearestRankNotMinimum(t *testing.T) {
 		v = append(v, evidenceLabeledVector{fmt.Sprint(i), fmt.Sprintf("a%d", i), []float32{1, 0, 0}}, evidenceLabeledVector{fmt.Sprint(i), fmt.Sprintf("b%d", i), []float32{float32(c), float32(math.Sqrt(1 - c*c)), 0}})
 	}
 	p, e := fitEvidencePolicy(v, evidenceTraining(), 3)
-	if e != nil || p.EnrollmentSamePairs != 21 || math.Abs(p.DiagnosticFloor+.9) > 1e-6 {
+	if e != nil || p.EnrollmentSamePairs != 21 || math.IsNaN(p.DiagnosticFloor) || math.IsInf(p.DiagnosticFloor, 0) || math.Abs(p.DiagnosticFloor+.9) > 1e-6 {
 		t.Fatal(p, e)
 	}
 }
@@ -64,7 +64,7 @@ func TestEvidencePolicyInsufficientIndependentAndNoSeparation(t *testing.T) {
 		v[i].Vector = []float32{1, 0, 0}
 	}
 	p, e := fitEvidencePolicy(v, v, 3)
-	if e != nil || p.ContinuityStatus != "disabled_no_safe_threshold" || p.ContinuityFloor > 1 || p.QuerySamePassing != 0 {
+	if e != nil || p.ContinuityStatus != "disabled_no_safe_threshold" || math.IsNaN(p.ContinuityFloor) || math.IsInf(p.ContinuityFloor, 0) || p.ContinuityFloor > 1 || p.QuerySamePassing != 0 {
 		t.Fatal(p, e)
 	}
 }
