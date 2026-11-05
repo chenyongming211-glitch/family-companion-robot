@@ -24,7 +24,7 @@ import (
 
 const requestTimeout = 2 * time.Second
 const startupTimeout = 10 * time.Second
-const maxModelBytes = 100 * 1024 * 1024
+const maxModelBytes = 128 * 1024 * 1024
 
 var errModel = errors.New("invalid_model")
 var errWorker = errors.New("worker_failed")
