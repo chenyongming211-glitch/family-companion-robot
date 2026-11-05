@@ -440,3 +440,56 @@ WeSpeaker适配只加元数据、不改图或权重；实际sherpa使用Povey窗
 本轮base因新P2需要一次共享提取而重提，B必须精确重现保存R0的Top-1／ROC／完整1%规则。
 所有旧人物都已看过，不构成新盲测；真实机器人／手机原始登记的独立现场查询和家庭验收仍待执行。
 详细冻结、全部36池结果和采集边界见[本轮验证报告](../../docs/verification/2026-11-05-speaker-prototype-model.md)。
+
+## 现有 SDK 对照（仅显式测试入口）
+
+`product_sdk_study_test.go` 仅编入 Linux 测试二进制，普通 CLI／正式服务没有 SDK 入口。
+固定 SpeechBrain ECAPA、WeSpeaker 官方 ONNX 前端参考和 Vosk 三项；资产、官方来源及精确版本见
+`products.lock.json`，Python worker 在加载前认证 bundle 和全部成员，禁止启动时下载。
+比较对象为“官方 SDK 提取＋本项目共同 B 政策”，不代表厂商完整登记／1:N 产品，也没有新声纹算法。
+只调用既有 `analyzePrototypeMethod(...,"B_single_template")`，保留原顺序等权归一化登记、
+三候选池、完整 ROC、人物／组统计及仅 validation 标定的1%规则；不计算或报告 P2。
+
+全部依赖、构建、测试、模型和音频处理必须在云端 Linux 执行，Mac仅代码／Git。
+新增 opt-in 的以下七项必须全部显式设置；全部未设置默认跳过，部分设置或非法模式直接失败，
+错误文本不回显私有路径。解释器允许正常 venv 符号链接，worker／bundle／模型成员仍要求规范路径。
+
+```sh
+cd /private/source/tools/speaker-lab
+GOTOOLCHAIN=local GOMAXPROCS=2 /absolute/go test -c -o /private/bin/sdk-study.test .
+SPEAKER_LAB_TEST_PRODUCT_MODE=synthetic \
+SPEAKER_LAB_TEST_PRODUCT_PYTHON=/private/venv/bin/python \
+SPEAKER_LAB_TEST_PRODUCT_WORKER=/private/source/tools/speaker-lab/product_sdk_worker.py \
+SPEAKER_LAB_TEST_PRODUCT_BUNDLE=/private/bundle-speechbrain_ecapa.json \
+SPEAKER_LAB_TEST_PRODUCT_SHA256=<bundle的64位小写SHA256> \
+SPEAKER_LAB_TEST_PRODUCT_MANIFEST=/private/synthetic/manifest.json \
+SPEAKER_LAB_TEST_PRODUCT_OUTPUT=/private/evidence/sdk-synthetic-new.json \
+/private/bin/sdk-study.test -test.run '^TestRealProductSDKStudyOptIn$' -test.v
+```
+
+`synthetic` 使用既有严格合成清单，真实提取每个原始案例一次；随后仅在内存为完整 B 池布局复用，
+明确分开实际 `planned_cases`／`processed_cases`／`sdk_attempts`／`sdk_vectors`／`native_sdk_no_vector`
+与逻辑 `case_count`／`sdk_no_vector`／`enrollment_sdk_no_vector`。逻辑质量拒识为工程覆盖，
+不是新增真人或真实 VAD 结论；`synthetic_engineering_fixture`、开放集 unavailable、所有验收／功能标记false。
+SpeechBrain／WeSpeaker 要求正向完整三池和原 B 精确等价；Vosk 允许真实无声纹导致整条件 not_run，
+或真实2秒请求失败导致 not_run，绝不伪造正向向量。成功后及错误／取消均清理自己拥有的 PCM／向量，
+检查实际子进程回收和 socket 删除；SDK／分配器／操作系统内部副本不承诺清除。
+
+`public` 只接受原严格 `public_human` backend loader，角色、审核、原971输入及登记资格均不变。
+查询短／低能量／SDK真实无向量全部保留已知和陌生分母；任一必需登记无向量使整条件 not_run，
+不删除片段或人物。协议失败、SDK异常、退出、超时使整条件 not_run；部分处理量单独报告，
+不生成完整池拒识数或成功识别率。`wall_ipc_inference` 覆盖所有尝试（含无向量和失败），
+`native_inference` 仅覆盖成功返回向量的 SDK 推理；冷启动计入模型和前端加载，
+CPU／最大RSS取已回收子进程的真实 Linux rusage，父进程RSS单列。
+
+Python worker 是反向连接客户端，旧 `launchWorker` 也是客户端；测试专用启动器因此使用原
+`listenPrivate`、`workerProcess` 和 `requestWithDecoder`，保留10秒启动／2秒请求、Pdeathsig、
+最小环境、socket私有权限／inode安全清理，并验证连接的 UID 和确切子进程PID。
+仅对已认证协议 `errUnavailable` 做带外标记并保持连接，其余错误中止。
+输出在推理前以 `O_EXCL`／0600独占创建，只有聚合结果和摘要，没有向量、原始路径、ASR文本或逐句分数。
+
+公开评分前必须由控制器审查并冻结源码、二进制、SDK／资产／bundle、原输入／审核和固定政策摘要。
+固定顺序为 speechbrain03／06、wespeaker03／06、vosk03／06，每项顺序执行一次；
+外层必须使用3600秒独立进程组控制器，TERM后5秒KILL并wait。测试自身3600秒context不替代该控制器。
+失败及输出保留，不按结果调参／挑输入／重跑；既有 B 仅读取冻结结果，不重新推理。
+本入口的实现和合成通过不授权公开评分，也不代表家庭／生产／新盲测通过。
