@@ -140,6 +140,32 @@ func TestChannelStrictJSON(t *testing.T) {
 		}
 	}
 }
+func TestChannelCheckpointStrictJSON(t *testing.T) {
+	// Engineering metadata only; no scoring, extraction or measured resources.
+	cp := newChannelCheckpoint(backendPolicy{Status: "calibrated", Threshold: .5, Target: .01, Validation: backendCounts{Total: 25, Rejected: 25, UnknownTotal: 25, UnknownRejected: 25}})
+	cp.Resources = channelResources{Status: "complete", Cases: 88, NativeVectors: 82, RejectedSilence: 6, Dimension: 512, WorkerReaped: true, SocketRemoved: true, OwnedCleared: true, Native: timingSummary{WarmCount: 81}, Wall: timingSummary{WarmCount: 81}}
+	b, e := json.Marshal(cp)
+	if e != nil {
+		t.Fatal("marshal checkpoint metadata")
+	}
+	t.Run("valid_zero", func(t *testing.T) {
+		if restored, e := readChannelCheckpointBytes(b, channelDigest(b)); e != nil || !reflect.DeepEqual(restored, cp) {
+			t.Fatal("numeric zero grid roundtrip")
+		}
+	})
+	for _, first := range []string{"null", " null ", `"0"`, "false", "{}", "[]", "1e999"} {
+		t.Run(first, func(t *testing.T) {
+			bad := bytes.Replace(b, []byte(`"margin_grid":[0,`), []byte(`"margin_grid":[`+first+`,`), 1)
+			if bytes.Equal(bad, b) {
+				t.Fatal("margin grid mutation missing")
+			}
+			// Bind the mutated bytes so a hash mismatch cannot mask schema acceptance.
+			if _, e := readChannelCheckpointBytes(bad, channelDigest(bad)); e == nil {
+				t.Fatal("invalid primitive margin accepted")
+			}
+		})
+	}
+}
 func channelNumeric(t *testing.T, phase string) (channelManifest, []embeddedCase) {
 	t.Helper()
 	m, _ := channelFixture()
@@ -583,13 +609,16 @@ func channelStrict(b []byte, dst any) error {
 			if channelStrict(r, reflect.New(f.Type).Interface()) != nil {
 				return errProtocol
 			}
-		} else if f.Type.Kind() == reflect.Slice && f.Type.Elem().Kind() == reflect.Struct {
+		} else if f.Type.Kind() == reflect.Slice {
 			var rs []json.RawMessage
 			if json.Unmarshal(r, &rs) != nil {
 				return errProtocol
 			}
 			for _, v := range rs {
-				if channelStrict(v, reflect.New(f.Type.Elem()).Interface()) != nil {
+				if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+					return errProtocol
+				}
+				if f.Type.Elem().Kind() == reflect.Struct && channelStrict(v, reflect.New(f.Type.Elem()).Interface()) != nil {
 					return errProtocol
 				}
 			}
