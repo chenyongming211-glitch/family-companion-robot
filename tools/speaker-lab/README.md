@@ -1,8 +1,8 @@
 # Speaker lab（隔离 Linux 实验）
 
 本嵌套 Go module 只在云端 Linux 运行，使用 sherpa-onnx Linux v2.0.1。
-根仓库的普通 Go 构建不加载 ONNX 运行库。当前只有有界特征提取与私有 IPC，
-没有接正式 Realtime、登记、人物数据库、会话队列或跨会话识别。
+根仓库的普通 Go 构建不加载 ONNX 运行库。包含有界特征提取、私有 IPC 和隔离的离线研究工具，
+没有接正式 Realtime、产品登记库、人物数据库、会话队列或跨会话识别。
 
 ## 云端构建与探测
 
@@ -344,3 +344,50 @@ R1 固定 30 个背景模板、top-k=10；分别对登记和查询取背景余�
 输出不包含路径、源人物、正文、录音／文字／源组摘要或向量。`human_acceptance`、`production_acceptance`、`feature_enabled` 均 false；`open_set_assessment:limited_public_unknown_cohort`，连续分段、重叠、重放和家庭现场 unavailable。错误仅 `usage`／`backend_study_failed`。首次真人身份评分须在代码与冻结数据审查通过后进行。
 
 只验证冻结输入合同、不加载模型的可选检查：`SPEAKER_LAB_BACKEND_MANIFEST=/private/backend/device03-manifest.json go test -run '^TestBackendFrozenManifestOptIn$'`。默认跳过；不构成身份准确率或模型原生验证。所有 Go 测试／构建／运行均在云端。
+
+## 登记诊断与有界证据积累（隔离 `evidence-study`）
+
+`evidence-study` 保持已有 B 等权登记模板、RMS／长度资格、严格 `public_human` 清单与冻结输入；
+登记诊断只提示重录，不自动删段。查询候选将合格片段向量逐段归一化，按样本数加权融合后再归一化，
+不是拼 PCM 重新推理。连续性只用 `train_query` 拟合；全窗口两两守门，无人物标签、身份结果或未来输入。
+训练不足／门槛无效时明确禁用并回退单片段。固定上限为8秒合格音频、4段、1.5秒相邻间隙、12秒源坐标跨度。
+
+只在云端 Linux 使用已校验绝对路径；不在 Mac 安装运行依赖、构建或运行语音／原生测试：
+
+```sh
+cd /private/source/tools/speaker-lab
+GOTOOLCHAIN=local GOMAXPROCS=2 go test -json -count=1 ./... > /private/evidence/ordinary.jsonl
+GOTOOLCHAIN=local GOMAXPROCS=2 go test -race -json -count=1 ./... > /private/evidence/race.jsonl
+GOTOOLCHAIN=local GOMAXPROCS=2 go vet ./...
+GOTOOLCHAIN=local GOMAXPROCS=2 go build -o /private/bin/speaker-lab .
+SPEAKER_LAB_TEST_EVIDENCE_FIXTURE=/private/synthetic/manifest.json \
+SPEAKER_LAB_TEST_MODEL=/private/models/eres2net.onnx \
+SPEAKER_LAB_TEST_SHA256=<64位小写SHA256> \
+SPEAKER_LAB_TEST_BINARY=/private/bin/speaker-lab \
+GOTOOLCHAIN=local GOMAXPROCS=2 go test -v -count=1 -run '^TestRealEvidenceStudyOptIn$' .
+```
+
+新增测试只由以上四个显式输入启用；默认新增1项和原8项 opt-in 均跳过。合成清单必须通过原有
+`loadManifest` 的 `synthetic_tts`／非真人验收／单人声明合同。测试先真实原生提取，再在内存复用合成声音填充候选池，
+执行内部分析、四组诊断等价、匿名 JSON 与子进程／socket 清理；这种声音复用不代表人物独立、公开真人或识别准确率。
+它没有放宽公开数据 loader。实际拟合状态、观察到的融合数与工程测试结论见[验证报告](../../docs/verification/2026-11-05-speaker-evidence.md)。
+
+公开回归 CLI 为：
+
+```sh
+/private/bin/speaker-lab evidence-study \
+  --model /private/models/eres2net.onnx \
+  --sha256 <64位小写SHA256> \
+  --manifest /private/public/backend/device03-manifest.json
+```
+
+实际研究应先审查源码并冻结二进制／模型／清单／审核摘要和实验常量，用进程组1200秒超时、TERM／KILL及回收的控制器顺序运行，
+保留 stdout／stderr／退出状态／资源记录，禁止覆盖成功输出。2026-11-05 两次既有运行已完成，不应再次执行其控制器。
+旧 B 只读取已保存结果做语义回归，不重新推理。四组固定为 `B_baseline`、`B_enrollment_diagnostic`、`B_accumulation`、
+`B_combined_diagnostic`；两种顺序为 `paired_bursts`、`alternating`，相邻虚拟间隙固定4000样本。
+只用 validation 以1%陌生误接纳经验预算独立标定各候选池，再冻结应用于旧 test；不按结果选择片段、顺序或阈值。
+
+输出是 `seen_development_regression`、`constructed_sequence`、`new_blind_test=false`，不是现场连续录音。
+未知／不合格查询仍计分母；报告事后混入异人的窗口，但不把标签反馈给积累器。
+诊断没有真实重录素材时必须保持身份结果不变；没有生产／家庭验收、真实重叠检测或端到端时延结论。
+模型未替换或部署，正式服务／环境／固件／VAD／AEC均未改变。实际设备和手机参与者采集步骤见验证报告；工具不会自动开麦。
