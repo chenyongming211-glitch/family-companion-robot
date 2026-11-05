@@ -42,6 +42,7 @@ type productSDKReport struct {
 }
 
 func productAnalyze(ctx context.Context, m backendManifest, a map[string]auditCase, cs []embeddedCase, dim int) (productSDKReport, error) {
+	started := time.Now()
 	r := productSDKReport{Status: "not_run", Planned: len(m.Cases)}
 	r.evaluationMetadata = newEvaluationReport("").evaluationMetadata
 	r.SourceKind, r.SingleSpeakerBasis, r.Condition = m.SourceKind, m.SingleSpeakerBasis, m.Condition
@@ -172,6 +173,7 @@ func productAnalyze(ctx context.Context, m backendManifest, a map[string]auditCa
 	}
 	r.Methods = []prototypeMethod{method}
 	r.Status = "evaluated"
+	r.TotalMS = backendElapsed(started)
 	return r, nil
 }
 func productDecoder(noVector *bool) workerResponseDecoder {
@@ -207,6 +209,9 @@ func TestProductSDKCommonBParityDenominators(t *testing.T) {
 		r, e := productAnalyze(context.Background(), m, a, cs, dim)
 		if e != nil || r.Status != "evaluated" || len(r.Methods) != 1 || r.Methods[0].Name != "B_single_template" || !reflect.DeepEqual(old.Pools, r.Methods[0].Pools) {
 			t.Fatal("complete B pool/ROC/calibration parity", e)
+		}
+		if !backendFinite(r.TotalMS) || r.TotalMS <= 0 || r.TotalMS < r.Methods[0].TotalMS {
+			t.Fatal("complete analysis duration is finite and contains method duration")
 		}
 		assertNativeStudyVectors(t, "common B borrows", cs, snapshot)
 		for i, c := range m.Cases {

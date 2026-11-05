@@ -481,6 +481,7 @@ SpeechBrain／WeSpeaker 要求正向完整三池和原 B 精确等价；Vosk 允
 不生成完整池拒识数或成功识别率。`wall_ipc_inference` 覆盖所有尝试（含无向量和失败），
 `native_inference` 仅覆盖成功返回向量的 SDK 推理；冷启动计入模型和前端加载，
 CPU／最大RSS取已回收子进程的真实 Linux rusage，父进程RSS单列。
+`analysis_total_ms` 表示完整成功评测的分析耗时，包含共同 B 方法；`not_run` 时为0表示结果不完整、耗时不可用，不表示零成本。
 
 Python worker 是反向连接客户端，旧 `launchWorker` 也是客户端；测试专用启动器因此使用原
 `listenPrivate`、`workerProcess` 和 `requestWithDecoder`，保留10秒启动／2秒请求、Pdeathsig、
