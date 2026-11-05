@@ -1,0 +1,339 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "speechbrain_ecapa": {
+      "metadata": {
+        "sdk": "speechbrain",
+        "sdk_version": "1.1.2",
+        "dimension": 192,
+        "source_revision": "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
+        "frontend": "SpeakerRecognition.encode_batch(normalize=False)"
+      },
+      "assets": {
+        "sb/classifier.ckpt": "fd9e3634fe68bd0a427c95e354c0c677374f62b3f434e45b78599950d860d535",
+        "sb/mean_var_norm_emb.ckpt": "cd70225b05b37be64fc5a95e24395d804231d43f74b2e1e5a513db7b69b34c33",
+        "sb/label_encoder.txt": "e13c3a167bb4112685670ee896d20e2b565af16b3a4ceeaa8689fa4d22adb8b9",
+        "sb/embedding_model.ckpt": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2",
+        "sb/config.json": "15ff7afad09adec0936c31493a7397c13f855914f4579a8393fe82649778a664",
+        "sb/README.md": "00f58c3cbd7a7510de9374080da0e82a4c4e8f4df567f7338fe6efe108be705a",
+        "sb/hyperparams.yaml": "6f78854fa04ba59e761437b76a2575d3aba5e5016de3e9b69f0c9a5077fb1a41"
+      }
+    },
+    "wespeaker_cn34_ref": {
+      "metadata": {
+        "sdk": "onnxruntime",
+        "sdk_version": "1.23.2",
+        "dimension": 256,
+        "source_revision": "9fecd6cb4f47475d01761d87c826298dff4ef18c",
+        "frontend": "official infer_onnx.py compute_fbank"
+      },
+      "assets": {
+        "onnx": "e7584940aeac8d5512d875e58ce6c09ba4ddad65d8128e1dac0d93aadd087ebb",
+        "reference": "3d3be2b52ce3ae563bc0cf96d1dc9ab7c7be4f64f1792946e82c50cd16efd05a"
+      }
+    },
+    "vosk": {
+      "metadata": {
+        "sdk": "vosk",
+        "sdk_version": "0.3.45",
+        "dimension": 128,
+        "source_revision": "vosk-0.3.45;spk-0.4;small-cn-0.22",
+        "frontend": "KaldiRecognizer.AcceptWaveform/FinalResult spk"
+      },
+      "assets": {
+        "asr/README": "7362be411c609f2a1c9d2dfe22c2d72555c15eb90bfe47c41772f49ef94840ce",
+        "asr/am/final.mdl": "91eda2c04c4f599361cb92b0e5298ccdf6b3c7a1fa52bfcefcd2c4e07aa1c131",
+        "asr/conf/mfcc.conf": "6c326fea5741c2d78be12f76eb1b36ea2ace040da9e355e4cfe6bb80e5f7d5ab",
+        "asr/conf/model.conf": "468a8125c07530f96adcc219a0a5f993e8e0721ccf18acbd3169b77fc685fb9b",
+        "asr/graph/Gr.fst": "46d41a9b1723abccdcb354d731a5b58d87c060100d88ada1a3e31220f52b0434",
+        "asr/graph/HCLr.fst": "798af0d9ba6f2d727747f58e1e7b2305f8618bc8ea7f6c51beecd8a2c965b965",
+        "asr/graph/disambig_tid.int": "c9200318c2a265549ebfbea7e0176fa62e131e953abd140c9b0b39fe61e24015",
+        "asr/graph/phones/word_boundary.int": "11ca784b99f03188b451fb54714c2de3dd694e662a5f88e82df435c2789b9aec",
+        "asr/ivector/final.dubm": "e33276cbd548c0a03ae5812c98115940614997dff23a6d59968af6eaf7630ff8",
+        "asr/ivector/final.ie": "c39d46fbff04efb7baa9660ae7a728b0e2f35a4a1250b56ed3a599e26956df86",
+        "asr/ivector/final.mat": "42706d88818070ea0d0182b4d11367ba52a13b9a2be45630f60858a422109ada",
+        "asr/ivector/global_cmvn.stats": "b267dc89c1556fdd5bc358f0a480929da1743eeccfa06a67daf8db629ca336bb",
+        "asr/ivector/online_cmvn.conf": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "asr/ivector/splice.conf": "9f0c5f7c82d18eaf25d8bce470efa9f7741f88411fe428774bc0a9bb69a24756",
+        "spk/README.txt": "df0a2ab600c337475b65fd4d6f29a1b9b18e09fc0211b5a7a4820dce82d4e23a",
+        "spk/final.ext.raw": "d30354474ac719b3cfce58186463302b988cf22ce3afee7237a2da862c4a91d1",
+        "spk/mean.vec": "3bc5dfa9479c3aaacf4f45c155e9bd4772785449112566fac23578c09e93bcd7",
+        "spk/mfcc.conf": "86f4df625b950b81b68864fdefabf26aa65079f84ea20f40e7f9e7ccbb9c456c",
+        "spk/transform.mat": "fab14481fb27c41df0f1825afe18530e4f6d128dbb2c239ee86d8d7096e22c33"
+      }
+    }
+  },
+  "source_urls": {
+    "speechbrain_model": "https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/tree/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
+    "wespeaker_reference": "https://github.com/wenet-e2e/wespeaker/blob/9fecd6cb4f47475d01761d87c826298dff4ef18c/wespeaker/bin/infer_onnx.py",
+    "vosk_model_list": "https://alphacephei.com/vosk/models",
+    "vosk_speaker_archive": "https://alphacephei.com/vosk/models/vosk-model-spk-0.4.zip",
+    "vosk_asr_archive": "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip",
+    "speechbrain_package": "https://pypi.org/project/speechbrain/1.1.2/",
+    "vosk_package": "https://pypi.org/project/vosk/0.3.45/"
+  },
+  "license_boundaries": {
+    "speechbrain": "SDK/model card Apache-2.0; VoxCeleb training-person exclusion unverified; model-card benchmark not our accuracy.",
+    "wespeaker": "SDK/reference/CN34 model card Apache-2.0; CN-Celeb training-person exclusion and downstream data/product fit not verified. Frontend control, not turnkey product.",
+    "vosk": "SDK/model list Apache-2.0; spk archive Kaldi recipe provenance retained. ASR/speaker extraction adapter, not native enrolled 1:N product policy. Wheel build commit unverified; reference source commit is not asserted to build wheel."
+  },
+  "archive_sha256": {
+    "vosk-model-spk-0.4.zip": "a74d8f51144484813e16af689bb0f916b7a111e2347f467c4933c1166097b5a7",
+    "vosk-model-small-cn-0.22.zip": "3af8b0e7e0f835ae9d414ce5df580237a3cfb08d586c9fbbb0f7ff29ad5b14ba"
+  },
+  "packages": [
+    {
+      "name": "vosk",
+      "version": "0.3.45",
+      "sha256": "25e025093c4399d7278f543568ed8cc5460ac3a4bf48c23673ace1e25d26619f",
+      "official_files": [
+        "vosk-0.3.45-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.whl"
+      ]
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.23.2",
+      "sha256": "0f9b4ae77f8e3c9bee50c27bc1beede83f786fe1d52e99ac85aa8d65a01e9b77",
+      "official_files": [
+        "onnxruntime-1.23.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+      ]
+    },
+    {
+      "name": "speechbrain",
+      "version": "1.1.2",
+      "sha256": "9fea4144c917ea58bcf13f17a1a1759179ed7472a30ec8416e7c7c8cf21d9c9a",
+      "official_files": [
+        "speechbrain-1.1.2-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "sha256": "c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf",
+      "official_files": [
+        "cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+      ]
+    },
+    {
+      "name": "huggingface_hub",
+      "version": "2.4.0",
+      "sha256": "42ecfd93ede47bdd333daebbf66a32d7bfe2e18752754fe4d2d4f98a0179d801",
+      "official_files": [
+        "huggingface_hub-2.4.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "HyperPyYAML",
+      "version": "1.2.3",
+      "sha256": "0088c8ce97dc7c7d3460112b6ccc92dca46fade4d0320bc39f58b1fdda60f7f1",
+      "official_files": [
+        "hyperpyyaml-1.2.3-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "joblib",
+      "version": "1.6.0",
+      "sha256": "3dbbf9f6e4b592a2357b854608e980fe6390d131d7a82f011a377ef2ebef7aba",
+      "official_files": [
+        "joblib-1.6.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "official_files": [
+        "packaging-26.3-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "scipy",
+      "version": "1.18.1",
+      "sha256": "f55fa87b6c612ecd6b058f167c53231b1d14e412efe361d3d6e38b3631c73218",
+      "official_files": [
+        "scipy-1.18.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+      ]
+    },
+    {
+      "name": "sentencepiece",
+      "version": "0.2.3",
+      "sha256": "cc3189b79c1ffda767f71b04238c27ac746f3b7abc263eab9a41c4cf46aee49e",
+      "official_files": [
+        "sentencepiece-0.2.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+      ]
+    },
+    {
+      "name": "soundfile",
+      "version": "0.14.0",
+      "sha256": "1e38bac1853412871318e82a1ba69a8be677619b56025bbfcccdb41b6cafe82d",
+      "official_files": [
+        "soundfile-0.14.0-py2.py3-none-manylinux_2_28_x86_64.whl"
+      ]
+    },
+    {
+      "name": "coloredlogs",
+      "version": "15.0.1",
+      "sha256": "612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934",
+      "official_files": [
+        "coloredlogs-15.0.1-py2.py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "sha256": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
+      "official_files": [
+        "flatbuffers-25.12.19-py2.py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.2",
+      "sha256": "89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2",
+      "official_files": [
+        "protobuf-7.36.2-cp310-abi3-manylinux2014_x86_64.whl"
+      ]
+    },
+    {
+      "name": "srt",
+      "version": "3.5.3",
+      "sha256": "4884315043a4f0740fd1f878ed6caa376ac06d70e135f306a6dc44632eed0cc0",
+      "official_files": [
+        "srt-3.5.3.tar.gz"
+      ]
+    },
+    {
+      "name": "websockets",
+      "version": "17.4",
+      "sha256": "9ae1429ee9e52b139167ed0169757806a27ed7307e942e8c62037a9184e9843b",
+      "official_files": [
+        "websockets-17.4-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl"
+      ]
+    },
+    {
+      "name": "click",
+      "version": "8.5.0",
+      "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360",
+      "official_files": [
+        "click-8.5.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "cloudpickle",
+      "version": "3.1.2",
+      "sha256": "9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a",
+      "official_files": [
+        "cloudpickle-3.1.2-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "hf-xet",
+      "version": "1.8.0",
+      "sha256": "29dab7c904cd1914a0439c6e1306c12c7497c8bd32290fbe563ebf51ca4b6d6d",
+      "official_files": [
+        "hf_xet-1.8.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+      ]
+    },
+    {
+      "name": "httpx2",
+      "version": "2.16.0",
+      "sha256": "fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a",
+      "official_files": [
+        "httpx2-2.16.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "httpcore2",
+      "version": "2.16.0",
+      "sha256": "5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f",
+      "official_files": [
+        "httpcore2-2.16.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "humanfriendly",
+      "version": "10.0",
+      "sha256": "1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477",
+      "official_files": [
+        "humanfriendly-10.0-py2.py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "ruamel.yaml",
+      "version": "0.18.17",
+      "sha256": "9c8ba9eb3e793efdf924b60d521820869d5bf0cb9c6f1b82d82de8295e290b9d",
+      "official_files": [
+        "ruamel_yaml-0.18.17-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "pycparser",
+      "version": "3.12",
+      "sha256": "a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e",
+      "official_files": [
+        "pycparser-3.12-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "anyio",
+      "version": "4.16.0",
+      "sha256": "c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026",
+      "official_files": [
+        "anyio-4.16.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "official_files": [
+        "typing_extensions-4.16.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "official_files": [
+        "idna-3.20-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "ruamel.yaml.clib",
+      "version": "0.2.15",
+      "sha256": "11e5499db1ccbc7f4b41f0565e4f799d863ea720e01d3e99fa0b7b5fcd7802c9",
+      "official_files": [
+        "ruamel_yaml_clib-0.2.15-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+      ]
+    },
+    {
+      "name": "truststore",
+      "version": "0.10.5",
+      "sha256": "9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c",
+      "official_files": [
+        "truststore-0.10.5-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+      "official_files": [
+        "h11-0.16.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "torchcodec",
+      "version": "0.10.0",
+      "sha256": "6e43184d83ccced965b31cad5bb6200c779646fee2ec153a6d784b4def40c91b",
+      "official_files": [
+        "torchcodec-0.10.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+      ]
+    }
+  ],
+  "reused_runtime_versions": {
+    "torch": "2.10.0",
+    "torchaudio": "2.10.0",
+    "numpy": "2.4.3"
+  }
+}
