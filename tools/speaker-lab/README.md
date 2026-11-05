@@ -391,3 +391,52 @@ GOTOOLCHAIN=local GOMAXPROCS=2 go test -v -count=1 -run '^TestRealEvidenceStudyO
 未知／不合格查询仍计分母；报告事后混入异人的窗口，但不把标签反馈给积累器。
 诊断没有真实重录素材时必须保持身份结果不变；没有生产／家庭验收、真实重叠检测或端到端时延结论。
 模型未替换或部署，正式服务／环境／固件／VAD／AEC均未改变。参与者采集分别比较“机器人原始登记／机器人独立现场查询”与“手机原始录音登记／机器人独立现场查询”；不播放手机录音，手机登记素材经私有转换直接生成模板。具体步骤见验证报告；工具不会自动开麦。
+
+## 固定模型／登记双原型（隔离 `prototype-study`）
+
+此命令只做离线研究，仍通过严格 `public_human` backend 清单读取全部角色和质量拒识。
+每个模型／条件共享一次提取，同时输出 `B_single_template` 和 `P2_two_prototypes`。
+登记保留原有双门禁：每段RMS≥0.005且VAD speech_samples≥16000，并按原清单顺序累计首次达到
+320000样本（20秒）的前缀，总登记320000～448000样本。查询评分仍以既有长度／RMS判断资格，
+查询的VAD仅诊断；本轮没有新增VAD硬门禁或绕过登记门禁。
+严格公开清单中所有片段至少32000样本（2秒）；通用energy提取器的24000样本（1.5秒）是另一层下限，
+不能把它当作此公开清单准入条件。
+B 保留原清单顺序的等权归一化融合；P2 只看登记向量，按 ID 排序选择最远种子，最多10轮余弦聚类，
+每簇至少2段；不足4段、重合或小簇时整人回退原B，不删除登记段。每人得分取两个原型余弦最大值。
+没有查询积累、AS-Norm 或 QMF。最大值可能提高陌生误接纳，故各方法／池独立使用 validation
+按1%经验陌生预算和既有 margin 网格标定；不能沿用B门槛或将Top-1当接纳率。
+
+全部 Go／Python／原生运行和依赖安装限云端 Linux；Mac仅代码／Git。使用已校验绝对路径：
+
+```sh
+cd /private/source/tools/speaker-lab
+GOTOOLCHAIN=local GOMAXPROCS=2 go test -count=1 -v -run '^TestRealPrototypeStudyOptIn$' .
+GOTOOLCHAIN=local GOMAXPROCS=2 go build -o /private/bin/speaker-lab .
+SPEAKER_LAB_TEST_PROTOTYPE_FIXTURE=/private/synthetic/manifest.json \
+SPEAKER_LAB_TEST_MODEL=/private/models/fixed.onnx \
+SPEAKER_LAB_TEST_SHA256=<64位小写SHA256> \
+SPEAKER_LAB_TEST_BINARY=/private/bin/speaker-lab \
+GOTOOLCHAIN=local GOMAXPROCS=2 go test -count=1 -v -run '^TestRealPrototypeStudyOptIn$' .
+/private/bin/speaker-lab prototype-study \
+  --model /private/models/fixed.onnx \
+  --sha256 <64位小写SHA256> \
+  --manifest /private/public/backend/device03-manifest.json
+```
+
+新增测试默认跳过，原10项 opt-in 保持原样。启用时先从原严格合成清单真实提取，按输入顺序选两个不同
+波形摘要，在内存为逻辑身份复用为两种模式、每模式两段，并保留一个两段回退身份。
+测试强制要求真实双原型计数和 `[2,2]` 簇成员、全回退与B的完整三池等价、质量失败分母、匿名输出、
+独立原型所有权及向量清零、worker回收和socket移除。`synthetic_engineering_fixture`、开放集 unavailable、
+所有验收／功能标记false；这些逻辑身份不是独立真人，不能用于准确率结论。公开loader不接受此合成输入。
+
+本轮固定 ERes2Net-base／ResNet293-LM／CN-Celeb ResNet34-LM，128MiB模型上限、2秒请求／10秒启动边界不变。
+WeSpeaker适配只加元数据、不改图或权重；实际sherpa使用Povey窗／snip_edges=false／high_freq=-400，
+官方参考使用Hamming／snip_edges=true／high_freq=0，两者虽有CMN仍非严格官方前端复现。
+报告比较的是完整工程链路，不能把差异单独归因于模型架构。
+
+公开推理前必须固定源／二进制／原始及适配模型／清单／审计／算法常量，并复核原生证据。
+使用独立进程组控制器按 base03、base06、resnet29303、resnet29306、cn3403、cn3406 顺序各一次；
+总超时3600秒、TERM后5秒KILL并wait，输出独占创建，失败保留且记not_run，不覆写、不按分数重跑。
+本轮base因新P2需要一次共享提取而重提，B必须精确重现保存R0的Top-1／ROC／完整1%规则。
+所有旧人物都已看过，不构成新盲测；真实机器人／手机原始登记的独立现场查询和家庭验收仍待执行。
+详细冻结、全部36池结果和采集边界见[本轮验证报告](../../docs/verification/2026-11-05-speaker-prototype-model.md)。
