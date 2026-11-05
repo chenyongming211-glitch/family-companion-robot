@@ -1,6 +1,6 @@
 # 换电脑开发交接
 
-**登记诊断／查询积累正在开发（2026-11-05）：** 用户已批准按优化方案开发；[设计](superpowers/specs/2026-11-05-speaker-evidence-design.md)／[计划](superpowers/plans/2026-11-05-speaker-evidence.md)已预注册。纯算法4961a62与测试断言加固d19bab4已完成云端RED→GREEN（新增57通过，module382通过／8原opt-in跳过）及独立规格／质量复核。登记先诊断不删段，查询采用无人物标签输入、有界／全片段相似度守门的向量融合；这不是PCM重新推理。下一步实现四组顺序回放CLI，再执行旧971条／条件的开发回归。所有人物均已看过，不是新盲测；尚未执行新方法真人评分或部署，正式模型／服务不改。活动续接记录在本机`.superpowers/sdd/speaker-evidence-20261105/progress.md`，优先于根目录旧任务ledger；云端隔离目录`/opt/family-robot-validation/speaker-evidence-20261105-c5e730a/`，SSH临时mux仅在活动任务期保留。旧数据、VAD／重叠检测、真实设备登记与家庭现场边界见设计。
+**登记诊断／查询积累正在开发（2026-11-05）：** 用户已批准按优化方案开发；[设计](superpowers/specs/2026-11-05-speaker-evidence-design.md)／[计划](superpowers/plans/2026-11-05-speaker-evidence.md)已预注册。纯算法4961a62与测试断言加固d19bab4已完成云端RED→GREEN（新增57通过，module382通过／8原opt-in跳过）及独立规格／质量复核。登记先诊断不删段，查询采用无人物标签输入、有界／全片段相似度守门的向量融合；这不是PCM重新推理。四组顺序回放CLI已在2af3e0a实现并通过独立规格／质量审查；云端普通／race均387通过、8原opt-in跳过，vet/build通过。下一步执行原生链路验证及旧971条／条件的开发回归。所有人物均已看过，不是新盲测；尚未执行新方法真人评分或部署，正式模型／服务不改。活动续接记录在本机`.superpowers/sdd/speaker-evidence-20261105/progress.md`，优先于根目录旧任务ledger；云端隔离目录`/opt/family-robot-validation/speaker-evidence-20261105-c5e730a/`，SSH临时mux仅在活动任务期保留。旧数据、VAD／重叠检测、真实设备登记与家庭现场边界见设计。
 
 **用户已停止Eagle注册／申请，改查其他现有产品（2026-11-05）：** 官方登录实际返回公司邮箱要求，云端未取得AccessKey。用户随后明确“不要注册了”，要求用REA逆向现有产品；不再推进注册或联系厂商，已有申请只留未发送草稿。后续研究公开可取得的商用原生库和免注册开源SDK，仍在云端隔离分析，不将接口封装或产品介绍当成核心算法已恢复。没有Eagle运行或新准确率，模型选择仍未定案；现有B是对照基线。注册原因见[原报告补充](research/2026-11-05-speaker-algorithm-audit.md#6-现在能作出的选择)。
 
