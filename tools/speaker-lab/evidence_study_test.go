@@ -216,6 +216,9 @@ func TestRealEvidenceStudyOptIn(t *testing.T) {
 			}
 		}
 	}
+	if r.Policy.DiagnosticStatus != "fitted" || r.Policy.ContinuityStatus != "fitted" {
+		t.Fatal("native fixture must exercise fitted diagnostic and continuity policies")
+	}
 	merges := 0
 	for _, scene := range r.Arms[2].Scenarios {
 		for _, replay := range scene.Replay {
@@ -227,6 +230,9 @@ func TestRealEvidenceStudyOptIn(t *testing.T) {
 				t.Fatal("disabled native policy accumulated")
 			}
 		}
+	}
+	if merges <= 0 {
+		t.Fatal("native fixture must exercise actual accumulation")
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
