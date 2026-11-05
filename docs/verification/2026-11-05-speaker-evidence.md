@@ -324,4 +324,4 @@ device06 原生耗时摘要：`{"native_inference":{"first_ms":139.779,"warm_cou
 
 ## 正式环境与交接边界
 
-本轮只修改隔离实验代码／测试及文档，不改正式服务、模型、环境、固件、VAD／AEC、现有身份门槛或部署。控制器已运行独立 `final-protection-check.py`：正式2项服务的PID／NRestarts／ActiveState等字段与运行前完全相同、5项SHA保持、`analysis_processes=[]`，证据为 `protection-after.json`；这项结论来自实际前后核对，不来自单元测试。任务／整体复核、计划关闭、推送核对和临时SSH关闭仍由控制器完成。真实设备登记、新独立保留集、真实连续换人／重叠和家庭／生产验收仍待执行。
+本轮只修改隔离实验代码／测试及文档，不改正式服务、模型、环境、固件、VAD／AEC、现有身份门槛或部署。控制器已运行独立 `final-protection-check.py`：正式2项服务的PID／NRestarts／ActiveState等字段与运行前完全相同、5项SHA保持、`analysis_processes=[]`，证据为 `protection-after.json`；这项结论来自实际前后核对，不来自单元测试。规格／质量及整体复核已通过（代码截至81f0d60，无未关闭发现），测试修复后的最终保护核对仍为2服务／5SHA保持、分析进程为空；临时SSH已关闭并清理。计划按本轮隔离开发范围关闭，main推送同步状态由控制器在收尾时另行核对。真实设备登记、新独立保留集、真实连续换人／重叠和家庭／生产验收仍待执行。
