@@ -58,8 +58,8 @@ func (a *evidenceAccumulator) Push(chunk evidenceChunk) (evidenceAccumulated, er
 func (a *evidenceAccumulator) Reset()
 ```
 
-- [ ] Write cloud-failing tests before implementation for: trained floors/nearest-rank quantile; insufficient/invalid training; per-segment median/suspect IDs/no input mutation; same-speaker weighted evidence; non-collinear drift blocked by all-pairs guard; exact/over limits; stream/gap/span/overlap/discontinuity/quality resets; duplicate/retrograde IDs/times, NaN/Inf/cancellation; independent input/state/output ownership and zeroing.
-- [ ] Execute focused RED on cloud; save expected feature-missing evidence under this run's `evidence/`. Implement only the specified algorithms and tests. Concrete fusion/check rules:
+- [x] Write cloud-failing tests before implementation for: trained floors/nearest-rank quantile; insufficient/invalid training; per-segment median/suspect IDs/no input mutation; same-speaker weighted evidence; non-collinear drift blocked by all-pairs guard; exact/over limits; stream/gap/span/overlap/discontinuity/quality resets; duplicate/retrograde IDs/times, NaN/Inf/cancellation; independent input/state/output ownership and zeroing.
+- [x] Execute focused RED on cloud; save expected feature-missing evidence under this run's `evidence/`. Implement only the specified algorithms and tests. Concrete fusion/check rules:
 
 ```text
 diagnostic_floor = sorted_same_enrollment_cosines[max(0,ceil(.05*n)-1)]
@@ -71,7 +71,7 @@ bad IDs/times/vector => clear state and errProtocol
 overlap or unqualified => clear state, no vector; no identity fallback
 ```
 
-- [ ] Execute focused GREEN then existing module ordinary tests once; no Mac Go execution. Format/review ownership and numeric assertions, stage only task files, `git diff --cached --check`, commit. Report RED/GREEN commands and exact results. Task reviewer checks spec and quality before Task2 starts.
+- [x] Execute focused GREEN then existing module ordinary tests once; no Mac Go execution. Format/review ownership and numeric assertions, stage only task files, `git diff --cached --check`, commit. Report RED/GREEN commands and exact results. Task reviewer checks spec and quality before Task2 starts. Implementation4961a62, assertion hardening d19bab4, focused57pass / module382pass plus8opt-in skips; spec/quality and re-review approved.
 
 ## Task 2: Four-arm study and explicit CLI
 
