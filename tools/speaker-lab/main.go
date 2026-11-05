@@ -53,7 +53,7 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 	case "enrollment-study":
 		audit = f.String("audit", "", "")
 		manifest = f.String("manifest", "", "")
-	case "benchmark", "evaluate", "evaluate-large", "quality-audit", "backend-study", "evidence-study":
+	case "benchmark", "evaluate", "evaluate-large", "quality-audit", "backend-study", "evidence-study", "prototype-study":
 		manifest = f.String("manifest", "", "")
 	case "probe":
 		wav = f.String("wav", "", "")
@@ -81,6 +81,19 @@ func runCLIWithInput(ctx context.Context, args []string, input io.ReadCloser, ou
 	if manifest != nil {
 		if *manifest == "" {
 			return fail("usage")
+		}
+		if args[0] == "prototype-study" {
+			if !filepath.IsAbs(*model) || !filepath.IsAbs(*manifest) {
+				return fail("usage")
+			}
+			result, e := runPrototypeStudy(ctx, *model, *sha, *manifest)
+			if e != nil {
+				return fail("prototype_study_failed")
+			}
+			if json.NewEncoder(out).Encode(result) != nil {
+				return 1
+			}
+			return 0
 		}
 		if args[0] == "evidence-study" {
 			if !filepath.IsAbs(*model) || !filepath.IsAbs(*manifest) {
