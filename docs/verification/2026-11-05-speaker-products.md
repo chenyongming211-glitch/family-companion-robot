@@ -8,7 +8,7 @@
 
 公开输入仍需≥2秒、RMS≥.005；登记每段原VAD语音≥1秒，原20秒前缀／合计20–28秒合同保持。查询VAD仅诊断。SDK成功但无有效声纹属于sdk_no_vector；查询仍计拒识，任何必需登记片段无向量使该条件not_run。超时／协议／推理失败不是合法无声纹或零准确率，不发布部分身份结果。
 
-主规则unknown_target_0.01只在开发25条陌生上允许floor(25×.01)=0次误接纳，保留固定margin网格[0,.01,.030229,.05,.1]；并非总体FAR≤1%的统计保证。V4为固定13个家庭池、V50为完整50人池、T4为旧4人池；V4与V50复用相同查询，不可相加。每行已知总数包含所有质量拒识；正确／误归／拒识互斥且完整，陌生误接纳／拒识同理。
+主规则unknown_target_0.01只在开发25条陌生上允许floor(25×.01)=0次误接纳，保留固定margin网格[0,.01,.030229,.05,.1]；并非总体FAR≤1%的统计保证。V4按匿名编号构造13个候选组（每组最多4人，末组2人，并非13个真实家庭），V50为完整50人池、T4为旧4人池；V4与V50复用相同查询，不可相加。每行已知总数包含所有质量拒识；正确／误归／拒识互斥且完整，陌生误接纳／拒识同理。
 
 | 运行／池 | 状态 | 已知总／合格 | 正确／误归／拒识 | 全分母正确接纳 | 陌生总／合格 | 陌生误接纳／拒识 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -62,7 +62,7 @@
 
 ## 人物／家庭宏平均与排名诊断
 
-人物宏平均先对各已知人物计算比率再等权平均；合格宏平均只包括至少1条合格查询的人。家庭宏平均先对有已知查询的家庭计算全分母正确接纳率再等权平均。Top1是合格音频的排名诊断，未通过质量的查询在全分母Top1中仍保留；不能替代接纳率。EER／minDCF由模板配对ROC计算，配对共享人物／片段且不独立，不是实际1:N陌生误接纳或官方测试集成绩。
+人物宏平均先对各已知人物计算比率再等权平均；合格宏平均只包括至少1条合格查询的人。家庭宏平均先对有已知查询的家庭计算全分母正确接纳率再等权平均；下文家庭宏平均指这些构造候选组的等权平均，不是实际家庭采集结果。Top1是合格音频的排名诊断，未通过质量的查询在全分母Top1中仍保留；不能替代接纳率。EER／minDCF由模板配对ROC计算，配对共享人物／片段且不独立，不是实际1:N陌生误接纳或官方测试集成绩。
 
 | 运行／池 | 已知人数／有合格查询人数 | 人物正确接纳全／合格 | 家庭正确接纳宏平均 | Top1正确／全部 | 人物Top1全／合格 | 配对EER | minDCF(.01) | 至少1次误接纳的陌生人数 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -219,7 +219,7 @@ WeSpeaker只控制其本次上游前端；相对ERes2Net-base同时改变了模�
 
 云端根目录：`/opt/family-robot-validation/speaker-products-20261105-39ae72e`。原始音频、模型、venv、二进制、运行JSON与向量不进Git；本地只同步源码／报告。源、包和输入均在首次公开评分前冻结，包身份涵盖私有SDK源／原生库及复用的torch2.10.0／torchaudio2.10.0／numpy2.4.3依赖；排除pycache，不声称完整OS构建溯源。52源文件与Git摘要一致；全部冻结文件（其中1421唯一WAV路径／1942 case引用）每次前后复核。
 
-冻结前发现AppleDouble旁文件，先保存SHA再只刷新Git追踪源，二进制未重建。首次门禁后，根任务的保护检查更新了被冻的protection-after.json，控制器在首个推理／日志claim之前因SHA不符退出；原config／gate、失败stdout／stderr／exit均保留。根任务将该可变绑定改为已验证的不可变副本。随后SB03／06机械启动尝试均processed0／attempts0／dimension0／cold0：深TMPDIR使Unix socket超过listenPrivate的100字节限制，SDK尚未启动。两个原始失败及旧控制器／配置／门禁保存在`pre-inference-controller-amendment-2/`。根任务只缩短控制器私有TMPDIR，以实际非模型IPC的RED／GREEN及10项辅助检查验证，再独立重冻／审批；此后才是本表六次实际SDK尝试。源码／二进制／worker／模型／输入／规则／预算保持，没有成绩后调参或重跑。相关证据另见`task3-source-sync.json`、`task3-pre-score-guard-abort.json`、`root-pre-score-amendment-1.json`及控制器修正报告。
+冻结前发现AppleDouble旁文件，先保存SHA再只刷新Git追踪源，二进制未重建。首次门禁后，根任务的保护检查更新了被冻的protection-after.json，控制器在首个推理／日志claim之前因SHA不符退出；原config／gate、失败stdout／stderr／exit均保留。根任务将该可变绑定改为已验证的不可变副本。随后SB03／06机械启动尝试均processed0／attempts0／dimension0／cold0：深TMPDIR使Unix socket超过listenPrivate的100字节限制，SDK尚未启动。两个原始失败及旧配置／门禁保存在`pre-inference-controller-amendment-2/`，旧控制器另存为`controller-before-path-amendment.py`。根任务只缩短控制器私有TMPDIR，以实际非模型IPC的RED／GREEN及10项辅助检查验证，再独立重冻／审批；此后才是本表六次实际SDK尝试。源码／二进制／worker／模型／输入／规则／预算保持，没有成绩后调参或重跑。相关证据另见`task3-source-sync.json`、`task3-pre-score-guard-abort.json`、`root-pre-score-amendment-1.json`及控制器修正报告。
 
 | 固定对象 | SHA256 |
 | --- | --- |
