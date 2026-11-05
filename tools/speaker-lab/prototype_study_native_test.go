@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -125,7 +126,9 @@ func TestRealPrototypeStudyOptIn(t *testing.T) {
 			rejectedUnknown = true
 		}
 	}
+	borrowed := snapshotNativeStudyVectors(t, cs)
 	r, err := analyzePrototypeStudy(ctx, m, a, cs, ex.dimension)
+	assertNativeStudyVectors(t, "positive analysis", cs, borrowed)
 	if err != nil {
 		t.Fatal("native internal prototype analysis", err)
 	}
@@ -151,7 +154,9 @@ func TestRealPrototypeStudyOptIn(t *testing.T) {
 	// B fallback, including all three pool/ROC/calibration/person objects.
 	fallbackManifest := m
 	fallbackManifest.Cases = m.Cases[:initial]
+	fallbackBorrowed := snapshotNativeStudyVectors(t, cs[:initial])
 	fr, e := analyzePrototypeStudy(ctx, fallbackManifest, a, cs[:initial], ex.dimension)
+	assertNativeStudyVectors(t, "all-fallback analysis", cs[:initial], fallbackBorrowed)
 	if e != nil || fr.Methods[1].TwoPrototypePeople != 0 || fr.Methods[1].FallbackPeople != 57 || !reflect.DeepEqual(fr.Methods[0].Pools, fr.Methods[1].Pools) {
 		t.Fatal("native complete exact-B fallback pool parity", e)
 	}
@@ -190,27 +195,39 @@ func TestRealPrototypeStudyOptIn(t *testing.T) {
 				original = append(original, cs[i].vector)
 			}
 		}
-		want, e := fuseEnrollment(original, ex.dimension)
-		if e != nil {
-			t.Fatal(e)
-		}
-		// Explicit fallback uses native vectors and must remain bit-exact original B.
-		p, summary, e := buildEnrollmentPrototypes(clips[:2], ex.dimension)
-		fallback, e2 := fuseEnrollment(original[:2], ex.dimension)
-		if e != nil || e2 != nil || summary.Status != "fallback_single" || !reflect.DeepEqual(p[0], fallback) {
-			t.Fatal("native exact fallback")
-		}
-		for _, src := range sources {
-			got, e := prototypeScore(src.vector, [][]float32{want}, ex.dimension)
-			if e != nil || got != similarity(src.vector, want) {
-				t.Fatal("native original B score parity")
+		func() {
+			// Deferred cleanup also runs when an assertion or builder fails.
+			want, e := fuseEnrollment(original, ex.dimension)
+			defer clear(want)
+			if e != nil {
+				t.Fatal(e)
 			}
-		}
-		clear(want)
-		clear(fallback)
-		for _, v := range p {
-			clear(v)
-		}
+			// Explicit fallback must remain bit-exact original B and own its output.
+			p, summary, e := buildEnrollmentPrototypes(clips[:2], ex.dimension)
+			defer clearNativeStudyVectors(p)
+			fallback, e2 := fuseEnrollment(original[:2], ex.dimension)
+			defer clear(fallback)
+			if e != nil || e2 != nil || summary.Status != "fallback_single" || len(p) != 1 || !reflect.DeepEqual(p[0], fallback) {
+				t.Fatal("native exact fallback")
+			}
+			for _, src := range sources {
+				got, e := prototypeScore(src.vector, [][]float32{want}, ex.dimension)
+				if e != nil || got != similarity(src.vector, want) {
+					t.Fatal("native original B score parity")
+				}
+			}
+			clearNativeStudyVectors(p)
+			assertNativeStudyVectors(t, "cleared owned fallback", cs, borrowed)
+			if s.Speaker != "train_1" {
+				positive, summary, e := buildEnrollmentPrototypes(clips, ex.dimension)
+				defer clearNativeStudyVectors(positive)
+				if e != nil || summary.Status != "two_prototypes" || len(positive) != 2 || !reflect.DeepEqual(summary.ClusterSizes, []int{2, 2}) {
+					t.Fatal("native owned positive prototypes")
+				}
+				clearNativeStudyVectors(positive)
+				assertNativeStudyVectors(t, "cleared owned positive prototypes", cs, borrowed)
+			}
+		}()
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
@@ -232,7 +249,7 @@ func TestRealPrototypeStudyOptIn(t *testing.T) {
 	if _, e := os.Lstat(socket); !os.IsNotExist(e) {
 		t.Fatal("native socket retained")
 	}
-	// Analysis borrows extraction; its cleanup must not mutate these vectors.
+	// Extraction originals remain valid; actual analysis inputs were checked above.
 	for _, src := range sources {
 		if !validVector(src.vector, ex.dimension) {
 			t.Fatal("analysis mutated borrowed native vector")
@@ -254,4 +271,40 @@ func btoiNative(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+// Snapshot only in RAM, with cleanup registered before any subsequent assertion.
+func snapshotNativeStudyVectors(t *testing.T, cases []embeddedCase) [][]float32 {
+	t.Helper()
+	snapshot := make([][]float32, len(cases))
+	t.Cleanup(func() { clearNativeStudyVectors(snapshot) })
+	for i, c := range cases {
+		if c.vector != nil {
+			snapshot[i] = append([]float32{}, c.vector...)
+		}
+	}
+	return snapshot
+}
+
+func clearNativeStudyVectors(vectors [][]float32) {
+	for _, v := range vectors {
+		clear(v)
+	}
+}
+
+func assertNativeStudyVectors(t *testing.T, phase string, cases []embeddedCase, snapshot [][]float32) {
+	t.Helper()
+	if len(cases) != len(snapshot) {
+		t.Fatal(phase, "borrowed native vector count changed")
+	}
+	for i, c := range cases {
+		if len(c.vector) != len(snapshot[i]) || (c.vector == nil) != (snapshot[i] == nil) {
+			t.Fatal(phase, "borrowed native vector shape changed")
+		}
+		for j, v := range c.vector {
+			if math.Float32bits(v) != math.Float32bits(snapshot[i][j]) {
+				t.Fatal(phase, "borrowed native vector bits changed")
+			}
+		}
+	}
 }

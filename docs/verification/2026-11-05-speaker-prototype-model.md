@@ -43,6 +43,12 @@ Mac仅代码／Git；全部依赖、Go／Python测试、构建、模型／音频
 
 先用旧两登记片段夹具运行，exit1准确触发“must exercise actual two-prototype identity”；此前一次字段名错误造成编译失败单独保留，不当行为RED。扩展每模式两段后首次三模型均通过；自查补充完整回退池／簇成员断言后的最终base／293／CN34分别3.425／18.095／3.062秒通过，维度512／256／256，新增默认skip0.005秒、最终build exit0。所有尝试、日志、退出值和精确环境在云端`evidence/task3-native*.log/.exit`与两份`task3-native*-check.sh`，没有隐藏失败或重跑公开数据。
 
+公开评分后的测试专用审查修订（I1，2026-11-05）：原测试只检查提取原件的有效性，不能证明实际借给分析的`cs`副本未被修改。现在分别在正向／全回退分析前对实际输入作仅RAM快照，返回后逐float32位精确比较（含nil／长度）；另对57个原生回退输出、56个`[2,2]`正向双原型显式清零后再次要求全部借用输入不变。快照通过测试cleanup清零，返回原型与比较临时向量通过defer保证断言／错误时也清零；原提取清零、worker回收及socket删除检查保留。此修订未改运行时、算法、校准、清单或公开评分，不替换上述推理前原生证明。
+
+修订使用独立云端源码`R/source-ownership-reviewfix`与独立二进制`R/bin/speaker-lab-ownership-reviewfix`。只在scratch测试中注入一次单bit输入变更，保持finite／非零，base定向测试exit1、3.499秒，准确触发`positive analysis borrowed native vector bits changed`；同一变异源码的默认检查SKIP、exit0、0.005秒。随后恢复与Mac相同的测试文件，执行同一`go test -count=1 -v -run '^TestRealPrototypeStudyOptIn$' .`：最终默认SKIP／exit0／0.006秒，base PASS／exit0／3.440秒／512维，293 PASS／exit0／18.293秒／256维，CN34 PASS／exit0／3.084秒／256维；每个显式模型仍是15次原生提取、390复用案例、56双原型／1回退，均完成所有权与清理断言。独立build exit0、输出为空。全部精确环境／模型路径及命令保留在`evidence/task3-ownership-reviewfix-check.sh`；每次日志和退出值为`evidence/task3-ownership-reviewfix-{build,red-default,red-base,final-default,final-base,final-resnet293,final-cn34}.{log,exit}`。没有执行普通／race／旧opt-in／公开矩阵。
+
+修订测试SHA256 `f4f0342199ae430c96fe79b2baf026ab40956e84665b15c514c54832db4a1d2c`，独立二进制SHA256 `b831d2aebf1dd250ca34f884863a9255e970f511639e2157c82bace628b19c55`；50项独立源文件清单摘要`5038ed6c7831b2717e556f4a4240d7fa54aaca52e8c95a41bc1623c0ea61d583`见`evidence/task3-ownership-reviewfix-preservation-after.json`，其中仅测试文件不同。`preservation-before.json`／`preservation-after.json`（共同前缀`task3-ownership-reviewfix-`）记录87项当前冻结摘要符合配置、1080个原文件前后保持、analysis_processes为空；原测试摘要`ade462c8f1d9f5f0215b3d050387bcf321254fad8f69fbea4cd38f3d356b7825`、原二进制a68112...和配置96fe13...均保持，六份结果／运行元数据／stderr也未改。准备阶段两次只读清单脚本因遍历到历史隔离旁文件引用、误用stderr后缀而失败，关联两次tar因目标尚未创建失败；全部发生在任何构建／原生运行前，无冻结文件改写。之后按当前冻结字段及实际`-result.stderr`名称核对通过，再创建独立副本；Mac只做代码／gofmt／diff检查。
+
 以下是本轮已执行的云端命令记录；原隔离目录的冻结二进制和公开结果不得覆写或重跑。后续复现须另用云端隔离目录、重新冻结并审查，不能把新结果混入本轮。
 
 ```sh
