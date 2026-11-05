@@ -390,4 +390,4 @@ GOTOOLCHAIN=local GOMAXPROCS=2 go test -v -count=1 -run '^TestRealEvidenceStudyO
 输出是 `seen_development_regression`、`constructed_sequence`、`new_blind_test=false`，不是现场连续录音。
 未知／不合格查询仍计分母；报告事后混入异人的窗口，但不把标签反馈给积累器。
 诊断没有真实重录素材时必须保持身份结果不变；没有生产／家庭验收、真实重叠检测或端到端时延结论。
-模型未替换或部署，正式服务／环境／固件／VAD／AEC均未改变。实际设备和手机参与者采集步骤见验证报告；工具不会自动开麦。
+模型未替换或部署，正式服务／环境／固件／VAD／AEC均未改变。参与者采集分别比较“机器人原始登记／机器人独立现场查询”与“手机原始录音登记／机器人独立现场查询”；不播放手机录音，手机登记素材经私有转换直接生成模板。具体步骤见验证报告；工具不会自动开麦。
