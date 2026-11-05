@@ -1,0 +1,45 @@
+# Existing Speaker SDK Comparison Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development task-by-task. User has authorized loading/comparing products and prefers direct open-source module reuse. Main only, no branches/worktrees.
+
+**Goal:** Run two existing open-source SDKs and one official frontend control on the frozen public corpus against base B, then document adoption/product priorities from measured results.
+**Architecture:** Python official SDK worker + explicit Go opt-in research harness; unchanged production runtime and shared B/calibration math.
+**Tech Stack:** ExistingGo1.27.3/sherpa2.0.1 module tests, private cloudPython/torch/SpeechBrain/Vosk/ORT, CPU1thread.
+
+## Global Constraints
+
+- Main directly; no branches/worktrees. Mac code/Git only; ALL dependencies/builds/tests/native/model/audio/data processing cloud-only.
+- No formal service/model/threshold/session/env/firmware/VAD/AEC/microphone or playback change. No registration, mail, purchase, key bypass or vendor audio upload.
+- All audio/model/runtimeJSON/vectors/binaries/credentials remain out of Git. Owned PCM/vector/snapshot buffers RAM-only and explicitly cleared; SDK/OS internal copies not claimed erased.
+- Reuse strict public_human backend loader and original971cases percondition, original roles/audits/source binding and eligibility. Registration RMS>=.005, VAD>=16000/clip, publicPCM>=32000, original20s-prefix/20–28s total unchanged. Query VAD diagnostic only.
+- Freeze SDK/package/model/source/bundle/input/binary/config hashes before public scoring; each of6fixed profile/condition runs once sequentially, no post-score selection/tuning/reruns. Failures/amendments preserved. Whole-run3600s process-group timeout, TERM5s thenKILL/reap; existing2srequest/10sstartup unchanged.
+- Fixed profiles in order: speechbrain_ecapa03/06, wespeaker_cn34_ref03/06, vosk03/06. Official SDK SpeechBrain SpeakerRecognition + ECAPA VoxCeleb weights; official WeSpeaker ONNX reference with existing raw CN34 weights as frontend control (not a turnkey product); official Vosk0.3.45 + speaker0.4 + smallChinese0.22. CPU1thread/batch1. No other model after scores.
+- Same existing B multi-clip equal-weight normalized template and existing calibration/3pool helpers, target.01, margins[0,.01,.030229,.05,.1]. No P2/query accumulation/ASNorm/QMF/new scoring algorithm. Report SDK extraction plus common policy, not native complete commercial enrollment/1:N equivalence.
+- Preserve all query quality and SDK-no-vector rejects in denominators. SDK no-vector on any required enrollment clip makes that whole condition not_run, with counts and cause, never silently drop/replace clips/people. Inference errors/timeouts/protocol failure are not_run, not legitimate rejection. Vosk non-speech/no-spk is SDK no-vector only when real SDK succeeds but returns no valid spk.
+- All people seen_development_regression, new_blind_test=false; synthetic_engineering_fixture/unavailable for synthetic. All human/production/feature flagsfalse; train-person exclusion/license product fit/reference equivalence boundaries explicit. Actual household/device/newblind recording not performed.
+
+## Task 1: Verified SDK assets and research worker
+
+**Files:** create tools/speaker-lab/product_sdk_worker.py, product_sdk_worker_test.py, products.lock.json. No other tracked file ownership.
+**Interface:** worker --socket ABS --bundle ABS --sha256 SHA, protocol1 existing request/response/ready, authenticated bundleSHA. Profiles and bundle schema from design; persist exact final schema for Task2. Official native APIs, no custom network/feature/embedding implementation. Same CPU1thread/no runtime network.
+- [ ] Acquire pinned SpeechBrain model officialHF/LFS identity, current stable package from officialPyPI metadata pinnedbeforetests; Vosk0.3.45 officialwheel and fixedASR/spk models; existingWeSpeaker rawCN34 + pinned officialreference. Private cloudvenv/systemsitepackage reuse, no global installs. Save all sourcecards/licenses/reference/provenance/failedattempts and observed hashes cloud; lock only sanitized hashes/URLs/version/license boundaries in Git.
+- [ ] Write failing Python unittest cases covering strict bundle/hash/path/unknownkeys, protocol/header sizes/sequence, invalidnumeric/unavailable payload, output/privacy/ownedcleanup. Run cloud `python -m unittest product_sdk_worker_test.py -v`, preserve RED, implement minimum worker, GREEN. Use fakeextractor only protocol/unitnumerics; realnative separate.
+- [ ] Real native fixed synthetic probe each profile, dimension192/256/128 expected, finite or genuine no-vector recorded; verify official preprocessing use and extraction/similarity conventions by direct upstream comparison on same fixedsynthetic waveforms. No public-human SDK scoring. Preserve init/import incompatibility and dependency fixes. Verify startup10s/request2s feasibility without budget changes.
+- [ ] Self-review, commit owned3files main, exact tests/commands/exit/hashes/nativecleanup report task-1-report.md; spec/quality gate. No push by agent or public inference.
+
+## Task 2: Bounded common-policy SDK harness
+
+**Files:** create tools/speaker-lab/product_sdk_study_test.go; update tools/speaker-lab/README.md. No normal CLI/production source edits.
+**Interface:** explicitenv SPEAKER_LAB_TEST_PRODUCT_MODE (synthetic|public), _PYTHON, _WORKER, _BUNDLE, _SHA256, _MANIFEST, _OUTPUT; allunset=>skip, partial=>failprivate. Uses Task1 exactbundle/schema/protocol. TestRealProductSDKStudyOptIn must be explicitly enabled. Public strictloader unchanged, synthetic loader distinct/engineeringmetadata.
+- [ ] RED numeric/unit tests for extraction eligibility vsSDKnoVector/inferencefailure, missing enrollment=>not_run without filtering, allqueryrejectdenominators, finitevectors, exact B sharedpool/calibration parity, metadata/privacy, vectorownership/cleanup. New helpers in testfile only, no handcopycalibration algorithm.
+- [ ] Implement explicitworker starter via existinglaunchWorker/private directory, minimalenv and hash binding. Extract each originalcase once; legitimate protocolunavailable recorded while keepingworkeravailable (safe decoder), errors abortnot_run. OwnedPCM/embeddingcleared on success/error/cancel. CorrectCPU/RSS/coldstart/native-success/IPC-all timing. Build B by originalmanifestorder and call analyzePrototypeMethod withfixedB; exact3pool andcalibration grid/target. O_EXCL0600 aggregateoutput no vectors/rawpaths.
+- [ ] FocusedGREEN, moduleordinary/race/vet once appropriate for integration; defaultnewSKIP, explicit syntheticfixture all3SDKs, require real extraction/nonacceptance/quality and no-vector accounting/workerreap/socketcleanup. No public inference until root freeze/review.
+- [ ] Self-review, commit ownedfiles main, exact report task-2-report.md; spec/quality gate. No public scoring/push by agent.
+
+## Task 3: Fixed product matrix and product decision
+
+**Files:** create docs/verification/2026-11-05-speaker-products.md; update docs/DEVELOPMENT_HANDOFF.md and plan status.
+- [ ] Freeze reviewedsource/testbinary/SDKworker/assets/bundles/packageversions/input/audits/oldbaseB/config/outercontroller before scores. Root first-scoregate checksfullsource/input/hash/provenance. OfficiallatestVeriSpeak trial runtime/license feasibility using bounded synthetic preflight, or candidnot_run evidence; no account/keybypass/payment/outreach.
+- [ ] Sixfixedonce-onlysequentialpublic runs, original971cases/condition/allroles. Baseline frozenB reused,no publicbaseline rerun. Capturestderr/exit/code/config/input/assets/resultsSHA andprocessgroupcleanup/CPU/RSS; no overwrite/retune/datasetselection. GenuineSDKunavailablecoverage and enrollmentnot_run explicit, notzeroaccuracy.
+- [ ] Independent compare all18candidatepoolrows+6baseline withfullknown/unknown denominators, group/personmacro,Top1/ROCdiagnostic,latency/resources, failures/unavailable/licensing/officialbenchmark vsactualtestlimits. No freshblind/device/productionclaims.
+- [ ] Report concrete productchoice: directmatureopenmodulepreferred if observedbetter and license/runtime fit; thinGo integration responsibilities explicit; no rewrite ofspeakeralgorithm. If no clearwinner preservebaseline andpropose frontend/targetdevice/newdata plan withnoinventedgain. Reviewtask+mostcapablewholechange; final2services5SHA/proc protection, mainpush/remotematch/clean, SSHclose, allplancheckboxes/ledger/handoffclosed.
