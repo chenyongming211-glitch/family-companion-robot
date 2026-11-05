@@ -7,9 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func evidenceStudyFixture() (backendManifest, map[string]auditCase, []embeddedCase) {
@@ -182,4 +185,149 @@ func TestEvidenceCLIExplicitFixedErrorsNoEcho(t *testing.T) {
 			t.Fatal(tc.args, out.String(), err.String())
 		}
 	}
+}
+
+// TestRealEvidenceStudyOptIn exercises native extraction without pretending that
+// repeated synthetic voices are independent public-human regression subjects.
+func TestRealEvidenceStudyOptIn(t *testing.T) {
+	manifest, model, sha, binary := os.Getenv("SPEAKER_LAB_TEST_EVIDENCE_FIXTURE"), os.Getenv("SPEAKER_LAB_TEST_MODEL"), os.Getenv("SPEAKER_LAB_TEST_SHA256"), os.Getenv("SPEAKER_LAB_TEST_BINARY")
+	if manifest == "" || model == "" || sha == "" || binary == "" {
+		t.Skip("explicit synthetic fixture+model+digest+binary opt-in not set")
+	}
+	for _, p := range []string{manifest, model, binary} {
+		if !filepath.IsAbs(p) {
+			t.Fatal("explicit absolute inputs required")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	r, extracted, worker, socket := nativeEvidenceFixture(t, ctx, manifest, model, sha, binary)
+	defer extracted.clearVectors()
+	if r.SourceKind != "synthetic_tts" || r.SingleSpeakerBasis != "synthetic_fixture_declared_single_speaker" || r.Population != "synthetic_engineering_fixture" || r.NewBlindTest || r.HumanAcceptance || r.ProductionAcceptance || r.FeatureEnabled || r.HouseholdAssessment != "unavailable" || r.EvidenceBasis != "constructed_sequence" || r.EndToEndLatencyAssessment != "unavailable" {
+		t.Fatal("native fixture must retain truthful engineering metadata")
+	}
+	if extracted.dimension != 512 || extracted.qualified < 6 || r.Dimension != extracted.dimension || r.QualifiedCases != r.CaseCount || len(r.Arms) != 4 || len(r.Diagnostics) != 57 {
+		t.Fatal("native extraction/analysis coverage missing")
+	}
+	for _, pair := range [][2]int{{0, 1}, {2, 3}} {
+		for scene := 0; scene < 2; scene++ {
+			if !reflect.DeepEqual(r.Arms[pair[0]].Scenarios[scene].Pools, r.Arms[pair[1]].Scenarios[scene].Pools) {
+				t.Fatal("diagnostic changed native identity results")
+			}
+		}
+	}
+	merges := 0
+	for _, scene := range r.Arms[2].Scenarios {
+		for _, replay := range scene.Replay {
+			merges += replay.Accumulations
+			if replay.EvidenceSamplesMax > 128000 {
+				t.Fatal("native accumulated window exceeded sample bound")
+			}
+			if r.Policy.ContinuityStatus != "fitted" && replay.Accumulations != 0 {
+				t.Fatal("disabled native policy accumulated")
+			}
+		}
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{manifest, model, binary, `"vector"`, `"embedding"`, `"path"`, `"recording_sha256"`, `"text_sha256"`} {
+		if bytes.Contains(b, []byte(secret)) {
+			t.Fatal("private native data in anonymous report")
+		}
+	}
+	if worker == nil || worker.cmd.ProcessState == nil {
+		t.Fatal("native worker not reaped")
+	}
+	select {
+	case <-worker.done:
+	default:
+		t.Fatal("native worker still running")
+	}
+	if _, err := os.Lstat(socket); !os.IsNotExist(err) {
+		t.Fatal("native worker socket not removed")
+	}
+	// Clear explicitly, rather than relying on process exit to drop native vectors.
+	extracted.clearVectors()
+	for _, c := range extracted.cases {
+		for _, v := range c.vector {
+			if v != 0 {
+				t.Fatal("native extracted vectors retained")
+			}
+		}
+	}
+	t.Logf("native=%d dimension=%d synthetic_reused_cases=%d diagnostic=%s continuity=%s observed_accumulations=%d (synthetic engineering coverage only)", extracted.qualified, extracted.dimension, r.CaseCount, r.Policy.DiagnosticStatus, r.Policy.ContinuityStatus, merges)
+}
+
+func nativeEvidenceFixture(t *testing.T, ctx context.Context, manifest, model, sha, binary string) (evidenceReport, evaluationExtraction, *workerProcess, string) {
+	t.Helper()
+	fixture, _, err := loadManifest(manifest)
+	if err != nil || fixture.SourceKind != "synthetic_tts" || fixture.HumanAcceptance || !fixture.SingleSpeakerOnly {
+		t.Fatal("strict synthetic fixture required")
+	}
+	em := evaluationManifest{SourceKind: "synthetic_tts", SampleRate: sampleRate}
+	for _, c := range fixture.Cases {
+		em.Cases = append(em.Cases, evaluationCase{ID: c.ID, Speaker: c.Speaker, Split: "evaluation", Path: c.Path, Samples: c.Samples, SHA: c.SHA, TextSHA: c.TextSHA})
+	}
+	var worker *workerProcess
+	var socket string
+	starts := 0
+	ex, err := extractEvaluation(ctx, em, model, sha, func(ctx context.Context, model, sha string) (*workerProcess, error) {
+		starts++
+		w, e := startWorkerBinary(ctx, binary, model, sha)
+		if e == nil {
+			worker = w
+			socket = w.conn.RemoteAddr().String()
+		}
+		return w, e
+	})
+	if err != nil {
+		t.Fatal("native synthetic extraction failed")
+	}
+	t.Cleanup(ex.clearVectors)
+	if starts != 1 || ex.qualified != len(fixture.Cases) {
+		t.Fatal("native extraction did not process each qualified fixture once")
+	}
+	voices := map[string][]embeddedCase{}
+	var voiceNames []string
+	for _, c := range ex.cases {
+		if _, ok := voices[c.Speaker]; !ok {
+			voiceNames = append(voiceNames, c.Speaker)
+		}
+		voices[c.Speaker] = append(voices[c.Speaker], c)
+	}
+	if len(voiceNames) < 3 {
+		t.Fatal("native fixture needs at least three synthetic voices")
+	}
+	// Reuse the explicitly synthetic native fixtures across the fixed pool layout.
+	// This is a pipeline/ownership check, never an accuracy or role-disjoint study.
+	m, a, cs := evidenceStudyFixture()
+	m.SingleSpeakerBasis = "synthetic_fixture_declared_single_speaker"
+	assigned := map[string]int{}
+	clips := map[string]int{}
+	for i, c := range m.Cases {
+		voice, ok := assigned[c.Speaker]
+		if !ok {
+			voice = len(assigned) % len(voiceNames)
+			assigned[c.Speaker] = voice
+		}
+		choices := voices[voiceNames[voice]]
+		source := choices[clips[c.Speaker]%len(choices)]
+		clips[c.Speaker]++
+		clear(cs[i].vector)
+		cs[i] = embeddedCase{fixtureCase: fixtureCase{ID: c.ID, Speaker: c.Speaker}, quality: source.quality, vector: append([]float32(nil), source.vector...)}
+		m.Cases[i].Samples = source.Samples
+		a[c.SHA] = auditCase{Samples: source.Samples} // No synthetic VAD speech-duration assertion.
+	}
+	defer func() {
+		for i := range cs {
+			clear(cs[i].vector)
+		}
+	}()
+	r, err := analyzeEvidence(ctx, m, a, cs, ex.dimension)
+	if err != nil {
+		t.Fatal("native synthetic evidence analysis failed")
+	}
+	return r, ex, worker, socket
 }
