@@ -125,11 +125,60 @@ func TestEvidenceAnalysisFourArmsDenominatorsParityPrivacy(t *testing.T) {
 			t.Fatal("privacy", s)
 		}
 	}
-	if r.SourceKind != "synthetic_tts" || r.NewBlindTest || r.EvidenceBasis != "constructed_sequence" || r.HouseholdAssessment != "unavailable" || r.EndToEndLatencyAssessment != "unavailable" {
+	if r.SourceKind != "synthetic_tts" || r.OpenSetAssessment != "unavailable" || r.NewBlindTest || r.EvidenceBasis != "constructed_sequence" || r.HouseholdAssessment != "unavailable" || r.EndToEndLatencyAssessment != "unavailable" {
 		t.Fatal("truthful flags")
 	}
 	if cs[0].vector[0] != 1 {
 		t.Fatal("borrowed vectors mutated")
+	}
+}
+func TestEvidenceAnalysisSourceAssessmentMetadata(t *testing.T) {
+	var synthetic evidenceReport
+	for _, tc := range []struct{ source, assessment, population string }{
+		{"synthetic_tts", "unavailable", "synthetic_engineering_fixture"},
+		{"public_human", "limited_public_unknown_cohort", "seen_development_regression"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			m, a, cs := evidenceStudyFixture()
+			defer func() {
+				for i := range cs {
+					clear(cs[i].vector)
+				}
+			}()
+			m.SourceKind = tc.source
+			r, err := analyzeEvidence(context.Background(), m, a, cs, 128)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.source == "synthetic_tts" {
+				synthetic = r
+			}
+			if r.SourceKind != tc.source || r.OpenSetAssessment != tc.assessment || r.Population != tc.population || r.HumanAcceptance || r.ProductionAcceptance || r.FeatureEnabled || r.NewBlindTest {
+				t.Fatalf("source assessment mismatch: source=%s open_set=%s population=%s", r.SourceKind, r.OpenSetAssessment, r.Population)
+			}
+			b, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, secret := range []string{"/private/", "secret.wav", `"vector"`, `"embedding"`, `"path"`, `"recording_sha256"`, `"text_sha256"`} {
+				if bytes.Contains(b, []byte(secret)) {
+					t.Fatal("metadata branch leaked private data")
+				}
+			}
+			if tc.source == "synthetic_tts" {
+				return
+			}
+			if !reflect.DeepEqual(r.Policy, synthetic.Policy) || !reflect.DeepEqual(r.Diagnostics, synthetic.Diagnostics) || !reflect.DeepEqual(r.Enrollment, synthetic.Enrollment) {
+				t.Fatal("source metadata changed evidence analysis")
+			}
+			for ai, arm := range r.Arms {
+				for si, scene := range arm.Scenarios {
+					if !reflect.DeepEqual(scene.Pools, synthetic.Arms[ai].Scenarios[si].Pools) {
+						t.Fatal("source metadata changed score decisions")
+					}
+				}
+			}
+		})
 	}
 }
 func TestEvidenceAnalysisTrainOnlyPolicyAndDisabledFallback(t *testing.T) {
@@ -203,7 +252,7 @@ func TestRealEvidenceStudyOptIn(t *testing.T) {
 	defer cancel()
 	r, extracted, worker, socket := nativeEvidenceFixture(t, ctx, manifest, model, sha, binary)
 	defer extracted.clearVectors()
-	if r.SourceKind != "synthetic_tts" || r.SingleSpeakerBasis != "synthetic_fixture_declared_single_speaker" || r.Population != "synthetic_engineering_fixture" || r.NewBlindTest || r.HumanAcceptance || r.ProductionAcceptance || r.FeatureEnabled || r.HouseholdAssessment != "unavailable" || r.EvidenceBasis != "constructed_sequence" || r.EndToEndLatencyAssessment != "unavailable" {
+	if r.SourceKind != "synthetic_tts" || r.OpenSetAssessment != "unavailable" || r.SingleSpeakerBasis != "synthetic_fixture_declared_single_speaker" || r.Population != "synthetic_engineering_fixture" || r.NewBlindTest || r.HumanAcceptance || r.ProductionAcceptance || r.FeatureEnabled || r.HouseholdAssessment != "unavailable" || r.EvidenceBasis != "constructed_sequence" || r.EndToEndLatencyAssessment != "unavailable" {
 		t.Fatal("native fixture must retain truthful engineering metadata")
 	}
 	if extracted.dimension != 512 || extracted.qualified < 6 || r.Dimension != extracted.dimension || r.QualifiedCases != r.CaseCount || len(r.Arms) != 4 || len(r.Diagnostics) != 57 {

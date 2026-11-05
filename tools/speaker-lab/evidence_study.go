@@ -62,7 +62,9 @@ func analyzeEvidence(ctx context.Context, m backendManifest, audit map[string]au
 	if m.SourceKind == "synthetic_tts" {
 		r.Population = "synthetic_engineering_fixture"
 	}
-	r.OpenSetAssessment = "limited_public_unknown_cohort"
+	if m.SourceKind == "public_human" {
+		r.OpenSetAssessment = "limited_public_unknown_cohort"
+	}
 	if e := ctx.Err(); e != nil {
 		return r, e
 	}

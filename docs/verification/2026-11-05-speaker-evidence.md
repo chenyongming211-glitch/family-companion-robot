@@ -8,7 +8,7 @@
 
 ## 固定代码、输入与运行
 
-设计和实施计划在推理前已批准；运行时算法为 `2af3e0a`，新增原生测试为 `4e0b99c`。Mac 只编辑／格式化／Git；依赖、测试、构建和原生运行全部在既有云端隔离目录完成，没有额外安装依赖。
+设计和实施计划在推理前已批准；公开回归的推理运行时快照为 `2af3e0a`，冻结源码含新增原生测试 `4e0b99c`。Mac 只编辑／格式化／Git；依赖、测试、构建和原生运行全部在既有云端隔离目录完成，没有额外安装依赖。
 
 云端证据根目录：`/opt/family-robot-validation/speaker-evidence-20261105-c5e730a/evidence/`。WAV、模型、运行 JSON、二进制和向量不进 Git；向量只在内存，显式清理。本文只保留匿名汇总。
 
@@ -43,6 +43,8 @@
 推理冻结源 `4e0b99c` 的 `task3-ordinary.log` 和 `task3-race.log` 均387通过／9默认opt-in跳过／0失败；后者61.154秒、无race报告。`task3-vet.log`／`task3-build.log` 均exit0。新增测试独立运行于最终二进制：`task3-native-final.log` exit0、5.297秒，15条真实原生提取、512维，278条明确复用的合成分析案例，诊断／连续性均fitted，两个顺序三候选池共观察152次积累。此数量仅为合成链路覆盖，不是识别增益。
 
 后续审查发现原生测试只记录拟合状态和积累次数、未强制验证正向路径，已在测试专用提交 `332eca6` 补上两项fitted状态及积累次数大于0的断言。为保留实验绑定，原41份冻结源码及配置保持；只在独立 `assertion-fix-source/` 副本覆盖测试，使用相同worker／模型／合成fixture执行定向原生测试，`task3-native-review-fix.log`／`.exit` 为exit0、3.548秒，15条真实提取／512维／152次合成积累，清理检查通过。该提交不改变运行时和成功实验输出，未重跑公开推理或全量检查。
+
+最终整体审查另发现合成内部报告的 `open_set_assessment` 曾无条件标为 `limited_public_unknown_cohort`。最终修正只在 `source_kind=public_human` 时赋该值；合成报告保持默认 `unavailable`，并补上公开／合成分支及原生断言。公开分支元数据、所有身份分数／模板／决策不变；此前公开结果没有该合成标记错误。原41份冻结源、配置、实验二进制和两次成功公开输出均保持，未重跑公开推理。修改在独立 `final-metadata-fix-source/` 验证：`final-metadata-fix-red.log` exit1准确暴露合成字段错误且公开分支通过；`final-metadata-fix-green.log` exit0（3个顶层分析测试、2个元数据子测试）；`final-metadata-fix-native.log` exit0、3.479秒，15条提取／512维／152次合成积累及清理通过；`final-metadata-fix-vet.log`／`final-metadata-fix-build.log` 均exit0。每项精确命令／环境／源码摘要与退出值分别保存在同名前缀的 `.command.json`／`.exit`。新构建另存 `bin/speaker-lab-metadata-fix`，SHA `bdfba27e946a2ea7d06f1d5f55f3ae919fb8876903cff16d9f61ffeba424789e`，不覆盖或部署实验二进制。定向测试同时验证公开与合成分支的policy／登记／pool身份结果完全相等及无路径／向量泄漏；`final-metadata-fix-preservation-check.json` 核对原冻结源／配置／二进制／成功结果摘要保持，两个保存的公开报告字段仍正确、无私有路径或向量字段。没有因此重复普通／race全量检查。
 
 测试检查四组身份结果的诊断等价、固定合成／非验收元数据、不输出私有路径或向量、窗口音频上限、禁用状态不能积累、实际worker已回收、socket已移除、原生向量清零。合成声音会复用到不同匿名位置，不具备人物角色独立性，不冒充 `public_human`。严格公开 loader保持。原8项opt-in与新增1项均默认skip；本轮不重复执行旧长测或根module旧全量测试。
 
