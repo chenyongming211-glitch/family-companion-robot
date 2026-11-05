@@ -494,3 +494,31 @@ Python worker 是反向连接客户端，旧 `launchWorker` 也是客户端；�
 外层必须使用3600秒独立进程组控制器，TERM后5秒KILL并wait。测试自身3600秒context不替代该控制器。
 失败及输出保留，不按结果调参／挑输入／重跑；既有 B 仅读取冻结结果，不重新推理。
 本入口的实现和合成通过不授权公开评分，也不代表家庭／生产／新盲测通过。
+
+### Frozen Device06 five-person channel diagnostic (test-only)
+
+`channel_study_test.go` is an isolated B-only adapter, with no CLI/service changes.
+It pins the approved public-human manifest, selection, provenance, base model and
+previously reviewed native CLI hashes. It retains the original enrollment fusion,
+cosine, query energy gate, calibration margin grid and 1% empirical unknown target.
+Source qualification does not constitute identity inference or product acceptance.
+
+The gated entry is `TestRealChannelStudyOptIn`; all its inputs unset means SKIP.
+It requires the eight `SPEAKER_LAB_TEST_CHANNEL_` fields `PHASE`, `MODEL`, `SHA256`,
+`BINARY`, `MANIFEST`, `MANIFEST_SHA256`, `POLICY`, and `OUTPUT`. `PHASE=calibration`
+extracts only the 88 development cases and exclusively creates a policy checkpoint;
+`POLICY_SHA256` must be unset. After independent checkpoint review and digest freeze,
+`PHASE=diagnostic` additionally requires that exact `POLICY_SHA256`, extracts only
+161 diagnostic cases, and applies the unchanged policy. The Go test executable is
+not the native `BINARY`; the native artifact must support the existing `worker` CLI.
+A short private 0700 `TMPDIR` is required; outputs/checkpoints are exclusive 0600.
+
+Execution requires the controller's source/code/binary/input review and separate
+approval for each phase. Focused `TestChannel...` tests use numeric metadata/vector
+fixtures, never synthesized voice. The optional source-only
+`TestChannelFrozenInputsOptIn` uses `SPEAKER_LAB_TEST_CHANNEL_INPUT_PREFLIGHT` to
+validate frozen WAV/audit bindings without starting a worker or extracting identity.
+No Top-1, EER, minDCF, 50-person arm, alternate model or new scoring is reported.
+Both real robot enrollment conditions and five-member/200-stranger product gates
+remain awaiting recordings; this small public seen-development diagnostic cannot
+establish household or production acceptance.
