@@ -40,7 +40,9 @@
 
 `task3-red.log`：原生测试先接空测试 harness，显式启用后因缺少真实链路及诚实元数据而失败，exit1；未改变运行时代码。补上严格合成 loader→真实 worker 提取→内部分析→匿名 JSON→实际子进程／socket清理后，`task3-native.log` exit0。
 
-最终源的 `task3-ordinary.log` 和 `task3-race.log` 均387通过／9默认opt-in跳过／0失败；后者61.154秒、无race报告。`task3-vet.log`／`task3-build.log` 均exit0。新增测试独立运行于最终二进制：`task3-native-final.log` exit0、5.297秒，15条真实原生提取、512维，278条明确复用的合成分析案例，诊断／连续性均fitted，两个顺序三候选池共观察152次积累。此数量仅为合成链路覆盖，不是识别增益。
+推理冻结源 `4e0b99c` 的 `task3-ordinary.log` 和 `task3-race.log` 均387通过／9默认opt-in跳过／0失败；后者61.154秒、无race报告。`task3-vet.log`／`task3-build.log` 均exit0。新增测试独立运行于最终二进制：`task3-native-final.log` exit0、5.297秒，15条真实原生提取、512维，278条明确复用的合成分析案例，诊断／连续性均fitted，两个顺序三候选池共观察152次积累。此数量仅为合成链路覆盖，不是识别增益。
+
+后续审查发现原生测试只记录拟合状态和积累次数、未强制验证正向路径，已在测试专用提交 `332eca6` 补上两项fitted状态及积累次数大于0的断言。为保留实验绑定，原41份冻结源码及配置保持；只在独立 `assertion-fix-source/` 副本覆盖测试，使用相同worker／模型／合成fixture执行定向原生测试，`task3-native-review-fix.log`／`.exit` 为exit0、3.548秒，15条真实提取／512维／152次合成积累，清理检查通过。该提交不改变运行时和成功实验输出，未重跑公开推理或全量检查。
 
 测试检查四组身份结果的诊断等价、固定合成／非验收元数据、不输出私有路径或向量、窗口音频上限、禁用状态不能积累、实际worker已回收、socket已移除、原生向量清零。合成声音会复用到不同匿名位置，不具备人物角色独立性，不冒充 `public_human`。严格公开 loader保持。原8项opt-in与新增1项均默认skip；本轮不重复执行旧长测或根module旧全量测试。
 
@@ -302,7 +304,7 @@ device06 原生耗时摘要：`{"native_inference":{"first_ms":139.779,"warm_cou
 
 `semantic-regression-check.json` 首次406项中404通过，2项失败来自汇总脚本错误地要求新 `enrollment_summary` 也包含旧backend的30名cohort。旧94项中64名实际登记人物的逐项值完全相同；新研究不将cohort登记成身份模板，cohort仍在输入和完整 `role_quality_counts` 中。保留首次失败记录和初版脚本，`summary-audit-amendment.json` 明确这只是分析断言范围修订；按匿名人物键比较实际登记64项后，`semantic-regression-check-amended.json` 406/406通过。未修改运行源码、输入、阈值或原始成功输出，未重跑任何推理。
 
-控制器另独立核对246项／0失败，保存为 `root-independent-result-check.json`；41份冻结源码再次与Mac当前文件逐项一致。两次公开运行均exit0／stderr0，未超时、未需额外进程组清理；不存在为改善数字而重跑的条件。
+控制器另独立核对246项／0失败，保存为 `root-independent-result-check.json`；41份冻结源码在推理及断言加固前再次与Mac文件逐项一致。两次公开运行均exit0／stderr0，未超时、未需额外进程组清理；不存在为改善数字而重跑的条件。
 
 
 ## 实际设备／手机参与者采集步骤（待执行）
