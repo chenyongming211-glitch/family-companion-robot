@@ -1,0 +1,11 @@
+diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+@@ -155,4 +155,6 @@
+     void InitializePowerSaveTimer() {
+-        power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
++        // Keep the 60-second screen sleep. Idle power-off is disabled;
++        // the board's existing manual power control remains available.
++        power_save_timer_ = new PowerSaveTimer(-1, 60, -1);
+         power_save_timer_->OnEnterSleepMode([this]() {
+             GetDisplay()->SetPowerSaveMode(true);

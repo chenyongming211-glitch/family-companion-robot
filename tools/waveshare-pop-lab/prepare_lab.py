@@ -50,9 +50,12 @@ def prepare(tree, url, descriptors=6, yield_output_lock=False):
         edit(box+'xiaoman_box_playback.inc','        vTaskDelay(1);','        lock.unlock();\n        vTaskDelay(1);\n        lock.lock();')
         yielding=True
     board=box+'esp32-s3-touch-amoled-2.16.cc'
-    # Disable only the lab build's idle hardware power-off while artifacts are
-    # collected. The product tree and all persistent preferences stay intact.
-    edit(board,'new PowerSaveTimer(-1, 60, 300)','new PowerSaveTimer(-1, 60, -1)')
+    # Older product trees still use 300 seconds; current Waveshare product
+    # firmware already disables idle power-off. Do not rewrite preferences.
+    if 'new PowerSaveTimer(-1, 60, 300)' in (tree/board).read_text():
+        edit(board,'new PowerSaveTimer(-1, 60, 300)','new PowerSaveTimer(-1, 60, -1)')
+    elif (tree/board).read_text().count('new PowerSaveTimer(-1, 60, -1)') != 1:
+        raise ValueError('unrecognized Waveshare idle power policy')
     if descriptors==12:
         edit('main/audio/audio_codec.h','#define AUDIO_CODEC_DMA_DESC_NUM 6','#define AUDIO_CODEC_DMA_DESC_NUM 12')
         edit('main/audio/playback_progress.h','kBlock = 240, kSlots = 6,','kBlock = 240, kSlots = 12,')
