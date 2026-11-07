@@ -23,6 +23,7 @@ inline void Dump(int phase) {
         if(at%6144==0)vTaskDelay(1);
     }
     printf("WPL_CAPTURE_END %d %u\n",phase,unsigned(count)*2);
+    for(uint32_t i=0;i<time_count.load();++i)printf("WPL_INPUT_TIME %d %u %u\n",phase,unsigned(capture_times[i*2]),unsigned(capture_times[i*2+1]));
     fflush(stdout);
 }
 
@@ -38,7 +39,8 @@ inline void Start(Application* app,AudioService* service) {
         while(c.app->GetDeviceState()!=kDeviceStateIdle && esp_timer_get_time()-began<90000000)vTaskDelay(pdMS_TO_TICKS(100));
         if(c.app->GetDeviceState()!=kDeviceStateIdle){printf("WPL_ABORT not_idle\n");vTaskDelete(nullptr);return;}
         capture=static_cast<int16_t*>(heap_caps_malloc(kCaptureSamples*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-        if(!capture){printf("WPL_ABORT capture_allocation\n");vTaskDelete(nullptr);return;}
+        capture_times=static_cast<uint32_t*>(heap_caps_malloc(kTimeEntries*2*sizeof(uint32_t),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+        if(!capture || !capture_times){printf("WPL_ABORT capture_allocation\n");heap_caps_free(capture);heap_caps_free(capture_times);vTaskDelete(nullptr);return;}
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         const auto original_light=light?light->brightness():0;
         const auto task=c.service->WavePopCodecTask();
@@ -66,7 +68,7 @@ inline void Start(Application* app,AudioService* service) {
             }
             active.store(false);capturing.store(false);
             while(input_busy.load())vTaskDelay(1);
-            captured.store(0);max_decode_us.store(0);max_wait_us.store(0);
+            captured.store(0);time_count.store(0);max_decode_us.store(0);max_wait_us.store(0);
             codec->WavePopProbe(true);
             printf("WPL_PHASE %d direct=%d screen_off=%d priority=%u paced=%d network=%d\n",phase,direct,screen_off,unsigned(uxTaskPriorityGet(task)),paced,network);fflush(stdout);
             const auto start=esp_timer_get_time();
@@ -111,7 +113,7 @@ inline void Start(Application* app,AudioService* service) {
         }
         vTaskPrioritySet(task,original_priority);
         if(light)light->SetBrightness(original_light,false);
-        heap_caps_free(capture);capture=nullptr;
+        heap_caps_free(capture);heap_caps_free(capture_times);capture=nullptr;capture_times=nullptr;
         c.app->Schedule([app=c.app](){app->SetDeviceState(kDeviceStateIdle);});
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         printf("WPL_DONE\n");fflush(stdout);vTaskDelete(nullptr);

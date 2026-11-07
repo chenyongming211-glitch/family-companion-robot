@@ -25,7 +25,7 @@ def prepare(tree, url, descriptors=6):
     box='main/boards/waveshare/esp32-s3-touch-amoled-2.16/'
     edit(box+'xiaoman_box_codec.h','#include "experiment_gate.h"','#include "experiment_gate.h"\n#include "wave_pop_runtime.h"')
     edit(box+'xiaoman_box_codec.h','    void Start() override;','    wave_pop_lab::Probe WavePopProbe(bool reset) { portENTER_CRITICAL(&mux_); auto result=wave_pop_lab::probe; if(reset) wave_pop_lab::probe={}; portEXIT_CRITICAL(&mux_); return result; }\n    void Start() override;')
-    edit(box+'xiaoman_box_dma.inc','        playback_->Complete(static_cast<int16_t*>(event->dma_buf),240,now);','        wave_pop_lab::probe.completed_samples+=playback_->WavePopCompletedCount(event->dma_buf);\n        wave_pop_lab::probe.Refill(wave_pop_lab::active.load(std::memory_order_relaxed),playback_->WavePopQueueDepth()!=0,wave_pop_lab::decode_backlog.load(std::memory_order_relaxed)+wave_pop_lab::decode_inflight.load(std::memory_order_relaxed),wave_pop_lab::pcm_backlog.load(std::memory_order_relaxed)+wave_pop_lab::pcm_inflight.load(std::memory_order_relaxed));\n        playback_->Complete(static_cast<int16_t*>(event->dma_buf),240,now);')
+    edit(box+'xiaoman_box_dma.inc','        playback_->Complete(static_cast<int16_t*>(event->dma_buf),240,now);','        wave_pop_lab::probe.completed_samples+=playback_->WavePopCompletedCount(event->dma_buf);\n        const auto wave_pop_supply=wave_pop_lab::ReadSupplyISR();\n        wave_pop_lab::probe.Refill(wave_pop_supply.active,playback_->WavePopQueueDepth()!=0,wave_pop_supply.decode,wave_pop_supply.pcm);\n        playback_->Complete(static_cast<int16_t*>(event->dma_buf),240,now);')
     edit(box+'xiaoman_box_lifecycle.inc','    const bool read=BoxAudioCodec::InputData(data);','    const bool read=BoxAudioCodec::InputData(data);\n    if(read)wave_pop_lab::Input(data.data(),data.size());')
     edit('main/audio/audio_service.h','    void PrintC3Resources() const;','    void PrintC3Resources() const;\n    TaskHandle_t WavePopCodecTask() const { return opus_codec_task_handle_; }')
     edit('main/protocols/protocol.h','struct AudioStreamPacket {','struct AudioStreamPacket {\n    uint32_t wave_pop_queued_us=0;')
@@ -50,6 +50,7 @@ def prepare(tree, url, descriptors=6):
     if descriptors==12:
         edit('main/audio/audio_codec.h','#define AUDIO_CODEC_DMA_DESC_NUM 6','#define AUDIO_CODEC_DMA_DESC_NUM 12')
         edit('main/audio/playback_progress.h','kBlock = 240, kSlots = 6,','kBlock = 240, kSlots = 12,')
+        edit('main/audio/playback_progress.h','sizeof(PlaybackProgress)<=7360','sizeof(PlaybackProgress)<=7552')
         edit(box+'xiaoman_box_lifecycle.inc','tx.total_dma_buf_size!=2880','tx.total_dma_buf_size!=5760')
         edit(box+'xiaoman_box_lifecycle.inc','rx.total_dma_buf_size!=5760','rx.total_dma_buf_size!=11520')
     for name,d in changed.items():d['after']=hashlib.sha256((tree/name).read_bytes()).hexdigest()
