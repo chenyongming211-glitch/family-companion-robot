@@ -22,7 +22,7 @@ umask 077
 python3 -m unittest -v test_capture
 ```
 
-Tests use constructed packets, a native Opus sine-wave roundtrip, temporary
+Tests use constructed packets, native Opus synthetic roundtrips, temporary
 private files, and real short-lived subprocess fixtures. They do not execute
 tcpdump, access eth0, read production configuration, or use real human audio.
 These are engineering checks, not acoustic or voiceprint acceptance.
@@ -87,8 +87,13 @@ server audio to disk. The capture requires a newly observed SYN/SYN-ACK/ACK,
 the specified MAC and exact configured token, HTTP101 with the request's correct
 Sec-WebSocket-Accept, a valid client16kHz/server24kHz hello, and server scope.
 Only masked client binary messages following scoped listen/start in realtime
-or auto mode are admitted. Wake-cache binary frames are discarded; a scoped
-pre-listen wake abort is ignored. Scope-mismatched controls fail closed.
+or auto mode are saved. After client hello and server scope validation,
+pre-listen wake packets advance the same decoder used for business input;
+their decoded PCM is immediately discarded. Only discarded frame/sample
+counts are retained for reporting. At most32000 wake samples are allowed
+(33 complete960-sample packets); an additional packet fails before decode.
+Wake Opus and PCM never enter the source/WAV files. A scoped pre-listen wake
+abort is ignored. Scope-mismatched controls fail closed.
 
 TCP capture order is authoritative. Identical retransmits and matching overlaps
 are skipped; gaps, conflicts, truncation, resets, unsupported frames or limits
@@ -135,6 +140,21 @@ session string. The configured target's model label is explicitly operator
 declared, not inferred from MAC. `source_kind=private_human` records the intended
 capture protocol; it is not a content classifier. `stage=capture_readiness`,
 `human_acceptance=false` and `production_acceptance=false` remain fixed.
+
+`decoder_policy=bounded_prelisten_warmup` records decode-before-discard ordering
+for wake input, followed by business decode using the existing warm state.
+`wake_discarded_frames` and `wake_discarded_samples` exclude business input.
+`context_saved=false` means neither wake packets/PCM nor decoder state is saved.
+Consequently, the saved business Opus packets alone cannot reproduce the warm
+WAV: `source_only_redecode_is_server_pcm=false` explicitly prevents labeling a
+fresh decoder's business-only output as the backend reference. Source Opus and
+WAV retain separate hashes. Matching valid packet call order does not establish
+a measured bitwise match with recorded server PCM; that PCM is not captured.
+Native synthetic tests compare the full wake-plus-business sequence with an
+independent fresh decoder that replays both, without assuming which live
+frames a business-only fresh decoder would change. Older captures made with
+the initial skip-before-decode policy retain their original interpretation;
+they must not be relabeled as warm-state captures or used for enrollment.
 
 Fixed failure reasons and terminal JSON summaries prevent raw exception text
 from exposing protocol/config contents. Failure artifacts are unsuitable for

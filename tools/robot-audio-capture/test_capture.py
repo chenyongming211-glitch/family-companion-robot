@@ -170,17 +170,79 @@ class SessionTests(Base):
         s.feed(True, ws({"type": "listen", "state": "start", "mode": "realtime", "session_id": "private-session"}))
 
     def test_upgrade_and_wake_audio_exclusion(self):
-        s = self.session()
+        calls = []
+        def decode(packet):
+            calls.append(packet)
+            return b"\x01\x00" * 960
+        s = self.session(decode)
         s.feed(True, request())
         s.feed(False, response())
-        s.feed(True, ws(hello()) + ws(b"wake"))
+        s.feed(True, ws(hello()))
         h = hello(24000); h["session_id"] = "private-session"
         s.feed(False, ws(h, False))
+        s.feed(True, ws(b"wake"))
         s.feed(True, ws({"type": "listen", "state": "start", "mode": "auto", "session_id": "private-session"}) + ws(b"real"))
         s.feed(False, ws({"type": "tts", "state": "start", "session_id": "private-session"}, False) + ws(b"model", False))
         self.assertEqual(s.frames, [b"real"])
+        self.assertEqual(calls, [b"wake", b"real"])
         self.assertEqual(s.reason, "tts_start")
         self.assertTrue(s.complete)
+
+    def test_wake_decoder_state_is_warm_and_only_business_audio_is_saved(self):
+        calls = []
+        def decode(packet):
+            calls.append(packet)
+            return struct.pack("<h", len(calls)) * 960
+        s = self.session(decode)
+        s.feed(True, request()); s.feed(False, response()); s.feed(True, ws(hello()))
+        h = hello(24000); h["session_id"] = "private-session"; s.feed(False, ws(h, False))
+        s.feed(True, ws(b"wake-one") + ws(b"wake-two"))
+        self.assertEqual(calls, [b"wake-one", b"wake-two"])
+        self.assertEqual(s.frames, [])
+        self.assertEqual(s.pcm, b"")
+        s.feed(True, ws({"type": "listen", "state": "start", "mode": "auto", "session_id": "private-session"}) + ws(b"business"))
+        s.feed(False, ws({"type": "tts", "state": "start", "session_id": "private-session"}, False))
+        self.assertEqual(s.pcm, b"\x03\x00" * 960)
+        self.assertEqual(s.frames, [b"business"])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample"
+            report = c.PrivateOutput(str(path)).finish(s, None, True, 0)
+            self.assertEqual(report["decoder_policy"], "bounded_prelisten_warmup")
+            self.assertFalse(report["context_saved"])
+            self.assertFalse(report["source_only_redecode_is_server_pcm"])
+            self.assertEqual(report["wake_discarded_frames"], 2)
+            self.assertEqual(report["wake_discarded_samples"], 1920)
+            for f in path.iterdir():
+                raw = f.read_bytes()
+                self.assertNotIn(b"wake-one", raw)
+                self.assertNotIn(b"wake-two", raw)
+            self.assertEqual((path / "utterance.wav").read_bytes()[44:], b"\x03\x00" * 960)
+
+    def test_wake_limit_and_scope_fail_before_admitting_audio(self):
+        calls = []
+        def decode(packet):
+            calls.append(packet)
+            return b"\x01\x00" * 960
+        s = self.session(decode)
+        s.feed(True, request()); s.feed(False, response()); s.feed(True, ws(hello()))
+        self.bad("session_scope", lambda: s.feed(True, ws(b"unscoped-wake")))
+        self.assertEqual(calls, [])
+        h = hello(24000); h["session_id"] = "private-session"; s.feed(False, ws(h, False))
+        for _ in range(33): s.feed(True, ws(b"wake"))
+        self.assertEqual(len(calls), 33)
+        self.bad("wake_limit", lambda: s.feed(True, ws(b"over-limit")))
+        self.assertEqual(len(calls), 33)
+        self.assertEqual(s.wake_discarded_samples, 31680)
+        self.assertEqual(s.frames, [])
+        self.assertEqual(s.pcm, b"")
+
+    def test_wake_packet_samples_and_size_are_validated(self):
+        s = self.session(lambda p: b"bad")
+        s.feed(True, request()); s.feed(False, response()); s.feed(True, ws(hello()))
+        h = hello(24000); h["session_id"] = "private-session"; s.feed(False, ws(h, False))
+        self.bad("opus_samples", lambda: s.feed(True, ws(b"wake")))
+        self.bad("opus_packet", lambda: s.feed(True, ws(b"")))
+        self.bad("ws_size", lambda: s.feed(True, ws(b"x" * 4097)))
 
     def test_wrong_target_and_token_are_rejected(self):
         for req in (request("11:22:33:44:55:66"), request(token="x" * 64)):
@@ -293,6 +355,53 @@ class SessionTests(Base):
 
 
 class NativeAndStorageTests(Base):
+    def test_native_warm_business_pcm_matches_full_sequence_reference(self):
+        decoder, reference, business_only = c.OpusDecoder(), c.OpusDecoder(), c.OpusDecoder()
+        lib = decoder.lib
+        lib.opus_encoder_create.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+        lib.opus_encoder_create.restype = ctypes.c_void_p
+        lib.opus_encode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+        lib.opus_encoder_destroy.argtypes = [ctypes.c_void_p]
+        err = ctypes.c_int()
+        enc = lib.opus_encoder_create(16000, 1, 2049, ctypes.byref(err))
+        self.assertEqual(err.value, 0)
+        try:
+            packets = []
+            for frame in range(8):
+                samples = (ctypes.c_int16 * 960)(*[int(6000 * math.sin(2 * math.pi * (220 + frame * 29) * (frame * 960 + i) / 16000)) for i in range(960)])
+                output = ctypes.create_string_buffer(4096)
+                n = lib.opus_encode(enc, samples, 960, output, 4096)
+                self.assertGreater(n, 0)
+                packets.append(output.raw[:n])
+            s = c.Session(MAC, TOKEN, decoder.decode)
+            s.feed(True, request()); s.feed(False, response()); s.feed(True, ws(hello()))
+            h = hello(24000); h["session_id"] = "private-session"; s.feed(False, ws(h, False))
+            for p in packets[:3]:
+                reference.decode(p)
+                s.feed(True, ws(p))
+            self.assertEqual(s.frames, [])
+            self.assertEqual(s.pcm, b"")
+            s.feed(True, ws({"type": "listen", "state": "start", "mode": "auto", "session_id": "private-session"}))
+            expected, fresh = bytearray(), bytearray()
+            for p in packets[3:]:
+                expected.extend(reference.decode(p))
+                fresh.extend(business_only.decode(p))
+                s.feed(True, ws(p))
+            s.feed(False, ws({"type": "tts", "state": "start", "session_id": "private-session"}, False))
+            self.assertEqual(s.pcm, expected)
+            self.assertEqual(s.frames, packets[3:])
+            # Compare complete business output, without asserting which frame
+            # differs or implying this synthetic extent describes live audio.
+            self.assertNotEqual(fresh, expected)
+            with tempfile.TemporaryDirectory() as tmp:
+                report = c.PrivateOutput(str(Path(tmp) / "sample")).finish(s, None, True, 0)
+                self.assertEqual(report["decoder_policy"], "bounded_prelisten_warmup")
+                self.assertFalse(report["source_only_redecode_is_server_pcm"])
+                self.assertEqual(report["wake_discarded_frames"], 3)
+        finally:
+            lib.opus_encoder_destroy(enc)
+            decoder.close(); reference.close(); business_only.close()
+
     def test_real_opus_synthetic_roundtrip_960(self):
         decoder = c.OpusDecoder()
         lib = decoder.lib

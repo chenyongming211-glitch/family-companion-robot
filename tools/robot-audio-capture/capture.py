@@ -31,7 +31,7 @@ MAX_HTTP = 16384
 MAX_WS = 65536
 MAX_FLOWS = 32
 PORT = 18041
-REASONS = frozenset("pcap_limit pcap_header pcap_truncated packet_header ip_fragment tcp_header tcp_gap tcp_conflict tcp_limit tcp_handshake tcp_reset flow_limit http_header http_upgrade ws_mask ws_control ws_fragment ws_size ws_header ws_close hello_format session_scope listen_state opus_packet opus_decode opus_samples audio_limit empty_audio boundary_partial client_stop client_fin tts_start auth_config output_unsafe timeout first_audio_timeout capture_start capture_io capture_exit capture_drops capture_stats signal internal_error".split())
+REASONS = frozenset("pcap_limit pcap_header pcap_truncated packet_header ip_fragment tcp_header tcp_gap tcp_conflict tcp_limit tcp_handshake tcp_reset flow_limit http_header http_upgrade ws_mask ws_control ws_fragment ws_size ws_header ws_close hello_format session_scope listen_state opus_packet opus_decode opus_samples wake_limit audio_limit empty_audio boundary_partial client_stop client_fin tts_start auth_config output_unsafe timeout first_audio_timeout capture_start capture_io capture_exit capture_drops capture_stats signal internal_error".split())
 
 
 class CaptureError(Exception):
@@ -303,6 +303,8 @@ class Session:
         self.listen_at = self.first_audio_at = None
         self.frames = []
         self.pcm = bytearray()
+        self.wake_discarded_frames = 0
+        self.wake_discarded_samples = 0
         self.complete = False
         self.reason = None
 
@@ -353,13 +355,21 @@ class Session:
                 if not client:
                     continue  # Never persist or decode model audio.
                 require(self.client_hello, "hello_format")
-                if not self.listening:
-                    continue  # Wake-cache audio is outside business input.
                 require(self.scope is not None, "session_scope")
-                require(len(self.frames) * 0.06 + 0.06 <= self.audio_limit + 1e-9, "audio_limit")
                 require(0 < len(payload) <= 4096, "opus_packet")
+                if not self.listening:
+                    require(self.wake_discarded_samples + 960 <= 32000, "wake_limit")
+                else:
+                    require(len(self.frames) * 0.06 + 0.06 <= self.audio_limit + 1e-9, "audio_limit")
                 pcm = self.decoder(payload)
                 require(len(pcm) == 1920, "opus_samples")
+                if not self.listening:
+                    # Match the backend's valid packet decode order while
+                    # retaining no wake packet or PCM in capture artifacts.
+                    self.wake_discarded_frames += 1
+                    self.wake_discarded_samples += 960
+                    del pcm
+                    continue
                 self.frames.append(payload)
                 self.pcm.extend(pcm)
                 if self.first_audio_at is None:
@@ -587,6 +597,11 @@ class PrivateOutput:
             report = {"schema_version": 1, "status": "complete" if good else "incomplete", "reason": reason if reason in REASONS else "internal_error", "stage": "capture_readiness", "source_kind": "private_human", "source_device": "waveshare_esp32_s3", "capture_scope": "first_business_input", "decoder_version": decoder_version, "source_format": {"codec": "opus", "protocol_version": 1, "sample_rate": 16000, "channels": 1, "frame_duration_ms": 60}, "human_acceptance": False, "production_acceptance": False, "frames": len(frames), "samples": len(samples), "duration_seconds": len(samples) / 16000, "opus_payload_bytes": sum(map(len, frames)), "source_bytes": len(source), "wav_bytes": len(wav) if wav else 0, "rms": math.sqrt(sum(x * x for x in samples) / len(samples)) if samples else 0, "peak": max(map(abs, samples), default=0), "source_sha256": hashlib.sha256(source).hexdigest(), "wav_sha256": hashlib.sha256(wav).hexdigest() if wav else None, "drop_stats_verified": bool(verified), "kernel_drops": drops}
             report["source_device_basis"] = "user_declared_and_configured_target"
             report["session_sha256"] = hashlib.sha256(session.scope.encode()).hexdigest() if session and session.scope else None
+            report["decoder_policy"] = "bounded_prelisten_warmup"
+            report["context_saved"] = False
+            report["source_only_redecode_is_server_pcm"] = False
+            report["wake_discarded_frames"] = session.wake_discarded_frames if session else 0
+            report["wake_discarded_samples"] = session.wake_discarded_samples if session else 0
             self.write("metadata.json", (json.dumps(report, sort_keys=True, indent=2) + "\n").encode())
             os.fsync(self.fd)
             return report
