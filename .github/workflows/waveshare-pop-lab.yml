@@ -1,0 +1,64 @@
+name: Waveshare isolated pop lab
+on:
+  workflow_dispatch:
+    inputs:
+      fixture_url:
+        description: HTTP base URL of the isolated deterministic fixture
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        descriptors: [6, 12]
+    container:
+      image: espressif/idf:v6.1
+    env:
+      FIXTURE_URL: ${{ inputs.fixture_url }}
+      DESCRIPTORS: ${{ matrix.descriptors }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Cloud dependencies and counter check
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
+          apt-get update -qq
+          apt-get install -y --no-install-recommends libopus0 g++ libssl-dev
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tools/waveshare-pop-lab/probe_test.cc -o /tmp/probe-test
+          /tmp/probe-test
+      - name: Prepare locked source and explicit lab delta
+        run: |
+          python3 firmware/tools/prepare_experiment.py --target esp32s3
+          python3 tools/waveshare-pop-lab/prepare_lab.py --tree firmware/.cache/experiment --fixture-url "$FIXTURE_URL" --descriptors "$DESCRIPTORS"
+      - name: Build only the Waveshare lab target
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          EXPECTED_IDF=$(python3 -c 'import json;print(json.load(open("firmware/upstream.lock.json"))["idf_commit"])')
+          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
+          cd firmware/.cache/experiment
+          python3 scripts/build.py waveshare/esp32-s3-touch-amoled-2.16 --name esp32-s3-touch-amoled-2.16-xiaoman --language zh-CN --zip
+          test "$(stat -c %s build/xiaozhi.bin)" -le 3145728
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: waveshare-pop-lab-dma${{ matrix.descriptors }}-${{ github.sha }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            firmware/.cache/experiment/build/xiaozhi.bin
+            firmware/.cache/experiment/build/xiaozhi.elf
+            firmware/.cache/experiment/build/partition_table/partition-table.bin
+            firmware/.cache/experiment/build/generated_assets.bin
+            firmware/.cache/experiment/sdkconfig
+            firmware/.cache/experiment/wave-pop-fixture/
+            firmware/.cache/experiment/build/log/
