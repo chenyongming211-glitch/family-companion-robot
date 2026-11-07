@@ -12,9 +12,9 @@
 
 **Files:** 新增tools/computer-voice-capture/中的main.swift、NativeCapture.swift、Transport.swift、State.swift、Tests、Info.plist、build.command、open.command、README.md；新增tools/robot-audio-capture/receive_computer.py及test_receive_computer.py。已有采集器和普通客户端保持原功能。
 
-- [ ] 云端新隔离目录先写receiver严格协议与权限／格式／声道／失败测试，运行RED，再实现GREEN。接收头／payload边界、输出字段和限制遵照设计，不保存任何真实音频到Mac。
-- [ ] 客户端先写无麦状态测试：只有手动动作且远端ready后才可申请权限和采集、忙／取消／代次、4秒格式与容量、stored匹配clip、SSH失败／EOF／超时及子进程回收。SDK测试取得RED再实现GREEN。
-- [ ] 云端运行receiver全部专项及既有43项采集器回归；Mac构建／SDK测试／签名／脚本检查。源码摘要绑定；独立规格、质量复核通过再提交。
+- [x] 云端新隔离目录先写receiver严格协议与权限／格式／声道／失败测试，运行RED，再实现GREEN。接收头／payload边界、输出字段和限制遵照设计，不保存任何真实音频到Mac。
+- [x] 客户端先写无麦状态测试：只有手动动作且远端ready后才可申请权限和采集、忙／取消／代次、4秒格式与容量、stored匹配clip、SSH失败／EOF／超时及子进程回收。SDK测试取得RED再实现GREEN。
+- [x] 云端运行receiver全部专项及既有43项采集器回归；Mac构建／SDK测试／签名／脚本检查。源码摘要绑定；独立规格、质量复核通过再提交。
 
 ## Task 2: 一人现场及记账
 
