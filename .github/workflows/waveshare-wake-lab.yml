@@ -1,0 +1,54 @@
+name: Waveshare isolated wake lab
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Cloud dependencies and bounded probe checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
+          apt-get update -qq
+          apt-get install -y --no-install-recommends g++ libopus0 libssl-dev
+          g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tools/waveshare-wake-lab/probe_test.cc -o /tmp/wake-probe
+          /tmp/wake-probe
+      - name: Prepare locked product source and isolated diagnostic delta
+        run: |
+          python3 firmware/tools/prepare_experiment.py --target esp32s3
+          python3 tools/waveshare-wake-lab/prepare_lab.py --tree firmware/.cache/experiment --source-sha "$GITHUB_SHA"
+      - name: Build only the Waveshare wake diagnostic target
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          EXPECTED_IDF=$(python3 -c 'import json;print(json.load(open("firmware/upstream.lock.json"))["idf_commit"])')
+          test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$EXPECTED_IDF"
+          cd firmware/.cache/experiment
+          python3 scripts/build.py waveshare/esp32-s3-touch-amoled-2.16 --name esp32-s3-touch-amoled-2.16-xiaoman --language zh-CN --zip
+          test "$(stat -c %s build/xiaozhi.bin)" -le 3145728
+      - name: Bind binary hashes to the diagnostic source delta
+        run: python3 tools/waveshare-wake-lab/prepare_lab.py --tree firmware/.cache/experiment --finalize
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: waveshare-wake-lab-${{ github.sha }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            firmware/.cache/experiment/build/xiaozhi.bin
+            firmware/.cache/experiment/build/xiaozhi.elf
+            firmware/.cache/experiment/build/partition_table/partition-table.bin
+            firmware/.cache/experiment/build/generated_assets.bin
+            firmware/.cache/experiment/sdkconfig
+            firmware/.cache/experiment/wake-lab-manifest.json
+            firmware/.cache/experiment/build/log/
