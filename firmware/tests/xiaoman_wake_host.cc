@@ -1,4 +1,5 @@
 #include <atomic>
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <condition_variable>
@@ -12,6 +13,7 @@
 #include "experiment_gate.h"
 
 #define CONFIG_SEND_WAKE_WORD_DATA 1
+#define CONFIG_WAVESHARE_XIAOMAN_REALTIME 1
 #define CONFIG_CUSTOM_WAKE_WORD "xiao man"
 #define CONFIG_CUSTOM_WAKE_WORD_DISPLAY "小满"
 #define CONFIG_CUSTOM_WAKE_WORD_THRESHOLD 20
@@ -22,6 +24,7 @@
 constexpr int ESP_OK = 0;
 constexpr int ESP_FAIL = -1;
 constexpr int WAKENET_DETECTED = 1;
+constexpr int VAD_SPEECH = 1;
 constexpr int ESP_MN_RESULT_MAX_NUM = 5;
 constexpr const char* ESP_MN_PREFIX = "mn";
 enum esp_mn_state_t { ESP_MN_STATE_DETECTING, ESP_MN_STATE_DETECTED, ESP_MN_STATE_TIMEOUT };
@@ -42,17 +45,32 @@ struct AudioCodec {
 struct WakeWordAudioCache {
     int initializes = 0, stores = 0, clears = 0;
     size_t samples = 0;
+    size_t capacity = 0;
+    std::vector<int16_t> pcm;
     std::function<void()> on_store;
-    bool Initialize(size_t) { ++initializes; return true; }
-    void Store(const int16_t*, size_t count) {
+    bool Initialize(size_t cap) { ++initializes;capacity=cap;return true; }
+    size_t Size() const { return pcm.size(); }
+    size_t Read(size_t offset,int16_t* out,size_t count) const {
+        if(offset>=pcm.size())return 0;
+        count=std::min(count,pcm.size()-offset);
+        std::copy_n(pcm.data()+offset,count,out);return count;
+    }
+    void Store(const int16_t* data, size_t count) {
         ++stores;
         samples += count;
+        if(capacity) {
+            pcm.insert(pcm.end(),data,data+count);
+            if(pcm.size()>capacity)pcm.erase(pcm.begin(),pcm.end()-capacity);
+        }
         if (on_store) on_store();
     }
-    void Clear() { ++clears; samples = 0; }
+    void Clear() { ++clears; samples = 0;pcm.clear(); }
 };
 static bool create_failed = false, add_failed = false, update_failed = false, empty_commands = false;
 static int detects = 0, cleans = 0, registered = 0;
+static bool boundary_mode=false;
+static unsigned window_frames=0;
+static std::vector<int16_t> window_pcm;
 static esp_mn_state_t detection = ESP_MN_STATE_DETECTING;
 static std::function<void()> during_detect;
 static model_iface_data_t model;
@@ -61,13 +79,19 @@ static model_iface_data_t* create(const char*, int) { return create_failed ? nul
 static int set_threshold(model_iface_data_t*, float threshold) { assert(threshold == 0.2f); return 0; }
 static int chunksize(model_iface_data_t*) { return 4; }
 static void print_commands(model_iface_data_t*) {}
-static esp_mn_state_t detect(model_iface_data_t*, int16_t*) {
+static esp_mn_state_t detect(model_iface_data_t*, int16_t* data) {
     ++detects;
     if (during_detect) during_detect();
+    if(boundary_mode) {
+        window_pcm.insert(window_pcm.end(),data,data+4);
+        if(++window_frames>=100)return ESP_MN_STATE_TIMEOUT;
+        const std::vector<int16_t> word{91,92,93,94,95,96,97,98};
+        if(window_pcm.size()>=word.size()&&std::equal(word.begin(),word.end(),window_pcm.end()-word.size()))return ESP_MN_STATE_DETECTED;
+    }
     return detection;
 }
 static esp_mn_results_t* get_results(model_iface_data_t*) { return &results; }
-static void clean(model_iface_data_t*) { ++cleans; }
+static void clean(model_iface_data_t*) { ++cleans;window_frames=0;window_pcm.clear(); }
 struct esp_mn_iface_t {
     decltype(&::create) create = ::create;
     decltype(&set_threshold) set_det_threshold = set_threshold;
@@ -108,6 +132,8 @@ public:
     std::mutex input_buffer_mutex_;
     std::atomic<bool> running_{false};
     WakeWordAudioCache wake_word_audio_cache_;
+    WakeWordAudioCache speech_preroll_cache_;
+    bool speech_window_enabled_=false,speech_active_=false;
     std::function<void(const std::string&)> wake_word_detected_callback_;
     void ParseWakenetModelConfig() { if (!empty_commands) commands_.push_back({"xiao man", "小满", "wake"}); }
     bool Initialize(AudioCodec*, srmodel_list_t*);
@@ -117,7 +143,7 @@ public:
     // FEED_SAMPLES_DECLARATION
     // FEED_MONO_DECLARATION
 };
-struct afe_fetch_result_t { int16_t* data; int data_size; int wakeup_state = 0; int wakenet_model_index = 1; };
+struct afe_fetch_result_t { int16_t* data; int data_size; int wakeup_state = 0; int wakenet_model_index = 1; int vad_state=0; };
 class AfeAudioEngine {
 public:
     struct WakePacket { std::vector<uint8_t> opus; uint32_t batch, generation; };
@@ -189,7 +215,22 @@ int main(int argc, char** argv) {
     assert(initialized && registered == 1);
     custom.Start();
     int16_t samples[4] = {1, 2, 3, 4};
-    if (scenario.rfind("tagged-", 0) == 0) {
+    if(scenario=="speech-window"||scenario=="speech-window-epoch") {
+        AfeAudioEngine engine;engine.codec_=&codec;
+        engine.custom_wake_word_=std::make_unique<CustomWakeWord>();
+        assert(engine.custom_wake_word_->Initialize(&codec,&models));engine.custom_wake_word_->Start();
+        boundary_mode=true;int callbacks=0;
+        engine.custom_wake_word_->wake_word_detected_callback_=[&](const std::string& word){assert(word=="小满");++callbacks;};
+        int16_t quiet[]{0,0,0,0};afe_fetch_result_t frame{quiet,sizeof(quiet)};
+        for(int i=0;i<99;++i)FeedWakeFrame(engine,&frame,codec.CaptureGeneration(),0);
+        int16_t prefix[]{91,92,93,94};frame.data=prefix;
+        FeedWakeFrame(engine,&frame,codec.CaptureGeneration(),0);
+        assert(callbacks==0&&cleans==1);
+        if(scenario=="speech-window-epoch") {++codec.capture_generation;engine.ResetWakeWordCapture();}
+        int16_t suffix[]{95,96,97,98};frame.data=suffix;frame.vad_state=VAD_SPEECH;
+        FeedWakeFrame(engine,&frame,codec.CaptureGeneration(),0);
+        assert(callbacks==(codec.hardware&&scenario=="speech-window"?1:0));
+    } else if (scenario.rfind("tagged-", 0) == 0) {
         AfeAudioEngine engine;
         engine.codec_ = &codec;
         engine.experiment_wake_word_opus_.push_back({{42},

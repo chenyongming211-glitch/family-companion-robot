@@ -4,6 +4,7 @@ import hashlib
 import json
 import pathlib
 import re
+import textwrap
 
 
 def digest(p):
@@ -59,13 +60,15 @@ def prepare(tree, source):
          '    if (!running_) {\n        return;\n    }',
          '    if (!running_) {\n        wave_wake_lab::Count(wave_wake_lab::Step::Stopped);\n        return;\n    }')
     edit('main/audio/wake_words/custom_wake_word.cc',
-         '        input_buffer_.clear();\n        multinet_->clean(multinet_model_data_);\n        return false;',
-         '        wave_wake_lab::Count(wave_wake_lab::Step::GenerationRejected);\n        input_buffer_.clear();\n        multinet_->clean(multinet_model_data_);\n        return false;')
+         '            return true;\n        input_buffer_.clear();',
+         '            return true;\n        wave_wake_lab::Count(wave_wake_lab::Step::GenerationRejected);\n        input_buffer_.clear();')
     edit('main/audio/wake_words/custom_wake_word.h', '    float threshold_ = 0.2;',
          '    float threshold_ = 0.2;\n    unsigned wave_lab_threshold_applied_ = 0;')
-    edit('main/audio/wake_words/custom_wake_word.cc',
-         '        esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());',
-         '''        // This runs under input_buffer_mutex_, alongside detect/clean.
+    custom_name = 'main/audio/wake_words/custom_wake_word.cc'
+    custom_text = (tree/custom_name).read_text()
+    detect_line = 'esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());'
+    indent = re.search(r'^([ \t]*)'+re.escape(detect_line), custom_text, re.M).group(1)
+    diagnostic = '''        // This runs under input_buffer_mutex_, alongside detect/clean.
         const auto requested = wave_wake_lab::threshold_percent.load();
         if (requested != wave_lab_threshold_applied_) {
             multinet_->set_det_threshold(multinet_model_data_, requested / 100.0f);
@@ -76,7 +79,12 @@ def prepare(tree, source):
         esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());
         wave_wake_lab::Count(wave_wake_lab::Step::Infer);
         if (mn_state == ESP_MN_STATE_DETECTED) wave_wake_lab::Count(wave_wake_lab::Step::Detected);
-        if (mn_state == ESP_MN_STATE_TIMEOUT) wave_wake_lab::Count(wave_wake_lab::Step::Timeout);''')
+        if (mn_state == ESP_MN_STATE_TIMEOUT) wave_wake_lab::Count(wave_wake_lab::Step::Timeout);'''
+    edit(custom_name, indent+detect_line, textwrap.indent(textwrap.dedent(diagnostic), indent))
+    speech_alignment = '// WAVE_SPEECH_WINDOW_RESET' in custom_text
+    if speech_alignment:
+        edit(custom_name, '            // WAVE_SPEECH_WINDOW_RESET',
+             '            // WAVE_SPEECH_WINDOW_RESET\n            wave_wake_lab::Count(wave_wake_lab::Step::Reset);')
     edit('main/application.cc', '#include "websocket_protocol.h"',
          '#include "websocket_protocol.h"\n#include "wave_wake_console.inc"')
     edit('main/application.cc', '    audio_service_.Start();\n    ESP_LOGI(TAG, "After board/audio init");',
@@ -87,6 +95,7 @@ def prepare(tree, source):
             'dma_descriptors': 6, 'probe_max_seconds': 10,
             'threshold_percent_choices': [15, 20], 'changes': changes,
             'model_flow_counters': True,
+            'speech_window_alignment': speech_alignment,
             'added': {p.relative_to(tree).as_posix(): digest(p)
                       for p in (tree/'main/audio').glob('wave_wake_*')}}
     manifest.write_text(json.dumps(data, indent=2)+'\n')

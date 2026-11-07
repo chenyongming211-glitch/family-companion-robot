@@ -1,6 +1,7 @@
 """Host checks of production MultiNet guards; no speech model runs on the host."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -55,6 +56,10 @@ class XiaomanWakeTests(unittest.TestCase):
             'void CustomWakeWord::Stop(', 'void CustomWakeWord::ResetCapture(',
             'void CustomWakeWord::FeedSamples(', 'void CustomWakeWord::FeedMono(']]
         engine = (self.source / 'main/audio/engines/afe_audio_engine.cc').read_text()
+        headers = {
+            'CustomWakeWord': (self.source/'main/audio/wake_words/custom_wake_word.h').read_text(),
+            'AfeAudioEngine': (self.source/'main/audio/engines/afe_audio_engine.h').read_text(),
+        }
         methods += [method(engine, 'void AfeAudioEngine::ResetWakeWordCapture('),
                     method(engine, 'void AfeAudioEngine::HandleWakeWordResult('),
                     method(engine, 'bool AfeAudioEngine::GetExperimentWakeWordOpus(')]
@@ -64,8 +69,7 @@ class XiaomanWakeTests(unittest.TestCase):
                 ('// FEED_SAMPLES_DECLARATION', 'FeedSamples', 'CustomWakeWord'),
                 ('// FEED_MONO_DECLARATION', 'FeedMono', 'CustomWakeWord'),
                 ('// WAKE_RESULT_DECLARATION', 'HandleWakeWordResult', 'AfeAudioEngine')]:
-            definition = next(body for body in methods if f'{owner}::{name}(' in body)
-            declaration = definition[:definition.index('{')].replace(f'{owner}::', '') + ';'
+            declaration = re.search(r'\bvoid\s+'+name+r'\([^;]+;', headers[owner]).group(0)
             program = program.replace(marker, declaration)
         source = self.work / 'xiaoman.cc'
         source.write_text(program)
@@ -93,7 +97,9 @@ class XiaomanWakeTests(unittest.TestCase):
                          'hardware-engine-cache-before-detect', 'hardware-engine-epoch-reset',
                          'hardware-engine-store-capture-only', 'hardware-engine-store-capture-and-wake',
                          'hardware-tagged-valid', 'hardware-tagged-old-batch',
-                         'hardware-tagged-old-generation']:
+                         'hardware-tagged-old-generation',
+                         'hardware-speech-window', 'hardware-speech-window-epoch',
+                         'speech-window']:
             with self.subTest(scenario=scenario):
                 result = subprocess.run([str(binary), scenario], capture_output=True,
                                         text=True, timeout=15, env=environment)
