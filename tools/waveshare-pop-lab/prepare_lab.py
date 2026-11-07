@@ -43,9 +43,12 @@ def prepare(tree, url, descriptors=6, yield_output_lock=False):
     edit('main/audio/audio_service.cc','        output_in_flight_ = false;','        output_in_flight_ = false;\n        wave_pop_lab::pcm_inflight.store(0,std::memory_order_relaxed);')
     edit('main/application.cc','#include "websocket_protocol.h"','#include "websocket_protocol.h"\n#include "wave_pop_lab.inc"')
     edit('main/application.cc','    audio_service_.Start();\n    ESP_LOGI(TAG, "After board/audio init");','    audio_service_.Start();\n    wave_pop_lab::Start(this,&audio_service_);\n    ESP_LOGI(TAG, "After board/audio init");')
-    if yield_output_lock:
+    playback_path=tree/(box+'xiaoman_box_playback.inc')
+    yielding='        lock.unlock();\n        vTaskDelay(1);\n        lock.lock();' in playback_path.read_text()
+    if yield_output_lock and not yielding:
         edit(box+'xiaoman_box_playback.inc','    std::lock_guard<std::mutex> lock(lifecycle_);','    std::unique_lock<std::mutex> lock(lifecycle_);')
         edit(box+'xiaoman_box_playback.inc','        vTaskDelay(1);','        lock.unlock();\n        vTaskDelay(1);\n        lock.lock();')
+        yielding=True
     board=box+'esp32-s3-touch-amoled-2.16.cc'
     # Disable only the lab build's idle hardware power-off while artifacts are
     # collected. The product tree and all persistent preferences stay intact.
@@ -57,7 +60,7 @@ def prepare(tree, url, descriptors=6, yield_output_lock=False):
         edit(box+'xiaoman_box_lifecycle.inc','tx.total_dma_buf_size!=2880','tx.total_dma_buf_size!=5760')
         edit(box+'xiaoman_box_lifecycle.inc','rx.total_dma_buf_size!=5760','rx.total_dma_buf_size!=11520')
     for name,d in changed.items():d['after']=hashlib.sha256((tree/name).read_bytes()).hexdigest()
-    manifest={'kind':'waveshare-pop-lab-only','dma_descriptors':descriptors,'yield_output_lock':yield_output_lock,'changed':changed,'inputs':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in here.iterdir() if p.is_file()},'added':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (tree/'main/audio').glob('wave_pop*')}}
+    manifest={'kind':'waveshare-pop-lab-only','dma_descriptors':descriptors,'yield_output_lock':yielding,'changed':changed,'inputs':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in here.iterdir() if p.is_file()},'added':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (tree/'main/audio').glob('wave_pop*')}}
     (tree/'wave-pop-fixture/lab-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 
 if __name__=='__main__':

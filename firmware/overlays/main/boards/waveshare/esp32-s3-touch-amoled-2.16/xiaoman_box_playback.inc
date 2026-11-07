@@ -1,6 +1,6 @@
 bool XiaomanBoxCodec::PlaybackControl(PlaybackOp op,family_robot::PlaybackIdentity id,uint64_t first,size_t n) {
-    // OutputTagged holds lifecycle_ while waiting for ISR space. Reset/Connect
-    // must remain able to cancel it; only Start needs the physical lifecycle.
+    // Reset/Connect can revoke output without waiting for a lifecycle owner;
+    // only Start needs the physical lifecycle.
     std::unique_lock<std::mutex> lock(lifecycle_,std::defer_lock);
     if(op==PlaybackOp::Start) {lock.lock();if(!PreparePlaybackHardware())return false;}
     portENTER_CRITICAL(&mux_);
@@ -41,7 +41,7 @@ void XiaomanBoxCodec::MarkOrbDraining(family_robot::PlaybackIdentity id) {portEN
 #endif
 void XiaomanBoxCodec::OutputData(std::vector<int16_t>& data) {OutputTagged(data,{},0,PlaybackGeneration());}
 void XiaomanBoxCodec::OutputTagged(std::vector<int16_t>& pcm,family_robot::PlaybackIdentity id,uint64_t first,uint32_t generation) {
-    std::lock_guard<std::mutex> lock(lifecycle_);
+    std::unique_lock<std::mutex> lock(lifecycle_);
     // Never call esp_codec_dev_write/i2s_channel_write, including failed setup.
     size_t offset=0;int64_t last_progress=esp_timer_get_time();
     while(offset<pcm.size()) {
@@ -61,6 +61,10 @@ void XiaomanBoxCodec::OutputTagged(std::vector<int16_t>& pcm,family_robot::Playb
         if(result==family_robot::PlaybackProgress::SubmitResult::Rejected)return;
         if(result==family_robot::PlaybackProgress::SubmitResult::Accepted) {offset+=n;last_progress=esp_timer_get_time();continue;}
         if(esp_timer_get_time()-last_progress>200000) {PlaybackControl(PlaybackOp::Invalidate,id);return;}
+        // DMA makes space independently. Let capture and hardware lifecycle
+        // operations run while waiting; recheck generation/health on reentry.
+        lock.unlock();
         vTaskDelay(1);
+        lock.lock();
     }
 }

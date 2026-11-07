@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
+#include <functional>
+#include <future>
 #include <mutex>
 #include <new>
 #include <vector>
@@ -42,8 +45,9 @@ struct Channel {
     i2s_chan_info_t info{};
 };
 static int64_t now_us=1000000;
+static std::function<void()> delay_hook;
 static int64_t esp_timer_get_time() { return now_us; }
-static void vTaskDelay(int) { now_us+=10000; }
+static void vTaskDelay(int) { now_us+=10000; if(delay_hook)delay_hook(); }
 static bool allocation_fails=false,registration_fails=false,read_fails=false;
 static void* heap_caps_malloc(size_t size,int) { return allocation_fails?nullptr:std::malloc(size); }
 static void heap_caps_free(void* p) { std::free(p); }
@@ -129,6 +133,51 @@ static void tick(XiaomanBoxCodec& c,int16_t* dma,size_t bytes=480,int step=10000
 }
 int main() {
     using Op=AudioCodec::PlaybackOp;
+    {
+        auto duplex=make_codec();duplex.Start();
+        duplex.PlaybackControl(Op::Connect,{1,0});
+        assert(duplex.PlaybackControl(Op::Start,{1,1}));
+        // Fill the twelve software blocks. A further output must wait for DMA
+        // space, during which a concurrent capture must still reach the ADC.
+        std::vector<int16_t> packet(1440,99),input(480);
+        const auto generation=duplex.PlaybackGeneration();
+        for(int frame=0;frame<3;++frame)
+            assert(duplex.PlaybackControl(Op::Admit,{1,1},frame*1440,1440));
+        duplex.OutputTagged(packet,{1,1},0,generation);
+        duplex.OutputTagged(packet,{1,1},1440,generation);
+        std::future<bool> reader;
+        bool read_during_wait=false;
+        int16_t blocks[6][240]{};
+        size_t next_block=0;
+        delay_hook=[&] {
+            if(!reader.valid()) {
+                reader=std::async(std::launch::async,[&] {return duplex.InputData(input);});
+                read_during_wait=reader.wait_for(std::chrono::seconds(1))==std::future_status::ready;
+            }
+            // Free one slot without substituting the production queue methods.
+            i2s_event_data_t event{blocks[next_block++%6],sizeof(blocks[0])};
+            duplex.tx.callbacks.on_sent(&duplex.tx,&event,duplex.tx.argument);
+        };
+        duplex.OutputTagged(packet,{1,1},2880,generation);
+        delay_hook={};
+        assert(reader.valid()&&reader.get());
+        assert(read_during_wait&&"capture blocked behind a full playback queue");
+    }
+    {
+        auto changing=make_codec();changing.Start();
+        changing.PlaybackControl(Op::Connect,{1,0});
+        assert(changing.PlaybackControl(Op::Start,{1,1}));
+        const auto generation=changing.PlaybackGeneration();
+        std::vector<int16_t> packet(1440,99);
+        for(int frame=0;frame<3;++frame)
+            assert(changing.PlaybackControl(Op::Admit,{1,1},frame*1440,1440));
+        changing.OutputTagged(packet,{1,1},0,generation);
+        changing.OutputTagged(packet,{1,1},1440,generation);
+        delay_hook=[&] {changing.EnableOutput(false);};
+        changing.OutputTagged(packet,{1,1},2880,generation);
+        delay_hook={};
+        assert(changing.PlaybackGeneration()!=generation&&!changing.PlaybackBusy());
+    }
     auto c=make_codec();c.Start();
     assert(c.PlaybackSupported()&&!c.SoftwareReference()&&c.ManagedCapture());
     assert(c.input_changes==1&&c.output_changes==1);
