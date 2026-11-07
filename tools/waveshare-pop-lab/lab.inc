@@ -47,9 +47,9 @@ inline void Start(Application* app,AudioService* service) {
         c.app->Schedule([app=c.app](){app->SetDeviceState(kDeviceStateSpeaking);});
         vTaskDelay(pdMS_TO_TICKS(600));
         c.service->EnableWakeWordDetection(false);
-        for(int phase=0;phase<7;++phase) {
-            const bool direct=phase==0, screen_off=phase==3, high=phase==2;
-            const bool paced=phase==4, network=phase>=5;
+        for(int phase=0;phase<8;++phase) {
+            const bool direct=phase==0 || phase==7, screen_off=phase==3, high=phase==2;
+            const bool paced=phase==4, network=phase==5 || phase==6;
             if(network && !kFixtureUrl[0]){printf("WPL_SKIP %d no_fixture_url\n",phase);continue;}
             if(light)light->SetBrightness(screen_off?0:(original_light?original_light:30),false);
             vTaskPrioritySet(task,high?6:original_priority);
@@ -90,7 +90,8 @@ inline void Start(Application* app,AudioService* service) {
                 if(!ok || !codec->PlaybackControl(AudioCodec::PlaybackOp::Admit,id,uint64_t(f)*1440,1440)){ok=false;break;}
                 if(direct) {
                     std::vector<int16_t> pcm(1440);
-                    for(int j=0;j<1440;++j){const int s=f*1440+j;const double fade=std::min(1.0,std::min(s/240.0,(kFrames*1440-1-s)/240.0));pcm[j]=std::lround(3000*fade*std::sin(2*3.141592653589793*400*s/24000));}
+                    const double amplitude=phase==7?12000:3000;
+                    for(int j=0;j<1440;++j){const int s=f*1440+j;const double fade=std::min(1.0,std::min(s/240.0,(kFrames*1440-1-s)/240.0));pcm[j]=std::lround(amplitude*fade*std::sin(2*3.141592653589793*400*s/24000));}
                     codec->OutputTagged(pcm,id,uint64_t(f)*1440,codec->PlaybackGeneration());
                     codec->PlaybackControl(AudioCodec::PlaybackOp::Release,id);
                 } else {
@@ -104,7 +105,7 @@ inline void Start(Application* app,AudioService* service) {
             const auto end=esp_timer_get_time();
             while((!c.service->IsPlaybackIdle() || codec->PlaybackBusy()) && esp_timer_get_time()-end<5000000)vTaskDelay(1);
             const auto p=codec->WavePopProbe(false);
-            printf("WPL_RESULT %d ok=%d fault=%d completed_samples=%u dma=%u empty=%u decode_waiting=%u pcm_waiting=%u no_backlog=%u max_decode_wall_us=%u max_wait_us=%u max_source_gap_us=%u feed_us=%lld\n",phase,ok,codec->ReferenceFaulted(),p.completed_samples,p.dma,p.empty,p.with_decode,p.with_pcm,p.without_backlog,max_decode_us.load(),max_wait_us.load(),max_source_gap,static_cast<long long>(end-start));
+            printf("WPL_RESULT %d ok=%d fault=%d completed_samples=%u dma=%u empty=%u decode_waiting=%u pcm_waiting=%u no_backlog=%u max_decode_wall_us=%u max_wait_us=%u max_source_gap_us=%u feed_us=%lld\n",phase,ok,codec->ReferenceFaulted(),unsigned(p.completed_samples),unsigned(p.dma),unsigned(p.empty),unsigned(p.with_decode),unsigned(p.with_pcm),unsigned(p.without_backlog),unsigned(max_decode_us.load()),unsigned(max_wait_us.load()),unsigned(max_source_gap),static_cast<long long>(end-start));
             Dump(phase);
             if(!ok || codec->ReferenceFaulted()){printf("WPL_ABORT phase_failed\n");break;}
         }
