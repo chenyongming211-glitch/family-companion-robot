@@ -45,10 +45,20 @@ def main():
                     emit({'kind':'capture','phase':int(m[1]),'samples':int(m[2]),'rate':int(m[3]),'channels':int(m[4])})
                 elif line.startswith('WPL_RESULT '):emit({'kind':'result','line':line});print(line,flush=True)
                 elif line=='WPL_DONE':emit({'kind':'done'});done=True;break
-                elif line.startswith('WPL_'):emit({'kind':'meta','line':line});print(line,flush=True)
+                elif line.startswith('WPL_'):
+                    emit({'kind':'meta','line':line})
+                    if not line.startswith('WPL_INPUT_TIME '):print(line,flush=True)
                 elif 'ELF file SHA256:' in line:
                     m=re.search(r'ELF file SHA256:\s+([0-9a-f]+)',line)
                     if m:emit({'kind':'meta','line':'WPL_ELF '+m[1]});print('WPL_ELF',m[1],flush=True)
+                elif 'XiaomanBox: capture blocked' in line:
+                    m=re.search(r'source=(\d+) dma_bytes=(\d+) dma_gap_us=(-?\d+)',line)
+                    if m:
+                        value=f'WPL_FAULT source={m[1]} dma_bytes={m[2]} dma_gap_us={m[3]}'
+                        emit({'kind':'meta','line':value});print(value,flush=True)
+                elif 'StateMachine: State:' in line:
+                    m=re.search(r'State: ([a-z_]+) -> ([a-z_]+)',line)
+                    if m:emit({'kind':'meta','line':f'WPL_STATE from={m[1]} to={m[2]}'});print('WPL_STATE',m[1],m[2],flush=True)
                 else:counts['discarded_lines']+=1
             if done:break
     except (serial.SerialException,BrokenPipeError,ValueError,KeyboardInterrupt) as e:

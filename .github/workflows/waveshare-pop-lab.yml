@@ -6,6 +6,15 @@ on:
         description: HTTP base URL of the isolated deterministic fixture
         required: false
         default: ''
+      dma_counts:
+        description: JSON list of DMA descriptor counts
+        required: false
+        default: '[6,12]'
+      yield_output_lock:
+        description: Lab control releasing lifecycle mutex while waiting for PCM space
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
@@ -15,12 +24,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        descriptors: [6, 12]
+        descriptors: ${{ fromJSON(inputs.dma_counts) }}
     container:
       image: espressif/idf:v6.1
     env:
       FIXTURE_URL: ${{ inputs.fixture_url }}
       DESCRIPTORS: ${{ matrix.descriptors }}
+      YIELD_OUTPUT_LOCK: ${{ inputs.yield_output_lock }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -35,9 +45,13 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tools/waveshare-pop-lab/probe_test.cc -o /tmp/probe-test
           /tmp/probe-test
       - name: Prepare locked source and explicit lab delta
+        shell: bash
         run: |
+          set -euo pipefail
           python3 firmware/tools/prepare_experiment.py --target esp32s3
-          python3 tools/waveshare-pop-lab/prepare_lab.py --tree firmware/.cache/experiment --fixture-url "$FIXTURE_URL" --descriptors "$DESCRIPTORS"
+          LAB_ARGS=()
+          if [[ "$YIELD_OUTPUT_LOCK" == true ]]; then LAB_ARGS+=(--yield-output-lock); fi
+          python3 tools/waveshare-pop-lab/prepare_lab.py --tree firmware/.cache/experiment --fixture-url "$FIXTURE_URL" --descriptors "$DESCRIPTORS" "${LAB_ARGS[@]}"
       - name: Build only the Waveshare lab target
         shell: bash
         run: |
