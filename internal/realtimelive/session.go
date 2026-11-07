@@ -173,6 +173,11 @@ func (s *Session) addTurn() *liveTurn {
 	s.seq++
 	ctx, cancel := context.WithCancel(s.ctx)
 	rt := &liveTurn{turn: realtimestate.NewTurn(s.seq), ctx: ctx, cancel: cancel, done: make(chan struct{}), transcriptReady: make(chan struct{}), stoppedAt: time.Now()}
+	// The selector comes from server configuration, and ownership from the
+	// authenticated adapter. Client messages cannot enlarge the credit window.
+	if s.rec.owner.ClientType == "xiaozhi" && s.cfg.ExtendedPlaybackDevice != "" && s.rec.owner.DeviceID == s.cfg.ExtendedPlaybackDevice {
+		rt.turn.PlaybackWindowSamples = realtimestate.ExtendedWindowSamples
+	}
 	s.history = append(s.history, rt)
 	s.output = rt
 	s.lastInput = rt

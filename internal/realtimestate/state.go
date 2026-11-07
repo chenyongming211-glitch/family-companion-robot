@@ -16,6 +16,10 @@ const RecentTurnLimit = 16
 const PacketSamples int64 = 1440
 const WindowSamples int64 = 7200
 
+// ExtendedWindowSamples covers the selected robot's 200ms DMA receipts, their
+// 60ms quantization and network transit without changing other clients' credit.
+const ExtendedWindowSamples int64 = 14400
+
 type AudioRing struct {
 	Capacity, End int64
 	data          []byte
@@ -60,13 +64,20 @@ type Turn struct {
 	Tracker                   *PrefixTracker
 	PlaybackBasis             string
 	PlaybackFinal             bool
+	PlaybackWindowSamples     int64
 	drainSignalled            bool
 }
 
 func NewTurn(id int64) *Turn {
 	return &Turn{ID: id, DrainDone: make(chan struct{}), Tracker: NewPrefixTracker("", 0)}
 }
-func (t *Turn) CanSend() bool { return !t.Cut && t.Sent-t.Completed < WindowSamples }
+func (t *Turn) CanSend() bool {
+	window := WindowSamples
+	if t.PlaybackWindowSamples == ExtendedWindowSamples {
+		window = ExtendedWindowSamples
+	}
+	return !t.Cut && t.Sent-t.Completed < window
+}
 func (t *Turn) SealForDrain() {
 	if t.DrainTarget == nil {
 		t.Cut = true
