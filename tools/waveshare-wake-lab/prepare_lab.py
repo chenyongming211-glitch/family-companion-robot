@@ -41,6 +41,21 @@ def prepare(tree, source):
          '#include "audio_service.h"\n#include "wave_wake_runtime.h"')
     edit('main/audio/engines/afe_audio_engine.cc', '        NotifyProcessedCaptureReady(capture);',
          '        wave_wake_lab::Processed(result->data,result->data_size/sizeof(int16_t));\n        NotifyProcessedCaptureReady(capture);')
+    edit('main/audio/wake_words/custom_wake_word.cc', '#include "assets.h"',
+         '#include "assets.h"\n#include "wave_wake_probe.h"\n#include <cstdio>')
+    edit('main/audio/wake_words/custom_wake_word.h', '    float threshold_ = 0.2;',
+         '    float threshold_ = 0.2;\n    unsigned wave_lab_threshold_applied_ = 0;')
+    edit('main/audio/wake_words/custom_wake_word.cc',
+         '        esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());',
+         '''        // This runs under input_buffer_mutex_, alongside detect/clean.
+        const auto requested = wave_wake_lab::threshold_percent.load();
+        if (requested != wave_lab_threshold_applied_) {
+            multinet_->set_det_threshold(multinet_model_data_, requested / 100.0f);
+            wave_lab_threshold_applied_ = requested;
+            printf("WWD_THRESHOLD applied=%u\\n", requested);
+            fflush(stdout);
+        }
+        esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());''')
     edit('main/application.cc', '#include "websocket_protocol.h"',
          '#include "websocket_protocol.h"\n#include "wave_wake_console.inc"')
     edit('main/application.cc', '    audio_service_.Start();\n    ESP_LOGI(TAG, "After board/audio init");',
@@ -48,7 +63,8 @@ def prepare(tree, source):
     for name, entry in changes.items():
         entry['after'] = digest(tree/name)
     data = {'kind': 'waveshare-wake-lab-only', 'source_sha': source,
-            'dma_descriptors': 6, 'probe_max_seconds': 10, 'changes': changes,
+            'dma_descriptors': 6, 'probe_max_seconds': 10,
+            'threshold_percent_choices': [15, 20], 'changes': changes,
             'added': {p.relative_to(tree).as_posix(): digest(p)
                       for p in (tree/'main/audio').glob('wave_wake_*')}}
     manifest.write_text(json.dumps(data, indent=2)+'\n')

@@ -25,6 +25,9 @@ inline void Start(Application* app) {
                         if(request.kind==Kind::Status) {
                             auto* codec=Board::GetInstance().GetAudioCodec();
                             printf("WWD_STATUS state=%u wake=%d ref=%d fault=%d ready=%d volume=%d\n",unsigned(state),app->GetAudioService().IsWakeWordRunning(),codec->ReferenceValid(),codec->ReferenceFaulted(),codec->RealtimeEligible(),codec->output_volume());
+                        } else if(request.kind==Kind::Threshold&&state==kDeviceStateIdle) {
+                            threshold_percent.store(request.seconds);
+                            printf("WWD_THRESHOLD requested=%u\n",request.seconds);
                         } else if((request.kind==Kind::Start&&state==kDeviceStateIdle)||(request.kind==Kind::Stop&&state==kDeviceStateListening)) {
                             puts("WWD_TOGGLE queued");app->ToggleChatState();
                         } else puts("WWD_REJECT state");

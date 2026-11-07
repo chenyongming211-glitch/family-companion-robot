@@ -1,17 +1,20 @@
 #pragma once
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 
 namespace wave_wake_lab {
-enum class Kind { Invalid,Status,Start,Stop,Probe };
+enum class Kind { Invalid,Status,Start,Stop,Probe,Threshold };
 struct Request {Kind kind=Kind::Invalid;unsigned seconds=0;};
 inline Request Parse(const char* s) {
     if(!s)return {};
     if(!std::strcmp(s,"wwd status"))return {Kind::Status,0};
     if(!std::strcmp(s,"wwd start"))return {Kind::Start,0};
     if(!std::strcmp(s,"wwd stop"))return {Kind::Stop,0};
+    if(!std::strcmp(s,"wwd threshold 15"))return {Kind::Threshold,15};
+    if(!std::strcmp(s,"wwd threshold 20"))return {Kind::Threshold,20};
     if(!std::strncmp(s,"wwd probe ",10)) {
         const char* n=s+10;
         if(n[0]>='1'&&n[0]<='9'&&!n[1])return {Kind::Probe,unsigned(n[0]-'0')};
@@ -19,6 +22,8 @@ inline Request Parse(const char* s) {
     }
     return {};
 }
+// Lab only: default is the unchanged, verified resource threshold (0.2).
+inline std::atomic<unsigned> threshold_percent{20};
 struct Stats {
     uint64_t energy=0;int64_t sum=0;
     uint32_t samples=0,peak=0,clipped=0;

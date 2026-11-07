@@ -4,12 +4,18 @@
 
 int main() {
     using namespace wave_wake_lab;
+    assert(threshold_percent.load()==20);
     assert(Parse("wwd status").kind==Kind::Status);
     assert(Parse("wwd start").kind==Kind::Start);
     assert(Parse("wwd stop").kind==Kind::Stop);
     assert(Parse("wwd probe 1").seconds==1);
     assert(Parse("wwd probe 10").seconds==10);
+    assert(Parse("wwd threshold 15").seconds==15);
+    assert(Parse("wwd threshold 20").seconds==20);
+    assert(Parse("wwd threshold 15").kind==Kind::Threshold);
     for(auto s:{"wwd probe 0","wwd probe 11","wwd probe -1","wwd probe 3 extra","wwd start; stop","reboot",""})
+        assert(Parse(s).kind==Kind::Invalid);
+    for(auto s:{"wwd threshold 0","wwd threshold 14","wwd threshold 16","wwd threshold 21","wwd threshold 15 extra"})
         assert(Parse(s).kind==Kind::Invalid);
     Stats a;
     const int16_t dc[]{100,100,100};
