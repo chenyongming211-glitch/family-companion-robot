@@ -39,20 +39,24 @@ struct Stats {
     double Rms()const{return samples?std::sqrt(double(energy)/samples):0;}
     double AcRms()const {if(!samples)return 0;const double dc=double(sum)/samples;const double v=double(energy)/samples-dc*dc;return v>0?std::sqrt(v):0;}
 };
-struct Snapshot {uint32_t id=0;bool done=false;std::array<Stats,3> channels{};};
+enum class Step : size_t {WakeEnabled,WakeDisabled,Feed,Stopped,GenerationRejected,Infer,Detected,Timeout,Reset,CacheRejected,Count};
+using Steps=std::array<uint32_t,size_t(Step::Count)>;
+struct Snapshot {uint32_t id=0;bool done=false;std::array<Stats,3> channels{};Steps steps{};};
 // Caller serializes window transitions and merges, never the sample loop.
 class Window {
     uint32_t id_=0;int64_t until_=0;std::array<Stats,3> channels_{};
+    Steps steps_{};
 public:
     bool Begin(int64_t now,unsigned seconds) {
         if(until_||seconds<1||seconds>10||id_==UINT32_MAX)return false;
-        ++id_;until_=now+int64_t(seconds)*1000000;channels_={};return true;
+        ++id_;until_=now+int64_t(seconds)*1000000;channels_={};steps_={};return true;
     }
     uint32_t Token(int64_t now)const{return until_&&now<until_?id_:0;}
     void Merge(uint32_t token,unsigned channel,const Stats& s) {if(until_&&token==id_&&channel<channels_.size())channels_[channel].Merge(s);}
+    void Count(uint32_t token,Step step) {const auto i=size_t(step);if(until_&&token==id_&&i<steps_.size())++steps_[i];}
     Snapshot Take(int64_t now) {
         if(!until_)return {};
-        Snapshot result{id_,now>=until_,channels_};channels_={};
+        Snapshot result{id_,now>=until_,channels_,steps_};channels_={};steps_={};
         if(result.done)until_=0;
         return result;
     }

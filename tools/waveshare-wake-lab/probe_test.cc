@@ -28,9 +28,18 @@ int main() {
     Window w;assert(w.Token(100)==0);assert(!w.Begin(100,0)&&!w.Begin(100,11));
     assert(w.Begin(100,1));auto token=w.Token(100);assert(token!=0);
     assert(!w.Begin(200,1));w.Merge(token,0,a);w.Merge(token,2,b);
+    w.Count(token,Step::WakeEnabled);w.Count(token,Step::Infer);
+    w.Count(token,Step::Infer);w.Count(token,Step::Timeout);
     auto first=w.Take(100000);assert(first.id==token&&!first.done&&first.channels[0].samples==3&&first.channels[2].clipped==2);
+    assert(first.steps[size_t(Step::WakeEnabled)]==1);
+    assert(first.steps[size_t(Step::Infer)]==2&&first.steps[size_t(Step::Timeout)]==1);
     auto empty=w.Take(200000);assert(empty.channels[0].samples==0);
+    for(auto count:empty.steps)assert(count==0);
     assert(w.Token(1000100)==0);auto last=w.Take(1000100);assert(last.done&&last.id==token);
     assert(w.Take(1000101).id==0);assert(w.Begin(2000000,2));
     w.Merge(token,0,a);assert(w.Take(2000001).channels[0].samples==0); // retired write cannot contaminate a new window
+    w.Count(token,Step::Infer);w.Count(w.Token(2000001),Step::Stopped);
+    w.Count(w.Token(2000001),static_cast<Step>(99));
+    auto current=w.Take(2000002);
+    assert(current.steps[size_t(Step::Infer)]==0&&current.steps[size_t(Step::Stopped)]==1);
 }

@@ -6,6 +6,12 @@
 namespace wave_wake_lab {
 inline portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
 inline Window window;
+inline void Count(Step step) {
+    portENTER_CRITICAL(&mux);
+    const auto token=window.Token(esp_timer_get_time());
+    if(token)window.Count(token,step);
+    portEXIT_CRITICAL(&mux);
+}
 inline void Record(unsigned channel,const int16_t* pcm,size_t frames,size_t stride) {
     if(!pcm||!frames||frames>1024)return;
     portENTER_CRITICAL(&mux);const auto token=window.Token(esp_timer_get_time());portEXIT_CRITICAL(&mux);
@@ -26,6 +32,11 @@ inline void Flush() {
         printf("WWD_LEVEL id=%u ch=%u samples=%u rms=%u ac=%u peak=%u clipped=%u done=%d\n",
             unsigned(s.id),i,unsigned(c.samples),unsigned(std::lround(c.Rms())),unsigned(std::lround(c.AcRms())),unsigned(c.peak),unsigned(c.clipped),s.done);
     }
+    const auto count=[&](Step step){return unsigned(s.steps[size_t(step)]);};
+    printf("WWD_MODEL id=%u enabled=%u disabled=%u feed=%u stopped=%u generation=%u infer=%u detected=%u timeout=%u reset=%u cache=%u done=%d\n",
+        unsigned(s.id),count(Step::WakeEnabled),count(Step::WakeDisabled),count(Step::Feed),
+        count(Step::Stopped),count(Step::GenerationRejected),count(Step::Infer),
+        count(Step::Detected),count(Step::Timeout),count(Step::Reset),count(Step::CacheRejected),s.done);
     fflush(stdout);
 }
 }

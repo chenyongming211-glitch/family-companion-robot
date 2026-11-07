@@ -41,8 +41,26 @@ def prepare(tree, source):
          '#include "audio_service.h"\n#include "wave_wake_runtime.h"')
     edit('main/audio/engines/afe_audio_engine.cc', '        NotifyProcessedCaptureReady(capture);',
          '        wave_wake_lab::Processed(result->data,result->data_size/sizeof(int16_t));\n        NotifyProcessedCaptureReady(capture);')
+    edit('main/audio/engines/afe_audio_engine.cc',
+         '        EventBits_t bits = xEventGroupGetBits(event_group_);\n        if (bits & kWakeWordEnabled)',
+         '        EventBits_t bits = xEventGroupGetBits(event_group_);\n        wave_wake_lab::Count((bits & kWakeWordEnabled) ? wave_wake_lab::Step::WakeEnabled : wave_wake_lab::Step::WakeDisabled);\n        if (bits & kWakeWordEnabled)')
+    edit('main/audio/engines/afe_audio_engine.cc',
+         '        if (emitted_wake_generation_ != codec_->WakeAudioGeneration())\n            return;',
+         '        if (emitted_wake_generation_ != codec_->WakeAudioGeneration()) {\n            wave_wake_lab::Count(wave_wake_lab::Step::CacheRejected);\n            return;\n        }')
     edit('main/audio/wake_words/custom_wake_word.cc', '#include "assets.h"',
-         '#include "assets.h"\n#include "wave_wake_probe.h"\n#include <cstdio>')
+         '#include "assets.h"\n#include "wave_wake_runtime.h"\n#include <cstdio>')
+    edit('main/audio/wake_words/custom_wake_word.cc',
+         'void CustomWakeWord::ResetCapture() {',
+         'void CustomWakeWord::ResetCapture() {\n    wave_wake_lab::Count(wave_wake_lab::Step::Reset);')
+    edit('main/audio/wake_words/custom_wake_word.cc',
+         '    // Check running state inside lock to avoid TOCTOU race with Stop()',
+         '    wave_wake_lab::Count(wave_wake_lab::Step::Feed);\n    // Check running state inside lock to avoid TOCTOU race with Stop()')
+    edit('main/audio/wake_words/custom_wake_word.cc',
+         '    if (!running_) {\n        return;\n    }',
+         '    if (!running_) {\n        wave_wake_lab::Count(wave_wake_lab::Step::Stopped);\n        return;\n    }')
+    edit('main/audio/wake_words/custom_wake_word.cc',
+         '        input_buffer_.clear();\n        multinet_->clean(multinet_model_data_);\n        return false;',
+         '        wave_wake_lab::Count(wave_wake_lab::Step::GenerationRejected);\n        input_buffer_.clear();\n        multinet_->clean(multinet_model_data_);\n        return false;')
     edit('main/audio/wake_words/custom_wake_word.h', '    float threshold_ = 0.2;',
          '    float threshold_ = 0.2;\n    unsigned wave_lab_threshold_applied_ = 0;')
     edit('main/audio/wake_words/custom_wake_word.cc',
@@ -55,7 +73,10 @@ def prepare(tree, source):
             printf("WWD_THRESHOLD applied=%u\\n", requested);
             fflush(stdout);
         }
-        esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());''')
+        esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, input_buffer_.data());
+        wave_wake_lab::Count(wave_wake_lab::Step::Infer);
+        if (mn_state == ESP_MN_STATE_DETECTED) wave_wake_lab::Count(wave_wake_lab::Step::Detected);
+        if (mn_state == ESP_MN_STATE_TIMEOUT) wave_wake_lab::Count(wave_wake_lab::Step::Timeout);''')
     edit('main/application.cc', '#include "websocket_protocol.h"',
          '#include "websocket_protocol.h"\n#include "wave_wake_console.inc"')
     edit('main/application.cc', '    audio_service_.Start();\n    ESP_LOGI(TAG, "After board/audio init");',
@@ -65,6 +86,7 @@ def prepare(tree, source):
     data = {'kind': 'waveshare-wake-lab-only', 'source_sha': source,
             'dma_descriptors': 6, 'probe_max_seconds': 10,
             'threshold_percent_choices': [15, 20], 'changes': changes,
+            'model_flow_counters': True,
             'added': {p.relative_to(tree).as_posix(): digest(p)
                       for p in (tree/'main/audio').glob('wave_wake_*')}}
     manifest.write_text(json.dumps(data, indent=2)+'\n')
