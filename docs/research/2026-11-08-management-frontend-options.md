@@ -2,6 +2,8 @@
 
 日期：2026-11-08。状态：技术建议，等待评审；用户明确前面的Vue 3提问不是选型确认。撤回“用户已确认Vue 3”的错误记录。本轮不安装框架、不修改HTML原型或后端。
 
+本文是[管理平台总体方案](../superpowers/specs/2026-11-08-management-platform-design.md)的前端选型研究附件。业务功能、权限、会话及八类智能体共用能力统一在总体方案定义，执行顺序见[开发计划](../superpowers/plans/2026-11-08-management-platform-development.md)；本比较不构成独立的第二份总体方案。
+
 ## 1. 先区分三个层次
 
 - 语言与网页基础：HTML描述结构，CSS负责视觉，JavaScript/TypeScript负责交互；TypeScript可以与Vue、React等框架配合。
