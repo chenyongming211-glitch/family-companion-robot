@@ -2,13 +2,13 @@
 
 > **For agentic workers:** 本轮在当前会话直接完成 HTML 原型。后续正式功能按确认后的方案逐任务实施；不新建分支或 worktree。
 
-**本轮状态：** HTML原型已完成，31个页面在3种视口下共93次检查通过，25项主要交互及13项详情/导航/窄屏补充检查通过；正式后端与React页面尚未开发。
+**本轮状态：** HTML原型已完成，31个页面在3种视口下共93次检查通过，25项主要交互及13项详情/导航/窄屏补充检查通过；正式后端与Vue 3页面尚未开发。
 
 **Goal:** 先让用户通过可点击页面评审内部后台与家庭端，再分阶段交付真实聊天记录、能力管理和家庭数据隔离。
 
-**Architecture:** 正式平台建议独立 Go 管理 API、PostgreSQL 和 React + TypeScript 两端页面。语音服务保持当前主路径。当前原型使用离线 HTML/CSS/JavaScript，以示例数据演示所有一级页面、主要详情和操作状态；不接服务器、设备、麦克风或模型。
+**Architecture:** 正式平台建议独立 Go 管理 API与PostgreSQL；前端按用户2026-11-08纠正采用Vue 3 + TypeScript + CSS，两端使用同一技术栈。语音服务保持当前主路径。当前原型使用离线 HTML/CSS/JavaScript，以示例数据演示所有一级页面、主要详情和操作状态；不接服务器、设备、麦克风或模型。
 
-**Tech Stack:** 原型：语义化 HTML、原生 CSS、JavaScript、内联 SVG；正式前端建议 TypeScript、React、Vite，内部端评估 Ant Design，家庭端采用同一套领域类型和独立移动布局。正式依赖与运行测试只在云端执行。
+**Tech Stack:** 原型：语义化 HTML、原生 CSS、JavaScript、内联 SVG；正式前端采用 Vue 3、TypeScript、CSS、Vite，内部端评估 Element Plus，家庭端采用同一套领域类型和独立移动布局。正式依赖与运行测试只在云端执行。
 
 **依据:** [平台方案](../specs/2026-11-08-management-platform-design.md)，包括已确认的第6.1节会话规则及最新第3.1～3.3节共用底层/故事故障前置约束（文档提交fed0a6d）。平台技术栈和视觉方案为本次建议，不将 HTML 预览当成后端已实现。
 
@@ -96,22 +96,22 @@
 
 ## 3. UI 评审后正式开发路线（建议，未实施）
 
-本节是后续里程碑和验收边界；页面确认后拆成独立的可执行开发计划，不在本轮安装 React、建立数据库或发布管理服务。P0离线原型可先评审；正式接入按P0B共用底层前置推进，不能把共用层误排成纯网页之后的附加项。
+本节是后续里程碑和验收边界；页面确认后拆成独立的可执行开发计划，不在本轮安装 Vue 3、建立数据库或发布管理服务。P0离线原型可先评审；正式接入按P0B共用底层前置推进，不能把共用层误排成纯网页之后的附加项。
 
 | 阶段 | 具体交付 | 拟涉及代码路径 | 验收条件 |
 | --- | --- | --- | --- |
 | P0 原型 | 本轮完整HTML、页面目录、交互及视觉复核 | prototypes/management-platform/ | 清单页面可达、关键状态和主要操作可评审 |
 | P0B 共用底层前置 | 统一连接/业务聊天/轮次映射、档案事实与上下文选择接口、归属与能力快照；将故事只返回准备句纳入回归并单独验证发布 | internal/realtimelive/、internal/realtimestate/、拟新增共享Go领域模块 | 从实际正式来源最小适配，档案不改写，正文交付与播放完成分别检查；覆盖普通故事/续讲/问答/插话/授权记忆，云端内容回归与微雪现场证据分别留存；不等待完整账号/页面即可发布已验修复 |
-| P1 平台基础 | React/TS应用外壳、设计组件；Go管理API；账号/家庭/角色/设备归属数据 | web/management/、cmd/management/、internal/management/、deploy/management/ | 两个家庭的列表、详情和正文权限互相隔离；登录/退出有效 |
+| P1 平台基础 | Vue 3/TS应用外壳、设计组件；Go管理API；账号/家庭/角色/设备归属数据 | web/management/、cmd/management/、internal/management/、deploy/management/ | 两个家庭的列表、详情和正文权限互相隔离；登录/退出有效 |
 | P2 对话闭环 | 现有文字/播放记录投影、索引、轮次详情、SSE；业务会话ID与30分钟分段 | internal/management/conversations/、internal/management/indexer/、internal/conversation/、web/management/src/features/conversations/ | 实机发言出现最终转写及实际已播回复；重连/零点/失败/重放不重复、不串归属 |
 | P3 配置与记忆 | 名称/音量/亮度回读，近期记忆查看/清除，留存/删除联动，访问审计 | internal/management/settings/、internal/management/memory/、internal/management/audit/ | 成功来自真实回执；删除后搜索/摘要/恢复均不能复活正文；名称新会话生效 |
 | P4 Eino任务接入 | 在云端先验证Eino与模型/工具/取消/存储，再接归档摘要及按需历史查询 | internal/agenttasks/、internal/management/tasks/ | 摘要/查档有来源、有界重试，旧结果不抢话，普通聊天不额外经过规划模型 |
 | P5 经验证能力开放 | 声纹、长期人物记忆、判题、提醒、升级按各自验收接入页面 | 对应独立领域模块与页面 | 保留五人19/20且零误归、陌生0/200等原门槛；未通过项目继续显示验证中 |
 
-### 正式前端的语言与框架建议
+### 正式前端的语言与框架（Vue 3已确认，组件库待评审）
 
-- TypeScript 是主要开发语言，HTML/TSX 定义结构，CSS 定义视觉；React 组织组件和页面，Vite 负责构建。
-- 内部端优先评估 Ant Design 的表格、表单和权限相关页面组件，使用本原型的设计变量覆盖主题；家庭端保持简洁移动布局，复用领域类型和API客户端。
+- TypeScript 是主要开发语言，Vue单文件组件的template定义结构，CSS定义视觉；Vue 3组织组件和页面，Vite负责构建。
+- 内部端优先评估 Element Plus 的表格、表单和权限相关页面组件，使用本原型的设计变量覆盖主题；家庭端保持简洁移动布局，复用领域类型和API客户端。
 - 正式 API 类型与状态枚举统一；后端保存/权限/能力事实是权威，前端不另写一份能力开关规则。
 - 数据存储建议 PostgreSQL；Eino 的执行检查点、聊天档案和设备记忆分清职责，借统一业务接口访问，不把 tracing 当成家庭聊天档案。
 - UI 原型确认后再锁定依赖版本；前端构建、后端运行检查和部署在云端，Mac 保持代码/Git与浏览器测试客户端定位。

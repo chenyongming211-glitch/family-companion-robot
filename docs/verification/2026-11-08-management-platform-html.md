@@ -7,7 +7,7 @@
 - [开发计划](../superpowers/plans/2026-11-08-management-platform-development.md)：本轮原型任务完成情况、31页清单及后续P1–P5建议路线。
 - [原型与页面目录](../../prototypes/management-platform/README.md)：内部后台19页、家庭端12页。
 - [视觉规则](../../prototypes/management-platform/DESIGN.md)：桌面/手机布局、颜色、状态、原型数据和名称边界。
-- 正式前端建议 TypeScript + React + Vite；本轮交互原型仅HTML、CSS、JavaScript和内联SVG，无运行依赖安装。
+- 正式前端按用户2026-11-08纠正采用 Vue 3 + TypeScript + CSS，使用Vite构建；本轮交互原型仅HTML、CSS、JavaScript和内联SVG，无运行依赖安装。
 
 ## 验证方式与结果
 
@@ -41,4 +41,4 @@ Mac仅作为浏览器测试客户端，Ego Lite直接打开本地file页面；�
 
 已读取并保留并行更新的共用底层方案fed0a6d，将共用层与故事正文交付故障回归列为正式接入的P0B前置项。此对齐只改计划，不新增语音修复或验收结论。
 
-下一步：用户评审页面视觉与信息结构；正式接入先落实共用底层必要模块和已知故事故障回归，再按计划推进React/Go管理服务和云端验收。
+下一步：用户评审页面视觉与信息结构；正式接入先落实共用底层必要模块和已知故事故障回归，再按计划推进Vue 3/Go管理服务和云端验收。
