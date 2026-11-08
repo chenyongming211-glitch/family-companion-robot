@@ -60,4 +60,4 @@
 - 家庭聊天搜索、记忆来源、清除记忆确认与空态、邀请表单、绑定码校验、数据偏好设置。
 - 所有“导出/发布/绑定/清除/邀请/删除”均为演示流程或确认回执，不产生真实外部动作。
 
-视觉样式见 [DESIGN.md](DESIGN.md)；完整范围与正式开发路线见 [开发计划](../../docs/superpowers/plans/2026-11-08-management-platform-development.md)。正式前端按用户确认采用 Vue 3 + TypeScript + CSS，使用 Vite 构建，当前原型保持 HTML + CSS + JavaScript。
+视觉样式见 [DESIGN.md](DESIGN.md)；完整范围与正式开发路线见 [开发计划](../../docs/superpowers/plans/2026-11-08-management-platform-development.md)。正式前端选型待评审，当前建议 Vue 3 + TypeScript + CSS及Vite，React也是可行备选，当前原型保持 HTML + CSS + JavaScript。
