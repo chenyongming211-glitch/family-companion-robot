@@ -25,6 +25,12 @@ type liveTurn struct {
 	transcriptReady         chan struct{}
 	transcriptOnce          sync.Once
 	transcriptWait          sync.Once // Memory and controls share one ASR budget.
+	expressionContextReady  bool
+	expressionStarted       bool
+	expressionSent          bool
+	expressionHistory       string
+	expressionPending       *ExpressionResult
+	expressionCancel        context.CancelFunc
 }
 type Session struct {
 	ws                *websocket.Conn
@@ -63,6 +69,7 @@ type Session struct {
 	failureMu         sync.Mutex
 	failureReason     string
 	generate          func(context.Context, int64, string, []byte, func(string, []byte) error) error
+	selectExpression  func(context.Context, ExpressionInput) ExpressionResult
 }
 
 func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimestate.Product) *Session {
@@ -85,6 +92,9 @@ func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimesta
 	s.manifest = info
 	s.rec.owner = info.Ownership
 	s.generate = s.generateNative
+	s.selectExpression = func(ctx context.Context, input ExpressionInput) ExpressionResult {
+		return SelectExpression(ctx, s.cfg, s.directory, input)
+	}
 	return s
 }
 func (s *Session) record(event string, m map[string]any) error {
@@ -178,6 +188,9 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 func (s *Session) addTurn() *liveTurn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.output != nil {
+		s.retireExpressionLocked(s.output)
+	}
 	s.seq++
 	ctx, cancel := context.WithCancel(s.ctx)
 	rt := &liveTurn{turn: realtimestate.NewTurn(s.seq), ctx: ctx, cancel: cancel, done: make(chan struct{}), transcriptReady: make(chan struct{}), stoppedAt: time.Now()}
@@ -225,11 +238,13 @@ func (s *Session) interruptFrom(expected *liveTurn, source string) error {
 		playbackDone = t.PlaybackFinal
 	}
 	if t.Sent > 0 && t.Completed == t.Sent && playbackDone {
+		s.retireExpressionLocked(rt)
 		s.output = nil
 		s.mu.Unlock()
 		return nil
 	}
 	t.SealForDrain()
+	s.retireExpressionLocked(rt)
 	rt.drainStarted = time.Now()
 	s.output = nil
 	rt.cancel()
@@ -538,6 +553,9 @@ func (s *Session) receiveReceipt(event map[string]any) error {
 		return errors.New("invalid_playback_receipt")
 	}
 	term := normalized["terminal"]
+	if rt.turn.PlaybackFinal {
+		s.retireExpressionLocked(rt)
+	}
 	var fields map[string]any
 	if term == "drained" || term == "played" {
 		var ms any
@@ -688,6 +706,7 @@ func (s *Session) listen() error {
 			if rt != nil && valid && utf8.RuneCountInString(text) <= 4096 {
 				rt.turn.User = text
 				rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
+				s.maybeStartExpressionLocked(rt)
 			}
 			s.mu.Unlock()
 			if rt != nil && valid && utf8.RuneCountInString(text) <= 4096 {
@@ -836,6 +855,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	if e != nil {
 		return
 	}
+	s.expressionContextReady(rt, contextText)
 	controlContext, e := s.routeDeviceControls(rt, contextText)
 	if e != nil {
 		return
@@ -999,6 +1019,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			rt.turn.Begun = true
 			e = s.sendLocked(map[string]any{"type": "begin", "id": rt.turn.ID})
 			if e != nil {
+				s.mu.Unlock()
+				s.fail()
+				return
+			}
+			if e = s.sendExpressionLocked(rt); e != nil {
 				s.mu.Unlock()
 				s.fail()
 				return

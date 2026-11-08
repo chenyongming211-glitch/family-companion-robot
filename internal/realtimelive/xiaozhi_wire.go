@@ -24,6 +24,7 @@ type xiaozhiWire struct {
 	mcp              bool   // Negotiated once from the authenticated hello.
 	pcm              bool   // Explicit v1 pcm_s16le_v1 negotiation; no format fallback.
 	face             bool   // Optional visual metadata, negotiated once from hello.
+	expression       bool   // Independent, flag-gated face_expression_v1 negotiation.
 	faceState        string // Session mutex owns state deduplication and writes.
 	wakeSamples      int
 	startDeadline    time.Time
@@ -145,6 +146,9 @@ func (w *xiaozhiWire) sendEvent(e map[string]any) error {
 		if w.face {
 			features["face_state_v1"] = true
 		}
+		if w.expression {
+			features["face_expression_v1"] = true
+		}
 		format := "opus"
 		if w.pcm {
 			format = "pcm_s16le"
@@ -168,6 +172,17 @@ func (w *xiaozhiWire) sendEvent(e map[string]any) error {
 		scope["type"] = "tts"
 		scope["state"] = "start"
 		scope["playback_id"] = id
+	case "expression":
+		id, ok := wireInteger(e["id"])
+		emotion, valid := e["emotion"].(string)
+		block := w.blocks[id]
+		if !w.expression || !ok || block == nil || block.draining || !valid || !canonicalExpression(emotion) {
+			return errors.New("invalid_playback_expression")
+		}
+		// A normal generation seal is not a physical playback completion.
+		scope["type"] = "llm"
+		scope["playback_id"] = id
+		scope["emotion"] = emotion
 	case "drain", "end":
 		id, ok := wireInteger(e["id"])
 		block := w.blocks[id]

@@ -19,6 +19,7 @@ type Config struct {
 	DeviceProfilesPath             string
 	MaxSessions                    int
 	MemoryEnabled                  bool
+	ExpressionsEnabled             bool
 	MemoryOnly                     bool
 	Speaker                        *speakerlive.Config
 	DiagnosticsDevice              string

@@ -28,6 +28,7 @@ func main() {
 	maxSessions := flag.Int("max-sessions", 1, "maximum simultaneous terminal sessions (1-8)")
 	deviceProfiles := flag.String("device-profiles", "", "optional private device presentation profile JSON")
 	memory := flag.Bool("memory", true, "restore bounded recent conversation memory per authenticated device")
+	expressions := flag.Bool("expressions", false, "enable silent expression selection for negotiated face_expression_v1 devices")
 	diagnosticDevice := flag.String("diagnostics-device", "", "optional authenticated device ID for one diagnostic session")
 	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
 	flag.Parse()
@@ -46,6 +47,7 @@ func main() {
 	}
 	cfg.MaxSessions = *maxSessions
 	cfg.MemoryEnabled = *memory
+	cfg.ExpressionsEnabled = *expressions
 	cfg.DeviceProfilesPath = *deviceProfiles
 	cfg.DiagnosticsDevice = *diagnosticDevice
 	cfg.DiagnosticsDuration = *diagnosticDuration
