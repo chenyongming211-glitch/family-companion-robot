@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>CHICK-01 v0.1 打印与装配指南</title>
+<style>
+  :root{--bg:#f7f5f1;--paper:#fff;--ink:#22262a;--ink2:#5b6167;--ink3:#8b9199;--line:#dcd8d1;--orange:#e8873e;--green:#2f7d5c;--red:#c0492f;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--ink);line-height:1.7;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:44px 24px 70px;}
+  .sheet{max-width:980px;margin:0 auto;}
+  header{border-bottom:2px solid var(--ink);padding-bottom:20px;margin-bottom:36px;}
+  .kicker{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange);font-weight:600;margin-bottom:8px;}
+  h1{font-size:30px;font-weight:700;}h1 span{color:var(--ink3);font-size:16px;font-weight:400;margin-left:10px;}
+  .meta{display:flex;flex-wrap:wrap;gap:6px 24px;margin-top:14px;font-size:13px;color:var(--ink2);}
+  .meta b{color:var(--ink);}
+  section{margin-bottom:44px;}
+  h2{font-size:20px;margin-bottom:6px;}h2::before{content:"■ ";color:var(--orange);font-size:14px;}
+  .desc{font-size:13.5px;color:var(--ink2);margin-bottom:18px;}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px;margin-bottom:18px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);border-bottom:1.5px solid var(--ink);padding:0 10px 8px 0;}
+  td{padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:top;}
+  tr.total td{border-top:2px solid var(--ink);border-bottom:none;font-weight:700;}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;font-weight:600;}
+  .tag.pla{background:#e5f1ea;color:var(--green);} .tag.tpu{background:#fbe8d9;color:#b5611f;}
+  .note{border-left:3px solid var(--orange);background:#fdf7f2;padding:13px 16px;font-size:13px;color:var(--ink2);border-radius:0 6px 6px 0;margin-top:14px;}
+  .note.ok{border-left-color:var(--green);background:#f0f7f3;} .note.warn{border-left-color:var(--red);background:#fbf0ed;}
+  .note b{color:var(--ink);}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#f2efe9;padding:1px 5px;border-radius:3px;}
+  ol,ul{padding-left:22px;font-size:13.5px;} li{margin-bottom:6px;}
+  footer{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--ink3);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="kicker">CHICK-01 · v0.1 Test Print</div>
+  <h1>打印与装配指南<span>小鸡翅膀款 · 试水版</span></h1>
+  <div class="meta">
+    <div><b>零件</b> 5 件（STL 已生成）</div>
+    <div><b>材料</b> PETG ≈ 100g + TPU 少量</div>
+    <div><b>打印时长</b> 约 6–8 小时</div>
+    <div><b>目标</b> 验证外观比例 / 屏窗尺寸 / 开孔位置 / 装配手感</div>
+  </div>
+</header>
+
+<section>
+  <h2>一、零件清单（models/ 目录）</h2>
+  <div class="card">
+    <table>
+      <tr><th>文件</th><th>材料</th><th>尺寸 (mm)</th><th>估重</th><th>说明</th></tr>
+      <tr><td><code>chick_front_PLA.stl</code></td><td><span class="tag pla">PETG</span></td><td>108×58×114</td><td>≈63g</td><td>前壳：屏窗(50×64)+内侧沉台、双麦孔 Φ1.4、底部喇叭孔阵、提环插槽、翅膀插槽、4 螺丝柱</td></tr>
+      <tr><td><code>chick_back_PLA.stl</code></td><td><span class="tag pla">PETG</span></td><td>104×19×111</td><td>≈32g</td><td>后壳盖板：USB-C 口(9.5×3.6)、散热孔阵、4 个 Φ2.4 螺丝过孔</td></tr>
+      <tr><td><code>chick_frame_PLA.stl</code></td><td><span class="tag pla">PETG</span></td><td>56×5×70</td><td>≈5g</td><td>屏幕压框：从内侧压住屏幕，同时当盖板限位</td></tr>
+      <tr><td><code>chick_handle_TPU.stl</code></td><td><span class="tag tpu">TPU</span></td><td>53×9×38</td><td>≈7g</td><td>提环：两脚插进前壳顶部插槽</td></tr>
+      <tr><td><code>chick_wing_TPU.stl</code></td><td><span class="tag tpu">TPU</span></td><td>40×13×80</td><td>≈10g</td><td>翅膀 ×2：带插舌，插进机身两侧槽（按压力度靠 TPU 弹性）</td></tr>
+      <tr class="total"><td colspan="3">合计</td><td colspan="2">PETG ≈ 100g（实际打印约 115g 含废件）＋ TPU ≈ 17g</td></tr>
+    </table>
+  </div>
+  <div class="note">
+    <b>没有 TPU 也能打：</b>提环和翅膀用 PETG 打只是「硬一点」，试水完全够用。等外观定案后再用 TPU 重打这两个软胶件。
+  </div>
+</section>
+
+<section>
+  <h2>二、切片参数</h2>
+  <div class="card">
+    <table>
+      <tr><th>参数</th><th>前壳 / 后壳 / 屏框</th><th>提环 / 翅膀</th></tr>
+      <tr><td>层高</td><td>0.2 mm</td><td>0.2 mm</td></tr>
+      <tr><td>壁厚</td><td>3 层墙（≈1.2mm）＋模型自带 2mm 实体壁</td><td>4 层墙</td></tr>
+      <tr><td>填充</td><td>10–15%（ Gyroid）</td><td>20%</td></tr>
+      <tr><td>支撑</td><td>仅「内侧螺丝柱 + 屏窗沉台」需要，选「仅从打印平台」会漏，开普通树形支撑</td><td>无</td></tr>
+      <tr><td>打印方向</td><td><b>开口（分模面）朝上</b>，即前壳背面贴平台是不对的——要像碗一样开口朝上放</td><td>平放</td></tr>
+      <tr><td>速度</td><td>≤ 60mm/s（曲面质量优先）</td><td>≤ 30mm/s（TPU 慢打）</td></tr>
+    </table>
+    <div class="note warn"><b>打印方向最重要的一条：</b>前壳像一只碗，开口（平面那侧）必须朝上打印。这样屏窗曲面是竖直打印的、螺丝柱朝上不需要支撑、底部平面直接贴板。放反了会Print失败或表面很烂。</div>
+  </div>
+</section>
+
+<section>
+  <h2>三、打印后处理</h2>
+  <div class="card">
+    <ol>
+      <li>去支撑、去毛边（屏窗边缘用 400 目砂纸轻轻倒角）</li>
+      <li>试装检查：屏窗 50×64 是否能放进你手头的屏幕模块（<b>注意：v0.1 按 2.8 寸 240×320 模组 50×69.2 预留，如果你买的屏尺寸不同，改 <code>gen_chick.py</code> 里 win_w / win_h 重生成</b>）</li>
+      <li>提环两脚插进顶部插槽、翅膀插舌插进两侧槽——插拔 10 次不松不裂为合格；太紧就用电烙铁头或小刀扩 0.2mm</li>
+      <li>（可选）外观升级：400 目打磨 → 白色底漆 → 奶黄自喷漆 2 层 → 喷胶+植绒粉。喷完就是「商品感」</li>
+    </ol>
+  </div>
+</section>
+
+<section>
+  <h2>四、电子件怎么装（v0.1 阶段）</h2>
+  <div class="card">
+    <p style="font-size:13.5px;color:var(--ink2);margin-bottom:12px;">
+      说清楚：v0.1 壳体是<b>外观与结构验证件</b>，还没有主板支架和电池仓（那要等电子件实物确定尺寸后做 v0.2）。现阶段能装的：
+    </p>
+    <ol>
+      <li><b>喇叭</b>：把 4040/4545A 用热熔胶粘在前壳底部内壁（出音孔对准底部孔阵），这就是 CHICK-01 的真实音腔雏形——装上后声音会比裸放再好一档，可以顺便复测</li>
+      <li><b>屏幕</b>：如果你买了 2.8 寸裸屏模块，从内侧放进窗内，用屏框（frame）从里面压住，四边热熔胶固定</li>
+      <li><b>主控</b>：微雪板是完整开发板（自带屏和结构），v0.1 塞不进去是正常的——它继续当桌面主力，等买了 S3 模组 + 2.8 寸裸屏，v0.2 再加主板支架</li>
+      <li><b>翅膀按键</b>：翅膀背后预留了安装空间，v0.2 会加轻触开关卡位；现在插上 purely 摆造型</li>
+    </ol>
+    <div class="note ok"><b>本阶段验收标准：</b>① 整机拿在手里的比例手感接近参考图；② 屏窗能装进屏幕模块且四边不露缝；③ 提环能承受 5kg 悬挂不断裂；④ 喇叭装进去后底部出音孔出声顺畅。四条全过 = v0.1 验收通过，进入 v0.2（主板支架 + 电池仓 + 按键卡位）。</div>
+  </div>
+</section>
+
+<section>
+  <h2>五、改尺寸（参数化）</h2>
+  <div class="card">
+    <p style="font-size:13.5px;color:var(--ink2);margin-bottom:10px;">
+      所有尺寸都在 <code>model/gen_chick.py</code> 顶部 <code>CFG</code> 里，改完重跑 <code>python3 gen_chick.py</code> 即可重新生成全套 STL：
+    </p>
+    <table>
+      <tr><th>参数</th><th>默认</th><th>什么时候改</th></tr>
+      <tr><td><code>win_w / win_h</code></td><td>50 / 64</td><td>换屏幕尺寸时（开窗 = 模组外形 + 3mm）</td></tr>
+      <tr><td><code>wall</code></td><td>2.0</td><td>觉得不够硬 → 2.4；想轻 → 1.6</td></tr>
+      <tr><td><code>e</code></td><td>0.62</td><td>0.55 更方正呆萌，0.75 更圆润</td></tr>
+      <tr><td><code>taper</code></td><td>0.08</td><td>蛋形收窄程度，0 为上下一样宽</td></tr>
+      <tr><td><code>seam_y</code></td><td>20</td><td>后壳盖板深度</td></tr>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>六、当前遗留（v0.2 待办）</h2>
+  <div class="card"><ol>
+    <li>主板支架：按最终主控（S3 模组自制板或微雪板改造）实测尺寸设计卡扣</li>
+    <li>电池仓 + 充电口位置细化</li>
+    <li>翅膀轻触开关卡位 + 回弹结构</li>
+    <li>麦克风腔（麦与孔之间的密封硅胶槽）</li>
+    <li>底部脚垫槽（硅胶脚垫 Φ26）</li>
+    <li>屏幕边框黑色遮光裙边（在 frame 上加一圈）</li>
+  </ol></div>
+</section>
+
+<footer>
+  <span>CHICK-01 v0.1 · 由参数化脚本生成，可随时改版重打</span>
+  <span>打印有问题把照片发回来，改参数 10 分钟出新版</span>
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CHICK-01 音频改造指南｜微雪板 + 40mm 喇叭</title>
+<style>
+  :root{
+    --bg:#f7f5f1; --paper:#fff; --ink:#22262a; --ink-2:#5b6167; --ink-3:#8b9199;
+    --line:#dcd8d1; --line-2:#b9b4ab; --orange:#e8873e; --orange-2:#b5611f;
+    --blue:#4a7fa5; --green:#2f7d5c; --red:#c0492f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:var(--bg);color:var(--ink);line-height:1.72;
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;padding:48px 24px 80px;
+  }
+  .sheet{max-width:1040px;margin:0 auto;}
+  header{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:40px;}
+  .kicker{font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--orange);font-weight:600;margin-bottom:10px;}
+  h1{font-size:32px;line-height:1.25;font-weight:700;letter-spacing:-.5px;}
+  h1 span{color:var(--ink-3);font-weight:400;font-size:17px;letter-spacing:0;margin-left:10px;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:16px;font-size:13px;color:var(--ink-2);}
+  .meta b{color:var(--ink);font-weight:600;}
+
+  section{margin-bottom:50px;}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px;}
+  .sec-no{font-size:12px;font-weight:700;color:#fff;background:var(--ink);padding:2px 8px;border-radius:3px;letter-spacing:.05em;}
+  h2{font-size:21px;font-weight:700;letter-spacing:-.2px;}
+  .sec-desc{font-size:13.5px;color:var(--ink-2);margin-bottom:22px;max-width:840px;}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:26px;margin-bottom:20px;}
+  .card-title{font-size:13px;font-weight:700;color:var(--ink-2);letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+  .card-title em{font-style:normal;color:var(--ink-3);font-weight:500;letter-spacing:0;text-transform:none;font-size:12px;}
+
+  svg{display:block;width:100%;height:auto;}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;font-weight:600;color:var(--ink-2);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;border-bottom:1.5px solid var(--ink);padding:0 10px 8px 0;}
+  td{padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:top;}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;}
+  th.num{text-align:right;}
+  tr.total td{border-bottom:none;border-top:2px solid var(--ink);font-weight:700;padding-top:12px;}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;background:#f0ece4;color:var(--ink-2);font-weight:500;}
+  .tag.hot{background:#fbe8d9;color:var(--orange-2);}
+  .tag.ok{background:#e5f1ea;color:var(--green);}
+  .tag.no{background:#f8e3de;color:var(--red);}
+  .muted{color:var(--ink-3);}
+  code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;background:#f2efe9;padding:1px 5px;border-radius:3px;}
+
+  .note{border-left:3px solid var(--orange);background:#fdf7f2;padding:14px 18px;font-size:13px;color:var(--ink-2);border-radius:0 6px 6px 0;margin-top:16px;}
+  .note b{color:var(--ink);}
+  .note.danger{border-left-color:var(--red);background:#fbf0ed;}
+  .note.danger b{color:var(--red);}
+  .note.ok{border-left-color:var(--green);background:#f0f7f3;}
+
+  .steps{counter-reset:s;}
+  .step{display:grid;grid-template-columns:44px 1fr;gap:16px;padding:14px 0;border-bottom:1px dashed var(--line);}
+  .step:last-child{border-bottom:none;}
+  .step::before{counter-increment:s;content:"S" counter(s);font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:700;color:var(--orange-2);border:1px solid #f0d2bb;background:#fdf3ec;border-radius:4px;height:26px;display:flex;align-items:center;justify-content:center;margin-top:2px;}
+  .step b{display:block;font-weight:600;font-size:14px;margin-bottom:2px;}
+  .step span{display:block;font-size:13px;color:var(--ink-2);}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+  .kv{display:grid;grid-template-columns:96px 1fr;gap:6px 14px;font-size:13px;}
+  .kv dt{color:var(--ink-3);}
+  .kv dd{color:var(--ink);}
+
+  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+  @media (max-width:860px){.grid2{grid-template-columns:1fr;}h1{font-size:25px;}body{padding:28px 14px 60px;}}
+  @media print{body{background:#fff;padding:0;}section,.card{break-inside:avoid;}}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="kicker">Audio Upgrade Guide · Step by Step</div>
+  <h1>把微雪板的声音救活<span>微雪 ESP32-S3 小智板 + 外接 40mm 喇叭</span></h1>
+  <div class="meta">
+    <div><b>难度</b> 焊接入门（2 根线）</div>
+    <div><b>花费</b> 约 15 元</div>
+    <div><b>耗时</b> 1.5 小时</div>
+    <div><b>预期提升</b> 低频下潜 3 倍，响度 +10dB</div>
+  </div>
+</header>
+
+<!-- ========== 01 先看原理 ========== -->
+<section>
+  <div class="sec-head"><span class="sec-no">01</span><h2>为什么换个喇叭就能好听三倍</h2></div>
+  <p class="sec-desc">微雪板上的功放芯片没问题，问题在喇叭和它周围的空气。20mm 喇叭的可振动面积只有 40mm 的 1/4，而它背面只有 2mm 缝隙，振膜往前推时，背面的声波绕到前面抵消——这叫「声短路」，低频直接被吃光。</p>
+
+  <div class="card">
+    <div class="card-title">物理差距 PHYSICS<em>同样 1W 输入下</em></div>
+    <table>
+      <thead><tr><th style="width:28%">参数</th><th style="width:24%">板载 20mm 喇叭</th><th style="width:24%">外接 40mm + 15cc 音腔</th><th>影响</th></tr></thead>
+      <tbody>
+        <tr><td>振膜面积</td><td class="num">314 mm²</td><td class="num">1256 mm²</td><td>4 倍，推动空气的能力</td></tr>
+        <tr><td>低频下限 f0</td><td class="num">~500 Hz</td><td class="num">~180 Hz</td><td>男声胸腔感、鼓点全在这里</td></tr>
+        <tr><td>响度 @1m</td><td class="num">~78 dB</td><td class="num">~88 dB</td><td>主观响一倍多</td></tr>
+        <tr><td>失真（大声时）</td><td class="num">明显破音</td><td class="num">基本听不出</td><td>大音量不再刺耳</td></tr>
+      </tbody>
+    </table>
+    <div class="note ok"><b>核心一句话：</b>喇叭每大一倍直径，低频能力提升接近一个八度。20mm → 40mm，不是「好一点」，是跨越了一个量级。</div>
+  </div>
+</section>
+
+<!-- ========== 02 接线 ========== -->
+<section>
+  <div class="sec-head"><span class="sec-no">02</span><h2>接线：只有两根线，但有一个坑</h2></div>
+  <p class="sec-desc">板载功放通常是 BTL（桥式）输出，两个输出端都在「浮动」状态。所以喇叭必须接在 SPK+ 和 SPK− 两端之间，<b>任何一端都不能接 GND</b>，否则会烧功放。</p>
+
+  <div class="card">
+    <div class="card-title">接线示意 WIRING<em>断电操作</em></div>
+    <svg viewBox="0 0 900 400" role="img" aria-label="接线图">
+      <!-- 板子 -->
+      <rect x="60" y="80" width="270" height="230" rx="10" fill="#1e5b46" stroke="#14402f" stroke-width="1.6"/>
+      <rect x="86" y="106" width="218" height="60" rx="4" fill="#2a6b52" opacity=".6"/>
+      <text x="195" y="142" font-size="12" fill="#cfe3d9" text-anchor="middle">ESP32-S3 · 2.16″ AMOLED</text>
+      <text x="195" y="200" font-size="12.5" fill="#9dc4b2" text-anchor="middle">微雪 小智 AI 开发板</text>
+      <text x="195" y="222" font-size="11" fill="#7ea694" text-anchor="middle">背面找丝印 SPK / 喇叭符号</text>
+      <!-- 喇叭座 -->
+      <rect x="296" y="252" width="30" height="46" rx="3" fill="#e8e2d6" stroke="#b9b4ab" stroke-width="1.2"/>
+      <circle cx="303" cy="264" r="3.6" fill="#c0492f"/>
+      <circle cx="303" cy="286" r="3.6" fill="#2b2f33"/>
+      <text x="292" y="240" font-size="9.5" fill="#cfe3d9" text-anchor="middle">SPK+</text>
+      <text x="292" y="316" font-size="9.5" fill="#cfe3d9" text-anchor="middle">SPK−</text>
+
+      <!-- 线 -->
+      <path d="M326 264 C420 264 470 220 560 220" fill="none" stroke="#c0492f" stroke-width="3"/>
+      <path d="M326 286 C420 286 470 316 560 316" fill="none" stroke="#2b2f33" stroke-width="3"/>
+
+      <!-- 喇叭 -->
+      <circle cx="654" cy="268" r="76" fill="#e9e4d8" stroke="#b9b4ab" stroke-width="2"/>
+      <circle cx="654" cy="268" r="62" fill="none" stroke="#c9c3b8" stroke-width="1.4"/>
+      <circle cx="654" cy="268" r="30" fill="#c9c3b8" opacity=".55"/>
+      <circle cx="640" cy="218" r="4.4" fill="#c0492f"/>
+      <circle cx="640" cy="318" r="4.4" fill="#2b2f33"/>
+      <text x="654" y="366" font-size="12" fill="#5b6167" text-anchor="middle">40mm 4Ω 3W 全频喇叭</text>
+
+      <!-- 危险提示 -->
+      <rect x="560" y="60" width="310" height="88" rx="6" fill="#fbf0ed" stroke="#e3bdb4" stroke-width="1.2"/>
+      <text x="576" y="86" font-size="12.5" font-weight="700" fill="#c0492f">⚠ BTL 输出，禁止单端接地</text>
+      <text x="576" y="108" font-size="11.5" fill="#8a4b39">喇叭一端接 SPK+，另一端接 SPK−。</text>
+      <text x="576" y="128" font-size="11.5" fill="#8a4b39">把任一端接外壳/GND，会瞬间烧毁功放 IC。</text>
+
+      <!-- 万用表提示 -->
+      <text x="576" y="200" font-size="11.5" fill="#5b6167">不确定哪两个是喇叭？万用表通断档：</text>
+      <text x="576" y="220" font-size="11.5" fill="#5b6167">两个焊盘之间电阻 4Ω 或 8Ω 左右，就是它。</text>
+      <text x="576" y="244" font-size="11.5" fill="#5b6167">若板上有 MX1.25 2P 白色座子，直接拔插更方便。</text>
+    </svg>
+    <div class="note danger"><b>三个必须注意的点：</b>① 先断电、拔电池再焊；② 电烙铁 350℃ 以内、每点 3 秒，焊盘很脆；③ 换不同阻抗喇叭前，确认板载功放支持（多数 4Ω/8Ω 兼容，但 3W 输出一般要求 5V/2A 供电，USB 小口可能只出 1W）。</div>
+  </div>
+</section>
+
+<!-- ========== 03 音腔 ========== -->
+<section>
+  <div class="sec-head"><span class="sec-no">03</span><h2>音腔：这一步比换喇叭更重要</h2></div>
+  <p class="sec-desc">喇叭背面必须有密封的空气腔，否则等于白换。经验值：40mm 喇叭配 12–15cc 后腔是最佳平衡点，再大低频略好但会闷，再小低频起不来。</p>
+
+  <div class="card">
+    <div class="card-title">音腔剖面 CROSS SECTION<em>单位 mm</em></div>
+    <svg viewBox="0 0 880 400" role="img" aria-label="音腔剖面">
+      <!-- 外壳 -->
+      <path d="M120 60 h640 v70 h-40 v200 h-560 v-200 h-40 z" fill="none" stroke="#b9b4ab" stroke-width="2"/>
+      <!-- 腔体内部 -->
+      <rect x="160" y="130" width="560" height="200" fill="#faf8f4" stroke="#dcd8d1" stroke-width="1.2"/>
+      <!-- 吸音棉 -->
+      <rect x="170" y="140" width="540" height="34" fill="#e6e1d7" stroke="#c9c3b8" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="440" y="162" font-size="11.5" fill="#7d858d" text-anchor="middle">吸音棉 5mm（等效容积 +15%，f0 再降 10%）</text>
+      <!-- 喇叭 -->
+      <rect x="330" y="212" width="220" height="18" rx="4" fill="#c9c3b8" stroke="#a9a29a" stroke-width="1.2"/>
+      <path d="M350 230 L530 230 L510 282 L370 282 Z" fill="#e9e4d8" stroke="#b9b4ab" stroke-width="1.2"/>
+      <text x="440" y="262" font-size="11" fill="#5b6167" text-anchor="middle">40mm 振膜</text>
+      <!-- 出音孔 -->
+      <rect x="360" y="330" width="160" height="18" fill="#dcd8d1" stroke="#b9b4ab" stroke-width="1"/>
+      <g stroke="#8b9199" stroke-width="1.6">
+        <line x1="376" y1="330" x2="376" y2="348"/><line x1="396" y1="330" x2="396" y2="348"/>
+        <line x1="416" y1="330" x2="416" y2="348"/><line x1="436" y1="330" x2="436" y2="348"/>
+        <line x1="456" y1="330" x2="456" y2="348"/><line x1="476" y1="330" x2="476" y2="348"/>
+        <line x1="496" y1="330" x2="496" y2="348"/>
+      </g>
+      <text x="560" y="344" font-size="11" fill="#5b6167">出音孔 Φ1.0 × 24（开孔率 8%）</text>
+      <!-- 密封胶 -->
+      <path d="M318 210 q10 -10 22 0 z" fill="#e8873e"/>
+      <path d="M540 210 q10 -10 22 0 z" fill="#e8873e"/>
+      <text x="120" y="232" font-size="11" fill="#b5611f">密封胶</text>
+      <line x1="150" y1="228" x2="316" y2="214" stroke="#e8873e" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <!-- 尺寸：腔体 -->
+      <g stroke="#7d858d" stroke-width="0.9" fill="none">
+        <line x1="160" y1="368" x2="720" y2="368"/>
+        <line x1="160" y1="362" x2="160" y2="374"/>
+        <line x1="720" y1="362" x2="720" y2="374"/>
+      </g>
+      <text x="440" y="386" font-size="11.5" fill="#22262a" text-anchor="middle" font-family="ui-monospace,Menlo,monospace">后腔 60 × 60 × 42 ≈ 15 cc</text>
+
+      <!-- 反面示例 -->
+      <rect x="120" y="20" width="640" height="34" rx="4" fill="#f8ede9" stroke="none"/>
+      <text x="440" y="42" font-size="11.5" fill="#a8563f" text-anchor="middle">✕ 反面做法：喇叭直接贴在薄壳上、四周不密封 —— 前后声波短路，等于没装喇叭</text>
+    </svg>
+    <div class="note"><b>三个实现方案，按条件选：</b><br>
+      <b>① 零成本（今晚就能听）：</b>找一个硬纸盒/快递盒，内部约 6×6×4cm，喇叭用热熔胶封在盒口，盒壁贴一层棉布。丑，但效果已经有 70%。<br>
+      <b>② 15 元（推荐）：</b>淘宝买「40mm 喇叭带音腔一体件」，塑料后腔+前腔已做好，回来直接接线。<br>
+      <b>③ 结构件（做产品）：</b>按 CHICK-01 文档的腔体尺寸 3D 打印，或用亚克力板 + 密封胶粘，注意腔体壁厚 ≥1.5mm 不然会共振。
+    </div>
+  </div>
+</section>
+
+<!-- ========== 04 麦克风 ========== -->
+<section>
+  <div class="sec-head"><span class="sec-no">04</span><h2>麦克风：这块板其实不用买</h2></div>
+  <p class="sec-desc">微雪这块板已经板载了双麦阵列（这就是它 ¥165 里最值钱的部分之一）。你需要做的不是「买麦」，而是「别把已有的麦糟蹋了」——收音差 90% 是结构问题。</p>
+
+  <div class="card">
+    <div class="card-title">麦克风布局 MIC PLACEMENT<em>俯视 / 正视</em></div>
+    <svg viewBox="0 0 880 400" role="img" aria-label="麦克风布局">
+      <!-- 机体正面 -->
+      <rect x="240" y="50" width="400" height="300" rx="110" fill="#faf8f4" stroke="#b9b4ab" stroke-width="2"/>
+      <!-- 屏幕 -->
+      <rect x="316" y="110" width="248" height="150" rx="16" fill="#e8e4dc" stroke="#c9c3b8" stroke-width="1.2"/>
+      <text x="440" y="192" font-size="11.5" fill="#8b9199" text-anchor="middle">屏幕（示例位置）</text>
+      <!-- 左麦 -->
+      <circle cx="352" cy="300" r="7" fill="#4a7fa5"/>
+      <circle cx="352" cy="300" r="13" fill="none" stroke="#4a7fa5" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="352" y="332" font-size="11" fill="#2f5d80" text-anchor="middle">MIC L</text>
+      <!-- 右麦 -->
+      <circle cx="528" cy="300" r="7" fill="#4a7fa5"/>
+      <circle cx="528" cy="300" r="13" fill="none" stroke="#4a7fa5" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="528" y="332" font-size="11" fill="#2f5d80" text-anchor="middle">MIC R</text>
+      <!-- 间距 -->
+      <g stroke="#4a7fa5" stroke-width="1" fill="none">
+        <line x1="352" y1="356" x2="528" y2="356"/>
+        <line x1="352" y1="350" x2="352" y2="362"/>
+        <line x1="528" y1="350" x2="528" y2="362"/>
+      </g>
+      <text x="440" y="376" font-size="11.5" fill="#2f5d80" text-anchor="middle" font-family="ui-monospace,Menlo,monospace">间距 ≥ 60 mm</text>
+
+      <!-- 喇叭位置（底部） -->
+      <rect x="378" y="330" width="124" height="22" rx="6" fill="#e8e4dc" stroke="#c9c3b8" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="440" y="345" font-size="10" fill="#a9a29a" text-anchor="middle">喇叭在下</text>
+
+      <!-- 右侧说明 -->
+      <text x="676" y="80" font-size="12.5" font-weight="700" fill="#22262a">四条铁律</text>
+      <text x="676" y="108" font-size="11.5" fill="#5b6167">① 麦与喇叭距离 ≥ 60mm，</text>
+      <text x="676" y="126" font-size="11.5" fill="#5b6167">    且喇叭朝下、麦朝前</text>
+      <text x="676" y="152" font-size="11.5" fill="#5b6167">② 麦孔 Φ1.2，后面贴</text>
+      <text x="676" y="170" font-size="11.5" fill="#5b6167">    0.5mm 声学网布防尘</text>
+      <text x="676" y="196" font-size="11.5" fill="#5b6167">③ 麦与外壳之间套硅胶，</text>
+      <text x="676" y="214" font-size="11.5" fill="#5b6167">    断开结构传声</text>
+      <text x="676" y="240" font-size="11.5" fill="#5b6167">④ 麦孔不要开在屏幕正上方</text>
+      <text x="676" y="258" font-size="11.5" fill="#5b6167">    （气流噪声大）</text>
+
+      <rect x="660" y="286" width="196" height="96" rx="6" fill="#f0f7f3" stroke="#c9dfd3" stroke-width="1"/>
+      <text x="674" y="310" font-size="11.5" font-weight="700" fill="#2f7d5c">为什么间距重要</text>
+      <text x="674" y="330" font-size="11" fill="#3f6b58">间距越大，波束成形越准，</text>
+      <text x="674" y="348" font-size="11" fill="#3f6b58">3 米外人声越清楚。板载麦</text>
+      <text x="674" y="366" font-size="11" fill="#3f6b58">间距只有 20mm，所以拾音</text>
+      <text x="674" y="382" font-size="11" fill="#3f6b58">方向性天生就弱。</text>
+    </svg>
+    <div class="note ok"><b>结论：</b>先别买麦克风。把板子装进任何外壳前，先用裸板在安静房间测一次拾音距离（正常说话，退到 3 米，看识别率）——这是你的基准分。装壳后再测一次，如果掉了 30% 以上，说明是结构把麦闷住了，改开孔和密封就能救回来。</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">如果你确实想外接麦克风<em>可选，非必需</em></div>
+    <div class="grid2">
+      <div>
+        <dl class="kv">
+          <dt>推荐型号</dt><dd>INMP441（I²S 数字 MEMS 麦）</dd>
+          <dt>价格</dt><dd>¥3–5 / 个，双麦 ¥7–8</dd>
+          <dt>淘宝关键词</dt><dd>INMP441 模块 I2S 麦克风</dd>
+          <dt>买几个</dt><dd>2 个（做波束成形），先买 3 个备用</dd>
+          <dt>接线</dt><dd>VDD→3.3V，GND→GND，SCK→BCLK，WS→LRCLK，SD→DIN</dd>
+          <dt>双麦接法</dt><dd>一个 L/R 接 GND（左声道），另一个接 VDD（右声道），共用一组 I²S</dd>
+        </dl>
+      </div>
+      <div>
+        <table>
+          <thead><tr><th>注意事项</th><th>原因</th></tr></thead>
+          <tbody>
+            <tr><td>别买模拟麦</td><td>MAX9814/MAX4466 经 ADC 采样，WiFi 一开底噪就上来</td></tr>
+            <tr><td>INMP441 只认 3.3V</td><td>接 5V 直接烧</td></tr>
+            <tr><td>一个 I²S 只带一组</td><td>S3 的 I²S 控制器有限，板载麦占用后需改引脚映射</td></tr>
+            <tr><td>线长 ≤ 100mm</td><td>I²S 时钟线过长会串扰，出现「咔咔」声</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== 05 采购清单 ========== -->
+<section>
+  <div class="sec-head"><span class="sec-no">05</span><h2>采购清单（照着买）</h2></div>
+  <p class="sec-desc">全部淘宝可买，总价不到 20 元。价格是散买价，不是批量价。</p>
+
+  <div class="card">
+    <div class="card-title">BOM · 改造件<em>散买 ≈ 17 元</em></div>
+    <table>
+      <thead><tr><th style="width:24%">物件</th><th style="width:34%">搜索关键词 / 规格</th><th class="num" style="width:10%">单价</th><th class="num" style="width:8%">数量</th><th>避坑</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="tag hot">必买</span> 喇叭</td>
+          <td><code>40mm 4欧 3W 全频喇叭 带音腔</code><br><span class="muted">或「40*40 腔体喇叭 4Ω3W」</span></td>
+          <td class="num">5–8</td><td class="num">1</td>
+          <td>选带后腔的一体件；不要买「超薄 8Ω 0.5W」（那是手机用的，f0 更高）</td>
+        </tr>
+        <tr>
+          <td><span class="tag ok">推荐</span> 吸音棉</td>
+          <td><code>音箱吸音棉 聚酯纤维 5mm</code></td>
+          <td class="num">1–2</td><td class="num">1</td>
+          <td>买薄款，厚了会顶到振膜</td>
+        </tr>
+        <tr>
+          <td>线材</td>
+          <td><code>26AWG 硅胶线 红黑</code></td>
+          <td class="num">1</td><td class="num">1 对</td>
+          <td>细软线，粗线会把焊盘拽掉</td>
+        </tr>
+        <tr>
+          <td>端子（可选）</td>
+          <td><code>XH2.54 2P 公母插头</code></td>
+          <td class="num">0.5</td><td class="num">2 对</td>
+          <td>做成可插拔，方便反复拆装</td>
+        </tr>
+        <tr>
+          <td>热熔胶 / 密封胶</td>
+          <td>家里有就用，没有买 <code>704硅胶</code></td>
+          <td class="num">3</td><td class="num">1</td>
+          <td>密封必须用软胶，硬胶会随振动开裂</td>
+        </tr>
+        <tr>
+          <td><span class="tag">可选</span> 麦克风</td>
+          <td><code>INMP441 I2S 麦克风模块</code></td>
+          <td class="num">3–5</td><td class="num">2</td>
+          <td>先别买，等基准测试做完再决定</td>
+        </tr>
+        <tr class="total"><td colspan="2">必买 + 推荐合计</td><td class="num">≈ 12</td><td class="num">—</td><td class="muted">含运费约 17 元</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ========== 06 验证 ========== -->
+<section>
+  <div class="sec-head"><span class="sec-no">06</span><h2>改完怎么验证（别靠耳朵猜）</h2></div>
+  <p class="sec-desc">按顺序做四个测试，每个都有明确的通过标准。做完你会知道钱花得值不值。</p>
+
+  <div class="card">
+    <div class="steps">
+      <div class="step"><div><b>扫频听异响</b><span>播 100Hz→10kHz 扫频（手机搜「扫频测试」即可）。<b>通过标准：</b>全程无「咔咔」破音、无塑料共振的嗡嗡声。有异响说明壳体没密封或腔壁太薄，加胶/加棉。</span></div></div>
+      <div class="step"><div><b>响度测量</b><span>手机装个 SPL 计 App，播 1kHz 正弦波，音量开到 80%，手机放 1 米外。<b>通过标准：</b>≥ 85dB。低于 80dB 说明功放供电不足（换 5V/2A 电源试）。</span></div></div>
+      <div class="step"><div><b>人声清晰度</b><span>播一段有声书或新闻。<b>通过标准：</b>1 米外每个字都能听清，不用「脑补」。这是玩具最重要的指标，比低频更重要。</span></div></div>
+      <div class="step"><div><b>回环啸叫测试</b><span>开录音 + 播放同时进行（或直接语音对话）。<b>通过标准：</b>不啸叫、不「自己打断自己」。啸叫 = 喇叭与麦太近或结构传声，先加硅胶垫、再拉开距离。</span></div></div>
+    </div>
+    <div class="note"><b>预期结果：</b>改完后主观听感应该从「小喇叭喊话」变成「小音箱说话」——人声厚实、能听出一点低频。如果听起来还是单薄，八成是腔体漏气，重点查喇叭边缘和过线孔，用 704 硅胶补一圈。</div>
+  </div>
+</section>
+
+<footer>
+  <span>CHICK-01 · 音频改造指南 · 配套微雪 ESP32-S3 小智板</span>
+  <span>接线前务必断电 ｜ 价格随行情浮动 ｜ 尺寸单位 mm</span>
+</footer>
+
+</div>
+</body>
+</html>

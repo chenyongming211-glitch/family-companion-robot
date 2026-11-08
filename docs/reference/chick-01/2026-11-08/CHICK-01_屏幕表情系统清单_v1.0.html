@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>CHICK-01 屏幕表情系统清单</title>
+<style>
+  :root{--bg:#f7f5f1;--paper:#fff;--ink:#22262a;--ink2:#5b6167;--ink3:#8b9199;--line:#dcd8d1;--orange:#e8873e;--green:#2f7d5c;--red:#c0492f;--blue:#2f6b8f;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--ink);line-height:1.7;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:44px 24px 70px;}
+  .sheet{max-width:1080px;margin:0 auto;}
+  header{border-bottom:2px solid var(--ink);padding-bottom:20px;margin-bottom:36px;}
+  .kicker{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange);font-weight:600;margin-bottom:8px;}
+  h1{font-size:30px;font-weight:700;}h1 span{color:var(--ink3);font-size:16px;font-weight:400;margin-left:10px;}
+  .meta{display:flex;flex-wrap:wrap;gap:6px 24px;margin-top:14px;font-size:13px;color:var(--ink2);}
+  .meta b{color:var(--ink);}
+  section{margin-bottom:44px;}
+  h2{font-size:20px;margin-bottom:6px;}h2::before{content:"■ ";color:var(--orange);font-size:14px;}
+  h3{font-size:15px;margin:20px 0 10px;color:var(--ink);}
+  .desc{font-size:13.5px;color:var(--ink2);margin-bottom:18px;}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px;margin-bottom:18px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);border-bottom:1.5px solid var(--ink);padding:0 10px 8px 0;}
+  td{padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:top;}
+  tr.total td{border-top:2px solid var(--ink);border-bottom:none;font-weight:700;}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;font-weight:600;white-space:nowrap;}
+  .t0{background:#fbe8d9;color:#b5611f;} .t1{background:#e5f1ea;color:var(--green);} .t2{background:#e6eef5;color:var(--blue);}
+  .note{border-left:3px solid var(--orange);background:#fdf7f2;padding:13px 16px;font-size:13px;color:var(--ink2);border-radius:0 6px 6px 0;margin-top:14px;}
+  .note.ok{border-left-color:var(--green);background:#f0f7f3;} .note.warn{border-left-color:var(--red);background:#fbf0ed;}
+  .note b{color:var(--ink);}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:#f2efe9;padding:1px 5px;border-radius:3px;}
+  pre{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.55;background:#1b1f24;color:#d8dee6;padding:16px 18px;border-radius:8px;overflow-x:auto;}
+  pre .k{color:#8fbfe0;} pre .v{color:#e0c68f;} pre .c{color:#6b7683;}
+  ol,ul{padding-left:22px;font-size:13.5px;} li{margin-bottom:6px;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:16px;}
+  .face{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:12px 12px 14px;text-align:center;}
+  .screen{width:100%;aspect-ratio:3/4;border-radius:12px;overflow:hidden;background:#11151a;border:3px solid #2a2f36;box-shadow:inset 0 0 0 1px #3a4048;}
+  .screen svg{display:block;width:100%;height:100%;}
+  .fname{font-size:12.5px;font-weight:700;margin-top:9px;}
+  .fsub{font-size:11px;color:var(--ink3);margin-top:2px;line-height:1.5;}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--ink2);margin-bottom:14px;}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;}
+  footer{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--ink3);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="kicker">CHICK-01 · Screen Expression Spec</div>
+  <h1>屏幕表情系统清单<span>小鸡翅膀款 · v1.0</span></h1>
+  <div class="meta">
+    <div><b>屏幕</b> 2.8″ 240×320 IPS（竖屏）</div>
+    <div><b>预设数</b> 27 个表情 + 5 类微动画</div>
+    <div><b>实现方式</b> 1 个参数化脸引擎（非序列帧）</div>
+    <div><b>依据</b> DeviceState 12 态 + 19 个协议情绪串</div>
+  </div>
+</header>
+
+<section>
+  <h2>一、结论先行：不是「画 27 张脸」，是「一套参数 + 27 组数值」</h2>
+  <p class="desc">这份清单把你项目里已有的两条真实约束对齐了：固件的 <code>DeviceState</code>（12 个状态）和协议里的情绪字符串（19 个）。表情不是装饰，它是这套会话状态机的可见输出。</p>
+
+  <div class="card">
+    <table>
+      <tr><th style="width:86px">层级</th><th style="width:150px">来源</th><th>内容</th><th style="width:70px">数量</th></tr>
+      <tr><td><span class="tag t0">L0 状态</span></td><td><code>DeviceState</code> 状态机</td><td>开机、配网、连接、待机、聆听、思考、说话、提示、错误、升级、低电、充电</td><td><b>12</b></td></tr>
+      <tr><td><span class="tag t1">L1 情绪</span></td><td>LLM 情绪串（协议）</td><td>19 个情绪串收敛成 15 个预设，不新增协议字段</td><td><b>15</b></td></tr>
+      <tr><td><span class="tag t2">L2 微动</span></td><td>常驻叠加层</td><td>眨眼、呼吸、视线游移、口型、待机小动作</td><td><b>5 类</b></td></tr>
+      <tr class="total"><td colspan="3">合计视觉预设</td><td>27 个</td></tr>
+    </table>
+    <div class="note"><b>为什么要分层：</b>L0 决定「它在干什么」，L1 决定「它什么心情」，L2 让画面不像静止图片。三层叠加后，27 个预设能组合出接近 200 种观感，但代码里只有一张脸。</div>
+  </div>
+</section>
+
+<section>
+  <h2>二、L0 系统状态表情（12 个 · 必做）</h2>
+  <p class="desc">这 12 个直接对应 <code>device_state.h</code> 里的枚举，由状态机回调驱动，不依赖云端。下面每个都是 240×320 的实际效果预览。</p>
+  <div class="legend"><span><i style="background:#fbe8d9"></i>背景为屏幕色，非实体颜色</span><span>预览按 240×320 等比缩放</span></div>
+  <div class="grid" id="gridL0"></div>
+  <div class="note warn"><b>两个容易漏掉的：</b>「升级中」和「低电」在状态机里没有独立状态（OTA 是 <code>kDeviceStateUpgrading</code>，低电要靠电源管理回调），但它们是最需要被看见的状态——用户不知道设备为什么不动时，脸是他唯一的解释。</div>
+</section>
+
+<section>
+  <h2>三、L1 情绪表情（19 个情绪串 → 15 个预设 · 零协议改动）</h2>
+  <p class="desc">下面这张表是从固件里读出的真实词表（<code>emoji_display.cc</code> 的 <code>emotion_map</code>），不是我自己编的。你项目现在链路里情绪只下发过 <code>neutral</code>，所以这 19 个是「已经支持但还没被用起来」的能力。</p>
+
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">协议情绪串</th><th style="width:130px">映射预设</th><th>表情特征</th></tr>
+      <tr><td><code>happy</code> <code>laughing</code> <code>funny</code></td><td>开心</td><td>月牙笑眼（上弧）+ 张嘴笑，循环时轻微上下弹动</td></tr>
+      <tr><td><code>loving</code></td><td>喜欢</td><td><b>心形瞳孔</b> + 腮红，2 秒一次心跳缩放</td></tr>
+      <tr><td><code>embarrassed</code></td><td>害羞</td><td>腮红加深、视线往右下躲、一侧汗滴</td></tr>
+      <tr><td><code>confident</code></td><td>得意</td><td>半眯眼 + 单边挑眉 + 嘴角上挑一点</td></tr>
+      <tr><td><code>delicious</code></td><td>好吃</td><td>眯眼 + 舔嘴（小舌头），配一次快速点头</td></tr>
+      <tr><td><code>sad</code> <code>crying</code></td><td>难过</td><td>下弧眼 + 下弯嘴；<code>crying</code> 额外加两行泪 + 眼睛更闭</td></tr>
+      <tr><td><code>sleepy</code></td><td>困</td><td>眼睛闭合弧 + 右上角 <b>z z Z</b> 缓慢浮起</td></tr>
+      <tr><td><code>silly</code></td><td>搞怪</td><td>一高一低眼 + 歪嘴（不对称是关键）</td></tr>
+      <tr><td><code>angry</code></td><td>生气</td><td>眉毛内压、眼睛斜切、嘴变窄，整体色调压暗</td></tr>
+      <tr><td><code>surprised</code> <code>shocked</code></td><td>惊讶</td><td>圆睁大眼 + 小 o 嘴 + 眉毛高挑；`shocked` 加抖动</td></tr>
+      <tr><td><code>thinking</code></td><td>思考</td><td>视线右上、缓慢漂移，与 L0「思考」共用（区别是 L0 更安静）</td></tr>
+      <tr><td><code>winking</code></td><td>眨眼</td><td>单眼闭合 + 另一眼正常，嘴角微上</td></tr>
+      <tr><td><code>relaxed</code></td><td>放松</td><td>闭眼长弧 + 极慢呼吸（4 秒一个周期）</td></tr>
+      <tr><td><code>confused</code></td><td>疑惑</td><td>一高一低眉 + 歪嘴 + 头顶问号上下浮</td></tr>
+      <tr><td><code>neutral</code></td><td>平静</td><td>正常睁眼、无表情、只有呼吸和眨眼</td></tr>
+    </table>
+  </div>
+
+  <div class="grid" id="gridL1"></div>
+  <div class="note ok"><b>关键：19 个串收敛成 15 个预设</b>，<code>happy/laughing/funny</code> 共用一套，「sad/crying」共用一套（crying 加泪层）。这样固件里只需要一张 <code>emotion → preset</code> 的映射表，未知情绪自动回落 <code>neutral</code>，永远不会因为云端下发新词而黑屏。</div>
+</section>
+
+<section>
+  <h2>四、L2 微动画（5 类 · 叠加在任意表情上）</h2>
+  <p class="desc">没有这一层，脸就是一张贴纸。这五项的成本很低，但「像活的」和「像图片」的差别几乎全在这里。</p>
+  <div class="card">
+    <table>
+      <tr><th style="width:110px">微动画</th><th style="width:130px">触发</th><th>参数</th><th style="width:90px">帧率</th></tr>
+      <tr><td><b>眨眼</b></td><td>随机 3–6 秒</td><td>闭合 60ms → 保持 20ms → 睁开 80ms；10% 概率连眨两下</td><td>15fps</td></tr>
+      <tr><td><b>呼吸</b></td><td>常驻</td><td>整脸 scale 1.000 ↔ 1.015，正弦 4 秒；说话时幅度降到 0.5 倍</td><td>15fps</td></tr>
+      <tr><td><b>视线游移</b></td><td>仅 idle</td><td>2–8 秒随机一次，瞳孔偏移 ±12px，80ms 到位（模拟眼跳，不能线性移动）</td><td>15fps</td></tr>
+      <tr><td><b>口型</b></td><td>播放音频时</td><td>嘴的张开高度 = 音频 RMS 包络，每 20ms 更新一次，带 60ms 平滑</td><td><b>30fps</b></td></tr>
+      <tr><td><b>待机小动作</b></td><td>30–90 秒随机</td><td>歪头 6°、轻打哈欠（眼闭 400ms + 张嘴）、被叫名字时耳朵一抖</td><td>15fps</td></tr>
+    </table>
+    <div class="note"><b>视线游移那条最容易被做错：</b>瞳孔要「跳」不要「滑」。线性移动看起来像机器人扫视，80ms 内瞬移到位才像眼睛。</div>
+  </div>
+</section>
+
+<section>
+  <h2>五、和你项目状态机的对接关系</h2>
+  <p class="desc">我把 <code>device_state_machine.cc</code> 里的合法迁移读了一遍，表情必须遵守同一套规则，否则会出现「界面显示在听，实际已经断开」这种撕裂。</p>
+  <div class="card">
+    <table>
+      <tr><th style="width:210px">迁移</th><th style="width:180px">表情动作</th><th>要点</th></tr>
+      <tr><td><code>Idle → Listening</code></td><td>平静 → 聆听</td><td><b>不要瞬间切换</b>。先 150ms 交叉淡化，再睁大眼睛——硬切会像闪屏</td></tr>
+      <tr><td><code>Listening → Speaking</code></td><td>聆听 → 保持情绪 + 开口型</td><td>这里最容易出错：不是「切到说话表情」，是「情绪不变，只解锁嘴」</td></tr>
+      <tr><td><code>Speaking → Listening</code>（被打断）</td><td>惊讶闪 250ms → 聆听</td><td>符合全双工直觉：被打断先微微吃惊，再听你说</td></tr>
+      <tr><td><code>Speaking → Idle</code></td><td>嘴闭合 → 保持情绪 2s → 回平静</td><td>话说完不要立刻变脸，留 2 秒余韵，情绪才有温度</td></tr>
+      <tr><td><code>* → Notifying</code></td><td>眉毛上挑 + 感叹号</td><td>提示必须和「说话」在视觉上区分开，否则用户以为在自言自语</td></tr>
+      <tr><td><code>* → FatalError</code></td><td>下垂 + 皱眉 + 红色调</td><td>不可逆状态，表情也不该再恢复</td></tr>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>六、实现决策：为什么必须是参数化，不能用序列帧</h2>
+  <p class="desc">这一步算错，后面全部要推倒。你项目里 <code>emote_display</code> 用的是 <code>.aaf</code> 序列帧资源（esp-hi 那套是 128×128 的），CHICK-01 是 240×320，面积大 6 倍，直接套用会炸。</p>
+  <div class="card">
+    <table>
+      <tr><th style="width:150px">方案</th><th style="width:120px">Flash 占用</th><th style="width:110px">CPU</th><th>结论</th></tr>
+      <tr><td>序列帧（RGB565 全帧）</td><td>27 表情 × 2s × 15fps × 150KB<br><b>≈ 120MB</b></td><td>低</td><td>❌ 物理上不可能</td></tr>
+      <tr><td>序列帧（RLE 压缩）</td><td>≈ 8–12MB</td><td>中（需实时解压）</td><td>⚠️ 吃掉 16MB Flash 的大半，且改一个表情就要重导资源</td></tr>
+      <tr><td><b>参数化绘制</b> ✅</td><td><b>≈ 0（纯代码 ~15KB）</b></td><td>4–8%（240×320，LVGL）</td><td>✅ 推荐</td></tr>
+    </table>
+    <div class="note ok"><b>参数化的额外收益：</b>①改表情只需改数值，不用重导素材；②表情之间可以<b>插值过渡</b>（序列帧做不到）；③微雪 480×480 和小鸡 240×320 共用同一套参数（按屏宽归一化），换屏不用重做；④口型可以直接驱动「嘴张开度」这一个参数。</div>
+  </div>
+
+  <h3>显存与刷新</h3>
+  <div class="card">
+    <table>
+      <tr><th style="width:200px">项目</th><th style="width:150px">数值</th><th>说明</th></tr>
+      <tr><td>整屏 RGB565</td><td>240×320×2 = <b>150KB</b></td><td>放不下双缓冲（内部 RAM），必须分区刷新</td></tr>
+      <tr><td>部分缓冲（推荐）</td><td>240×40×2 ×2 = <b>38KB</b></td><td>两块 40 行缓冲，放内部 RAM，DMA 直推</td></tr>
+      <tr><td>表情刷新率</td><td>15fps</td><td>眼睛/眉/腮红区域重绘</td></tr>
+      <tr><td>口型刷新率</td><td>30fps</td><td>只重绘嘴部矩形区域，约 80×70px</td></tr>
+      <tr><td>全屏切换（换表情）</td><td>150ms</td><td>用透明度交叉淡化，不是硬切</td></tr>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>七、口型同步的接入点（你代码里现成的位置）</h2>
+  <p class="desc">这是整份清单里唯一需要碰音频路径的地方，而且只需要 3 行。位置在 <code>audio_service.cc</code> 的 <code>AudioOutputTask</code>：</p>
+  <pre><span class="c">// main/audio/audio_service.cc · AudioOutputTask()</span>
+<span class="c">// 现有最后一行：</span>
+codec_-&gt;OutputData(task.pcm);
+
+<span class="c">// 加在这两行之间即可（不改变任何播放行为）：</span>
+<span class="k">int16_t</span> peak = <span class="v">0</span>;
+<span class="k">for</span> (<span class="k">size_t</span> i = <span class="v">0</span>; i &lt; task.pcm.size(); ++i)
+    peak = std::max(peak, (<span class="k">int16_t</span>)std::abs(task.pcm[i]));
+display-&gt;SetMouthEnvelope(peak &gt;&gt; <span class="v">8</span>);   <span class="c">// 0..127</span></pre>
+  <div class="note"><b>为什么放这里：</b>这是全链路唯一「已经解码完、即将送 I²S」的点——数据一定存在、时间戳一定对、且不额外解一次码。表情任务只消费一个 1 字节的值，用深度 1 的队列覆盖写就行，积压会自己丢弃，不会拖慢音频。</div>
+  <div class="note warn"><b>不要在这里做重活：</b>包络计算只是取绝对值最大值，一次遍历几百个样本，成本可忽略。千万别在这里加 FFT、加平滑滤波以外的任何处理——这个线程优先级只有 4，一慢就爆音。</div>
+</section>
+
+<section>
+  <h2>八、优先级：谁可以打断谁</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:110px">优先级</th><th style="width:200px">层</th><th>规则</th></tr>
+      <tr><td><b>P0</b></td><td>FatalError / OTA</td><td>抢占一切，不可被覆盖，只由状态机解除</td></tr>
+      <tr><td><b>P1</b></td><td>L0 状态表情</td><td>状态机迁移时立即接管；P1 生效期间 L1 情绪被挂起而非丢弃</td></tr>
+      <tr><td><b>P2</b></td><td>L1 情绪表情</td><td>持续 3–5 秒后自动回落；连续两次相同情绪不重播动画（避免抖）</td></tr>
+      <tr><td><b>P3</b></td><td>L2 微动画</td><td>永远在跑，但会被 P0/P1 抑制（如 OTA 时停止眨眼）</td></tr>
+    </table>
+    <div class="note"><b>一个必须写的防抖：</b>情绪串在流式输出里可能连续来好几个（<code>happy</code>→<code>laughing</code>→<code>happy</code>）。规则是「同一预设 800ms 内不重启动画」，否则脸会抽。</div>
+  </div>
+</section>
+
+<section>
+  <h2>九、附带价值：把表情当 AEC 的诊断仪表</h2>
+  <div class="card">
+    <p style="font-size:13.5px;color:var(--ink2)">你正在查「自己说话时被自己打断」的问题。表情系统做好后，<b>这个故障会变得肉眼可见</b>：</p>
+    <table style="margin-top:12px">
+      <tr><th style="width:230px">现象</th><th>说明</th></tr>
+      <tr><td>它说话时脸突然闪一下「惊讶」又回到聆听</td><td>说明收到了 <code>provider_vad_start</code> 打断 → <b>自打断正在发生</b></td></tr>
+      <tr><td>正常说完整段，脸平稳回到平静</td><td>这一轮没有被误打断</td></tr>
+      <tr><td>脸在「思考」卡很久不进入「说话」</td><td>云端首包延迟问题，不是设备问题</td></tr>
+    </table>
+    <div class="note ok"><b>实用做法：</b>调试期给被打断加一个只有调试版才显示的小标记（屏幕左下角一个红点）。坐在对面看十轮对话，就能估出自打断率，比翻日志快一个数量级。量产版关掉。</div>
+  </div>
+</section>
+
+<section>
+  <h2>十、分期建议：先做 8 个，别一次做 27 个</h2>
+  <div class="card">
+    <table>
+      <tr><th style="width:110px">阶段</th><th style="width:280px">做哪些</th><th>目标</th></tr>
+      <tr><td><b>MVP</b><br>1–2 天</td><td>平静、聆听、思考、说话（含口型）、开心、难过、惊讶、错误</td><td><b>能让一轮完整对话跑通并看懂</b>。这 8 个覆盖了 90% 的实际停留时间</td></tr>
+      <tr><td><b>V1</b><br>+2 天</td><td>补齐剩余 7 个情绪 + 配网/连接/升级/低电/充电</td><td>产品级完整度</td></tr>
+      <tr><td><b>V2</b><br>后续</td><td>喜欢、得意、搞怪、疑惑等「性格化」表情 + 待机小动作</td><td><b>IP 感</b>：让它有性格，而不是有功能</td></tr>
+    </table>
+    <div class="note warn"><b>顺序不能反：</b>先做「状态表情」，后做「情绪表情」。因为状态表情决定可用性（用户得知道它在听还是在想），情绪表情只决定可爱度。反过来做，会出现「表情很萌但不知道它在干嘛」的半成品。</div>
+  </div>
+</section>
+
+<section>
+  <h2>附：参数表（可直接用于固件）</h2>
+  <p class="desc">下面是上面所有预览的同一份数据源，字段含义：<code>eye</code> 眼形、<code>open</code> 开合度、<code>pupil</code> 瞳孔偏移、<code>brow</code> 眉毛角度、<code>mouth</code> 嘴形、<code>blush</code> 腮红、<code>fx</code> 附加元素。未列出的字段取默认值。</p>
+  <pre id="jsonOut"></pre>
+  <div class="note"><b>归一化约定：</b>所有坐标按「屏宽 = 1.0」的相对值给出，渲染时乘以实际屏宽。这样同一份参数在 240×320（小鸡）和 480×480（微雪 AMOLED）上都能直接用，只需改字号和线宽系数。</div>
+</section>
+
+<footer>
+  <div>CHICK-01 · 屏幕表情系统清单 v1.0</div>
+  <div>依据：device_state.h（12 态）· emoji_display.cc（19 情绪串）· 2.8″ 240×320 IPS</div>
+</footer>
+
+</div>
+
+<script>
+const BG = '#14181F', EYE = '#FFD8A8', PUP = '#14181F', BLUSH = '#FF7A6B';
+
+// ---------- 基础绘制 ----------
+function eyes(cx, cy, e){
+  const rx = 32, ryBase = 42;
+  const ry = ryBase * (e.open === undefined ? 1 : e.open);
+  const sw = 9;
+  const s = e.shape || 'open';
+  let out = '';
+
+  if (s === 'closed') {
+    out = `<path d="M${cx-30},${cy} q30,13 60,0" stroke="${EYE}" stroke-width="${sw}" fill="none" stroke-linecap="round"/>`;
+  } else if (s === 'happy') {
+    out = `<path d="M${cx-31},${cy+9} q31,-31 62,0" stroke="${EYE}" stroke-width="${sw}" fill="none" stroke-linecap="round"/>`;
+  } else if (s === 'sad') {
+    out = `<path d="M${cx-31},${cy-7} q31,27 62,0" stroke="${EYE}" stroke-width="${sw}" fill="none" stroke-linecap="round"/>`;
+  } else if (s === 'heart') {
+    out = `<path d="M${cx},${cy+22} C${cx-34},${cy-4} ${cx-20},${cy-30} ${cx},${cy-12} C${cx+20},${cy-30} ${cx+34},${cy-4} ${cx},${cy+22} Z" fill="${EYE}"/>`;
+  } else if (s === 'star') {
+    let p = [];
+    for (let i=0;i<10;i++){
+      const r = i%2===0 ? 34 : 15;
+      const a = -Math.PI/2 + i*Math.PI/5;
+      p.push(`${cx+r*Math.cos(a)},${cy+r*Math.sin(a)}`);
+    }
+    out = `<polygon points="${p.join(' ')}" fill="${EYE}"/>`;
+  } else if (s === 'spiral') {
+    out = `<circle cx="${cx}" cy="${cy}" r="33" fill="none" stroke="${EYE}" stroke-width="8"/>
+           <circle cx="${cx}" cy="${cy}" r="16" fill="none" stroke="${EYE}" stroke-width="7"/>`;
+  } else {
+    // open / wide / half / squint
+    const r = (s === 'wide') ? ry*1.2 : ry;
+    out = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${r}" fill="${EYE}"/>`;
+    const pr = (s === 'wide') ? 13 : 12;
+    const px = cx + (e.pupil ? e.pupil[0] : 0) * 13;
+    const py = cy + (e.pupil ? e.pupil[1] : 0) * 13;
+    if (s !== 'squint') {
+      out += `<circle cx="${px}" cy="${py}" r="${pr}" fill="${PUP}"/>
+              <circle cx="${px-4}" cy="${py-5}" r="4.5" fill="#ffffff" opacity="0.9"/>`;
+    }
+    if (s === 'half' || s === 'squint') {
+      out += `<rect x="${cx-rx-4}" y="${cy-r}" width="${rx*2+8}" height="${r*0.55}" fill="${BG}"/>
+              <path d="M${cx-rx-2},${cy-r*0.44} L${cx+rx+2},${cy-r*0.44}" stroke="${EYE}" stroke-width="7" stroke-linecap="round"/>`;
+    }
+  }
+  return out;
+}
+
+function mouth(el){
+  const cx = 120, cy = 208;
+  const m = el.mouth || {shape:'smile', w:1, open:0};
+  const w = 26 * (m.w === undefined ? 1 : m.w);
+  const sw = 8;
+  switch(m.shape){
+    case 'none': return '';
+    case 'flat': return `<path d="M${cx-w},${cy} L${cx+w},${cy}" stroke="${EYE}" stroke-width="${sw}" stroke-linecap="round"/>`;
+    case 'smile': return `<path d="M${cx-w},${cy-3} q${w},21 ${w*2},0" stroke="${EYE}" stroke-width="${sw}" fill="none" stroke-linecap="round"/>`;
+    case 'sad': return `<path d="M${cx-w},${cy+13} q${w},-20 ${w*2},0" stroke="${EYE}" stroke-width="${sw}" fill="none" stroke-linecap="round"/>`;
+    case 'wavy': return `<path d="M${cx-w},${cy} q${w/2},-11 ${w},0 t${w},0" stroke="${EYE}" stroke-width="${sw-1}" fill="none" stroke-linecap="round"/>`;
+    case 'o': return `<ellipse cx="${cx}" cy="${cy+2}" rx="12" ry="16" fill="${EYE}"/>`;
+    case 'open': {
+      const h = 7 + (m.open||0) * 20;
+      return `<ellipse cx="${cx}" cy="${cy+4}" rx="${w*0.92}" ry="${h}" fill="${EYE}"/>`;
+    }
+    case 'grin': return `<path d="M${cx-w},${cy-6} q${w},3 ${w*2},0 q-2,30 -${w},30 q-${w-2},0 -${w},-30 Z" fill="${EYE}"/>`;
+    case 'tongue': return `<path d="M${cx-w},${cy-6} q${w},3 ${w*2},0 q-2,28 -${w},28 q-${w-2},0 -${w},-28 Z" fill="${EYE}"/>
+                           <path d="M${cx-9},${cy+14} q9,12 18,0 q-9,7 -18,0 Z" fill="#FF8A7A"/>`;
+    case 'smirk': return `<path d="M${cx-w},${cy+3} q${w},12 ${w*2},-6" stroke="${EYE}" stroke-width="${sw}" fill="none" stroke-linecap="round"/>`;
+    default: return '';
+  }
+}
+
+function brows(el){
+  const b = el.brow;
+  if (!b) return '';
+  const y = 76 + (b.y||0), sw = 7;
+  const t = Math.tan((b.angle||0) * Math.PI/180) * 50;
+  const dy = b.split ? 9 : 0;
+  return `<path d="M54,${y-dy} L104,${y-dy-t}" stroke="${EYE}" stroke-width="${sw}" stroke-linecap="round" opacity="0.95"/>
+          <path d="M136,${y+dy-t} L186,${y+dy}" stroke="${EYE}" stroke-width="${sw}" stroke-linecap="round" opacity="0.95"/>`;
+}
+
+function blush(level){
+  if (!level) return '';
+  const op = 0.28 + level*0.45;
+  return `<ellipse cx="46" cy="182" rx="17" ry="10" fill="${BLUSH}" opacity="${op}"/>
+          <ellipse cx="194" cy="182" rx="17" ry="10" fill="${BLUSH}" opacity="${op}"/>`;
+}
+
+function fx(list){
+  if (!list) return '';
+  let out = '';
+  list.forEach(f=>{
+    if (f === 'zzz') out += `<text x="176" y="86" font-size="20" fill="${EYE}" opacity=".85" font-family="sans-serif">z</text>
+        <text x="192" y="68" font-size="26" fill="${EYE}" opacity=".65" font-family="sans-serif">z</text>
+        <text x="210" y="48" font-size="32" fill="${EYE}" opacity=".45" font-family="sans-serif">Z</text>`;
+    if (f === 'question') out += `<text x="192" y="70" font-size="46" font-weight="700" fill="${EYE}" opacity=".8" font-family="sans-serif">?</text>`;
+    if (f === 'exclaim') out += `<text x="196" y="72" font-size="46" font-weight="700" fill="${EYE}" opacity=".9" font-family="sans-serif">!</text>`;
+    if (f === 'tears') out += `<path d="M62,170 q-7,16 0,24 q7,-8 0,-24 Z" fill="#8FD3FF" opacity=".9"/>
+        <path d="M178,170 q-7,16 0,24 q7,-8 0,-24 Z" fill="#8FD3FF" opacity=".9"/>`;
+    if (f === 'sweat') out += `<path d="M196,96 q-9,17 0,25 q9,-8 0,-25 Z" fill="#8FD3FF" opacity=".9"/>`;
+    if (f === 'sparkle') out += `<g fill="${EYE}" opacity=".85"><path d="M44,84 l4,10 10,4 -10,4 -4,10 -4,-10 -10,-4 10,-4 Z"/><path d="M200,196 l3,7 7,3 -7,3 -3,7 -3,-7 -7,-3 7,-3 Z"/></g>`;
+    if (f === 'dots') out += `<g fill="${EYE}" opacity=".7"><circle cx="96" cy="272" r="6"/><circle cx="120" cy="272" r="6"/><circle cx="144" cy="272" r="6"/></g>`;
+    if (f === 'bars') out += `<g stroke="${EYE}" fill="none" stroke-width="5" stroke-linecap="round" opacity=".75">
+        <path d="M186,92 a14,14 0 0 1 20,0"/><path d="M180,80 a24,24 0 0 1 32,0"/><path d="M174,68 a34,34 0 0 1 44,0"/></g>`;
+    if (f === 'ring') out += `<g opacity=".85"><rect x="58" y="286" width="124" height="12" rx="6" fill="none" stroke="${EYE}" stroke-width="3"/>
+        <rect x="62" y="290" width="76" height="4" rx="2" fill="${EYE}"/></g>`;
+    if (f === 'battery') out += `<g opacity=".8"><rect x="168" y="262" width="34" height="16" rx="3" fill="none" stroke="${EYE}" stroke-width="3"/>
+        <rect x="202" y="267" width="4" height="6" fill="${EYE}"/><rect x="172" y="266" width="8" height="8" fill="${BLUSH}"/></g>`;
+  });
+  return out;
+}
+
+function face(el){
+  return `<svg viewBox="0 0 240 320" preserveAspectRatio="xMidYMid meet">
+    <rect width="240" height="320" fill="${el.bg || BG}"/>
+    ${fx(el.fx)}
+    ${blush(el.blush)}
+    ${eyes(74, 132, el.eyeL || el.eye || {})}
+    ${eyes(166, 132, el.eyeR || el.eye || {})}
+    ${brows(el)}
+    ${mouth(el)}
+  </svg>`;
+}
+
+// ---------- 数据 ----------
+const L0 = [
+  {k:'boot', n:'开机自检', s:'Starting / Activating', el:{eye:{shape:'wide',open:1,pupil:[0,0]}, mouth:{shape:'o'}, fx:['ring']}, note:'闭→睁 300ms，瞳孔放大，末了一次眨眼'},
+  {k:'wifi_config', n:'配网中', s:'WifiConfiguring', el:{eye:{shape:'open',open:1,pupil:[-0.7,0.5]}, mouth:{shape:'flat'}, fx:['bars']}, note:'视线固定看左下，信号弧循环'},
+  {k:'connecting', n:'连接中', s:'Connecting', el:{eye:{shape:'open',open:0.9,pupil:[0,-0.7]}, mouth:{shape:'flat'}, fx:['dots']}, note:'看上方 + 三点依次点亮'},
+  {k:'idle', n:'待机', s:'Idle', el:{eye:{shape:'half',open:0.75,pupil:[0,0]}, mouth:{shape:'smile',w:0.6}}, note:'半眯 + 呼吸 + 随机眨眼 + 视线游移'},
+  {k:'listening', n:'聆听', s:'Listening', el:{eye:{shape:'wide',open:1,pupil:[0,-0.15]}}, note:'睁大、瞳孔放大，嘴轻合，轻微上抬'},
+  {k:'thinking_state', n:'思考', s:'Listening（等首包）', el:{eye:{shape:'open',open:0.85,pupil:[0.6,-0.6]}, mouth:{shape:'flat'}, fx:['dots']}, note:'视线右上缓慢漂移，比情绪版更安静'},
+  {k:'speaking', n:'说话', s:'Speaking', el:{eye:{shape:'open',open:1}, mouth:{shape:'open',open:0.5}, blush:0.2}, note:'嘴开合由音频包络驱动，情绪保持不变'},
+  {k:'notifying', n:'提示', s:'Notifying', el:{eye:{shape:'wide',open:1}, mouth:{shape:'o'}, brow:{y:-6,angle:10}, fx:['exclaim']}, note:'眉毛上挑 + 感叹号，与「说话」明显区分'},
+  {k:'error', n:'错误', s:'FatalError', el:{eye:{shape:'sad',open:1}, mouth:{shape:'sad',w:0.8}, brow:{y:6,angle:14}, bg:'#1E1416'}, note:'下垂 + 皱眉 + 背景压向暗红'},
+  {k:'upgrading', n:'升级中', s:'Upgrading', el:{eye:{shape:'squint',open:0.6}, mouth:{shape:'flat'}, fx:['ring']}, note:'进度环 + 眯眼，不可被情绪覆盖'},
+  {k:'low_battery', n:'低电', s:'Battery < 15%', el:{eye:{shape:'half',open:0.5}, mouth:{shape:'sad',w:0.7}, fx:['battery']}, note:'半闭眼 + 电池图标，10 秒一次缓慢眨眼'},
+  {k:'charging', n:'充电', s:'Charging', el:{eye:{shape:'closed'}, mouth:{shape:'smile',w:0.7}, blush:0.3}, note:'闭眼微笑弧 + 慢呼吸，可 30s 后转低亮度待机'}
+];
+
+const L1 = [
+  {k:'neutral', n:'平静', s:'neutral', el:{eye:{shape:'open',open:1}}, note:'基础态，只有呼吸与眨眼'},
+  {k:'happy', n:'开心', s:'happy / laughing / funny', el:{eye:{shape:'happy'}, mouth:{shape:'grin'}, blush:0.5}, note:'月牙眼 + 张嘴笑，循环轻微弹动'},
+  {k:'loving', n:'喜欢', s:'loving', el:{eye:{shape:'heart'}, mouth:{shape:'smile',w:0.8}, blush:0.7}, note:'心形瞳孔 + 2s 一次心跳缩放'},
+  {k:'embarrassed', n:'害羞', s:'embarrassed', el:{eye:{shape:'open',open:0.6,pupil:[0.8,0.6]}, mouth:{shape:'wavy'}, blush:1, fx:['sweat']}, note:'腮红加深、视线躲开、一侧汗滴'},
+  {k:'confident', n:'得意', s:'confident', el:{eye:{shape:'half',open:0.6,pupil:[0,0]}, mouth:{shape:'smirk',w:0.8}, brow:{y:-4,angle:12,split:true}}, note:'半眯 + 单边挑眉 + 嘴角斜挑'},
+  {k:'delicious', n:'好吃', s:'delicious', el:{eye:{shape:'happy'}, mouth:{shape:'tongue'}, blush:0.6}, note:'眯眼 + 舔嘴，配一次快速点头'},
+  {k:'sad', n:'难过', s:'sad', el:{eye:{shape:'sad',open:1}, mouth:{shape:'sad'}, brow:{y:5,angle:10}}, note:'下弧眼 + 下弯嘴'},
+  {k:'crying', n:'哭', s:'crying', el:{eye:{shape:'sad',open:0.7}, mouth:{shape:'sad',w:0.8}, brow:{y:6,angle:12}, fx:['tears'], blush:0.4}, note:'难过加强版 + 两行泪'},
+  {k:'sleepy', n:'困', s:'sleepy', el:{eye:{shape:'closed'}, mouth:{shape:'o'}, fx:['zzz']}, note:'闭眼 + zzZ 缓慢上浮'},
+  {k:'silly', n:'搞怪', s:'silly', el:{eyeL:{shape:'wide',open:1}, eyeR:{shape:'squint',open:0.5}, mouth:{shape:'wavy',w:0.9}}, note:'一高一低眼 + 歪嘴，不对称是关键'},
+  {k:'angry', n:'生气', s:'angry', el:{eye:{shape:'open',open:0.7,pupil:[0,0]}, mouth:{shape:'flat',w:0.75}, brow:{y:2,angle:-16}, bg:'#1C1416'}, note:'眉毛内压、眼色压暗、嘴变窄'},
+  {k:'surprised', n:'惊讶', s:'surprised / shocked', el:{eye:{shape:'wide',open:1}, mouth:{shape:'o'}, brow:{y:-8,angle:8}, fx:['sparkle']}, note:'圆睁 + 小 o 嘴 + 高挑眉'},
+  {k:'winking', n:'眨眼', s:'winking', el:{eyeL:{shape:'open',open:1}, eyeR:{shape:'closed'}, mouth:{shape:'smirk',w:0.7}, blush:0.4}, note:'单眼闭 + 嘴微挑'},
+  {k:'relaxed', n:'放松', s:'relaxed', el:{eye:{shape:'closed'}, mouth:{shape:'smile',w:0.75}, blush:0.25}, note:'闭眼长弧 + 4s 极慢呼吸'},
+  {k:'confused', n:'疑惑', s:'confused', el:{eye:{shape:'open',open:0.9,pupil:[0.5,-0.5]}, mouth:{shape:'wavy'}, brow:{y:-2,angle:0,split:true}, fx:['question']}, note:'高低眉 + 歪嘴 + 问号上下浮'}
+];
+
+// ---------- 渲染 ----------
+function card(item){
+  return `<div class="face">
+    <div class="screen">${face(item.el)}</div>
+    <div class="fname">${item.n}</div>
+    <div class="fsub">${item.s}</div>
+    <div class="fsub" style="margin-top:6px;color:#5b6167">${item.note}</div>
+  </div>`;
+}
+document.getElementById('gridL0').innerHTML = L0.map(card).join('');
+document.getElementById('gridL1').innerHTML = L1.map(card).join('');
+
+// ---------- 参数表输出 ----------
+function compact(el){
+  const o = {};
+  if (el.bg) o.bg = el.bg;
+  const eyeOut = e => {
+    const r = {shape:e.shape};
+    if (e.open !== undefined && e.open !== 1) r.open = +e.open.toFixed(2);
+    if (e.pupil) r.pupil = e.pupil;
+    return r;
+  };
+  if (el.eye) o.eye = eyeOut(el.eye);
+  if (el.eyeL) o.eyeL = eyeOut(el.eyeL);
+  if (el.eyeR) o.eyeR = eyeOut(el.eyeR);
+  if (el.brow) o.brow = el.brow;
+  if (el.mouth) o.mouth = el.mouth;
+  if (el.blush) o.blush = el.blush;
+  if (el.fx) o.fx = el.fx;
+  return o;
+}
+const all = {state:{}, emotion:{}};
+L0.forEach(x => all.state[x.k] = compact(x.el));
+L1.forEach(x => all.emotion[x.k] = compact(x.el));
+let txt = JSON.stringify(all, null, 2)
+  .replace(/"(\w+)":/g, '<span class="k">"$1"</span>:')
+  .replace(/: "([^"]*)"/g, ': <span class="v">"$1"</span>');
+document.getElementById('jsonOut').innerHTML = txt;
+</script>
+</body>
+</html>
