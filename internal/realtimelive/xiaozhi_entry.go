@@ -165,6 +165,7 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		session.wire = newXiaozhiWire(ws, hello.Version, hello.AudioParams.FrameDuration, session.rec.owner.SessionID)
 		session.wire.(*xiaozhiWire).mcp = hello.Features["mcp"]
 		session.wire.(*xiaozhiWire).pcm = hello.AudioParams.Format == "pcm_s16le"
+		session.wire.(*xiaozhiWire).face = hello.Features["face_state_v1"]
 		s.attachDiagnostics(session)
 		session.enableDeviceControls()
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }

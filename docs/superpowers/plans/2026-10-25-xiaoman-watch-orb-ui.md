@@ -1,5 +1,7 @@
 # 小满手表流体光球实施计划
 
+> 已取消（2026-11-08）：用户明确不再使用小光球，改用[CHICK-01表情方案](../specs/2026-11-08-chick-face-design.md)。本文件只保留历史，不再作为产品界面实施依据。已验证的DMA音频观察继续复用。
+
 > **For agentic workers:** Use superpowers:subagent-driven-development to implement and review the firmware tasks. User explicitly authorizes direct main development and device installation; do not create branches or worktrees.
 
 **Goal:** 将已确认的B流体光球、简短状态及默认隐藏对话字幕实现到小满StopWatch固件，保留现有小满唤醒、AEC、持续收音、插话排空和云端记录。

@@ -9,6 +9,8 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <thread>
 using namespace family_robot;
 // cJSON/transport are host test doubles. Protocol methods themselves are the
 // exact production include; hardware state uses the real PlaybackProgress core.
@@ -58,7 +60,7 @@ public:
             case PlaybackOp::Reset:core.InterruptAll();++generation;break;
         }return true;
     }
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
     void MarkOrbDraining(PlaybackIdentity id) {core.MarkOrbDraining(id);}
 #endif
     uint32_t PlaybackGeneration(){return generation;}
@@ -109,6 +111,9 @@ public:
     int sent=0;std::string last_text;void SendText(const std::string& s){++sent;last_text=s;}
     std::function<void(uint32_t)> on_audio_channel_closed_;
     void NotifyPlaybackClosed(uint32_t);uint32_t AudioChannelEpoch()const override;
+#if CONFIG_CHICK_FACE_UI
+    uint32_t FaceStateEpoch(const char*)const;
+#endif
     bool ResetPlaybackConnection(uint32_t expected=0,uint32_t* closed_epoch=nullptr);bool PlaybackNegotiated()const;
 #if CONFIG_XMINI_C3_BUTTON_ENTRY
     bool PlaybackAllowsListening()const;
@@ -130,6 +135,25 @@ static std::unique_ptr<cJSON> tts(const char* state,double id=1,const char* sess
     cJSON_AddStringToObject(r.get(),"state",state);cJSON_AddStringToObject(r.get(),"session_id",session);cJSON_AddNumberToObject(r.get(),"playback_id",id);return r;
 }
 int main(){
+#if CONFIG_CHICK_FACE_UI
+    {
+        WebsocketProtocol face;face.ResetPlaybackConnection();
+        face.playback_negotiated_=true;face.session_id_="face-scope";
+        const auto epoch=face.FaceStateEpoch("face-scope");assert(epoch);
+        assert(!face.FaceStateEpoch(nullptr) && !face.FaceStateEpoch("wrong"));
+        std::atomic<bool> started{false};
+        std::thread reader([&] {
+            started=true;
+            for(int i=0;i<10000;++i) {
+                const auto value=face.FaceStateEpoch("face-scope");
+                assert(value==0 || value==epoch);
+            }
+        });
+        while(!started.load())std::this_thread::yield();
+        face.ResetPlaybackConnection();reader.join();
+        assert(!face.FaceStateEpoch("face-scope") && face.AudioChannelEpoch()!=epoch);
+    }
+#endif
     WebsocketProtocol ws;ws.ResetPlaybackConnection();
     auto handle=[&](cJSON* r){return ws.HandlePlaybackTts(r,ws.playback_connection_);};
     // No mutual negotiation: retain ordinary JSON behavior and suppress receipts.
@@ -265,7 +289,7 @@ int main(){
         assert(false && "drain requires the actual production AbortSpeaking method");
 #endif
         assert(app.aborted_&&app.audio_service_.resets==resets&&codec.generation==generation);
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         assert(codec.core.OrbActivity().draining);
 #endif
         assert(!d.PlaybackEventCurrent(old_event)); // retire only scheduled UI
@@ -277,7 +301,7 @@ int main(){
         cJSON_AddStringToObject(seal.get(),"reason","drain");
         cJSON_AddNumberToObject(seal.get(),"sent_samples",2880);
         assert(d.HandlePlaybackTts(seal.get(),d.playback_connection_));
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         assert(codec.core.OrbActivity().draining);
 #endif
         d.DeliverAudio(std::make_unique<AudioStreamPacket>(),d.playback_connection_);
@@ -286,7 +310,7 @@ int main(){
         for(int tick=0;tick<18;++tick)codec.core.Complete(dma[tick%6],240,(tick+1)*10000);
         auto final=codec.core.Snapshot(old_event.identity);
         assert(final.valid&&final.finished&&!final.interrupted&&final.played_samples==2880);
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         assert(!codec.core.OrbActivity().draining && !codec.core.OrbActivity().active);
 #endif
         // An advertised total must match the same ID's actually admitted frames.

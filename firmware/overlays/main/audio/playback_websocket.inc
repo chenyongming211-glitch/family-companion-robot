@@ -104,7 +104,7 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
                 return false;
             }
         }
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         if (playback_drain_negotiated_ && cJSON_IsString(reason) && strcmp(reason->valuestring,"drain")==0)
             codec->MarkOrbDraining(id); // only after the existing exact sent_samples validation
 #endif
@@ -189,7 +189,7 @@ void WebsocketProtocol::SendAbortSpeaking(AbortReason reason) {
             // Retire scheduled speaking UI, but keep receiving the ordered
             // tail until the server seals this same playback identity.
             if (!playback_drain_negotiated_) playback_receiving_ = false;
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
             else Board::GetInstance().GetAudioCodec()->MarkOrbDraining(playback_id_);
 #endif
             if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
@@ -265,6 +265,16 @@ uint32_t WebsocketProtocol::AudioChannelEpoch() const {
     std::lock_guard<std::mutex> lock(playback_mutex_);
     return playback_connection_;
 }
+#if CONFIG_CHICK_FACE_UI
+uint32_t WebsocketProtocol::FaceStateEpoch(const char* scope) const {
+    // Scope and connection must describe one hello/reset snapshot. Do not
+    // return a reference to the string modified by transport close callbacks.
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    if(!scope || !*scope || !playback_negotiated_ || session_id_!=scope ||
+       !playback_connection_ || playback_connection_==UINT32_MAX)return 0;
+    return playback_connection_;
+}
+#endif
 void WebsocketProtocol::NotifyPlaybackClosed(uint32_t connection) {
     uint32_t closed_epoch;
     if (!ResetPlaybackConnection(connection, &closed_epoch)) return;

@@ -4,7 +4,7 @@
 namespace family_robot {
 // UI computation budget only. Caller observes rendered frames; there is no
 // clock, probing, audio control, or work scheduled by this bounded policy.
-class OrbRefreshPolicy {
+class FaceRefreshPolicy {
 public:
     static constexpr uint32_t kFastFrameUs=25000,kCriticalFrameUs=80000;
     static constexpr uint8_t kRecoveryFrames=10,kCriticalFrames=2;

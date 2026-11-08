@@ -34,6 +34,13 @@ def prepare(tree, source):
                      ('console.inc', 'wave_wake_console.inc')]:
         (tree/'main/audio'/dst).write_bytes((here/src).read_bytes())
     board = 'main/boards/waveshare/esp32-s3-touch-amoled-2.16/'
+    if 'config WAVESHARE_WAKE_SPEECH_WINDOW' in (tree/'main/Kconfig.projbuild').read_text():
+        config = json.loads((tree/(board+'config.json')).read_text())
+        for build in config['builds']:
+            if build['name'] == 'esp32-s3-touch-amoled-2.16-xiaoman':
+                build['sdkconfig_append'].append('CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW=y')
+        old = (tree/(board+'config.json')).read_text()
+        edit(board+'config.json', old, json.dumps(config, indent=4)+'\n')
     edit(board+'xiaoman_box_codec.h', '#include "experiment_gate.h"',
          '#include "experiment_gate.h"\n#include "wave_wake_runtime.h"')
     edit(board+'xiaoman_box_lifecycle.inc', '    const bool read=BoxAudioCodec::InputData(data);',

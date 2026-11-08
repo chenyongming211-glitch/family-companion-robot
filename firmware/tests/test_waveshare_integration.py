@@ -46,17 +46,17 @@ class WaveshareIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(xiaoman, 'dedicated Waveshare target is absent')
         options = xiaoman['sdkconfig_append']
         for option in ['CONFIG_WAVESHARE_XIAOMAN_REALTIME=y', 'CONFIG_STOPWATCH_SOFTWARE_AEC=n',
-                       'CONFIG_USE_DEVICE_AEC=y', 'CONFIG_XIAOMAN_ORB_UI=y',
+                       'CONFIG_USE_DEVICE_AEC=y', 'CONFIG_CHICK_FACE_UI=y',
                        'CONFIG_CUSTOM_WAKE_WORD="xiao man"', 'CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20',
                        'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/waveshare-xiaoman-16m.csv"']:
             self.assertIn(option, options)
         source = (board/'esp32-s3-touch-amoled-2.16.cc').read_text()
         self.assertIn('static XiaomanBoxCodec audio_codec(', source)
-        self.assertIn('using OrbDisplayOwner=CustomLcdDisplay;', source)
-        self.assertIn('#include "xiaoman_orb_display.inc"', source)
-        self.assertIn('SetOrbScreenOn(brightness>0)', source)
+        self.assertNotIn('xiaoman_orb_display.inc', source)
+        self.assertIn('#include "chick_face_display.inc"', source)
+        self.assertIn('SetFaceScreenOn(brightness>0)', source)
         cmake = (self.source/'main/CMakeLists.txt').read_text()
-        self.assertIn('if(CONFIG_XIAOMAN_ORB_UI AND NOT CONFIG_BOARD_TYPE_M5STACK_STOPWATCH)', cmake)
+        self.assertIn('if(CONFIG_CHICK_FACE_UI)', cmake)
 
     def test_checked_read_is_opt_in_and_ordinary_writes_cannot_touch_refill_dma(self):
         box = (self.source/'main/audio/codecs/box_audio_codec.cc').read_text()

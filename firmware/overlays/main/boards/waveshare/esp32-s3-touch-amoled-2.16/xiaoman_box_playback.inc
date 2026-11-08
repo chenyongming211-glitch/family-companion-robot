@@ -33,7 +33,7 @@ bool XiaomanBoxCodec::PlaybackPoll(family_robot::PlaybackSnapshot& out) {
 bool XiaomanBoxCodec::PlaybackBusy() const {
     portENTER_CRITICAL(&mux_);const bool busy=playback_ && playback_->Busy();portEXIT_CRITICAL(&mux_);return busy;
 }
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
 family_robot::OrbOutputActivity XiaomanBoxCodec::GetOrbOutputActivity() const {
     portENTER_CRITICAL(&mux_);const auto out=playback_?playback_->OrbActivity():family_robot::OrbOutputActivity{};portEXIT_CRITICAL(&mux_);return out;
 }
@@ -46,13 +46,13 @@ void XiaomanBoxCodec::OutputTagged(std::vector<int16_t>& pcm,family_robot::Playb
     size_t offset=0;int64_t last_progress=esp_timer_get_time();
     while(offset<pcm.size()) {
         const size_t n=std::min(pcm.size()-offset,family_robot::PlaybackProgress::kBlock);
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         const auto level=family_robot::OrbPcmLevel(pcm.data()+offset,n);
 #endif
         portENTER_CRITICAL(&mux_);
         const bool current=playback_ && accepting_ && !faulted_ && generation!=UINT32_MAX && generation==output_generation_;
         const auto result=current?playback_->Submit(id,first+offset,pcm.data()+offset,n
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
             ,level
 #endif
             ):family_robot::PlaybackProgress::SubmitResult::Rejected;

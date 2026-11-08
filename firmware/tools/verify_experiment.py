@@ -621,7 +621,8 @@ def verify(firmware, tree, variant, idf_commit):
                 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME': '"partitions/waveshare-xiaoman-16m.csv"' if waveshare else '"partitions/v2/16m.csv"',
                 'CONFIG_STOPWATCH_SOFTWARE_AEC': 'y' if experiment else 'n',
                 'CONFIG_STOPWATCH_DEFAULT_REALTIME': 'y' if variant == 'm5stack-stopwatch-xiaoman' else 'n',
-                'CONFIG_XIAOMAN_ORB_UI': 'y' if xiaoman else 'n',
+                'CONFIG_CHICK_FACE_UI': 'y' if xiaoman else 'n',
+                'CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW': 'n',
                 'CONFIG_USE_DEVICE_AEC': 'y' if usb_console else 'n',
                 'CONFIG_ESP_CONSOLE_UART_DEFAULT': 'n' if usb_console else 'y',
                 'CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG': 'y' if usb_console else 'n'}
@@ -668,7 +669,8 @@ def verify(firmware, tree, variant, idf_commit):
     effective.setdefault('CONFIG_WAVESHARE_XIAOMAN_REALTIME', 'n')
     effective.setdefault('CONFIG_STOPWATCH_SOFTWARE_AEC', 'n')
     effective.setdefault('CONFIG_STOPWATCH_DEFAULT_REALTIME', 'n')
-    effective.setdefault('CONFIG_XIAOMAN_ORB_UI', 'n')
+    effective.setdefault('CONFIG_CHICK_FACE_UI', 'n')
+    effective.setdefault('CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW', 'n')
     effective.setdefault('CONFIG_XMINI_C3_PCM', 'n')
     # Kconfig omits the device-AEC symbol when this stock board's dependency
     # expression is false. Absent means disabled, never an enabled core path.

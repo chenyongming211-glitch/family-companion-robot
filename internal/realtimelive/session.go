@@ -132,6 +132,14 @@ func (s *Session) send(event map[string]any) error {
 	defer s.mu.Unlock()
 	return s.sendLocked(event)
 }
+func (s *Session) sendThinking(rt *liveTurn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctx.Err() != nil || rt.ctx.Err() != nil || rt.turn.Cut || s.output != rt {
+		return nil
+	}
+	return s.sendLocked(map[string]any{"type": "status", "code": "thinking"})
+}
 func (s *Session) pcmTransport() bool {
 	w, ok := s.wire.(*xiaozhiWire)
 	return ok && w.pcm
@@ -230,6 +238,9 @@ func (s *Session) interruptFrom(expected *liveTurn, source string) error {
 		err = s.sendLocked(map[string]any{"type": "drain", "id": t.ID, "sent": *t.DrainTarget})
 	} else {
 		t.MarkDrainDone()
+		if device {
+			err = s.sendLocked(map[string]any{"type": "status", "code": "listening"})
+		}
 	}
 	if expected != nil && err == nil {
 		err = s.sendLocked(map[string]any{"type": "status", "code": "turn_failed"})
@@ -817,7 +828,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	if e != nil {
 		return
 	}
-	if e = s.send(map[string]any{"type": "status", "code": "thinking"}); e != nil {
+	if e = s.sendThinking(rt); e != nil {
 		s.fail()
 		return
 	}

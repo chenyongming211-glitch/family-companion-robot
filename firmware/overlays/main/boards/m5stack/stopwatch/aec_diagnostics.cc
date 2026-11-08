@@ -10,8 +10,8 @@
 #include <cstdio>
 #include <cstring>
 #include "application.h"
-#if CONFIG_XIAOMAN_ORB_UI
-#include "xiaoman_orb_view.h"
+#if CONFIG_CHICK_FACE_UI
+#include "chick_face_view.h"
 #endif
 #include "software_aec_codec.h"
 
@@ -130,8 +130,8 @@ void AecDiagnostics::Worker() {
     vTaskDelete(nullptr);
 }
 void AecDiagnostics::Command(const char* line) {
-#if CONFIG_XIAOMAN_ORB_UI
-    if (family_robot::XiaomanOrbConsole(line)) return;
+#if CONFIG_CHICK_FACE_UI
+    if (family_robot::ChickFaceConsole(line)) return;
 #endif
     if (std::strcmp(line, "aec_stats") == 0) {
         codec_.PrintStats();

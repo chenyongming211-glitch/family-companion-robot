@@ -14,6 +14,9 @@
 
 #define CONFIG_SEND_WAKE_WORD_DATA 1
 #define CONFIG_WAVESHARE_XIAOMAN_REALTIME 1
+#ifndef CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW
+#define CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW 1
+#endif
 #define CONFIG_CUSTOM_WAKE_WORD "xiao man"
 #define CONFIG_CUSTOM_WAKE_WORD_DISPLAY "小满"
 #define CONFIG_CUSTOM_WAKE_WORD_THRESHOLD 20
@@ -229,7 +232,7 @@ int main(int argc, char** argv) {
         if(scenario=="speech-window-epoch") {++codec.capture_generation;engine.ResetWakeWordCapture();}
         int16_t suffix[]{95,96,97,98};frame.data=suffix;frame.vad_state=VAD_SPEECH;
         FeedWakeFrame(engine,&frame,codec.CaptureGeneration(),0);
-        assert(callbacks==(codec.hardware&&scenario=="speech-window"?1:0));
+        assert(callbacks==(CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW && codec.hardware && scenario=="speech-window"?1:0));
     } else if (scenario.rfind("tagged-", 0) == 0) {
         AfeAudioEngine engine;
         engine.codec_ = &codec;

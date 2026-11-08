@@ -48,6 +48,12 @@ class XiaomanWakeTests(unittest.TestCase):
                 sys.path.pop(0)
 
     def test_production_multinet_registration_and_epoch_boundaries(self):
+        self.run_production_multinet(1)
+
+    def test_shipped_product_window_keeps_registration_and_epoch_boundaries(self):
+        self.run_production_multinet(0)
+
+    def run_production_multinet(self, speech_window):
         custom = (self.source / 'main/audio/wake_words/custom_wake_word.cc').read_text()
         self.assertIn('void CustomWakeWord::ResetCapture(', custom,
                       'MultiNet has no capture-epoch reset; old partial/model state can cross a restart')
@@ -71,12 +77,13 @@ class XiaomanWakeTests(unittest.TestCase):
                 ('// WAKE_RESULT_DECLARATION', 'HandleWakeWordResult', 'AfeAudioEngine')]:
             declaration = re.search(r'\bvoid\s+'+name+r'\([^;]+;', headers[owner]).group(0)
             program = program.replace(marker, declaration)
-        source = self.work / 'xiaoman.cc'
+        source = self.work / f'xiaoman-{speech_window}.cc'
         source.write_text(program)
         binary = source.with_suffix('')
         build = subprocess.run([
             'c++', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
             '-Wno-unused-parameter', '-Wno-sign-compare',
+            f'-DCONFIG_WAVESHARE_WAKE_SPEECH_WINDOW={speech_window}',
             '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
             '-I', str(self.source / 'main/audio'), str(source), '-o', str(binary)],
             capture_output=True, text=True)

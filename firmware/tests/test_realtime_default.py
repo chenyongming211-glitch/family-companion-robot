@@ -95,7 +95,7 @@ class RealtimeDefaultTests(unittest.TestCase):
         for variant in config['builds']:
             enabled = 'CONFIG_STOPWATCH_DEFAULT_REALTIME=y' in variant['sdkconfig_append']
             self.assertEqual(enabled, variant['name'] == 'm5stack-stopwatch-xiaoman')
-            orb = 'CONFIG_XIAOMAN_ORB_UI=y' in variant['sdkconfig_append']
+            orb = 'CONFIG_CHICK_FACE_UI=y' in variant['sdkconfig_append']
             self.assertEqual(orb, variant['name'] == 'm5stack-stopwatch-xiaoman')
         kconfig = (self.source / 'main/Kconfig.projbuild').read_text()
         self.assertIn('config STOPWATCH_DEFAULT_REALTIME', kconfig)

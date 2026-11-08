@@ -20,9 +20,11 @@ type xiaozhiWire struct {
 	ws               *websocket.Conn
 	version, frameMS int
 	scope            string
-	listening        bool // Read-loop owned; writes never consult it.
-	mcp              bool // Negotiated once from the authenticated hello.
-	pcm              bool // Explicit v1 pcm_s16le_v1 negotiation; no format fallback.
+	listening        bool   // Read-loop owned; writes never consult it.
+	mcp              bool   // Negotiated once from the authenticated hello.
+	pcm              bool   // Explicit v1 pcm_s16le_v1 negotiation; no format fallback.
+	face             bool   // Optional visual metadata, negotiated once from hello.
+	faceState        string // Session mutex owns state deduplication and writes.
 	wakeSamples      int
 	startDeadline    time.Time
 	blocks           map[int64]*devicePlayback // Session mutex owns all playback access.
@@ -140,6 +142,9 @@ func (w *xiaozhiWire) sendEvent(e map[string]any) error {
 		if w.mcp {
 			features["mcp"] = true
 		}
+		if w.face {
+			features["face_state_v1"] = true
+		}
 		format := "opus"
 		if w.pcm {
 			format = "pcm_s16le"
@@ -183,11 +188,36 @@ func (w *xiaozhiWire) sendEvent(e map[string]any) error {
 		scope["playback_id"] = id
 		scope["sent_samples"] = block.sent
 	case "status":
-		return nil // Do not masquerade model generation as firmware TTS state.
+		switch e["code"] {
+		case "thinking":
+			return w.sendFaceState("thinking")
+		case "listening", "turn_failed", "drain_failed", "input_too_long":
+			return w.sendFaceState("listening")
+		}
+		return nil
 	default:
 		return errors.New("unknown_server_control")
 	}
-	return w.ws.WriteJSON(scope)
+	if err := w.ws.WriteJSON(scope); err != nil {
+		return err
+	}
+	if e["type"] == "end" || e["type"] == "drain" {
+		// Preserve the validated playback seal and TTS-stop ordering. This only
+		// clears generation metadata; actual playing/draining remains device-owned.
+		return w.sendFaceState("listening")
+	}
+	return nil
+}
+
+func (w *xiaozhiWire) sendFaceState(state string) error {
+	if !w.face || w.faceState == state {
+		return nil
+	}
+	if err := w.ws.WriteJSON(map[string]any{"type": "llm", "state": state, "session_id": w.scope}); err != nil {
+		return err
+	}
+	w.faceState = state
+	return nil
 }
 func (w *xiaozhiWire) sendAudio(id int64, packet []byte) error {
 	if w.pcm && len(packet) != 2880 {

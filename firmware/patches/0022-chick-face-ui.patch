@@ -1,0 +1,403 @@
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -44,8 +44,8 @@
+             )
+ 
+ set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+-if(CONFIG_XIAOMAN_ORB_UI AND NOT CONFIG_BOARD_TYPE_M5STACK_STOPWATCH)
+-    list(APPEND SOURCES "boards/m5stack/stopwatch/xiaoman_orb_view.cc")
++if(CONFIG_CHICK_FACE_UI)
++    list(APPEND SOURCES "display/chick_face_view.cc")
+     list(APPEND INCLUDE_DIRS "boards/m5stack/stopwatch")
+ endif()
+ 
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1002,13 +1002,13 @@
+         Logical MR from physical mono ES8311 DMA. Observation only at boot.
+         Requires the unique USB-console experiment variant. No acoustic acceptance.
+ 
+-config XIAOMAN_ORB_UI
+-    bool "Xiaoman fluid orb conversation UI"
++config CHICK_FACE_UI
++    bool "CHICK-01 parameterized face UI"
+     default n
+     depends on ((BOARD_TYPE_M5STACK_STOPWATCH && STOPWATCH_DEFAULT_REALTIME) || WAVESHARE_XIAOMAN_REALTIME) && USE_DEFAULT_MESSAGE_STYLE
+     help
+-        Local low-rate RGB565 orb and short truthful state only. No transcripts.
+-        USB orb_ui off/low/on selects static, 5fps, or target 15fps for comparison.
++        Parameterized CHICK-01 expressions and current DMA playback envelope.
++        Uses PSRAM only; low brightness changes animation rate, not wake policy.
+         Audio gates, queueing, cancellation and power policy remain authoritative.
+ 
+ config STOPWATCH_DEFAULT_REALTIME
+@@ -1028,6 +1028,14 @@
+     help
+         Preserve hardware ES7210 MR input and use completed TX DMA receipts.
+         Current processed capture is required before realtime uplink.
++
++config WAVESHARE_WAKE_SPEECH_WINDOW
++    bool "Unaccepted Waveshare speech-window alignment lab candidate"
++    default n
++    depends on WAVESHARE_XIAOMAN_REALTIME
++    help
++        Lab-only comparison of the unaccepted 0021 candidate. Product builds
++        retain the shipped command window until acoustic acceptance succeeds.
+ 
+ config STOPWATCH_AEC_OFFSET_SAMPLES
+     int "Fixed playback reference lookback (physical 24k samples)"
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -724,6 +724,25 @@
+                 });
+             }
+         } else if (strcmp(type->valuestring, "llm") == 0) {
++#if CONFIG_CHICK_FACE_UI
++            auto face_state = cJSON_GetObjectItem(root, "state");
++            if (cJSON_IsString(face_state) &&
++                (strcmp(face_state->valuestring, "thinking") == 0 ||
++                 strcmp(face_state->valuestring, "listening") == 0)) {
++                const bool thinking = strcmp(face_state->valuestring, "thinking") == 0;
++                auto scope = cJSON_GetObjectItem(root, "session_id");
++                const auto channel = cJSON_IsString(scope) ? protocol_->FaceStateEpoch(scope->valuestring) : 0;
++                if (channel) {
++                    Schedule([this, display, thinking, channel]() {
++                        const auto state = GetDeviceState();
++                        if (protocol_ && protocol_->IsAudioChannelOpened() &&
++                            protocol_->AudioChannelEpoch() == channel &&
++                            (state == kDeviceStateListening || state == kDeviceStateSpeaking))
++                            display->SetThinking(thinking);
++                    });
++                }
++            }
++#endif
+             auto emotion = cJSON_GetObjectItem(root, "emotion");
+             if (cJSON_IsString(emotion)) {
+                 Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
+@@ -1126,8 +1145,12 @@
+             if (last_error_message_.empty()) {
+                 display->SetStatus(Lang::Strings::STANDBY);
+                 display->ClearChatMessages();  // Clear messages first
++#if !CONFIG_CHICK_FACE_UI
+                 display->SetEmotion(
+                     "neutral");  // Then set emotion (wechat mode checks child count)
++#else
++                display->SetThinking(false);
++#endif
+             }
+             audio_service_.EnableVoiceProcessing(false);
+             audio_service_.EnableWakeWordDetection(true);
+@@ -1139,7 +1162,11 @@
+             break;
+         case kDeviceStateListening:
+             display->SetStatus(Lang::Strings::LISTENING);
++#if !CONFIG_CHICK_FACE_UI
+             display->SetEmotion("neutral");
++#else
++            display->SetThinking(false);
++#endif
+ 
+             // Make sure the audio processor is running
+             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -47,7 +47,7 @@
+     virtual uint32_t PlaybackGeneration() const { return 0; }
+     virtual bool PlaybackPoll(family_robot::PlaybackSnapshot&) { return false; }
+     virtual bool PlaybackBusy() const { return false; }
+-#if CONFIG_XIAOMAN_ORB_UI
++#if CONFIG_CHICK_FACE_UI
+     virtual family_robot::OrbOutputActivity GetOrbOutputActivity() const { return {}; }
+     virtual void MarkOrbDraining(family_robot::PlaybackIdentity) {}
+ #endif
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -337,7 +337,7 @@
+         audio_encode_queue_.clear();
+         audio_send_queue_.clear();
+         audio_engine_->SetOutputEpoch(experiment_gate_.epoch());
+-#if CONFIG_XIAOMAN_ORB_UI
++#if CONFIG_CHICK_FACE_UI
+         orb_gate_epoch_.store(experiment_gate_.epoch());
+ #endif
+     }
+@@ -889,7 +889,7 @@
+     task.type = type;
+     task.pcm = std::move(pcm);
+ 
+-#if CONFIG_XIAOMAN_ORB_UI
++#if CONFIG_CHICK_FACE_UI
+     const auto orb_level=type==kAudioTaskTypeEncodeToSendQueue ?
+         family_robot::OrbPcmLevel(task.pcm.data(),task.pcm.size()):0;
+ #endif
+@@ -909,7 +909,7 @@
+             if (!experiment_gate_.Allows(task.uplink_epoch))
+                 return;
+         }
+-#if CONFIG_XIAOMAN_ORB_UI
++#if CONFIG_CHICK_FACE_UI
+         if(type==kAudioTaskTypeEncodeToSendQueue && codec_->ManagedCapture()) {
+             const auto capture=codec_->CaptureGeneration();
+             if(audio_engine_->OutputCaptureGeneration()==capture && capture_generation_.load()==capture)
+@@ -1351,7 +1351,7 @@
+     return true;
+ }
+ 
+-#if CONFIG_XIAOMAN_ORB_UI
++#if CONFIG_CHICK_FACE_UI
+ #include "orb_audio_service.inc"
+ #endif
+ 
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -176,7 +176,7 @@
+     bool OpenC3Uplink(uint32_t revision);
+ #endif
+ 
+-#if CONFIG_XIAOMAN_ORB_UI
++#if CONFIG_CHICK_FACE_UI
+     family_robot::OrbAudioActivity GetOrbAudioActivity();
+ #endif
+     void WaitForCaptureReady(bool enabled) { capture_ready_waiting_.store(enabled); }
+@@ -214,7 +214,7 @@
+     std::atomic<bool> preserve_server_playback_{false};
+     std::atomic<bool> capture_ready_waiting_{false};
+     void NotifyCaptureReady();
+-#if CONFIG_XIAOMAN_ORB_UI
++#if CONFIG_CHICK_FACE_UI
+     family_robot::OrbInputActivity orb_input_activity_{};
+     std::atomic<uint32_t> orb_gate_epoch_{0}; // UI-only lifecycle publication
+ #endif
+--- a/main/audio/wake_words/custom_wake_word.cc
++++ b/main/audio/wake_words/custom_wake_word.cc
+@@ -131,7 +131,7 @@
+         return false;
+     }
+     input_buffer_.reserve(chunksize);
+-#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++#if CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW
+     speech_window_enabled_ = codec_->ManagedCapture() && !codec_->SoftwareReference();
+     // Sixteen 32-ms model frames retain the AFE VAD onset delay, without
+     // replaying a whole command window. The cache allocates its PCM in PSRAM.
+@@ -173,7 +173,7 @@
+ 
+     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+     input_buffer_.clear();
+-#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++#if CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW
+     speech_active_ = false;
+     speech_preroll_cache_.Clear();
+ #endif
+@@ -183,7 +183,7 @@
+     // Only the AFE fetch owner resets model state. Stop() may run on the main task.
+     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+     input_buffer_.clear();
+-#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++#if CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW
+     speech_active_ = false;
+     speech_preroll_cache_.Clear();
+ #endif
+@@ -201,6 +201,7 @@
+ }
+ 
+ void CustomWakeWord::FeedSamples(const int16_t* data, size_t samples, bool mono, uint32_t capture_generation, bool speech) {
++    (void)speech; // The unaccepted alignment experiment is off in products.
+     if (multinet_model_data_ == nullptr || data == nullptr || samples == 0) {
+         return;
+     }
+@@ -217,7 +218,7 @@
+         if (!codec_->ManagedCapture() || capture_generation == codec_->CaptureGeneration())
+             return true;
+         input_buffer_.clear();
+-#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++#if CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW
+         speech_active_ = false;
+         speech_preroll_cache_.Clear();
+ #endif
+@@ -275,7 +276,7 @@
+         }
+     };
+ 
+-#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++#if CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW
+     if (speech_window_enabled_ && mono) {
+         const bool onset = speech && !speech_active_;
+         speech_active_ = speech;
+--- a/main/audio/wake_words/custom_wake_word.h
++++ b/main/audio/wake_words/custom_wake_word.h
+@@ -61,7 +61,7 @@
+     std::atomic<bool> running_ = false;
+     std::vector<int16_t> input_buffer_;
+     std::mutex input_buffer_mutex_;
+-#if CONFIG_WAVESHARE_XIAOMAN_REALTIME
++#if CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW
+     // Only the hardware-MR Waveshare aligns its command window to AFE speech.
+     WakeWordAudioCache speech_preroll_cache_;
+     bool speech_window_enabled_ = false;
+--- a/main/boards/m5stack/stopwatch/config.json
++++ b/main/boards/m5stack/stopwatch/config.json
+@@ -53,7 +53,7 @@
+                 "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
+                 "CONFIG_SEND_WAKE_WORD_DATA=y",
+                 "CONFIG_STOPWATCH_DEFAULT_REALTIME=y",
+-                "CONFIG_XIAOMAN_ORB_UI=y"
++                "CONFIG_CHICK_FACE_UI=y"
+             ]
+         }
+     ]
+--- a/main/boards/m5stack/stopwatch/m5stack_stopwatch.cc
++++ b/main/boards/m5stack/stopwatch/m5stack_stopwatch.cc
+@@ -7,8 +7,8 @@
+ #include "software_aec_codec.h"
+ #endif
+ #include "application.h"
+-#if CONFIG_XIAOMAN_ORB_UI
+-#include "xiaoman_orb_view.h"
++#if CONFIG_CHICK_FACE_UI
++#include "chick_face_view.h"
+ #include "display/lvgl_display/lvgl_font.h"
+ #include <cstring>
+ #endif
+@@ -92,12 +92,12 @@
+         }
+ 
+         lv_display_add_event_cb(display_, rounder_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+-#if CONFIG_XIAOMAN_ORB_UI
+-        SetupOrbUI();
+-#endif
+-    }
+-#if CONFIG_XIAOMAN_ORB_UI
+-#include "xiaoman_orb_display.inc"
++#if CONFIG_CHICK_FACE_UI
++        SetupFaceUI();
++#endif
++    }
++#if CONFIG_CHICK_FACE_UI
++#include "chick_face_display.inc"
+ #endif
+ };
+ 
+@@ -108,8 +108,8 @@
+ 
+ protected:
+     void SetBrightnessImpl(uint8_t brightness) override {
+-#if CONFIG_XIAOMAN_ORB_UI
+-        static_cast<RoundLcdDisplay*>(display_)->SetOrbScreenOn(brightness!=0);
++#if CONFIG_CHICK_FACE_UI
++        static_cast<RoundLcdDisplay*>(display_)->SetFaceScreenOn(brightness!=0);
+ #endif
+         DisplayLockGuard lock(display_);
+         uint8_t data[] = {static_cast<uint8_t>((255 * brightness) / 100)};
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
+@@ -39,7 +39,7 @@
+                 "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"小满\"",
+                 "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
+                 "CONFIG_SEND_WAKE_WORD_DATA=y",
+-                "CONFIG_XIAOMAN_ORB_UI=y",
++                "CONFIG_CHICK_FACE_UI=y",
+                 "CONFIG_PARTITION_TABLE_CUSTOM=y",
+                 "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/waveshare-xiaoman-16m.csv\"",
+                 "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y"
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+@@ -5,7 +5,7 @@
+ #include "codecs/box_audio_codec.h"
+ #if CONFIG_WAVESHARE_XIAOMAN_REALTIME
+ #include "xiaoman_box_codec.h"
+-#include "xiaoman_orb_view.h"
++#include "chick_face_view.h"
+ #include "display/lvgl_display/lvgl_font.h"
+ #include <cstring>
+ #endif
+@@ -86,9 +86,8 @@
+ 
+ // 在waveshare_amoled_1_75类之前添加新的显示类
+ class CustomLcdDisplay : public SpiLcdDisplay {
+-#if CONFIG_XIAOMAN_ORB_UI
+-    using OrbDisplayOwner=CustomLcdDisplay;
+-    #include "xiaoman_orb_display.inc"
++#if CONFIG_CHICK_FACE_UI
++    #include "chick_face_display.inc"
+ #endif
+ public:
+     static void rounder_event_cb(lv_event_t* e) {
+@@ -130,8 +129,8 @@
+         lv_obj_set_style_pad_left(status_bar_, LV_HOR_RES*  0.1, 0);
+         lv_obj_set_style_pad_right(status_bar_, LV_HOR_RES*  0.1, 0);
+         lv_display_add_event_cb(display_, rounder_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+-#if CONFIG_XIAOMAN_ORB_UI
+-        SetupOrbUI();
++#if CONFIG_CHICK_FACE_UI
++        SetupFaceUI();
+ #endif
+     }
+ };
+@@ -145,8 +144,8 @@
+ 
+     virtual void SetBrightnessImpl(uint8_t brightness) override {
+         auto display = Board::GetInstance().GetDisplay();
+-#if CONFIG_XIAOMAN_ORB_UI
+-        static_cast<CustomLcdDisplay*>(display)->SetOrbScreenOn(brightness>0);
++#if CONFIG_CHICK_FACE_UI
++        static_cast<CustomLcdDisplay*>(display)->SetFaceScreenOn(brightness>0);
+ #endif
+         DisplayLockGuard lock(display);
+         uint8_t data[1] = {((uint8_t)((255*  brightness) / 100))};
+--- a/main/boards/xmini/c3/config.json
++++ b/main/boards/xmini/c3/config.json
+@@ -36,7 +36,7 @@
+                 "CONFIG_USE_DEVICE_AEC=n",
+                 "CONFIG_USE_SERVER_AEC=n",
+                 "CONFIG_I2S_ISR_IRAM_SAFE=n",
+-                "CONFIG_XIAOMAN_ORB_UI=n",
++                "CONFIG_CHICK_FACE_UI=n",
+                 "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y",
+                 "CONFIG_ESP_CONSOLE_UART_DEFAULT=n",
+                 "CONFIG_ESP_CONSOLE_SECONDARY_NONE=y",
+--- a/main/display/display.h
++++ b/main/display/display.h
+@@ -44,6 +44,7 @@
+     virtual void ShowNotification(const char* notification, int duration_ms = 3000);
+     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
+     virtual void SetEmotion(const char* emotion);
++    virtual void SetThinking(bool thinking) { (void)thinking; }
+     virtual void SetChatMessage(const char* role, const char* content);
+     virtual void ClearChatMessages();
+     virtual void SetTheme(Theme* theme);
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -69,6 +69,9 @@
+     virtual void PollC3PcmDisconnect() {} // main owner only; no deferred this capture
+ #endif
+     virtual uint32_t AudioChannelEpoch() const { return 0; }
++#if CONFIG_CHICK_FACE_UI
++    virtual uint32_t FaceStateEpoch(const char*) const { return 0; }
++#endif
+     virtual bool PlaybackNegotiated() const { return false; }
+     virtual bool PlaybackDrainNegotiated() const { return false; }
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -270,6 +270,9 @@
+     cJSON_AddBoolToObject(features, "aec", true);
+ #endif
+     cJSON_AddBoolToObject(features, "mcp", true);
++#if CONFIG_CHICK_FACE_UI
++    cJSON_AddBoolToObject(features, "face_state_v1", true);
++#endif
+ #if CONFIG_XMINI_C3_PCM
+     cJSON_AddBoolToObject(features,"pcm_s16le_v1",true);
+ #endif
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -24,6 +24,9 @@
+     void PollC3PcmDisconnect() override;
+ #endif
+     uint32_t AudioChannelEpoch() const override;
++#if CONFIG_CHICK_FACE_UI
++    uint32_t FaceStateEpoch(const char* scope) const override;
++#endif
+     bool PlaybackNegotiated() const override;
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+     bool PlaybackAllowsListening() const override;

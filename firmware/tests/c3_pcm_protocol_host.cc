@@ -61,7 +61,7 @@ public:
             case PlaybackOp::Reset:core.InterruptAll();++generation;break;
         }return true;
     }
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
     void MarkOrbDraining(PlaybackIdentity id) {core.MarkOrbDraining(id);}
 #endif
     uint32_t PlaybackGeneration(){return generation;}

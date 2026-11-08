@@ -22,7 +22,7 @@ class WaveshareCodecTests(unittest.TestCase):
             result = subprocess.run([
                 'c++', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
                 '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-                '-DCONFIG_XIAOMAN_ORB_UI=1',
+                '-DCONFIG_CHICK_FACE_UI=1',
                 '-I', str(work), '-I', str(BOARD), '-I', str(FIRMWARE/'overlays/main/audio'),
                 str(FIRMWARE/'tests/waveshare_codec_host.cc'), '-o', str(binary)],
                 capture_output=True, text=True)
@@ -51,7 +51,7 @@ class WaveshareCodecTests(unittest.TestCase):
             (work/'platform.h').write_text(re.sub(r'^static ', 'inline ', platform, flags=re.M))
             flags = ['c++', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
                 '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-                '-DCONFIG_XIAOMAN_ORB_UI=1', '-include', str(work/'platform.h'),
+                '-DCONFIG_CHICK_FACE_UI=1', '-include', str(work/'platform.h'),
                 '-I', str(work), '-I', str(BOARD), '-I', str(FIRMWARE/'overlays/main/audio')]
             environment = dict(os.environ, ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',
                                UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')

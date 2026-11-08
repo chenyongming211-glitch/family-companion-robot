@@ -7,7 +7,7 @@ This directory pins the unmodified Xiaozhi ESP32 v2.5.2 source at
 archive root and SDK identity are recorded in `upstream.lock.json`.
 
 The patched source also has a dedicated Waveshare 2.16 Xiaoman target. The boards
-share the locked source, protocol, capture guards and A orb renderer/view; each
+share the locked source, protocol, capture guards and CHICK-01 face renderer/view; each
 has its own codec, display drivers, configuration and firmware image. M5 and
 Waveshare binaries and partition layouts are not interchangeable. Runtime
 dependencies, host tests and target builds run on the cloud host/Actions; the
@@ -154,11 +154,30 @@ and ordinary codec writes cannot access callback-owned DMA. These checks do not
 establish physical BCLK, acoustic output, hardware-reference quality or actual
 on-device scheduling. There is no automatic audio-fault recovery.
 
-The same A renderer/view uses a 480×480 layout and its existing 128×128/32KiB
-buffer, static/5fps/target15fps policy and screen-off/idle frame stop. Conversation
-subtitles stay hidden while system/setup pages keep priority. Listening requires
-a current processed AFE frame; Speaking requires actual tagged DMA completion.
-No target15fps or battery-power result is claimed from host tests.
+The Xiaoman S3 targets select `CONFIG_CHICK_FACE_UI`, replacing the retired
+fluid orb with the adopted CHICK-01 parameterized face. A normalized 240×320
+RGB565 canvas uses 153600 bytes of PSRAM and fits 480×480 Waveshare and 466×466
+round M5 panels. Allocation failure uses a static LVGL face without an internal
+RAM framebuffer. L0 states always have readable Chinese captions; L1 emotions
+and L2 microanimations never show their names or overwrite the actual state
+caption. Preview and system notices retain display ownership. Idle uses the new
+face, and the 60-second low-brightness policy only slows animation. Screen-off
+hides both face and caption and pauses its timer. Automatic idle shutdown remains
+disabled on the Waveshare product; existing button/battery protection remains.
+
+Normal animation targets 15fps and speaking targets 30fps; quiet mode uses 5fps.
+The UI lowers its own rate under a slow drawing budget. Listening requires the
+current capture gate; mouth movement uses the existing actual-DMA envelope,
+never queued PCM. `face_state_v1` negotiates optional `llm.state` metadata for
+real model thinking, independently of mood and TTS. Old clients receive no new
+state messages. Build/host success does not establish physical rendering budget,
+acoustic wake reliability or battery-power acceptance.
+
+Patch0022 also gates the unaccepted0021 speech-window experiment behind
+`CONFIG_WAVESHARE_WAKE_SPEECH_WINDOW`, default off. Only the isolated wake lab
+opts in; face product builds retain the shipped wake behavior. See the
+[adopted design](../docs/superpowers/specs/2026-11-08-chick-face-design.md) and
+[verification record](../docs/verification/2026-11-08-chick-face.md).
 
 The dedicated 16MB table is `partitions/waveshare-xiaoman-16m.csv`:
 
@@ -189,7 +208,7 @@ The independent `xmini-c3-family` variant uses board directory `xmini/c3`,
 ESP32-C3, ES8311 mono16/24k audio, SSD1306 OLED and the original GPIO wiring.
 The current candidate enables button-start continuous conversation with playback-
 period MR capture and standalone AEC. Local wake words, the full S3 AFE and the
-color orb remain disabled. This variant always
+color face remain disabled. This variant always
 uses WebSocket; retained old MQTT credentials cannot select another transport.
 Its compiled OTA URL is empty. USB provisioning must supply the product
 bootstrap URL and this device's own WebSocket credentials before first boot.

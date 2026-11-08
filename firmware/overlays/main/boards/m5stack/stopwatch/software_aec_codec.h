@@ -19,7 +19,7 @@ public:
     uint32_t PlaybackGeneration() const override;
     bool PlaybackPoll(family_robot::PlaybackSnapshot& out) override;
     bool PlaybackBusy() const override;
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
     family_robot::OrbOutputActivity GetOrbOutputActivity() const override;
     void MarkOrbDraining(family_robot::PlaybackIdentity id) override;
 #endif

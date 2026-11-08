@@ -32,7 +32,7 @@ bool SoftwareAecCodec::PlaybackPoll(family_robot::PlaybackSnapshot& out) {
     portEXIT_CRITICAL(&mux_);
     return result;
 }
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
 family_robot::OrbOutputActivity SoftwareAecCodec::GetOrbOutputActivity() const {
     portENTER_CRITICAL(&mux_);
     auto value=refill_mode_ && playback_ ? playback_->OrbActivity() : family_robot::OrbOutputActivity{};
@@ -71,13 +71,13 @@ void SoftwareAecCodec::OutputTagged(std::vector<int16_t>& data, family_robot::Pl
     int64_t last_progress = esp_timer_get_time();
     while (offset < data.size()) {
         const size_t n = std::min(data.size()-offset, family_robot::PlaybackProgress::kBlock);
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         const auto level=family_robot::OrbPcmLevel(data.data()+offset,n);
 #endif
         portENTER_CRITICAL(&mux_);
         const bool usable = playback_ && accepting_ && output_enabled_ && output_generation_ != UINT32_MAX && generation == output_generation_;
         const auto result = usable ? playback_->Submit(id, first+offset, data.data()+offset, n
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
                 , level
 #endif
             )

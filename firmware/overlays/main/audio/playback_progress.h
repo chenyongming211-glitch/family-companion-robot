@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
 #include "orb_activity.h"
 #endif
 
@@ -41,7 +41,7 @@ public:
     enum class SubmitResult { Accepted, Full, Rejected };
     void Connect(uint32_t connection) {
         records_ = {};
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         orb_completed_ = {};
 #endif
         connection_ = connection; last_id_ = 0; head_ = used_ = 0;
@@ -70,7 +70,7 @@ public:
         const auto* r=Find(id); return r && !r->interrupted;
     }
     SubmitResult Submit(PlaybackIdentity id, uint64_t first, const int16_t* pcm, size_t n
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
                         , uint8_t level=0
 #endif
                         ) {
@@ -85,7 +85,7 @@ public:
         if (r) r->submitted = first+n;
         auto& b = queue_[(head_+used_)%kQueue];
         b.tag = {id, first, static_cast<uint16_t>(n)};
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         b.tag.level = level;
 #endif
         std::memcpy(b.pcm.data(), pcm, n*sizeof(int16_t));
@@ -147,7 +147,7 @@ public:
                 if(s->tag.first!=r->played || r->played>kMaxSamples-s->tag.count) r->valid=false;
                 else {
                     r->played+=s->tag.count;
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
                     if (s->tag.count) {
                         orb_completed_.identity = {s->tag.id.connection,s->tag.id.playback};
                         orb_completed_.stamp_us=stamp;
@@ -189,7 +189,7 @@ public:
         for(const auto& s:slots_) if(s.tag.count) return true;
         return false;
     }
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
     // Task-facing snapshot under the adapter's existing mux. Complete publishes
     // only the tag scalar; this scan and all PCM energy work stay outside ISR.
     void MarkOrbDraining(PlaybackIdentity id) {
@@ -214,7 +214,7 @@ public:
 #endif
 private:
     struct Tag { PlaybackIdentity id{}; uint64_t first=0; uint16_t count=0;
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         uint8_t level=0; // occupies existing alignment padding, no larger DMA/PCM tag
 #endif
     };
@@ -226,7 +226,7 @@ private:
         int64_t report_time=0;
         uint32_t work=0;
         bool valid=false,sealed=false,interrupted=false,reported=false,reported_valid=false;
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
         bool orb_draining=false; // observation only; never changes cancellation
 #endif
     };
@@ -240,7 +240,7 @@ private:
         for(const auto& r:records_) if(r.id==id) return &r;
         return nullptr;
     }
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
     bool HasPending(PlaybackIdentity id) const {
         for(size_t i=0;i<used_;++i) if(queue_[(head_+i)%kQueue].tag.id==id) return true;
         for(const auto& s:slots_) if(s.tag.id==id) return true;
@@ -260,7 +260,7 @@ private:
     int64_t last_stamp_=0;
     uint32_t connection_=0,last_id_=0;
     bool hardware_ok_=true;
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
     OrbOutputActivity orb_completed_{};
 #endif
 };

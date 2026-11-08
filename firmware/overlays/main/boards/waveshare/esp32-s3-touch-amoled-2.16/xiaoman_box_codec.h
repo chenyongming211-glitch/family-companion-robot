@@ -24,7 +24,7 @@ public:
     bool PlaybackBusy() const override;
     void OutputTagged(std::vector<int16_t>& pcm, family_robot::PlaybackIdentity id,
                       uint64_t first, uint32_t generation) override;
-#if CONFIG_XIAOMAN_ORB_UI
+#if CONFIG_CHICK_FACE_UI
     family_robot::OrbOutputActivity GetOrbOutputActivity() const override;
     void MarkOrbDraining(family_robot::PlaybackIdentity id) override;
 #endif

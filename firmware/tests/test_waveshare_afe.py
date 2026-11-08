@@ -40,7 +40,7 @@ class WaveshareAfeTests(unittest.TestCase):
         board = defaults.FIRMWARE/'overlays/main/boards/waveshare/esp32-s3-touch-amoled-2.16'
         result = subprocess.run(['c++', '-std=c++17', '-pthread', '-Wall', '-Wextra', '-Werror', '-pedantic',
             '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-            '-DCONFIG_XIAOMAN_ORB_UI=1',
+            '-DCONFIG_CHICK_FACE_UI=1',
             '-I', str(self.work), '-I', str(board), '-I', str(defaults.FIRMWARE/'overlays/main/audio'),
             str(source), '-o', str(binary)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
