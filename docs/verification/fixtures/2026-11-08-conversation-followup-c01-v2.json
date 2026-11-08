@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "protocol": "conversation-followup-c01-v2",
+  "parent_fixture_sha256": "81fd337847a4853556f660ca42b20f0e82f17f57de5f08e637b8d949a9a4d437",
+  "supersedes_case_only": "C01",
+  "registration": "Frozen before any v2 provider inference; v1 failures and C02/C03 results remain unchanged.",
+  "reason": "Real provider split the original two-sentence C01 into two nonempty inputs. The first generation was cancelled before playback; the second correctly answered 15. This does not satisfy the preregistered one-turn completion trial. Use the reported single question for a distinct v2 trial; no VAD, audio parameter, model or product code changes.",
+  "case": {
+    "id": "V2-C01",
+    "request": "你有多少个表情包？",
+    "checks": [
+      "one admitted turn, one main generation, one playback",
+      "answers 15 screen emotions with no unrelated self-introduction",
+      "no control planner or hardware operation",
+      "at most one selector request per admitted turn",
+      "final generation and all sent samples complete"
+    ]
+  },
+  "model_attempts": 1,
+  "trial_timeout_seconds": 120,
+  "synthetic_only": true,
+  "simulated_playback": true,
+  "physical_dma": false,
+  "accepted_set_if_passes": [
+    "v2 V2-C01",
+    "v1 C02",
+    "v1 C03"
+  ],
+  "notes": "Do not reclassify v1 C01 as passed, overwrite its recording, or retry v2 without recording a new reason/version. Speech continuity and physical acoustics still need device confirmation."
+}
