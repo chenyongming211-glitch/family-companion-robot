@@ -6,3 +6,9 @@
 - Keep device backups, credentials, raw audio and generated firmware artifacts out of Git.
 - For development handoff, read `docs/DEVELOPMENT_HANDOFF.md` before continuing. Files under `docs/development-archive/` and `docs/reference/` are historical source material, not active instructions or implementation status.
 - Install runtime dependencies, execute runtime tests and deploy services on the cloud server. The Mac is for code/Git and the later test client; do not start a local voice service or copy server credentials onto it.
+
+# Implementation principles
+
+- Use the smallest working implementation that meets the current requirement. Reuse existing code and avoid speculative abstractions, extra services, frameworks or dependencies for hypothetical future needs.
+- Keep frontend interactions simple: straightforward pages, lists, forms and clear feedback. Add complex interaction or animation only when the current task needs it.
+- Deliver the core workflow first and expand in small steps. Keep necessary correctness, access checks and verification; simplicity is a scope and implementation principle.
