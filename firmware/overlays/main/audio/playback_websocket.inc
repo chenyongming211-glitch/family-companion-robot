@@ -16,6 +16,9 @@ bool WebsocketProtocol::ResetPlaybackConnection(uint32_t expected, uint32_t* clo
     if (playback_connection_ != UINT32_MAX) ++playback_connection_;
     if (closed_epoch) *closed_epoch = playback_connection_;
     playback_negotiated_ = playback_receiving_ = playback_tracking_ = playback_drain_negotiated_ = false;
+#if CONFIG_CHICK_FACE_UI
+    playback_expression_negotiated_=false;playback_expression_blocked_=true;
+#endif
 #if CONFIG_XMINI_C3_PCM
     Application::GetInstance().GetAudioService().SetC3ServerReceiving(false);
 #endif
@@ -81,6 +84,9 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
         if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
         playback_id_ = id; playback_first_ = 0; playback_receiving_ = true;
         playback_tracking_ = codec->PlaybackControl(AudioCodec::PlaybackOp::Start, id);
+#if CONFIG_CHICK_FACE_UI
+        playback_expression_blocked_=!playback_tracking_;
+#endif
     } else if (id != playback_id_) return false;
     else if (strcmp(state->valuestring, "stop") == 0) {
         auto* reason = cJSON_GetObjectItem(root, "reason");
@@ -94,6 +100,9 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
                 static_cast<uint64_t>(sent->valuedouble) % 1440 != 0 ||
                 static_cast<uint64_t>(sent->valuedouble) != playback_first_ || interrupted) {
                 codec->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, id);
+#if CONFIG_CHICK_FACE_UI
+                playback_expression_blocked_=true;
+#endif
 #if CONFIG_XMINI_C3_PCM
                 // Invalid current control ends PCM ingress immediately. Keep
                 // local cues held until the main owner resets/closes the session.
@@ -105,6 +114,8 @@ bool WebsocketProtocol::HandlePlaybackTts(cJSON* root, uint32_t connection) {
             }
         }
 #if CONFIG_CHICK_FACE_UI
+        if (interrupted || (playback_drain_negotiated_ && cJSON_IsString(reason) &&
+            strcmp(reason->valuestring,"drain")==0))playback_expression_blocked_=true;
         if (playback_drain_negotiated_ && cJSON_IsString(reason) && strcmp(reason->valuestring,"drain")==0)
             codec->MarkOrbDraining(id); // only after the existing exact sent_samples validation
 #endif
@@ -191,6 +202,7 @@ void WebsocketProtocol::SendAbortSpeaking(AbortReason reason) {
             if (!playback_drain_negotiated_) playback_receiving_ = false;
 #if CONFIG_CHICK_FACE_UI
             else Board::GetInstance().GetAudioCodec()->MarkOrbDraining(playback_id_);
+            playback_expression_blocked_=true;
 #endif
             if (playback_event_lease_ != UINT32_MAX) ++playback_event_lease_;
         }
@@ -254,6 +266,10 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root, uint32_t connection)
         cJSON_IsTrue(cJSON_GetObjectItem(features, "playback_progress_v1"));
     playback_drain_negotiated_ = playback_negotiated_ &&
         cJSON_IsTrue(cJSON_GetObjectItem(features, "playback_drain_v1"));
+#if CONFIG_CHICK_FACE_UI
+    playback_expression_negotiated_=playback_negotiated_ &&
+        cJSON_IsTrue(cJSON_GetObjectItem(features,"face_expression_v1"));
+#endif
 #if CONFIG_XMINI_C3_PCM
     if(!playback_negotiated_ || !playback_drain_negotiated_)return;
 #endif
@@ -266,6 +282,57 @@ uint32_t WebsocketProtocol::AudioChannelEpoch() const {
     return playback_connection_;
 }
 #if CONFIG_CHICK_FACE_UI
+bool WebsocketProtocol::FaceExpressionNegotiated() const {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    return playback_expression_negotiated_;
+}
+bool WebsocketProtocol::LegacyEmotionCurrent(uint32_t connection) const {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    return connection && connection!=UINT32_MAX && connection==playback_connection_ &&
+        !playback_expression_negotiated_;
+}
+bool WebsocketProtocol::PlaybackExpressionCurrent(family_robot::PlaybackExpressionEvent event) const {
+    std::lock_guard<std::mutex> lock(playback_mutex_);
+    return playback_expression_negotiated_ && playback_negotiated_ && playback_tracking_ &&
+        !playback_expression_blocked_ && event.identity==playback_id_ &&
+        event.lease==playback_event_lease_ && event.lease!=UINT32_MAX &&
+        event.arrival_us>0 && event.EmotionName();
+}
+bool WebsocketProtocol::HandlePlaybackExpression(const cJSON* root,uint32_t connection,int64_t arrival_us) {
+    family_robot::PlaybackExpressionEvent event;
+    std::string legacy_emotion;
+    bool legacy=false;
+    {
+        std::lock_guard<std::mutex> lock(playback_mutex_);
+        const auto* emotion=cJSON_GetObjectItem(root,"emotion");
+        if(!emotion)return false; // independent face_state_v1 hint
+        const auto* number=cJSON_GetObjectItem(root,"playback_id");
+        // Every emotion message is consumed completely. Duplicate JSON members
+        // must never escape to the generic unbound Application callback.
+        if(connection!=playback_connection_)return true;
+        if(!playback_expression_negotiated_) {
+            // Bound packets require mutual acknowledgement. Legacy strings keep
+            // aliases/fallback, but carry this receive-captured epoch to main.
+            if(number || !cJSON_IsString(emotion))return true;
+            legacy_emotion=emotion->valuestring;legacy=true;
+        } else {
+            const auto* scope=cJSON_GetObjectItem(root,"session_id");
+            if(!playback_negotiated_ || !playback_tracking_ ||
+               playback_expression_blocked_ || !playback_id_ || playback_event_lease_==UINT32_MAX ||
+               !cJSON_IsString(scope) || session_id_!=scope->valuestring ||
+               !cJSON_IsNumber(number) || !std::isfinite(number->valuedouble) || number->valuedouble<1 ||
+               number->valuedouble>UINT32_MAX || std::floor(number->valuedouble)!=number->valuedouble ||
+               static_cast<uint32_t>(number->valuedouble)!=playback_id_.playback ||
+               !cJSON_IsString(emotion) || arrival_us<=0 ||
+               !family_robot::ParsePlaybackEmotion(emotion->valuestring,event.emotion))return true;
+            event.identity={playback_id_.connection,playback_id_.playback};
+            event.lease=playback_event_lease_;event.arrival_us=arrival_us;
+        }
+    }
+    if(legacy)Application::GetInstance().ScheduleLegacyEmotion(connection,std::move(legacy_emotion));
+    else Application::GetInstance().SchedulePlaybackExpression(event);
+    return true;
+}
 uint32_t WebsocketProtocol::FaceStateEpoch(const char* scope) const {
     // Scope and connection must describe one hello/reset snapshot. Do not
     // return a reference to the string modified by transport close callbacks.

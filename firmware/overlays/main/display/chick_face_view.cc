@@ -8,6 +8,8 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace family_robot {
 namespace {
@@ -121,6 +123,15 @@ void ChickFaceView::SetEmotion(const char* emotion,int64_t now) {
     if(!emotion)return;
     model_.SetEmotion(emotion,now);
 }
+void ChickFaceView::SetLegacyEmotion(uint32_t connection,const char* emotion,int64_t now_us) {
+    model_.SetLegacyEmotion(connection,emotion,now_us);
+}
+bool ChickFaceView::SetPlaybackEmotion(OrbOutputActivity::Identity id,const char* emotion,int64_t arrival_us) {
+    return model_.SetPlaybackEmotion(id,emotion,arrival_us);
+}
+void ChickFaceView::ClearPlaybackEmotions() {
+    model_.ClearPlaybackEmotions();
+}
 void ChickFaceView::SetMessage(const char* text) {
     std::string next=text?text:"";
     if(next.size()>256) {
@@ -180,8 +191,12 @@ bool ChickFaceView::Update(FaceFacts facts) {
     lv_obj_invalidate(image_);
     painted_=true;last_frame_us_=facts.now_us;
     if(!profile_reported_ && frames_>=150) {
-        ESP_LOGI("ChickFace","frames=%lu max_draw_us=%lu mode=%d",
-            static_cast<unsigned long>(frames_),static_cast<unsigned long>(max_draw_us_),mode_);
+        // ESP-IDF's pinned task.h defines this high-water value in bytes.
+        // Read only at the existing profiling point, never on every frame.
+        const auto stack_min_free_bytes=uxTaskGetStackHighWaterMark(nullptr);
+        ESP_LOGI("ChickFace","frames=%lu max_draw_us=%lu mode=%d stack_min_free_bytes=%lu task=%s",
+            static_cast<unsigned long>(frames_),static_cast<unsigned long>(max_draw_us_),mode_,
+            static_cast<unsigned long>(stack_min_free_bytes),pcTaskGetName(nullptr));
         profile_reported_=true;
     }
     return true;

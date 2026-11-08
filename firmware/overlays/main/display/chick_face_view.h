@@ -17,6 +17,9 @@ public:
     bool Update(FaceFacts);
     void SetFont(const lv_font_t*);
     void SetEmotion(const char*,int64_t);
+    void SetLegacyEmotion(uint32_t,const char*,int64_t);
+    bool SetPlaybackEmotion(OrbOutputActivity::Identity,const char*,int64_t);
+    void ClearPlaybackEmotions();
     void SetThinking(bool on) { thinking_=on; }
     void SetMessage(const char*);
     void SetScreenOn(bool on) { screen_on_=on; }

@@ -66,15 +66,15 @@ if err != nil || renamed.Name() != "豆豆" || base.Name() == "豆豆" { t.Fatal
 
 ## Task 3：固件协议和显示接线
 
-**Files:** 新增`firmware/patches/0023-bound-expression.patch`；修改`audio/playback_websocket.inc`、`display/chick_face_view.h/.cc`、`chick_face_display.inc`、`firmware/tests/playback_websocket_test.cc`、`chick_face_display_host.cc`、`chick_face_view_host.cc`、`test_chick_integration.py`、`firmware/tools/verify_experiment.py`相关证据断言。
+**Files:** 新增`firmware/patches/0023-bound-expression.patch`；修改`audio/playback_websocket.inc`、`audio/playback_application.inc`（现有主任务调度接线）、`display/chick_face_view.h/.cc`、`chick_face_display.inc`、`firmware/tests/playback_websocket_test.cc`、`chick_face_display_host.cc`、`chick_face_view_host.cc`、`test_chick_integration.py`、`firmware/tools/verify_experiment.py`相关证据断言。
 
-补丁只修改原生/vendor文件，overlay文件直接改。以32baa67的完整准备树作baseline，新补丁不得包含原overlay的diff；保留0022及默认关闭的0021开关。CHICK hello声明face_expression_v1；服务端确认后接收带session_id/playback_id/emotion的llm。协议锁内校验当前会话、连接代次、合法已开始ID和规范情绪，生成不可变事件；主任务应用前重验代次与播放有效性。正常tts.stop不能当实际完成，drain/取消不接受新旧标签；当前已显示旧尾音作用可至实际尾音完毕。校验入口不要返回未锁的session_id引用。
+补丁只修改原生/vendor文件，overlay文件直接改。以32baa67的完整准备树作baseline，新补丁不得包含原overlay的diff；保留0022及默认关闭的0021开关。CHICK hello声明face_expression_v1；服务端确认后接收带session_id/playback_id/emotion的llm。协议锁内校验当前会话、连接代次、合法已开始ID和规范情绪，生成不可变事件；到达时间在接收侧记录并原样传递，不用延后的主任务执行时间替代。主任务应用前重验代次与播放有效性。正常tts.stop不能当实际完成，drain/取消不接受新旧标签；当前已显示旧尾音作用可至实际尾音完毕。校验入口不要返回未锁的session_id引用。新能力协商后拒绝无绑定情绪消息；旧协商路径继续保留原临时映射。
 
 Display新增默认no-op的有身份情绪入口，CHICK实现转发纯控制器；旧客户端/非CHICK路径保持。L0三处含名文案替换为“正在启动”“正在说话”“有新提示”，同步断言和有效方案。通用情绪legacy接口保留原映射但不能污染新的绑定轮。
 
-- [ ] 在生产方法host中先测协商、错误scope、非整数/旧/未来ID、接收→主任务之间close/reopen、已封口仍物理播放、drain拒绝新标签；观察旧代码RED。
-- [ ] 实现接线，准备新的全补丁树，以`git apply --check --whitespace=error-all`验证；云端跑新协议、实际View、模型及旧播放/唤醒回归，获得GREEN。
-- [ ] 分别规格/质量审查后root提交。不得为验证表情重新启用未验收唤醒窗口。
+- [x] 在生产方法host中先测协商、错误scope、非整数/旧/未来ID、接收→主任务之间close/reopen、已封口仍物理播放、drain拒绝新标签；观察旧代码RED。
+- [x] 实现接线，准备新的全补丁树，以`git apply --check --whitespace=error-all`验证；云端跑新协议、实际View、模型及旧播放/唤醒回归，获得GREEN。
+- [x] 分别规格/质量审查后root提交。不得为验证表情重新启用未验收唤醒窗口。
 
 ## Task 4：Go情绪选择、编排和能力协商
 

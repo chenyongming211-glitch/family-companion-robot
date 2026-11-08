@@ -1,0 +1,111 @@
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -4,6 +4,9 @@
+ 
+ #include <cJSON.h>
+ #include "playback_progress.h"
++#if CONFIG_CHICK_FACE_UI
++#include "../display/playback_expression_event.h"
++#endif
+ #include <chrono>
+ #include <functional>
+ #include <string>
+@@ -71,6 +74,9 @@
+     virtual uint32_t AudioChannelEpoch() const { return 0; }
+ #if CONFIG_CHICK_FACE_UI
+     virtual uint32_t FaceStateEpoch(const char*) const { return 0; }
++    virtual bool FaceExpressionNegotiated() const { return false; }
++    virtual bool LegacyEmotionCurrent(uint32_t) const { return false; }
++    virtual bool PlaybackExpressionCurrent(family_robot::PlaybackExpressionEvent) const { return false; }
+ #endif
+     virtual bool PlaybackNegotiated() const { return false; }
+     virtual bool PlaybackDrainNegotiated() const { return false; }
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -26,6 +26,9 @@
+     uint32_t AudioChannelEpoch() const override;
+ #if CONFIG_CHICK_FACE_UI
+     uint32_t FaceStateEpoch(const char* scope) const override;
++    bool FaceExpressionNegotiated() const override;
++    bool LegacyEmotionCurrent(uint32_t connection) const override;
++    bool PlaybackExpressionCurrent(family_robot::PlaybackExpressionEvent) const override;
+ #endif
+     bool PlaybackNegotiated() const override;
+ #if CONFIG_XMINI_C3_BUTTON_ENTRY
+@@ -54,6 +57,10 @@
+     uint64_t playback_first_ = 0;
+     bool playback_negotiated_ = false, playback_receiving_ = false, playback_tracking_ = false;
+     bool playback_drain_negotiated_ = false;
++#if CONFIG_CHICK_FACE_UI
++    bool playback_expression_negotiated_ = false, playback_expression_blocked_ = true;
++    bool HandlePlaybackExpression(const cJSON*, uint32_t connection, int64_t arrival_us);
++#endif
+     // Only the WebSocket receive task mutates ingress order. Main polls reports;
+     // this mutex protects connection/session checks, never taken in an ISR.
+ #if CONFIG_XMINI_C3_PCM
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -151,6 +151,9 @@
+ #endif
+     }
+     websocket_->OnData([this, connection](const char* data, size_t len, bool binary) {
++#if CONFIG_CHICK_FACE_UI
++        const int64_t arrival_us=esp_timer_get_time();
++#endif
+         if (binary) {
+ #if CONFIG_XMINI_C3_PCM
+             DeliverC3PcmAudio(reinterpret_cast<const uint8_t*>(data),len,connection);
+@@ -199,7 +202,13 @@
+                         cJSON_Delete(root);
+                         return;
+                     }
+-                    if (on_incoming_json_ != nullptr) {
++#if CONFIG_CHICK_FACE_UI
++                    const bool handled = strcmp(type->valuestring,"llm")==0 &&
++                        HandlePlaybackExpression(root, connection, arrival_us);
++#else
++                    const bool handled = false;
++#endif
++                    if (!handled && on_incoming_json_ != nullptr) {
+                         on_incoming_json_(root);
+                     }
+                 }
+@@ -272,6 +281,7 @@
+     cJSON_AddBoolToObject(features, "mcp", true);
+ #if CONFIG_CHICK_FACE_UI
+     cJSON_AddBoolToObject(features, "face_state_v1", true);
++    cJSON_AddBoolToObject(features, "face_expression_v1", true);
+ #endif
+ #if CONFIG_XMINI_C3_PCM
+     cJSON_AddBoolToObject(features,"pcm_s16le_v1",true);
+--- a/main/application.h
++++ b/main/application.h
+@@ -83,6 +83,10 @@
+      * Schedule a callback to be executed in the main task
+      */
+     void Schedule(std::function<void()>&& callback);
++#if CONFIG_CHICK_FACE_UI
++    void SchedulePlaybackExpression(family_robot::PlaybackExpressionEvent event);
++    void ScheduleLegacyEmotion(uint32_t connection, std::string emotion);
++#endif
+ 
+     /**
+      * Alert with status, message, emotion and optional sound
+--- a/main/display/display.h
++++ b/main/display/display.h
+@@ -45,6 +45,15 @@
+     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
+     virtual void SetEmotion(const char* emotion);
+     virtual void SetThinking(bool thinking) { (void)thinking; }
++    virtual void SetLegacyEmotion(uint32_t connection, const char* emotion) {
++        (void)connection; SetEmotion(emotion);
++    }
++    // Scalar identity keeps the generic display independent of the PCM ledger.
++    virtual void SetPlaybackEmotion(uint32_t connection, uint32_t playback,
++                                   const char* emotion, int64_t arrival_us) {
++        (void)connection; (void)playback; (void)emotion; (void)arrival_us;
++    }
++    virtual void ClearPlaybackEmotions() {}
+     virtual void SetChatMessage(const char* role, const char* content);
+     virtual void ClearChatMessages();
+     virtual void SetTheme(Theme* theme);

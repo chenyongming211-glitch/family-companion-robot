@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 #include "face_layout.h"
+#include "playback_progress.h"
+#include <functional>
 enum lv_obj_flag_t {LV_OBJ_FLAG_HIDDEN=1,LV_OBJ_FLAG_SCROLLABLE=2,LV_OBJ_FLAG_OVERFLOW_VISIBLE=4,LV_OBJ_FLAG_CLICKABLE=8};
 enum lv_align_t {LV_ALIGN_TOP_MID,LV_ALIGN_CENTER};
 enum lv_part_t {LV_PART_MAIN=0};
@@ -71,13 +73,73 @@ static uint32_t draw_us=1000;
 static int64_t esp_timer_get_time(){static int64_t now=1000000;return now+=draw_us;}
 
 #define ESP_LOGW(...) ((void)0)
-#define ESP_LOGI(...) ((void)0)
+static unsigned stack_samples=0;
+static unsigned uxTaskGetStackHighWaterMark(void*){++stack_samples;return 4096;}
+static const char* pcTaskGetName(void*){return "lvgl";}
+static std::string profile_log;
+template<class... Args> static void HostLog(const char* format,Args... args) {
+    if(std::strstr(format,"frames=")) {
+        std::array<char,256> line{};std::snprintf(line.data(),line.size(),format,args...);
+        profile_log=line.data();
+    }
+}
+#define ESP_LOGI(tag,...) HostLog(__VA_ARGS__)
 #define private public
 #include "chick_face_view.h"
 #undef private
 // PRODUCTION_VIEW
+// Only task/transport boundaries are faked; the scheduled stop body below is
+// extracted from the production Application include.
+enum {kDeviceStateSpeaking,kDeviceStateListening,kDeviceStateIdle,kListeningModeAutoStop,kListeningModeManualStop};
+struct StopProtocol {
+    bool PlaybackEventCurrent(family_robot::PlaybackEvent event)const{return bool(event);}
+};
+class Application {
+public:
+    StopProtocol owner,*protocol_=&owner;
+    struct Audio {void ResetDecoder(){}} audio_service_;
+    int state=kDeviceStateSpeaking,listening_mode_=kListeningModeAutoStop;
+    std::vector<std::function<void()>> scheduled;
+    void Schedule(std::function<void()> fn){scheduled.push_back(std::move(fn));}
+    int GetDeviceState()const{return state;}void SetDeviceState(int next){state=next;}
+    void SchedulePlaybackStop(family_robot::PlaybackEvent,bool);
+    void Run(){auto work=std::move(scheduled);scheduled.clear();for(auto& fn:work)fn();}
+};
+// PRODUCTION_PLAYBACK_STOP
+static void SealedPendingView() {
+    using namespace family_robot;
+    for(int mode=0;mode<4;++mode) {
+        allocation_fails=true;lv_font_t font{30};ChickFaceView view;
+        view.Initialize(&font,480,480,[](void*){},nullptr);Application app;
+        PlaybackProgress ledger;ledger.Connect(50);const PlaybackIdentity id{50,1};
+        assert(ledger.Start(id));assert(ledger.Admit(id,0,1440));
+        std::array<int16_t,240> pcm{};pcm.fill(2000);
+        for(size_t i=0;i<6;++i)assert(ledger.Submit(id,i*240,pcm.data(),240,180)==PlaybackProgress::SubmitResult::Accepted);
+        ledger.Release(id);
+        FaceFacts f;f.now_us=1000000;f.state=FaceState::Speaking;f.audio.output=ledger.OrbActivity();
+        f.audio.gate_open=true;assert(view.Update(f));
+        if(mode!=3)assert(view.SetPlaybackEmotion({50,1},"happy",f.now_us));
+        if(mode==1)ledger.MarkOrbDraining(id);
+        ledger.Seal(id,mode==2);
+        app.SchedulePlaybackStop({id,1},mode==2);app.Run();assert(app.state==kDeviceStateListening);
+        f.state=FaceState::Listening;f.audio.output=ledger.OrbActivity();assert(view.Update(f));
+        assert(view.emotion_==FaceEmotion::Neutral && view.state_!=FaceState::Speaking);
+        if(mode==3)assert(view.SetPlaybackEmotion({50,1},"happy",f.now_us)); // label arrives after logical stop
+        std::array<std::array<int16_t,240>,6> dma{};
+        for(size_t i=0;i<12;++i) {
+            f.now_us+=10000;ledger.Complete(dma[i%6].data(),240,f.now_us);
+            f.audio.output=ledger.OrbActivity();assert(view.Update(f));
+            if(i<6 || mode==2)assert(view.state_!=FaceState::Speaking && view.emotion_==FaceEmotion::Neutral);
+            else if(i==6)assert(view.state_==FaceState::Speaking && view.emotion_==((mode==0 || mode==3)?FaceEmotion::Happy:FaceEmotion::Neutral));
+        }
+        // A real subsequent input takeover or hard cancellation cannot revive it.
+        f.now_us+=10000;f.state=FaceState::Listening;f.audio.output=ledger.OrbActivity();view.Update(f);
+        f.now_us+=2000001;f.state=FaceState::Idle;view.Update(f);assert(view.emotion_==FaceEmotion::Neutral);
+    }
+}
 int main() {
     using namespace family_robot;
+    SealedPendingView();
     for(const int size:{240,466,480})for(const bool fail:{false,true}) {
         allocation_fails=fail;lv_font_t font{30};
         ChickFaceView view;
@@ -118,6 +180,74 @@ int main() {
             assert(ChickFaceConsole("face_ui on"));facts.quiet=false;facts.now_us+=200000;
             assert(view.Update(facts));assert(rendered_frames.load()>count);
         }
+    }
+    // Production forwarding uses immutable receive time; pending does not mean speech.
+    {
+        allocation_fails=true;lv_font_t font{30};ChickFaceView view;
+        view.Initialize(&font,480,480,[](void*){},nullptr);
+        FaceFacts f;f.now_us=10000000;f.audio.output.connection=8;
+        assert(view.Update(f));assert(view.SetPlaybackEmotion({8,1},"happy",f.now_us));
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Neutral);
+        auto& o=f.audio.output;f.now_us+=10000;
+        o.identity={8,1};o.active=o.valid=true;o.level=120;o.stamp_us=f.now_us;
+        o.playbacks[0]={{8,1},f.now_us,f.now_us,true,false,false,false};
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Happy && view.state_==FaceState::Speaking);
+        assert(view.caption_->text=="正在说话");
+        // A second early label cannot change the actual old tail.
+        assert(view.SetPlaybackEmotion({8,2},"sad",f.now_us));
+        o.draining=true;o.playbacks[0].draining=true;f.now_us+=10000;
+        o.stamp_us=o.playbacks[0].last_us=f.now_us;
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Happy);
+        o.playbacks[0].terminal=true;o.draining=false;o.identity={8,2};
+        f.now_us+=10000;o.stamp_us=f.now_us;
+        o.playbacks[1]={{8,2},f.now_us,f.now_us,true,false,false,false};
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Sad);
+        view.SetScreenOn(false);assert(!view.Update(f));
+        f.now_us+=10000;o.active=false;o.playbacks[1].terminal=true;
+        o.playbacks[1].last_us=f.now_us;assert(!view.Update(f));
+        f.now_us+=2000001;view.SetScreenOn(true);
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Neutral);
+        // Queue delay must not turn a receive-time-eligible late label into a new late arrival.
+        o={};o.connection=9;f.now_us=20000000;assert(view.Update(f));
+        const int64_t first=f.now_us,arrival=first+1999999;
+        o.identity={9,1};o.active=o.valid=true;o.level=80;o.stamp_us=f.now_us;
+        o.playbacks[0]={{9,1},first,f.now_us,true,false,false,false};assert(view.Update(f));
+        f.now_us=first+2100000;o.stamp_us=o.playbacks[0].last_us=f.now_us;
+        assert(view.Update(f)); // a timer frame may run before the queued event
+        assert(view.SetPlaybackEmotion({9,1},"loving",arrival));
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Loving);
+        view.ClearPlaybackEmotions();assert(view.Update(f) && view.emotion_==FaceEmotion::Neutral);
+        // An early receive can be dequeued after the first DMA was observed.
+        o={};o.connection=10;f.now_us=25000000;assert(view.Update(f));
+        const auto early_arrival=f.now_us;f.now_us+=10000;
+        o.identity={10,1};o.active=o.valid=true;o.level=80;o.stamp_us=f.now_us;
+        o.playbacks[0]={{10,1},f.now_us,f.now_us,true,false,false,false};assert(view.Update(f));
+        assert(view.SetPlaybackEmotion({10,1},"delicious",early_arrival));
+        const auto early=view.model_.Update(f);
+        assert(early.emotion==FaceEmotion::Delicious && early.motion_ms==0);
+    }
+    {
+        allocation_fails=true;lv_font_t font{30};ChickFaceView view;
+        view.Initialize(&font,480,480,[](void*){},nullptr);
+        FaceFacts f;f.now_us=28000000;f.audio.output.connection=40;
+        view.SetLegacyEmotion(40,"shocked",f.now_us); // first event before first observation
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Surprised);
+        f.now_us+=100000;f.audio.output.connection=41;
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Neutral);
+        view.SetLegacyEmotion(41,"loving",f.now_us);
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Loving);
+        view.ClearPlaybackEmotions();assert(view.Update(f) && view.emotion_==FaceEmotion::Neutral);
+        view.SetEmotion("sleepy",f.now_us);f.now_us+=100000;f.audio.output.connection=42;
+        assert(view.Update(f) && view.emotion_==FaceEmotion::Sleepy);
+    }
+    {
+        // Sample the current LVGL owner once at the existing profiling point.
+        allocation_fails=false;lv_font_t font{30};ChickFaceView view;
+        view.Initialize(&font,480,480,[](void*){},nullptr);
+        FaceFacts f;f.now_us=30000000;view.frames_=149;
+        assert(stack_samples==0);assert(view.Update(f));assert(stack_samples==1);
+        assert(profile_log.find("stack_min_free_bytes=4096")!=std::string::npos);
+        f.now_us+=100000;assert(view.Update(f));assert(stack_samples==1);
     }
     std::puts("CHICK real view captions, lifecycle, layout and fallback passed");
 }

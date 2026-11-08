@@ -131,6 +131,9 @@ static void SystemCaptions() {
             assert(caption==frame.Caption());
         }
     }
+    frame.state=FaceState::Boot;assert(!std::strcmp(frame.Caption(),"正在启动"));
+    frame.state=FaceState::Speaking;assert(!std::strcmp(frame.Caption(),"正在说话"));
+    frame.state=FaceState::Notifying;assert(!std::strcmp(frame.Caption(),"有新提示"));
     frame.state=FaceState::Hidden;assert(!*frame.Caption());
     frame.state=FaceState::Idle;assert(!std::strcmp(frame.Caption(),"待机中"));
     frame.state=FaceState::Thinking;assert(!std::strcmp(frame.Caption(),"正在思考"));

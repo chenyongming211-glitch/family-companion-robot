@@ -38,6 +38,26 @@ class ChickIntegrationTests(unittest.TestCase):
         self.assertIn('codec_->GetOrbOutputActivity()',observer)
         ws=(self.source/'main/protocols/websocket_protocol.cc').read_text()
         self.assertIn('"face_state_v1"',ws)
+        self.assertIn('"face_expression_v1"',ws)
+        receive=ws[ws.index('websocket_->OnData('):ws.index('websocket_->OnDisconnected(')]
+        self.assertLess(receive.index('esp_timer_get_time()'),receive.index('cJSON_ParseWithLength'))
+        self.assertIn('HandlePlaybackExpression(root, connection, arrival_us)',receive)
+        protocol=(self.source/'main/protocols/protocol.h').read_text()
+        self.assertIn('PlaybackExpressionCurrent',protocol)
+        application=(self.source/'main/application.h').read_text()
+        self.assertIn('SchedulePlaybackExpression',application.split('\nprivate:',1)[0])
+        self.assertIn('ScheduleLegacyEmotion',application.split('\nprivate:',1)[0])
+        self.assertIn('if (!handled && on_incoming_json_',receive)
+        self.assertNotIn('cJSON_DeleteItemFromObject(root,"emotion")',receive)
+        display=(self.source/'main/display/display.h').read_text()
+        self.assertIn('SetPlaybackEmotion',display)
+        self.assertIn('ClearPlaybackEmotions',display)
+        self.assertIn('SetLegacyEmotion',display)
+        self.assertNotIn('playback_progress.h',display)
+        refresh=(self.source/'main/display/chick_face_display.inc').read_text()
+        before=refresh[:refresh.index('facts.audio=app.GetAudioService().GetOrbAudioActivity();')]
+        self.assertNotIn('if(facts.state==family_robot::FaceState::Listening',before)
+
 
 
 if __name__=='__main__':unittest.main()

@@ -86,14 +86,14 @@ struct FaceFrame {
                         state==FaceState::Connecting || state==FaceState::Thinking))return "正在停播";
         if(preparing)return "正在准备语音";
         switch(state) {
-        case FaceState::Boot:return "小满启动中";
+        case FaceState::Boot:return "正在启动";
         case FaceState::WifiConfig:return "等待配网";
         case FaceState::Connecting:return "正在连接";
         case FaceState::Idle:return "待机中";
         case FaceState::Listening:return "正在聆听";
         case FaceState::Thinking:return "正在思考";
-        case FaceState::Speaking:return "小满正在说话";
-        case FaceState::Notifying:return "小满有个提示";
+        case FaceState::Speaking:return "正在说话";
+        case FaceState::Notifying:return "有新提示";
         case FaceState::Error:return "设备异常，请重试";
         case FaceState::Upgrading:return "正在升级";
         case FaceState::LowBattery:return "电量低，请充电";
@@ -108,12 +108,20 @@ public:
     bool SetPlaybackEmotion(OrbOutputActivity::Identity id,const char* name,int64_t now_us) {
         FaceEmotion next;
         if(!ParsePlaybackEmotion(name,next) || !expressions_.Set(id,next,now_us))return false;
-        emotion_=FaceEmotion::Neutral;shocked_=false;post_speech_until_=0;
+        emotion_=FaceEmotion::Neutral;shocked_=false;post_speech_until_=0;emotion_connection_=0;
         return true;
     }
-    void ClearPlaybackEmotions() {expressions_.Clear();}
+    void ClearPlaybackEmotions() {
+        expressions_.Clear();
+        if(emotion_connection_)ClearLegacyEmotion();
+    }
+    void SetLegacyEmotion(uint32_t connection,const char* name,int64_t now_us) {
+        if(!connection || expressions_.bound())return;
+        SetEmotion(name,now_us);emotion_connection_=connection;
+    }
     void SetEmotion(const char* name,int64_t now_us) {
         if(expressions_.bound())return;
+        emotion_connection_=0; // local/system moods keep their existing semantics
         const auto next=ParseEmotion(name);
         shocked_=name && !std::strcmp(name,"shocked");
         if(next==emotion_ && now_us>=emotion_us_ && now_us-emotion_us_<800000)return;
@@ -125,13 +133,21 @@ public:
     FaceFrame Update(const FaceFacts& f) {
         FaceFrame frame;
         const auto& a=f.audio;const auto& o=a.output;
+        if(emotion_connection_ && o.connection && o.connection!=emotion_connection_)ClearLegacyEmotion();
         const bool chronological=f.now_us>0 && f.now_us>=observed_us_;
         if(chronological)observed_us_=f.now_us;
         const bool physical=chronological && FaceExpressionController::Physical(o,f.now_us);
         const bool fixed=f.state==FaceState::Error || f.state==FaceState::Upgrading ||
             f.state==FaceState::Notifying || f.state==FaceState::Boot || f.state==FaceState::WifiConfig;
+        // A normal logical stop may return to Listening before the first queued
+        // DMA completion. Valid, nonterminal per-ID facts still own that pending
+        // speech; cancellation/drain/end facts must retire it instead.
+        bool awaiting_first_dma=false;
+        for(const auto& fact:o.playbacks)if(fact.identity && fact.identity.connection==o.connection &&
+            fact.valid && !fact.terminal && !fact.canceled && !fact.draining &&
+            !fact.first_us && !fact.last_us)awaiting_first_dma=true;
         const auto mood=expressions_.Observe(o,f.now_us,!f.system_page && !fixed &&
-            !(f.state==FaceState::Listening && !physical));
+            !(f.state==FaceState::Listening && !physical && !awaiting_first_dma));
         const bool bound=expressions_.bound();
         if(!f.screen_on || f.system_page || f.state==FaceState::Hidden) {
             if(was_speaking_)post_speech_until_=f.now_us+2000000;
@@ -220,6 +236,9 @@ public:
         last_state_=frame.state;last_us_=f.now_us;return frame;
     }
 private:
+    void ClearLegacyEmotion() {
+        emotion_=FaceEmotion::Neutral;emotion_connection_=0;shocked_=false;post_speech_until_=0;
+    }
     uint32_t Next() {rng_^=rng_<<13;rng_^=rng_>>17;rng_^=rng_<<5;return rng_;}
     int64_t RandomMs(uint32_t lo,uint32_t hi) {return int64_t(lo+Next()%(hi-lo+1))*1000;}
     bool Fresh(int64_t stamp,int64_t now)const {
@@ -303,7 +322,7 @@ private:
     int64_t emotion_us_=0,idle_since_=0,state_us_=0,last_us_=0,since_=0,gate_us_=0,observed_us_=0;
     int64_t post_speech_until_=0,interrupted_until_=0,transition_us_=0;
     int64_t next_blink_=0,blink_us_=-1,next_gaze_=0,next_action_=0,action_us_=-1;
-    uint32_t capture_=0,epoch_=0,connection_=0,rng_=0x43484943;
+    uint32_t capture_=0,epoch_=0,connection_=0,emotion_connection_=0,rng_=0x43484943;
     float gaze_x_=0,gaze_y_=0;int action_sign_=1,mouth_=0;
     FacePreset from_{},target_{};
     bool visible_=false,gate_confirmed_=false,double_blink_=false,shocked_=false;

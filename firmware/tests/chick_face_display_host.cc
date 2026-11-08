@@ -52,7 +52,14 @@ static void lv_obj_add_flag(lv_obj_t* p,int){assert(p);++mutations;p->hidden=tru
 static void lv_obj_remove_flag(lv_obj_t* p,int){assert(p);++mutations;p->hidden=false;}
 static int64_t now=1000000;
 static int64_t esp_timer_get_time(){return now;}
-struct DisplayLockGuard {template<class T>explicit DisplayLockGuard(T*){} explicit operator bool()const{return true;}};
+static std::recursive_mutex display_mutex;
+static thread_local unsigned display_lock_depth=0;
+struct DisplayLockGuard {
+ std::unique_lock<std::recursive_mutex> lock;
+ template<class T>explicit DisplayLockGuard(T*):lock(display_mutex){++display_lock_depth;}
+ ~DisplayLockGuard(){--display_lock_depth;}
+ explicit operator bool()const{return true;}
+};
 struct LvglImage {};
 struct Font {int* font(){return nullptr;}};
 struct Theme {uint32_t text_color=0;std::shared_ptr<Font> GetTextFont(){return std::make_shared<Font>();}};
@@ -71,6 +78,9 @@ public:
     virtual void SetStatus(const char*){if(status_label_)lv_obj_remove_flag(status_label_,1);if(notification_label_)lv_obj_add_flag(notification_label_,1);}
     virtual void SetEmotion(const char*){if(emoji_box_)lv_obj_remove_flag(emoji_box_,1);}
     virtual void SetThinking(bool){}
+    virtual void SetLegacyEmotion(uint32_t,const char* name){SetEmotion(name);}
+    virtual void SetPlaybackEmotion(uint32_t,uint32_t,const char*,int64_t){}
+    virtual void ClearPlaybackEmotions(){}
     virtual void SetChatMessage(const char*,const char* text){++chat_writes;bottom.hidden=!text||!*text;}
     virtual void ClearChatMessages(){bottom.hidden=true;}
     virtual void SetPowerSaveMode(bool){}
@@ -100,12 +110,26 @@ public:
  void SetScreenOn(bool on){screen=on;}void SetQuiet(bool on){quiet=on;}
  void SetThinking(bool on){thinking=on;}
  void SetEmotion(const char* name,int64_t time){model.SetEmotion(name,time);}
+ void SetLegacyEmotion(uint32_t connection,const char* name,int64_t time){model.SetLegacyEmotion(connection,name,time);}
+ bool SetPlaybackEmotion(OrbOutputActivity::Identity id,const char* name,int64_t time){return model.SetPlaybackEmotion(id,name,time);}
+ void ClearPlaybackEmotions(){model.ClearPlaybackEmotions();}
  void SetMessage(const char* text){message=text?text:"";}
  bool Update(FaceFacts f){f.screen_on=f.screen_on&&screen;f.quiet=f.quiet||quiet;f.model_thinking=f.model_thinking||thinking;last=f;frame=model.Update(f);return frame.shown;}
 };
 }
 enum DeviceState{kDeviceStateUnknown,kDeviceStateStarting,kDeviceStateWifiConfiguring,kDeviceStateIdle,kDeviceStateConnecting,kDeviceStateListening,kDeviceStateSpeaking,kDeviceStateNotifying,kDeviceStateUpgrading,kDeviceStateActivating,kDeviceStateAudioTesting,kDeviceStateFatalError};
-struct AudioServiceFake {family_robot::OrbAudioActivity facts{};family_robot::OrbAudioActivity GetOrbAudioActivity(){++audio_reads;return facts;}};
+struct AudioServiceFake {
+ family_robot::OrbAudioActivity facts{};bool dma_during_read=false;
+ family_robot::OrbAudioActivity GetOrbAudioActivity(){
+  assert(display_lock_depth>0); // snapshot collection and consumption share one guard
+  ++audio_reads;
+  if(dma_during_read) {
+   dma_during_read=false;now+=1000;facts.output.stamp_us=now;
+   for(auto& fact:facts.output.playbacks)if(fact.identity==facts.output.identity)fact.last_us=now;
+  }
+  return facts;
+ }
+};
 struct Application {DeviceState state=kDeviceStateIdle;AudioServiceFake audio;static Application& GetInstance(){static Application a;return a;}DeviceState GetDeviceState(){return state;}AudioServiceFake& GetAudioService(){return audio;}};
 struct Board {int reads=0;static Board& GetInstance(){static Board b;return b;}bool GetBatteryLevel(int& level,bool& charging,bool& discharging){++reads;level=80;charging=false;discharging=true;return true;}};
 class RoundLcdDisplay:public SpiLcdDisplay {
@@ -150,5 +174,36 @@ int main(){
  d.SetFaceScreenOn(true);assert(d.Face().frame.shown);
  app.state=kDeviceStateFatalError;d.SetEmotion("happy");assert(d.Face().frame.state==FaceState::Error);
  app.state=kDeviceStateUpgrading;d.SetStatus("upgrade");assert(d.Face().frame.state==FaceState::Upgrading);
+ // Idle and hidden owners must still consume independent actual-output facts.
+ app.state=kDeviceStateIdle;app.audio.facts.output={};app.audio.facts.output.connection=20;
+ now=10000000;const int reads=audio_reads;d.SetStatus("idle");assert(audio_reads==reads+1);
+ // Main can apply start before its deferred state-change display refresh.
+ app.state=kDeviceStateListening;d.SetStatus("listen");
+ app.state=kDeviceStateSpeaking;d.SetPlaybackEmotion(20,1,"happy",now);
+ assert(d.Face().frame.state!=FaceState::Speaking && d.Face().frame.emotion==FaceEmotion::Neutral);
+ app.state=kDeviceStateIdle;
+ auto& output=app.audio.facts.output;now+=10000;
+ output.identity={20,1};output.active=output.valid=true;output.stamp_us=now;output.level=150;
+ output.playbacks[0]={{20,1},now,now,true,false,false,false};
+ // A real completion can occur after RefreshFace starts sampling its facts.
+ app.audio.dma_during_read=true;
+ d.SetStatus("idle");assert(d.Face().last.now_us>=output.stamp_us);
+ assert(d.Face().frame.state==FaceState::Speaking);
+ assert(d.Face().frame.emotion==FaceEmotion::Happy && d.Face().frame.mouth_level);
+ d.SetFaceScreenOn(false);now+=20000;output.active=false;output.playbacks[0].terminal=true;
+ output.playbacks[0].last_us=now;output.stamp_us=now;d.SetStatus("idle");
+ now+=2000001;d.SetFaceScreenOn(true);
+ assert(d.Face().frame.emotion==FaceEmotion::Neutral && !d.Face().frame.mouth_level);
+ d.ClearPlaybackEmotions();
+ app.audio.facts.output={};app.audio.facts.output.connection=21;now+=10000;
+ d.SetLegacyEmotion(21,"laughing");assert(d.Face().frame.emotion==FaceEmotion::Happy);
+ now+=10000;app.audio.facts.output.connection=22;d.SetStatus("reopened");
+ assert(d.Face().frame.emotion==FaceEmotion::Neutral);
+ // New-connection mood is applied after observing replacement facts.
+ now+=10000;app.audio.facts.output.connection=23;d.SetLegacyEmotion(23,"shocked");
+ assert(d.Face().frame.emotion==FaceEmotion::Surprised);
+ d.ClearPlaybackEmotions();assert(d.Face().frame.emotion==FaceEmotion::Neutral);
+ d.SetEmotion("sleepy");now+=10000;app.audio.facts.output.connection=24;d.SetStatus("local mood");
+ assert(d.Face().frame.emotion==FaceEmotion::Sleepy);
  std::puts("CHICK display lifecycle checks passed");
 }

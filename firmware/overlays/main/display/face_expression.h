@@ -14,7 +14,10 @@ public:
     enum class Stage : uint8_t { Pending,Active,PostSpeech,Retired };
     struct Selection {FaceEmotion emotion=FaceEmotion::Neutral;int64_t applied_us=0;};
     bool Set(Identity id,FaceEmotion emotion,int64_t now) {
-        if(!id || !enabled_ || now<=0 || now<now_ ||
+        // now is the immutable receive timestamp, which can precede the most
+        // recent timer observation while its main-queue event was waiting.
+        // Observe owns chronological clock validation and the physical window.
+        if(!id || !enabled_ || now<=0 ||
            static_cast<unsigned>(emotion)>=15 ||
            (connection_ && id.connection!=connection_) || id.playback<=retired_through_)return false;
         if(!connection_)connection_=id.connection;
@@ -24,7 +27,7 @@ public:
             Retire(*e);return false;
         }
         e->emotion=emotion;e->arrival_us=now;e->chosen=true;
-        if(e->stage==Stage::Active)e->applied_us=now;
+        if(e->stage==Stage::Active)e->applied_us=now>e->first_us?now:e->first_us;
         return true;
     }
     void Clear() {

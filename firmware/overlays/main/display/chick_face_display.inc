@@ -35,11 +35,15 @@ private:
     void RefreshFace() {
         if(!IsSetupUICalled() || !chick_face_.Ready())return;
         auto& app=Application::GetInstance();
-        family_robot::FaceFacts facts{};
-        facts.now_us=esp_timer_get_time();facts.state=FaceStateFor(app.GetDeviceState());
-        if(facts.state==family_robot::FaceState::Listening || facts.state==family_robot::FaceState::Speaking)
-            facts.audio=app.GetAudioService().GetOrbAudioActivity();
         DisplayLockGuard lock(this);if(!lock)return;
+        family_robot::FaceFacts facts{};
+        facts.state=FaceStateFor(app.GetDeviceState());
+        // Serialize observation and consumption with the existing display guard,
+        // so main/timer cannot feed coherent snapshots in reverse order. Codec
+        // getters only copy under portMUX; the input queue read is nonblocking.
+        // Output facts remain independent of raw state, hidden pages and Idle.
+        facts.audio=app.GetAudioService().GetOrbAudioActivity();
+        facts.now_us=esp_timer_get_time();
         // Channel closure/error can enter Idle while preserving an alert.
         // Retire the operational hint independently of alert dismissal/text.
         if(facts.state!=family_robot::FaceState::Listening && facts.state!=family_robot::FaceState::Speaking)
@@ -56,6 +60,9 @@ private:
         facts.system_page=preview_image_ && !lv_obj_has_flag(preview_image_,LV_OBJ_FLAG_HIDDEN);
         if(face_notice_ && facts.state==family_robot::FaceState::Idle)
             facts.state=family_robot::FaceState::Notifying;
+        // A completion may occur while observing audio; PMIC reads can also
+        // take time. Evaluate at actual current time after all observations.
+        facts.now_us=esp_timer_get_time();
         const bool shown=chick_face_.Update(facts);
         // Never return to the stock smile/sleep glyph while this UI is selected.
         if(emoji_box_)lv_obj_add_flag(emoji_box_,LV_OBJ_FLAG_HIDDEN);
@@ -81,6 +88,25 @@ public:
     }
     void SetEmotion(const char* emotion) override {
         {DisplayLockGuard lock(this);if(lock)chick_face_.SetEmotion(emotion,esp_timer_get_time());}
+        RefreshFace();
+    }
+    void SetLegacyEmotion(uint32_t connection,const char* emotion) override {
+        // Retire an old observed connection before applying its successor's mood.
+        RefreshFace();
+        {DisplayLockGuard lock(this);if(lock)
+            chick_face_.SetLegacyEmotion(connection,emotion,esp_timer_get_time());}
+        RefreshFace();
+    }
+    void SetPlaybackEmotion(uint32_t connection,uint32_t playback,const char* emotion,int64_t arrival_us) override {
+        // Main's logical start can precede its deferred state-change refresh.
+        // Observe current lifecycle/page facts before admitting the queued label.
+        RefreshFace();
+        {DisplayLockGuard lock(this);if(lock)
+            chick_face_.SetPlaybackEmotion({connection,playback},emotion,arrival_us);}
+        RefreshFace();
+    }
+    void ClearPlaybackEmotions() override {
+        {DisplayLockGuard lock(this);if(lock)chick_face_.ClearPlaybackEmotions();}
         RefreshFace();
     }
     void SetChatMessage(const char* role,const char* content) override {
