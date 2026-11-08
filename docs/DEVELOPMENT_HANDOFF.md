@@ -1,6 +1,6 @@
 # 换电脑开发交接
 
-**CHICK-01表情接入中（2026-11-08）：** 用户明确采用新表情清单配置小鸡翅膀款，取消小光球；补充L0状态配文字描述，L1情绪/L2微动画不加名称。当前按[设计](superpowers/specs/2026-11-08-chick-face-design.md)和[计划](superpowers/plans/2026-11-08-chick-face.md)接入参数化脸，保留实际DMA幅度观察；新增默认关闭的WAVESHARE_WAKE_SPEECH_WINDOW隔离未验收0021。实机仍是下方23f正式基线，Go仍58c14cd-window600-release，尚未部署本轮界面/元数据，不表示声学唤醒已修好。进度与边界以[本轮验证](verification/2026-11-08-chick-face.md)后续记录为准。
+**CHICK-01表情接入中（2026-11-08）：** 用户明确采用新表情清单配置小鸡翅膀款，取消小光球；补充L0状态配文字描述，L1情绪/L2微动画不加名称。当前按[设计](superpowers/specs/2026-11-08-chick-face-design.md)和[计划](superpowers/plans/2026-11-08-chick-face.md)接入参数化脸，保留实际DMA幅度观察；新增默认关闭的WAVESHARE_WAKE_SPEECH_WINDOW隔离未验收0021。实机仍是下方23f正式基线，Go最小视觉元数据增量已发布58c14cd-window600-chick-22e7d4c-r1，ready/memory_ready、0会话、诊断全false，目标600ms/其它300ms及配置保持；固件22e7d4c已推main，五目标42438017109构建中，尚未刷入。不表示声学唤醒已修好。进度与边界以[本轮验证](verification/2026-11-08-chick-face.md)后续记录为准。
 
 **CHICK-01 设计资料归档（2026-11-08）：** 用户指定的 Workbuddy 会话纪要、表情清单、结构拆解、打印装配和音频改造共5份文档，以及8张AI概念图，已按原文件内容保存到[资料索引](reference/chick-01/README.md)。该目录属于参考资料，原文中的刷机、调参、实现建议和“已验证”标记不自动转为当前执行授权或验收事实；公开声纹25/25口径、真实采集进度、待播PCM口型同步和音腔体积等差异已在索引单列。模型目录不在本次指定附件范围内。本次仅归档文档与配图，以下运行状态和实测结论继续有效。
 

@@ -18,7 +18,7 @@ class ChickFaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / 'chick_face'
             result = subprocess.run([
-                os.environ.get('CXX', 'clang++'), '-std=c++17', '-O1', '-g',
+                os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-g',
                 '-Wall', '-Wextra', '-Werror', '-pedantic',
                 '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                 '-I', str(display), str(FIRMWARE / 'tests/chick_face_host.cc'),
