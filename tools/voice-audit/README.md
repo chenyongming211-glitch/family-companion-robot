@@ -44,7 +44,7 @@ python3 tools/voice-audit/cache_stress.py --source-root <prepared-source> --out 
 
 唤醒工具将 `ContinueWakeWordInvoke` 原文放进故障注入stub，保留方法SHA256；退出2表示发现上传失败仍继续聆听，退出0表示这三条故障路径已拒绝，其他异常需看编译/运行日志。它不覆盖真实网络、FreeRTOS调度、完整状态机或声学唤醒。
 
-缓存工具编译传入源码的环形缓存及epoch guard，用固定随机种子和标准deque作比较；同时测试分配失败和并发调用。运行ASAN/UBSAN，**未运行TSAN**；主机堆替代PSRAM，不验证ESP32性能或实时性。已有全套测试仍需运行 `python3 -m unittest discover -s firmware/tests -v`。
+缓存工具编译传入源码的环形缓存及epoch guard，用固定随机种子和标准deque作比较；同时测试分配失败和并发调用。运行ASAN/UBSAN，**未运行TSAN**；主机堆替代PSRAM，不验证ESP32性能或实时性。当前仅维护ESP32-S3，支持范围内的主机检查运行 `python3 firmware/tools/run_host_tests.py`；历史C3检查不再是发布门槛。
 
 ## 接续状态与开源框架对照
 

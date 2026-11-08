@@ -10,6 +10,8 @@
 
 ## 执行纪律与基线
 
+2026-11-08后续用户决定：停止支持ESP32-C3。后续实现和验收仅考虑ESP32-S3；完成过的C3检查保留历史记录，新构建矩阵改为四个S3变体，C3专用工作流/测试不再作为发布门槛。
+
 2026-11-08用户已明确“按照现在的表情方案开发”；后续询问还需做什么不取消该授权。采用分任务实现→规格审查→质量审查，root统一提交；实现子任务不自行推送、刷机或重启服务。全部runtime测试通过SSH在云端私有目录执行，先RED再GREEN；不用本机装服务或复制云端凭据。
 
 当前main32baa67，设备2beda8f（完整app槽MD5 4ceaabaca8a82709080a402cc01b67cb），Go58c14cd-window600-chick-22e7d4c-r1。云端正式来源为`/opt/family-robot-validation/chick-face-20261108/go-release`，正式二进制来自58c14cd加窗口和视觉最小增量；发布新功能需将本次限定diff移植到该来源再验证，不整包替换为main。原设备600ms/其它300ms、鉴权、资源、分区和未验收唤醒实验默认关闭保持。
@@ -84,9 +86,9 @@ Display新增默认no-op的有身份情绪入口，CHICK实现转发纯控制器
 
 Session在settle上下文和当前转写就绪后并行启动一次，不加入语音关键等待路径。测试可注入selector函数代替网络；生产默认用新的Native方法。liveTurn由Session.mu管理待选结果、已发送标记，生命周期沿用turn.ctx取消。合法begin写出后、首段音频前发送已准备情绪；晚到时只在仍当前/未Cut/未PlaybackFinal的同一轮发送一次，pending阶段只持有不发。wire验证该ID已begin、未排空，发llm+session_id+playback_id+emotion；legacy未协商设备无新增消息/调用。流控计数、300/600ms选择器、TTS事件及PCM/Opus不改变。
 
-- [ ] 先写并云端运行RED：selector一直阻塞时首包仍可发；已准备标签排序start→emotion→audio；晚到一次；旧轮取消/新轮/连接替换拒绝；legacy零调用；多个工具/未知情绪/超时neutral；主语音cfg与搜索不被修改。
-- [ ] 实现上述方法；用本地WebSocket提供方fake但实际Native序列测2秒取消/恰好一次response.create/no audio配置，云端定向race GREEN。
-- [ ] 云端全仓`go test -race ./... -count=1`、`go vet ./...`、`go build ./...`；两阶段独立审查后root提交。
+- [x] 先写并云端运行RED：selector一直阻塞时首包仍可发；已准备标签排序start→emotion→audio；晚到一次；旧轮取消/新轮/连接替换拒绝；legacy零调用；多个工具/未知情绪/超时neutral；主语音cfg与搜索不被修改。
+- [x] 实现上述方法；用本地WebSocket提供方fake但实际Native序列测2秒取消/恰好一次response.create/no audio配置，云端定向race GREEN。
+- [x] 云端全仓`go test -race ./... -count=1`、`go vet ./...`、`go build ./...`；两阶段独立审查后root提交a0fd847。尚未真实模型评估或发布。
 
 ## Task 5：固定真实模型试次和对照
 
@@ -104,7 +106,7 @@ Session在settle上下文和当前转写就绪后并行启动一次，不加入�
 
 - [ ] 完整方案对照与质量两阶段独立审查，检查所有规格项均有实现和新鲜测试证据。
 - [ ] 对实际部署来源核对manifest/hash/配置，复制到新私有release来源，仅移植本次功能/测试diff；验证名称/选择器/旧客户端/窗口race及vet/build。原二进制/配置备份、失败回退和ready/memory_ready检查具体就绪后，在0活动会话发布。
-- [ ] main推送后等待精确SHA五目标CI和原版基线通过，下载微雪artifact并核验ZIP及所有文件摘要、配置、无lab、分区/原资源兼容。新表情能力只对新版协商设备生效。
+- [ ] main推送后等待精确SHA四个S3目标CI和原版基线通过，下载微雪artifact并核验ZIP及所有文件摘要、配置、无lab、分区/原资源兼容。新表情能力只对新版协商设备生效。
 - [ ] 按MAC与原2beda完整槽MD5核对，app-only安装，回读和app外/NVS保护通过；观察初始化、实际绘制开销与低亮，避免重复朗读。
 - [ ] 现场最少自然问答/祝贺/插话确认，记录通过和未通过，失败修复再验；未取得的物理结果保持待验，不用host成绩替代。
 - [ ] 关闭临时客户端/观察；健康、零诊断、保护配置及Git同步核对，更新交接并提交main。最终报告代码、服务/设备版本、用户视觉反馈和实际限制。

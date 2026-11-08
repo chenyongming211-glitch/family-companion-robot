@@ -1,6 +1,8 @@
 # 换电脑开发交接
 
-**表情编排开发进行中（2026-11-08）：** 用户已明确“按照现在的表情方案开发”，后续询问进度没有取消该授权。按[定稿](superpowers/specs/2026-11-08-expression-orchestration-design.md)及[实施计划](superpowers/plans/2026-11-08-expression-orchestration.md)连续完成全链路。Task1设备名称存储、管理CLI及鉴权会话快照已在c11d830完成；Task2真实DMA时间与绑定情绪生命周期在2912f1c完成，五目标CI42445453846全部success。Task3独立face_expression_v1、不可变接收时间/主任务身份复验、View接线、通用L0文案及一次性栈余量日志已实现，32项云端host/sanitizer回归（45.222秒）和独立规格/质量审查通过；修复了旧legacy排队跨连接、重复字段回落、旧网络情绪复活及正常stop早于首个DMA清标签等边界，15源码摘要与云端匹配。当前host FaceModel1144字节，CHICK ledger7584／非CHICK7320；实机栈和帧率仍待测。Task4～6（Go无声选择器与回复绑定、真实模型/语音对照、最终构建发布与实机）仍待完成，尚未新增真实表情模型调用、更新服务或设备。名称模块已在实际Go来源的隔离副本适配并通过四包race/vet/build，不整包部署main。运行版本仍是下方2beda8f固件和58c14cd-window600-chick-22e7d4c-r1服务，原微雪600ms／其它300ms及未验唤醒实验默认关闭保持。直接main，不创建worktree；Mac仅代码/Git/USB，所有runtime检查在云端。完整进度、失败和证据见[实施验证](verification/2026-11-08-expression-orchestration.md)。
+**固件支持范围变更（2026-11-08）：** 用户明确后续不再支持ESP32-C3。当前只开发和验收ESP32-S3（微雪、M5）；C3专用工作流移出活动Actions目录，四个S3变体与独立原版基线是后续构建门槛，主机测试改用`python3 firmware/tools/run_host_tests.py`，不运行C3专用模块/用例及fixture准备。旧源码/锁/补丁和验证数据保留；下方五目标或C3通过结果均为变更前历史，不能据此继续C3开发。见[停止支持资料](development-archive/2026-11-08-c3-retirement/README.md)。
+
+**表情编排开发进行中（2026-11-08）：** 用户已明确“按照现在的表情方案开发”，后续询问进度没有取消该授权。按[定稿](superpowers/specs/2026-11-08-expression-orchestration-design.md)及[实施计划](superpowers/plans/2026-11-08-expression-orchestration.md)连续完成全链路。Task1设备名称存储、管理CLI及鉴权会话快照已在c11d830完成；Task2真实DMA时间与绑定情绪生命周期在2912f1c完成；Task3协议/View接线在6c3aa34完成，32项云端host/sanitizer回归及规格/质量复核通过，中间五目标CI42448608239全部success（C3退休前历史）。Task4无声选择器与Go回复绑定在a0fd847完成，183份Go/module摘要与云端一致，全仓race/vet/build及规格/质量审查通过。Task5真实模型工具正在实现，20场景/语音对照、最终发布与实机仍待完成；尚未新增真实表情模型调用、更新服务或设备。C3退休后的123项S3/共享云端检查全部通过，两阶段审查通过，后续只等待四S3目标与独立原版基线。当前host FaceModel1144字节，CHICK ledger7584／非CHICK7320；实机栈和帧率仍待测。名称模块已在实际Go来源的隔离副本适配并通过四包race/vet/build，不整包部署main。运行版本仍是下方2beda8f固件和58c14cd-window600-chick-22e7d4c-r1服务，原微雪600ms／其它300ms及未验唤醒实验默认关闭保持。直接main，不创建worktree；Mac仅代码/Git/USB，所有runtime检查在云端。完整进度、失败和证据见[实施验证](verification/2026-11-08-expression-orchestration.md)。
 
 **表情编排与名称配置首版已收敛为作者定稿（2026-11-08）：** [首版定稿v1.0](superpowers/specs/2026-11-08-expression-orchestration-design.md)固定采用无声情绪分支与语音并行，每轮最多新增一次情绪模型调用；15规范值、回复/连接绑定、新能力协商、实际DMA开播后生效、早到等待/晚到2000ms窗口、长回复保持/播完最多2秒及跨轮失效均已定义。2000ms为初始工程上限，不是实测最优值。名称按设备资料配置、新会话生效，L0名称无关，改名保持记忆和身份；声学唤醒词仍独立。定稿阶段只整理文档，未新增模型调用、改服务或刷固件；随后用户已明确授权按此方案开发，当前实施状态以上方进度和实施验证为准。授权本身不代表已实现或通过验收；下方已安装版本在新版本发布前继续有效。
 
@@ -310,7 +312,7 @@ pkg-config --modversion opus
 go test -race ./...
 go vet ./...
 go build ./...
-python3 -m unittest discover -s firmware/tests -v
+python3 firmware/tools/run_host_tests.py
 python3 -m unittest discover -s tools/voice-audit -p 'test_*.py' -v
 ```
 

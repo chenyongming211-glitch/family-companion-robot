@@ -1,4 +1,4 @@
-"""Canonical IDF flash/merge binding, including self-consistent forgeries."""
+"""ESP32-S3 IDF flash/merge binding, including self-consistent forgeries."""
 import hashlib
 import importlib.util
 import json
@@ -19,7 +19,7 @@ def image(chip):
     return result
 
 
-def fixture(tree, c3=True, pcm=True):
+def fixture(tree, c3=False, pcm=False):
     build = tree/'build'; build.mkdir(parents=True, exist_ok=True)
     rows = [('nvs', 1, 2, 0x9000, 0x4000 if c3 else 0x6000),
             ('otadata', 1, 0, 0xd000 if c3 else 0xf000, 0x2000),
@@ -68,13 +68,14 @@ class FlashEvidence(unittest.TestCase):
         self.assertTrue(hasattr(self.module, 'verify_flash_images'), 'whole-image flash binding missing')
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.tree = self.root/'c3'; self.files = fixture(self.tree)
+        self.tree = self.root/'s3'; self.files = fixture(self.tree, c3=False, pcm=False)
 
     def verify(self):
-        return self.module.verify_flash_images(self.tree, c3=True, pcm=True)
+        return self.module.verify_flash_images(self.tree, c3=False)
 
-    def test_stable_c3_requires_native_opus_map_without_pcm_trailer(self):
-        tree = self.root/'stable'; files = fixture(tree, pcm=False)
+    def test_c3_stable_requires_native_opus_map_without_pcm_trailer(self):
+        # Historical only: the supported runner excludes this retired case.
+        tree = self.root/'stable'; files = fixture(tree, c3=True, pcm=False)
         # Stable Opus assets may use the original full partition, not PCM's
         # experimental 0x50000 prefix reservation.
         (tree/'build/generated_assets.bin').write_bytes(b'assets'+bytes(0x50000))
@@ -89,17 +90,17 @@ class FlashEvidence(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'canonical'):
             self.module.verify_flash_images(tree, c3=True)
 
-    def test_canonical_c3_and_stock_use_their_native_partition_offsets(self):
+    def test_canonical_s3_uses_native_partition_offsets_and_chip(self):
         evidence = self.verify()
         self.assertEqual(evidence['merged_bytes'], (self.tree/'build/merged-binary.bin').stat().st_size)
-        stock = self.root/'stock'; fixture(stock, c3=False)
-        result = self.module.verify_flash_images(stock, c3=False)
-        self.assertEqual(result['images']['ota_data_initial.bin']['offset'], 0xf000)
-        self.assertEqual(result['images']['generated_assets.bin']['offset'], 0x620000)
+        self.assertEqual(evidence['images']['ota_data_initial.bin']['offset'], 0xf000)
+        self.assertEqual(evidence['images']['generated_assets.bin']['offset'], 0x620000)
+        for name in ('bootloader/bootloader.bin', 'xiaozhi.bin'):
+            self.assertEqual(struct.unpack_from('<H', (self.tree/'build'/name).read_bytes(), 12)[0], 9)
 
     def test_redirected_same_basename_app_prefix_boot_table_and_pack_fail(self):
         for canonical in ('xiaozhi.bin', 'generated_assets.bin', 'bootloader/bootloader.bin',
-                          'partition_table/partition-table.bin', 'family_c3_pcm/family_c3_pcm_cues.pack'):
+                          'partition_table/partition-table.bin'):
             offset = next(o for o, p in self.files.items() if p == canonical)
             other = 'other/'+Path(canonical).name
             path = self.tree/'build'/other; path.parent.mkdir(exist_ok=True)
@@ -169,7 +170,7 @@ class FlashEvidence(unittest.TestCase):
                      original+b'\x00', original[:-1]]:
             path.write_bytes(data)
             release = self.tree/'releases'; release.mkdir(exist_ok=True)
-            with zipfile.ZipFile(release/'v2.5.2_xmini-c3-family.zip', 'w') as output:
+            with zipfile.ZipFile(release/'v2.5.2_m5stack-stopwatch-software-aec.zip', 'w') as output:
                 output.writestr('merged-binary.bin', data)
             with self.assertRaisesRegex(ValueError, 'whole merged'): self.verify()
 

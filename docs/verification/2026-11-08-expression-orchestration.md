@@ -11,9 +11,9 @@
 | 项目 | 当前进度 |
 | --- | --- |
 | 设备名称存储、CLI、新会话快照 | 已实现，云端四包race/vet/build、独立规格与质量审查通过；尚未发布 |
-| 绑定表情的DMA时间与生命周期 | 已实现，云端host/sanitizer与独立规格、质量复核通过；尚未接线/发布 |
+| 绑定表情的DMA时间与生命周期 | 已实现并接线，云端host/sanitizer与独立规格、质量复核通过；尚未发布 |
 | 固件新能力/协议与界面接线 | 最新32项云端回归及独立规格、质量复核通过；尚未发布 |
-| 无声模型情绪分支与Go回复绑定 | 待开发 |
+| 无声模型情绪分支与Go回复绑定 | a0fd847已实现，全仓race/vet/build及规格、质量复核通过；尚未发布 |
 | 20场景真实模型及语音开/关对照 | 已预注册，尚未运行 |
 | 最小正式来源发布/目标构建/实机联验 | 待完成 |
 
@@ -64,6 +64,20 @@ CHICK ledger实际增加232字节；条件静态上限为CHICK 7616／其它7360
 最新私有`task3-protocol/quality-fix1-tests.log`32项／45.222秒／退出0，覆盖生产protocol/View/Display/模型、旧播放/唤醒、微雪生命周期/电源以及C3行为。root复核日志并独立核对15文件SHA匹配；最终规格、质量复核均已批准，质量审查独立重跑3项sanitizer/集成测试通过（11.147秒）。锁定归档新准备树共23补丁、68 overlay；0023单独对patch22基线`git apply --check --whitespace=error-all`退出0，且只改5个原生文件（protocol.h、websocket_protocol.h/.cc、application.h、display.h），与overlay交集为空。证据为`task3-quality-source-proof.json`及各版RED/准备日志，不覆盖原失败。
 
 在既有150帧一次性profile点增加当前任务最小剩余栈与任务名，不增加timer或逐帧栈扫描。固定ESP-IDF提交`fff9895c82d744c7237be8847347bdd1b07c6643`的task.h明确单位为bytes，私有下载SHA为`34fa5db62cfcb5b0007d3a3b79eabd4217554f8f8201f7f43dac68592fe0fb04`。这只准备实机测量入口，尚无新固件实机余量或帧率结论。
+
+## Go无声选择器与回复绑定
+
+Task4提交a0fd847采用独立Native文字/工具连接，关闭该分支搜索，只接受一次完成的规范`set_expression`调用；总预算2000ms含连接，不重试。主语音配置不变，选择器不进入首包等待路径。名称和当前转写以转义JSON传入，只投影有实际播放证据的有界背景。独立开关默认关闭，旧客户端或仅face_state_v1客户端不新增请求/消息。
+
+回复绑定覆盖早到等待、start→emotion→audio顺序、正常生成封口后合法晚到、取消/新轮/断连/最终回报失效。质量回归又补18种意外音频/文本/转写/拒绝输出：即使后续有合法工具也须中性回退；保留RED后修正。最终同步记录写入之后再核对总期限，跨预算结果不得成为选中标签。
+
+最终定向race6.304秒，全仓race58.391秒（realtimelive21.662秒），vet1.271秒、build5.400秒，均退出0；规格与质量复核通过。root独立核对183份Go/module源码摘要匹配云端，manifest SHA256 `e8e4034d2f45daf2ca4e5f02460da401eee69e8faeba16a5ca497be519206a48`。私有证据为`task4-go/logs/green4-*`与保留的各版RED。尚无真实提供方语义/耗时或物理播放成绩。
+
+## ESP32-C3退出支持
+
+用户2026-11-08明确停止支持C3，当前开发/发布门槛只覆盖S3（微雪、M5）。活动构建矩阵移除C3、保留四个S3变体与独立原版基线；三个C3专用工作流及旧说明原文移至[退休资料](../development-archive/2026-11-08-c3-retirement/README.md)。旧来源和证据保留。
+
+统一host入口排除C3专用模块/方法及网络/提示音fixture准备，通用flash防伪测试改用真实S3芯片/分区fixture。规格审查抓到原共享测试仍使用C3布局，先RED确认旧OTA0xd000与S3所需0xf000不同，再修正并保留原文件。最终云端`c3-retirement/supported-tests2.log`为123项通过／53.615秒，root与质量复核均核对活动runner、flash测试及CI文件摘要。规格、质量复核通过；四S3目标构建仍须等待本轮精确源码SHA，不用旧五目标结果替代。
 
 ## 预注册与产物边界
 

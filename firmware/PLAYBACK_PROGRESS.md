@@ -98,7 +98,7 @@ proved. No speaker or physical acoustic pass is claimed.
 
 ## Verification
 
-`python3 -m unittest discover -s firmware/tests -v` includes native ASan/UBSan
+`python3 firmware/tools/run_host_tests.py` includes supported ESP32-S3/shared native ASan/UBSan
 executables that compile the actual production core and `.inc` methods. They
 cover six-slot completion, zero PCM, partial spans, interruption/new reply,
 normal sealing, gaps and ordering faults, bounded capacity, hardware reset,
