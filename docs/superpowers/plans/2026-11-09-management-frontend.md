@@ -52,4 +52,8 @@ Interfaces: use shared API types, navigation and feedback. Methods for capabilit
 - [x] Provide capability filter, 15-expression visual preview and named detail views; unknown or unsupported operations explain their stage rather than claim execution.
 - [x] Cloud full API tests, typecheck/build and dependency audit; browser 31 routes × 1440/768/390 plus 375 mobile core flow.
 - [x] Resolve all important review findings, update README, previous plan and handoff with exact achieved/unverified scope.
-- [ ] Commit/push main, verify remote SHA and clean working tree, deliver review links and validation evidence.
+- [x] Commit/push main, verify remote SHA and clean working tree, deliver review links and validation evidence.
+
+## 收尾结果
+
+三批31页mock实现已完成，源码经分任务和整体只读复审通过。整体审查发现的缓存恢复覆盖问题已修正；云端18项行为测试、类型检查/构建及完整依赖审计0漏洞，浏览器93项布局检查与375px补充10页通过。功能提交`697b6ef`已推送main并核对远端一致。当前进入用户UI评审，尚未获得界面确认；管理后端保持待开发。
