@@ -244,6 +244,22 @@ func (c *deviceControls) run() {
 				r.done <- controlFailure("call_limit")
 				continue
 			}
+			// A new model call ID must not authorize a second write to the same
+			// field in this turn. This loop owns reservations; field keys share
+			// the bounded call budget and cannot collide with generation:id keys.
+			if field := controlField(r.name); field != "" && devicetools.ValidateArguments(r.name, r.args) {
+				key := fmt.Sprintf("field:%d:%s", r.generation, field)
+				if c.seen[key] {
+					r.done <- controlFailure("duplicate_field")
+					continue
+				}
+				if len(c.seen) == controlSessionCallLimit {
+					delete(c.seen, r.id)
+					r.done <- controlFailure("call_limit")
+					continue
+				}
+				c.seen[key] = true
+			}
 			fields := map[string]any{"id": r.generation, "tool": safeControlName(r.name), "phase": "requested"}
 			if devicetools.ValidateArguments(r.name, r.args) {
 				fields["arguments"] = json.RawMessage(r.args)
@@ -290,6 +306,7 @@ func (s *Session) routeDeviceControls(rt *liveTurn, history string) (string, err
 	text := rt.turn.User
 	s.mu.Unlock()
 	outcome := "not_candidate"
+	reason := ""
 	var receipts []controlReceipt
 	if text == "" {
 		outcome = "transcript_unavailable"
@@ -297,6 +314,8 @@ func (s *Session) routeDeviceControls(rt *liveTurn, history string) (string, err
 		outcome = "not_candidate"
 	} else if targetOutcome := controlTargetOutcome(text); targetOutcome != "" {
 		outcome = targetOutcome
+	} else if !currentControlScope(text).any() {
+		outcome = "not_candidate"
 	} else {
 		ctx, cancel := context.WithTimeout(rt.ctx, 18*time.Second)
 		defer cancel()
@@ -320,14 +339,24 @@ func (s *Session) routeDeviceControls(rt *liveTurn, history string) (string, err
 			outcome = "completed"
 			if err != nil {
 				outcome = "failed_or_unknown"
+				reason = controlRejectionReason(err)
+				if reason != "" {
+					outcome = "rejected"
+				}
+				if len(receipts) > 0 {
+					outcome = "partial_or_unknown"
+				}
 			}
 		}
 	}
-	if err := s.record("device_control_route", map[string]any{"id": rt.turn.ID, "outcome": outcome, "receipt_count": len(receipts)}); err != nil {
+	if err := s.record("device_control_route", map[string]any{"id": rt.turn.ID, "outcome": outcome, "receipt_count": len(receipts), "reason": reason}); err != nil {
 		return "", err
 	}
 	data := map[string]any{"outcome": outcome, "receipts": receipts}
-	if outcome == "unsupported_target" || outcome == "needs_clarification" {
+	if reason != "" {
+		data["reason"] = reason
+	}
+	if outcome == "unsupported_target" || outcome == "needs_clarification" || outcome == "rejected" {
 		data["no_action_issued"] = true
 	}
 	encoded, _ := json.Marshal(data)

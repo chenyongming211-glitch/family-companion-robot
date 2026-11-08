@@ -5,8 +5,8 @@ import (
 	"unicode"
 )
 
-// This is a hardware scope check, not an action/intent classifier. The model
-// still interprets quotations, hypotheticals and per-field negation. It cannot
+// This is a hardware target check, separate from currentControlScope's
+// action and per-field authority. It cannot
 // authorize substituting this socket for an explicitly different target.
 func controlTargetOutcome(text string) string {
 	if len(text) > 16384 {
@@ -129,7 +129,7 @@ func wholeCurrentDeviceProhibited(clause string) bool {
 		return true
 	}
 	// "音量别动，亮度设30" does not prohibit the whole device. Per-field
-	// choices remain the planner's semantic responsibility.
+	// choices are admitted independently by currentControlScope.
 	if containsControlPhrase(clause, []string{"音量", "声音", "亮度", "屏幕", "小声", "大声", "静音", "volume", "brightness", "screen", "speaker", "sound", "mute"}) {
 		return false
 	}

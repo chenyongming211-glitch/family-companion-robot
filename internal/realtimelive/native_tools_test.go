@@ -105,6 +105,9 @@ func TestNativePlannerTargetAuthorizationBeforeModelAndDispatch(t *testing.T) {
 				return
 			}
 			name, args := "device_set_volume", `{"volume":20}`
+			if strings.Contains(current, "亮度设30") {
+				name, args = "device_set_brightness", `{"brightness":30}`
+			}
 			if relative && round == 0 {
 				name, args = "device_get_status", `{}`
 			}
@@ -124,7 +127,7 @@ func TestNativePlannerTargetAuthorizationBeforeModelAndDispatch(t *testing.T) {
 			n := NewNative(Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http")}, t.TempDir())
 			receipts, err := n.planControls(context.Background(), tc.text, `{"recent_turns":[]}`, plannerTools(), func(context.Context, string, string, string) (string, error) {
 				executed++
-				return `{"ok":true,"verified":true,"volume":20}`, nil
+				return `{"ok":true,"verified":true,"volume":20,"brightness":30}`, nil
 			})
 			if err == nil || err.Error() != tc.outcome || executed != 0 || len(receipts) != 0 || connections.Load() != before {
 				t.Fatalf("unsupported target reached model or hardware: executed=%d connections=%d receipts=%v err=%v", executed, connections.Load()-before, receipts, err)
@@ -137,7 +140,7 @@ func TestNativePlannerTargetAuthorizationBeforeModelAndDispatch(t *testing.T) {
 			n := NewNative(Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http")}, t.TempDir())
 			receipts, err := n.planControls(context.Background(), text, `{"recent_turns":[]}`, plannerTools(), func(context.Context, string, string, string) (string, error) {
 				executed++
-				return `{"ok":true,"verified":true,"volume":20}`, nil
+				return `{"ok":true,"verified":true,"volume":20,"brightness":30}`, nil
 			})
 			if err != nil || executed == 0 || len(receipts) == 0 {
 				t.Fatal("current-device command blocked", executed, receipts, err)
@@ -177,6 +180,13 @@ func TestNativePlannerValidatesWholeResponseBeforeExecuting(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
+			request := "音量再小一点"
+			if scenario == "partial_status" {
+				request = "亮度调暗一点"
+			}
+			if scenario == "batch_cancel" {
+				request = "把音量设30"
+			}
 			seenOutput := make(chan string, 4)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -190,7 +200,15 @@ func TestNativePlannerValidatesWholeResponseBeforeExecuting(t *testing.T) {
 					return
 				}
 				s := object(req["session"])
-				if s["enable_search"] != false || len(s["tools"].([]any)) != 3 {
+				var names []string
+				for _, tool := range s["tools"].([]any) {
+					names = append(names, object(object(tool)["function"])["name"].(string))
+				}
+				wantWrite := "device_set_volume"
+				if scenario == "partial_status" {
+					wantWrite = "device_set_brightness"
+				}
+				if s["enable_search"] != false || strings.Join(names, ",") != "device_get_status,"+wantWrite {
 					t.Error("wrong planner settings", s)
 				}
 				c.WriteJSON(map[string]any{"type": "session.updated", "session": map[string]any{"enable_search": false}})
@@ -269,7 +287,7 @@ func TestNativePlannerValidatesWholeResponseBeforeExecuting(t *testing.T) {
 			n := NewNative(Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http")}, t.TempDir())
 			defer n.Close()
 			var calls []string
-			receipts, err := n.planControls(ctx, "音量再小一点", `{"recent_turns":[]}`, plannerTools(), func(_ context.Context, id, name, args string) (string, error) {
+			receipts, err := n.planControls(ctx, request, `{"recent_turns":[]}`, plannerTools(), func(_ context.Context, id, name, args string) (string, error) {
 				calls = append(calls, name)
 				if scenario == "batch_cancel" {
 					cancel()
@@ -304,7 +322,7 @@ func TestNativePlannerValidatesWholeResponseBeforeExecuting(t *testing.T) {
 				return
 			}
 			if scenario == "no_call" {
-				if err != nil || len(calls) != 0 {
+				if err == nil || err.Error() != "tool_request_incomplete" || len(calls) != 0 {
 					t.Fatal(calls, err)
 				}
 				return

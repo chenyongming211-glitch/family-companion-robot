@@ -413,6 +413,9 @@ func TestDeviceControlsDiscoveryReadbackAndIsolation(t *testing.T) {
 	if v, err := a.controls.Call(context.Background(), 1, "set", "device_set_volume", `{"volume":20}`); err != nil || !strings.Contains(v, "duplicate_call") {
 		t.Fatal("duplicate executed or hung", v, err)
 	}
+	if v, err := a.controls.Call(context.Background(), 1, "different-call-id", "device_set_volume", `{"volume":80}`); err != nil || !strings.Contains(v, "duplicate_field") {
+		t.Fatal("same turn changed the same field again", v, err)
+	}
 }
 
 func TestDeviceControlsFailureInvalidAndCancellation(t *testing.T) {
