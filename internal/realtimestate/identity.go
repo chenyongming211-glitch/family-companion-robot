@@ -124,6 +124,32 @@ func (caps capabilities) MarshalJSON() ([]byte, error) {
 	return []byte(out.String()), nil
 }
 
+// These are display names, not a capability enum. The authenticated session
+// supplies the canonical values from the expression selector's single source.
+var screenExpressionNames = map[string]string{
+	"neutral": "平静", "happy": "开心", "loving": "关爱", "embarrassed": "害羞", "confident": "自信",
+	"delicious": "馋嘴", "sad": "难过", "crying": "哭泣", "sleepy": "困倦", "silly": "搞怪",
+	"angry": "生气", "surprised": "惊讶", "winking": "眨眼", "relaxed": "放松", "confused": "疑惑",
+}
+
+func screenExpressionDescription(cfg map[string]any) string {
+	emotions, ok := cfg["screen_expression_emotions"].([]string)
+	if !ok || len(emotions) != len(screenExpressionNames) {
+		return ""
+	}
+	names := make([]string, 0, len(emotions))
+	seen := make(map[string]bool, len(emotions))
+	for _, emotion := range emotions {
+		name, known := screenExpressionNames[emotion]
+		if !known || seen[emotion] {
+			return ""
+		}
+		seen[emotion] = true
+		names = append(names, name+"（"+emotion+"）")
+	}
+	return fmt.Sprintf("当前设备屏幕可显示%d种主情绪表情：%s；L0系统状态和L2微动作不计入这%d种", len(emotions), strings.Join(names, "、"), len(emotions))
+}
+
 type modelSnapshot struct {
 	ID       any     `json:"id"`
 	Provider *string `json:"provider"`
@@ -230,6 +256,9 @@ func (p *Product) snapshot(cfg map[string]any, context string, connected bool) (
 		}
 		caps = append(caps, namedCapability{pair[0], value})
 	}
+	if description := screenExpressionDescription(cfg); description != "" {
+		caps = append(caps, namedCapability{"screen_expressions", capability{voiceStatus, description}})
+	}
 	memory := memorySnapshot{MaxRecentTurns: RecentTurnLimit, IncludedTurns: len(history.RecentTurns), OlderTurnsOmitted: history.OlderTurnsOmitted, Scope: "current_session_played_text", ServerPersistsText: true}
 	if cfg["device_memory_enabled"] == true {
 		memory.Scope, memory.CanRestorePriorSessions, memory.RetentionDays = "current_device_recent_sessions", true, 7
@@ -283,7 +312,13 @@ func (p *Product) InstructionsFor(cfg map[string]any, context string, connected 
 		return "", err
 	}
 	available, unavailable := []string{}, []string{}
+	screenGuidance := ""
 	for _, cap := range snapshot.Capabilities {
+		if cap.key == "screen_expressions" && cap.value.Status == "available" {
+			screenGuidance = "语音输入和屏幕输出是不同能力；这些是当前机器人屏幕上的表情，不是给手机发送的表情图片。" +
+				"问到数量或种类时，可以用自然中文名称介绍，例如开心、害羞、困倦、惊讶；回复时会选用合适表情。" +
+				"不要承诺一次回复依次展示全部主情绪表情。\n"
+		}
 		if cap.value.Status == "available" {
 			available = append(available, cap.value.Description)
 		} else if cap.value.Status == "not_connected" {
@@ -334,6 +369,7 @@ func (p *Product) InstructionsFor(cfg map[string]any, context string, connected 
 		fmt.Sprintf("当前可用：%s。当前没有接入：%s。\n", availableText, strings.Join(unavailable, "、")) +
 		memoryInstruction +
 		"这个入口只有语音输入。图片相关可以请用户口述画面，基于描述交流；照片无法传给你看。提醒可以讨论安排，由用户自己在手机或闹钟上设置，不会由你到时主动提醒。\n" +
+		screenGuidance +
 		"依据上述事实自然介绍，问到哪项就回答哪项；普通聊天直接交流，不反复自我介绍。" +
 		formalIdentity +
 		searchInstruction + "身份与当前能力：\n" + marshalPython(snapshot, true) + "\n对话规则：" + Instructions + context + "\n\n" + StorytellingGuidance + nameGuidance, nil

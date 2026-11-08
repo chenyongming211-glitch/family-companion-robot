@@ -171,3 +171,9 @@ Task2提交`2912f1c5544ff9177618381ff9f929602866894a`已推main，五目标CI [4
 VAD开始/停止改为有界候选，匹配当前item的有效流式text/stash预览确认自然插话；最终有效文字才激活回复。620ms空最终结果不再生成主语音、控制或情绪请求；无有效预览的候选不取消旧输出。有预览后撤回为空仍可能已经停播，不能记为绝对零误打断。显式abort保持立即生效，候选PCM与旁路观察器分开所有权，旧/重复/乱序事件不能重新准入。
 
 首轮规格审查发现stop后、final前的有效预览被错误拒绝，已先补text/stash双RED回归，再移除该限制。最终云端`conversation-followup/task1-input-admission/after-stop-green/evidence/`：targeted race、完整`go test -race ./...`、vet、build全exit0；realtimelive22.538s/gateway51.638s，213项源码/fixture摘要前后及当前本机一致。根目录此前漏打包公开fixture/Python基线引起的失败保留，补包后通过。独立规格PASS、随后质量批准，无剩余阻塞项。服务仍为a0fd847-r1，真实连续对话问题尚未验收。
+
+### 连续对话 Task2：主模型屏幕能力代码验证（尚未部署）
+
+仅已鉴权xiaozhi、协商face_expression_v1且服务端开关启用的会话取得screen_expression_emotions事实，直接复制选择器的15规范值。主快照/提示追加中文名称、数量及L0/L2不计入的说明，区分语音输入和屏幕输出，不承诺向手机发图或一轮展示全部。无能力提示逐字冻结，客户自定义名称不受影响。
+
+云端`conversation-followup/task2-screen-facts/logs/`保留正例缺能力的RED及GREEN；相关两包race、vet/build和494项Python冻结差分通过。211项打包摘要前后/当前本机一致，manifest SHA256 `122f43453c81cc34a6a0eb17327365559725459552e5e5097f980d554d5261ff`。独立规格PASS后质量批准，均无阻塞项。此处只证明代码/提示事实，不替代真实模型对“表情包”问题的回答复验。

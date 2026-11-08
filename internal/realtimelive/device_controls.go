@@ -336,6 +336,9 @@ func (s *Session) routeDeviceControls(rt *liveTurn, history string) (string, err
 
 func (s *Session) sessionFacts() map[string]any {
 	facts := s.cfg.facts()
+	if w, ok := s.wire.(*xiaozhiWire); ok && w.expression && s.cfg.ExpressionsEnabled && s.ownerErr == nil && s.rec.owner.ClientType == "xiaozhi" && s.rec.owner.DeviceID != "" {
+		facts["screen_expression_emotions"] = append([]string(nil), expressionEmotions[:]...)
+	}
 	if m := s.memory; m != nil {
 		m.mu.Lock()
 		facts["device_memory_enabled"] = m.loaded

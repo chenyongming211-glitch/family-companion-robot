@@ -7,6 +7,7 @@ import (
 	"familyrobot/internal/realtimestate"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -456,5 +457,138 @@ func TestExpressionFinalProviderTranscriptAdmitsThroughListener(t *testing.T) {
 	case <-selected:
 		t.Fatal("duplicate final ASR triggered a second selection")
 	default:
+	}
+}
+
+func TestSessionScreenExpressionsReachMainModelOnlyAfterNegotiation(t *testing.T) {
+	base, err := realtimestate.LoadProduct("../../config/product-identity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{base.Name(), "团子"} {
+		product := base
+		if name != base.Name() {
+			product, err = base.WithName(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, tc := range []struct {
+			name                string
+			enabled, face, want bool
+		}{
+			{"negotiated", true, true, true},
+			{"legacy", true, false, false},
+			{"disabled", false, true, false},
+			{"state_only", true, false, false},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				server := NewServer(Config{ExpressionsEnabled: tc.enabled}, product, t.TempDir(), "test")
+				sessions := make(chan *Session, 1)
+				server.runDevice = func(s *Session) {
+					defer s.cancel()
+					sessions <- s
+					s.send(map[string]any{"type": "ready"})
+				}
+				h := httptest.NewServer(server.DeviceHandler(DeviceConfig{Token: testDeviceToken, AllowedDevice: testDeviceMAC}))
+				defer h.Close()
+				c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(h.URL, "http")+"/xiaozhi/v1/", http.Header{"Authorization": []string{"Bearer " + testDeviceToken}, "Device-Id": []string{testDeviceMAC}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				hello := protocol.Hello{Type: "hello", Version: 1, Transport: "websocket", AudioParams: protocol.AudioParams{Format: "opus", SampleRate: 16000, Channels: 1, FrameDuration: 60}, Features: map[string]bool{"playback_progress_v1": true, "playback_drain_v1": true, "face_expression_v1": tc.face, "face_state_v1": tc.name == "state_only"}}
+				if err := c.WriteJSON(hello); err != nil {
+					t.Fatal(err)
+				}
+				if got := object(readFaceEvent(t, c)["features"])["face_expression_v1"] == true; got != tc.want {
+					t.Fatal("wrong negotiated capability", got)
+				}
+				var s *Session
+				select {
+				case s = <-sessions:
+				case <-time.After(time.Second):
+					t.Fatal("authenticated session not created")
+				}
+				facts := s.sessionFacts()
+				emotions, factPresent := facts["screen_expression_emotions"].([]string)
+				if tc.want && (!factPresent || !reflect.DeepEqual(emotions, expressionEmotions[:]) || len(emotions) != 15) {
+					t.Fatalf("main model lacks canonical screen emotion facts: %v", facts)
+				}
+				if !tc.want && facts["screen_expression_emotions"] != nil {
+					t.Fatal("unnegotiated session acquired screen emotions", facts)
+				}
+				context := `{"recent_turns":[]}`
+				now := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+				snapshot, err := s.product.Snapshot(facts, context, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prompt, err := s.product.InstructionsFor(facts, context, true, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if object(snapshot["product"])["name"] != name || !strings.Contains(prompt, `"name":"`+name+`"`) || !strings.Contains(prompt, "这个入口只有语音输入。") {
+					t.Fatal("screen output rewrote product identity or audio input facts", snapshot, prompt)
+				}
+				cap := object(object(snapshot["capabilities"])["screen_expressions"])
+				if tc.want {
+					if cap["status"] != "available" {
+						t.Fatal("negotiated screen capability unavailable", cap)
+					}
+					description, _ := cap["description"].(string)
+					for _, term := range []string{"15种主情绪表情", "平静", "开心", "关爱", "害羞", "自信", "馋嘴", "难过", "哭泣", "困倦", "搞怪", "生气", "惊讶", "眨眼", "放松", "疑惑", "L0系统状态", "L2微动作", "不计入"} {
+						if !strings.Contains(description, term) || !strings.Contains(prompt, term) {
+							t.Fatalf("screen capability missing natural fact %q: %v", term, cap)
+						}
+					}
+					for _, emotion := range expressionEmotions {
+						if !strings.Contains(description, "（"+emotion+"）") {
+							t.Fatal("screen capability lost canonical emotion", emotion, cap)
+						}
+					}
+					for _, term := range []string{"屏幕输出", "选用合适表情", "不是给手机发送", "不要承诺一次回复依次展示全部"} {
+						if !strings.Contains(prompt, term) {
+							t.Fatal("main prompt missing screen boundary", term, prompt)
+						}
+					}
+					// Facts are per-session copies, not a mutable alias of the selector enum.
+					emotions[0] = "mutated"
+					if !reflect.DeepEqual(s.sessionFacts()["screen_expression_emotions"], expressionEmotions[:]) || expressionEmotions[0] != "neutral" {
+						t.Fatal("screen facts changed the canonical selector values")
+					}
+				} else {
+					frozenSnapshot, _ := s.product.Snapshot(s.cfg.facts(), context, true)
+					frozenPrompt, _ := s.product.InstructionsFor(s.cfg.facts(), context, true, now)
+					if len(cap) != 0 || !reflect.DeepEqual(snapshot, frozenSnapshot) || prompt != frozenPrompt {
+						t.Fatal("unnegotiated identity or prompt changed", snapshot, prompt)
+					}
+				}
+				if _, exists := s.cfg.facts()["screen_expression_emotions"]; exists {
+					t.Fatal("shared config acquired another session's screen facts")
+				}
+			})
+		}
+	}
+}
+
+func TestScreenExpressionFactsRejectMacAndUnownedWire(t *testing.T) {
+	for _, mode := range []string{"mac", "unowned", "wrong_client_type", "invalid_owner"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := expressionSession(t)
+			switch mode {
+			case "mac":
+				s.wire = &macWire{ws: s.ws}
+				s.rec.owner = Ownership{DeviceID: "device", ClientType: "xiaozhi"}
+			case "wrong_client_type":
+				s.rec.owner = Ownership{DeviceID: "device", ClientType: "mac"}
+			case "invalid_owner":
+				s.rec.owner = Ownership{DeviceID: "device", ClientType: "xiaozhi"}
+				s.ownerErr = context.Canceled
+			}
+			if _, exists := s.sessionFacts()["screen_expression_emotions"]; exists {
+				t.Fatal("unauthenticated/non-device wire acquired screen emotion facts")
+			}
+		})
 	}
 }

@@ -20,9 +20,9 @@ Files：`internal/realtimelive/session.go`；新建`session_input.go`/`session_i
 
 Files：`internal/realtimelive/device_controls.go`（sessionFacts）、`internal/realtimestate/identity.go`，相关测试。
 
-- [ ] 先RED验证协商连接的快照/提示包含15种屏幕情绪，与L0/L2区分；无协商/Mac无此能力，旧默认冻结提示不改。
-- [ ] 用既有规范情绪来源和独立能力标志实现，不硬编码机器人名称，不修改语音搜索/工具配置。
-- [ ] 云端相关race/vet/build与独立规格/质量复核后root提交。
+- [x] 先RED验证协商连接的快照/提示包含15种屏幕情绪，与L0/L2区分；无协商/Mac无此能力，旧默认冻结提示不改。
+- [x] 用既有规范情绪来源和独立能力标志实现，不硬编码机器人名称，不修改语音搜索/工具配置。
+- [x] 云端相关race/vet/build与独立规格/质量复核后root提交。211项打包摘要前后/本机一致，494项Python冻结差分通过；尚未部署或计真人验收。
 
 ## Task3：控制范围与单轮停止
 

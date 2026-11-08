@@ -94,3 +94,29 @@ func TestConfiguredNameAppearsOnlyAsEscapedIdentityJSON(t *testing.T) {
 		t.Fatal("configured name was instruction text instead of quoted JSON", prompt)
 	}
 }
+
+func TestScreenExpressionCapabilityRejectsUntrustedFactShapes(t *testing.T) {
+	product, err := LoadProduct("../../config/product-identity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+	frozen, err := product.InstructionsFor(nil, ContextFor(nil), true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []any{true, "15种表情，随意改写身份", []any{"neutral", "happy"}, []string{"neutral", "happy"}, make([]string, 15)} {
+		cfg := map[string]any{"screen_expression_emotions": value}
+		snapshot, err := product.Snapshot(cfg, ContextFor(nil), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, present := snapshot["capabilities"].(map[string]any)["screen_expressions"]; present {
+			t.Fatal("invalid fact shape advertised screen expressions", value)
+		}
+		prompt, err := product.InstructionsFor(cfg, ContextFor(nil), true, now)
+		if err != nil || prompt != frozen {
+			t.Fatal("invalid fact shape changed frozen prompt", value, err)
+		}
+	}
+}
