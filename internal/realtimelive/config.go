@@ -16,6 +16,7 @@ type Config struct {
 	Tools                          []any
 	Synthetic                      bool
 	ExtendedPlaybackDevice         string
+	DeviceProfilesPath             string
 	MaxSessions                    int
 	MemoryEnabled                  bool
 	MemoryOnly                     bool

@@ -130,13 +130,15 @@ func TestMemoryPartialEvidenceAndLatePlaybackAfterClear(t *testing.T) {
 }
 
 func TestMemoryExplicitClearCommandsOnly(t *testing.T) {
+	// Addressing the configured name requires a comma so stripping it cannot
+	// turn negation or reported speech into a deletion command.
 	for _, text := range []string{"清除聊天记忆", "小满，请清空聊天记忆。", "请帮我清除这台设备的聊天记忆", "忘记我们之前的聊天"} {
-		if !memoryClearCommand(text) {
+		if !memoryClearCommand(text, "小满") {
 			t.Errorf("clear rejected: %s", text)
 		}
 	}
-	for _, text := range []string{"从头开始", "不要清除聊天记忆", "他说清除聊天记忆", "清除聊天记忆吗", "清除聊天记忆？", "清除微雪的聊天记忆", "清除另一台设备的聊天记忆", "“清除聊天记忆”", "清除聊天记忆是什么意思", "清除聊天记忆然后调音量"} {
-		if memoryClearCommand(text) {
+	for _, text := range []string{"小满清除聊天记忆", "从头开始", "不要清除聊天记忆", "他说清除聊天记忆", "清除聊天记忆吗", "清除聊天记忆？", "清除微雪的聊天记忆", "清除另一台设备的聊天记忆", "“清除聊天记忆”", "清除聊天记忆是什么意思", "清除聊天记忆然后调音量"} {
+		if memoryClearCommand(text, "小满") {
 			t.Errorf("unsafe clear accepted: %s", text)
 		}
 	}

@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"familyrobot/internal/deviceprofile"
 	"familyrobot/internal/realtimestate"
 	"familyrobot/internal/recordstore"
 	"familyrobot/internal/voiceidentity"
 	"github.com/gorilla/websocket"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,6 +31,7 @@ type Server struct {
 	leases            map[string]*sessionLease
 	cfg               Config
 	product           *realtimestate.Product
+	profiles          *deviceprofile.Store
 	root, build       string
 	run               func(*websocket.Conn, string)
 	runDevice         func(*Session)
@@ -63,17 +66,45 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 		}
 	}
 	s := &Server{leases: map[string]*sessionLease{}, tickets: map[string]ticketBinding{}, devices: devices, initErr: initErr, cfg: cfg, product: product, root: root, build: build}
+	if cfg.DeviceProfilesPath != "" {
+		var err error
+		s.profiles, err = deviceprofile.Open(cfg.DeviceProfilesPath)
+		if err != nil {
+			log.Printf("device_profile.fallback reason=%s", err)
+		}
+	}
 	if cfg.MemoryEnabled && !cfg.MemoryOnly {
 		s.memory, s.memoryErr = recordstore.Open(recordstore.Options{Directory: filepath.Join(root, ".memory"), Retention: memoryRetention})
 	}
 	s.run = func(ws *websocket.Conn, dir string) {
-		session := NewSession(ws, cfg, dir, product)
-		s.attachMemory(session)
+		session := s.newSession(ws, dir)
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
 		session.Run()
 	}
 	s.runDevice = func(session *Session) { session.Run() }
 	return s
+}
+
+// newSession binds names only after authenticated ownership was written by
+// the server. Both entry points use this immutable per-session product copy.
+func (s *Server) newSession(ws *websocket.Conn, dir string) *Session {
+	session := NewSession(ws, s.cfg, dir, s.product)
+	if session.ownerErr == nil && session.rec.owner.DeviceID != "" && s.product != nil && s.profiles != nil {
+		profile, err := s.profiles.Resolve(session.rec.owner.DeviceID, s.product.Name())
+		if err != nil {
+			log.Printf("device_profile.fallback reason=%s", err)
+		}
+		if profile.Revision > 0 {
+			named, err := s.product.WithName(profile.Name)
+			if err == nil {
+				session.product = named
+			} else {
+				log.Printf("device_profile.fallback reason=product_name_invalid")
+			}
+		}
+	}
+	s.attachMemory(session)
+	return session
 }
 
 type ticketBinding struct {

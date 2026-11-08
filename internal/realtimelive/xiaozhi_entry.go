@@ -159,8 +159,7 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		if err != nil {
 			return
 		}
-		session := NewSession(ws, s.cfg, dir, s.product)
-		s.attachMemory(session)
+		session := s.newSession(ws, dir)
 		session.inputFrame = hello.AudioParams.FrameDuration * 16
 		session.wire = newXiaozhiWire(ws, hello.Version, hello.AudioParams.FrameDuration, session.rec.owner.SessionID)
 		session.wire.(*xiaozhiWire).mcp = hello.Features["mcp"]

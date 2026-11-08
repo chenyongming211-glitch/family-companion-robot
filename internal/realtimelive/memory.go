@@ -193,16 +193,35 @@ func (s *Session) runMemory() {
 	}
 }
 
-func memoryClearCommand(text string) bool {
+func memoryClearCommand(text, currentName string) bool {
 	text = strings.TrimSpace(text)
+	// Recognize the complete bare command first: even a name such as 清除 must
+	// not consume the start of an otherwise explicit request.
+	if memoryClearBody(text) {
+		return true
+	}
+	// Names may contain punctuation or overlap negation/reported speech. Only
+	// an explicit comma identifies a literal name prefix as an address, so
+	// removing it cannot turn an undelimited refusal into a deletion command.
+	if currentName != "" && strings.HasPrefix(text, currentName) {
+		suffix := strings.TrimLeft(strings.TrimPrefix(text, currentName), " ")
+		body, comma := strings.CutPrefix(suffix, "，")
+		if !comma {
+			body, comma = strings.CutPrefix(suffix, ",")
+		}
+		if comma {
+			return memoryClearBody(strings.TrimLeft(body, " "))
+		}
+	}
+	return false
+}
+
+func memoryClearBody(text string) bool {
 	// Questions, quotes, compound requests and other targets never become clear.
 	if strings.ContainsAny(text, "?？\"“”‘’\n") {
 		return false
 	}
 	text = strings.TrimRight(text, "。.!！ ")
-	if strings.HasPrefix(text, "小满") {
-		text = strings.TrimLeft(strings.TrimPrefix(text, "小满"), "，, ")
-	}
 	for _, prefix := range []string{"请帮我", "帮我", "请"} {
 		if strings.HasPrefix(text, prefix) {
 			text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
@@ -327,7 +346,7 @@ func (s *Session) routeMemory(rt *liveTurn, history string) (string, string, err
 	s.mu.Lock()
 	text := rt.turn.User
 	s.mu.Unlock()
-	if !memoryClearCommand(text) {
+	if !memoryClearCommand(text, s.product.Name()) {
 		outcome := "transcript_unavailable"
 		if text != "" {
 			outcome = "verified_saved"

@@ -26,6 +26,7 @@ func main() {
 	deviceListen := flag.String("device-listen", "", "optional device-only listener: 0.0.0.0:18041")
 	deviceConfig := flag.String("device-config", "/etc/family-robot/server.env", "protected server-only device authentication configuration")
 	maxSessions := flag.Int("max-sessions", 1, "maximum simultaneous terminal sessions (1-8)")
+	deviceProfiles := flag.String("device-profiles", "", "optional private device presentation profile JSON")
 	memory := flag.Bool("memory", true, "restore bounded recent conversation memory per authenticated device")
 	diagnosticDevice := flag.String("diagnostics-device", "", "optional authenticated device ID for one diagnostic session")
 	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
@@ -45,6 +46,7 @@ func main() {
 	}
 	cfg.MaxSessions = *maxSessions
 	cfg.MemoryEnabled = *memory
+	cfg.DeviceProfilesPath = *deviceProfiles
 	cfg.DiagnosticsDevice = *diagnosticDevice
 	cfg.DiagnosticsDuration = *diagnosticDuration
 	cfg.ExtendedPlaybackDevice = os.Getenv("OUTPUT_LIVE_EXTENDED_PLAYBACK_DEVICE")

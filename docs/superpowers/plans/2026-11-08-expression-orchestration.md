@@ -30,9 +30,9 @@
 
 Product增加只读`Name()`和返回新实例的`WithName(name)`；原Product不被修改，raw身份JSON中name也同步，历史名称作为历史对待。Server从可选`Config.DeviceProfilesPath`初始化资料Store，给鉴权会话解析设备名称；Mac有鉴权device_id时同样隔离，无身份则用默认。`--device-profiles`配置路径默认空，保持旧行为；空/缺省名称保持配置中的默认name。新会话采用新资料，活动会话不变。CLI提供get/set，输出name/revision和effective_wake_word=unknown，不伪造设备回读；JSON/身份只留云端私有文件。
 
-清记忆解析增加当前名称参数，调用点来自session.product.Name()；保留旧问题/引文/复合请求拒绝及明确命令合同，不把常规聊天变成删除操作。
+清记忆解析增加当前名称参数，调用点来自session.product.Name()；保留旧问题/引文/复合请求拒绝及明确命令合同，不把常规聊天变成删除操作。先认完整裸命令；带配置名称时要求名称后有中文/英文逗号再剥离，避免“不要”“他说”等合法名称把原否定/转述变成删除。
 
-- [ ] 写行为测试，包括原Product不可变、两个设备不同名称、改名后旧Session不变/新Session更新、坏文件保留旧缓存、并发写不丢资料、错误名不写、名称前缀清记忆及旧拒绝用例。最小意图断言：
+- [x] 写行为测试，包括原Product不可变、两个设备不同名称、改名后旧Session不变/新Session更新、坏文件保留旧缓存、并发写不丢资料、错误名不写、名称前缀清记忆及旧拒绝用例。最小意图断言：
 
 ```go
 base := loadTestProduct(t)
@@ -40,8 +40,8 @@ renamed, err := base.WithName("豆豆")
 if err != nil || renamed.Name() != "豆豆" || base.Name() == "豆豆" { t.Fatal("identity snapshot mutation") }
 ```
 
-- [ ] 将仅新测试加当前源传云端，运行对应包并保留预期缺失实现的RED；随后实现上述API及会话挂接。
-- [ ] 云端`go test -race ./internal/deviceprofile ./internal/realtimestate ./internal/realtimelive ./cmd/device-profile -count=1`，相关vet/build通过；检查默认设备、名称错误与CLI输出。规格/质量分开审查后root提交。
+- [x] 将仅新测试加当前源传云端，运行对应包并保留预期缺失实现的RED；随后实现上述API及会话挂接。
+- [x] 云端`go test -race ./internal/deviceprofile ./internal/realtimestate ./internal/realtimelive ./cmd/device-profile -count=1`，相关vet/build通过；检查默认设备、名称错误与CLI输出。规格/质量分开审查后root提交。
 
 ## Task 2：固件实际播放时间与绑定情绪生命周期
 
@@ -49,7 +49,7 @@ if err != nil || renamed.Name() != "豆豆" || base.Name() == "豆豆" { t.Fatal
 
 在现有播放记录中发布UI需要的首个DMA完成、最后实际完成时间、终结事实与播放身份。ISR只作有界标量更新；不绘图、不增加PCM分析或新锁。C3未选CHICK时布局保持；CHICK若因时间标量增加少量固定SRAM，精确测量并以配置条件更新静态预算，禁止增加PCM队列或内部RAM画布。
 
-新纯C++控制器接收`PlaybackIdentity`、规范FaceEmotion和到达事件，采用最多现有kRecords的有界槽；每身份最多一次生效。控制器由UI任务消费；表达阶段包括Pending、Active、PostSpeech、Retired。FaceModel保留无绑定SetEmotion的5秒行为；新增有身份事件入口，绑定事件按实际同ID DMA开始生效，开播2000ms后或终结后到达拒绝。长回复不受旧5秒截断，正常结束以实际最后DMA时间起最多2秒；新状态可提前接管。新回复首帧没有其标签时不得复活旧主情绪。旧尾音排空保留已显示旧情绪，新标签不得跨ID提前应用。
+新纯C++控制器以`OrbOutputActivity::Identity`作为轻量身份（与PlaybackIdentity相等比较兼容），接收规范FaceEmotion和到达事件，采用最多现有kRecords的有界槽；每身份最多一次生效。FaceModel新增`SetPlaybackEmotion(OrbOutputActivity::Identity,const char*,int64_t)`及清理入口供后续View转发，不向模型头引入包含PCM队列的ledger头。控制器由UI任务消费；表达阶段包括Pending、Active、PostSpeech、Retired。FaceModel保留无绑定SetEmotion的5秒行为；新增有身份事件入口，绑定事件按实际同ID DMA开始生效，开播2000ms后或终结后到达拒绝。长回复不受旧5秒截断，正常结束以实际最后DMA时间起最多2秒；新状态可提前接管。新回复首帧没有其标签时不得复活旧主情绪。旧尾音排空保留已显示旧情绪，新标签不得跨ID提前应用。
 
 - [ ] 写真实时间线测试，至少覆盖以下具体输入：
 
