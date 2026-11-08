@@ -51,7 +51,7 @@ if err != nil || renamed.Name() != "豆豆" || base.Name() == "豆豆" { t.Fatal
 
 新纯C++控制器以`OrbOutputActivity::Identity`作为轻量身份（与PlaybackIdentity相等比较兼容），接收规范FaceEmotion和到达事件，采用最多现有kRecords的有界槽；每身份最多一次生效。FaceModel新增`SetPlaybackEmotion(OrbOutputActivity::Identity,const char*,int64_t)`及清理入口供后续View转发，不向模型头引入包含PCM队列的ledger头。控制器由UI任务消费；表达阶段包括Pending、Active、PostSpeech、Retired。FaceModel保留无绑定SetEmotion的5秒行为；新增有身份事件入口，绑定事件按实际同ID DMA开始生效，开播2000ms后或终结后到达拒绝。长回复不受旧5秒截断，正常结束以实际最后DMA时间起最多2秒；新状态可提前接管。新回复首帧没有其标签时不得复活旧主情绪。旧尾音排空保留已显示旧情绪，新标签不得跨ID提前应用。
 
-- [ ] 写真实时间线测试，至少覆盖以下具体输入：
+- [x] 写真实时间线测试，至少覆盖以下具体输入：
 
 ```cpp
 // Pending happy for {connection9,playback4}, while physical3 still drains:
@@ -61,8 +61,8 @@ if err != nil || renamed.Name() != "豆豆" || base.Name() == "豆豆" { t.Fatal
 ```
 
 另测hidden/息屏跨结束后不重计2秒、页面/异常/断连失效、未绑定5秒、neutral占用本轮一次选择、起止时间回退和无效观察不驱嘴型。
-- [ ] 先云端RED，再实现并云端ASan/UBSan GREEN；旧播放记账、队列/取消、UI文字优先及渲染内存回归通过。
-- [ ] 两阶段独立审查，root提交；记录实际类型尺寸和未做的物理结果。
+- [x] 先云端RED，再实现并云端ASan/UBSan GREEN；旧播放记账、队列/取消、UI文字优先及渲染内存回归通过。
+- [x] 两阶段独立审查，root提交；记录实际类型尺寸和未做的物理结果。
 
 ## Task 3：固件协议和显示接线
 

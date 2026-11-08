@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -32,7 +33,18 @@ struct OrbOutputActivity {
         template<class T> bool operator==(const T& other) const {
             return connection==other.connection && playback==other.playback;
         }
+        template<class T> bool operator!=(const T& other) const { return !(*this==other); }
+        explicit operator bool() const { return connection && playback; }
     } identity{};
+    // Fixed observer facts survive receipt retirement until their ledger slot is
+    // reused. Times are actual tagged DMA completions, never seal/report time.
+    static constexpr size_t kPlaybackFacts=16;
+    struct PlaybackFact {
+        Identity identity{};
+        int64_t first_us=0,last_us=0;
+        bool valid=false,terminal=false,canceled=false,draining=false;
+    };
+    std::array<PlaybackFact,kPlaybackFacts> playbacks{};
     int64_t stamp_us=0;
     uint8_t level=0;
     bool active=false,draining=false,valid=false;

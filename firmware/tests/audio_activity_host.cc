@@ -57,9 +57,16 @@ static void DmaTruth() {
     p.Complete(dma[0].data(),240,now);
     auto a=p.OrbActivity();
     assert(a.valid && a.identity==id && a.level==level && a.stamp_us==now);
+    const auto first_dma=now;
+    assert(a.playbacks[0].first_us==first_dma && a.playbacks[0].last_us==first_dma);
     // Once sealed and physically drained it must not keep claiming speech.
     p.Release(id); p.Seal(id,false);
     assert(!p.OrbActivity().active);
+    PlaybackSnapshot final;
+    assert(p.NextReport(now+1000000,final) && final.finished);
+    a=p.OrbActivity();
+    assert(a.valid && a.playbacks[0].terminal && a.playbacks[0].last_us==first_dma);
+    assert(!p.Snapshot(id).valid); // observation tombstone is not a receipt record
     p.HardwareFault(); assert(!p.OrbActivity().valid);
     p.Connect(8); assert(p.OrbActivity().stamp_us==0);
     assert(p.Start({8,1}));

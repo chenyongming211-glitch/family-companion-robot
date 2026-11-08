@@ -1,13 +1,12 @@
 #pragma once
-#include "../audio/orb_activity.h"
+#include "face_expression.h"
 #include <cmath>
 #include <cstring>
 
 namespace family_robot {
 enum class FaceState : uint8_t { Boot, WifiConfig, Connecting, Idle, Listening, Thinking,
     Speaking, Notifying, Error, Upgrading, LowBattery, Charging, Hidden };
-enum class FaceEmotion : uint8_t { Neutral, Happy, Loving, Embarrassed, Confident, Delicious,
-    Sad, Crying, Sleepy, Silly, Angry, Surprised, Winking, Relaxed, Confused, Thinking };
+
 enum class EyeShape : uint8_t { Open, Wide, Half, Squint, Closed, Happy, Sad, Heart, Star, Spiral };
 enum class MouthShape : uint8_t { None, Flat, Smile, Sad, Wavy, O, Open, Grin, Tongue, Smirk };
 enum FaceEffect : uint16_t { FxNone=0, FxZzz=1, FxQuestion=2, FxExclaim=4, FxTears=8,
@@ -68,21 +67,7 @@ inline FacePreset EmotionPreset(FaceEmotion emotion) {
     if(emotion==FaceEmotion::Winking)p.right.shape=EyeShape::Closed;
     return p;
 }
-inline FaceEmotion ParseEmotion(const char* text) {
-    if(!text)return FaceEmotion::Neutral;
-    struct Mapping {const char* name;FaceEmotion emotion;};
-    static constexpr Mapping map[]={
-        {"neutral",FaceEmotion::Neutral},{"happy",FaceEmotion::Happy},
-        {"laughing",FaceEmotion::Happy},{"funny",FaceEmotion::Happy},
-        {"loving",FaceEmotion::Loving},{"embarrassed",FaceEmotion::Embarrassed},
-        {"confident",FaceEmotion::Confident},{"delicious",FaceEmotion::Delicious},
-        {"sad",FaceEmotion::Sad},{"crying",FaceEmotion::Crying},{"sleepy",FaceEmotion::Sleepy},
-        {"silly",FaceEmotion::Silly},{"angry",FaceEmotion::Angry},{"surprised",FaceEmotion::Surprised},
-        {"shocked",FaceEmotion::Surprised},{"thinking",FaceEmotion::Thinking},
-        {"winking",FaceEmotion::Winking},{"relaxed",FaceEmotion::Relaxed},{"confused",FaceEmotion::Confused}};
-    for(const auto& item:map)if(!std::strcmp(text,item.name))return item.emotion;
-    return FaceEmotion::Neutral;
-}
+
 struct FaceFacts {
     int64_t now_us=0; FaceState state=FaceState::Idle;
     bool screen_on=true,quiet=false,system_page=false,low_battery=false,charging=false,model_thinking=false;
@@ -120,7 +105,15 @@ struct FaceFrame {
 class FaceModel {
 public:
     static constexpr int64_t kFreshUs=350000,kUnavailableHoldUs=200000;
+    bool SetPlaybackEmotion(OrbOutputActivity::Identity id,const char* name,int64_t now_us) {
+        FaceEmotion next;
+        if(!ParsePlaybackEmotion(name,next) || !expressions_.Set(id,next,now_us))return false;
+        emotion_=FaceEmotion::Neutral;shocked_=false;post_speech_until_=0;
+        return true;
+    }
+    void ClearPlaybackEmotions() {expressions_.Clear();}
     void SetEmotion(const char* name,int64_t now_us) {
+        if(expressions_.bound())return;
         const auto next=ParseEmotion(name);
         shocked_=name && !std::strcmp(name,"shocked");
         if(next==emotion_ && now_us>=emotion_us_ && now_us-emotion_us_<800000)return;
@@ -131,6 +124,15 @@ public:
     }
     FaceFrame Update(const FaceFacts& f) {
         FaceFrame frame;
+        const auto& a=f.audio;const auto& o=a.output;
+        const bool chronological=f.now_us>0 && f.now_us>=observed_us_;
+        if(chronological)observed_us_=f.now_us;
+        const bool physical=chronological && FaceExpressionController::Physical(o,f.now_us);
+        const bool fixed=f.state==FaceState::Error || f.state==FaceState::Upgrading ||
+            f.state==FaceState::Notifying || f.state==FaceState::Boot || f.state==FaceState::WifiConfig;
+        const auto mood=expressions_.Observe(o,f.now_us,!f.system_page && !fixed &&
+            !(f.state==FaceState::Listening && !physical));
+        const bool bound=expressions_.bound();
         if(!f.screen_on || f.system_page || f.state==FaceState::Hidden) {
             if(was_speaking_)post_speech_until_=f.now_us+2000000;
             visible_=false;gate_confirmed_=false;mouth_=0;was_speaking_=false;presentation_=false;return frame;
@@ -141,7 +143,6 @@ public:
             next_action_=f.now_us+RandomMs(30000,90000);blink_us_=action_us_=-1;
             gaze_x_=gaze_y_=0;gate_confirmed_=false;
         }
-        const auto& a=f.audio; const auto& o=a.output;
         bool gate=a.gate_open;
         if(a.snapshot_available) {
             gate_confirmed_=gate;gate_us_=f.now_us;capture_=a.capture;epoch_=a.epoch;connection_=o.connection;
@@ -150,14 +151,11 @@ public:
                 f.now_us>=gate_us_ && f.now_us-gate_us_<=kUnavailableHoldUs;
             if(!gate)gate_confirmed_=false;
         }
-        const bool output=o.active && o.valid && o.identity.playback &&
-            o.connection==o.identity.connection && Fresh(o.stamp_us,f.now_us);
+        const bool output=physical && expressions_.playing() && Fresh(o.stamp_us,f.now_us);
         // Expire before choosing state: an L1 thinking string is finite mood
         // data. Only explicit generation facts may hold the L0 Thinking state.
-        if(emotion_!=FaceEmotion::Neutral && (f.now_us<emotion_us_ || f.now_us-emotion_us_>=5000000 ||
+        if(!bound && emotion_!=FaceEmotion::Neutral && (f.now_us<emotion_us_ || f.now_us-emotion_us_>=5000000 ||
             (post_speech_until_>0 && f.now_us>=post_speech_until_)))emotion_=FaceEmotion::Neutral;
-        const bool fixed=f.state==FaceState::Error || f.state==FaceState::Upgrading ||
-            f.state==FaceState::Notifying || f.state==FaceState::Boot || f.state==FaceState::WifiConfig;
         frame.state=f.state;frame.shown=true;frame.draining=o.draining;
         if(!fixed) {
             if(output)frame.state=FaceState::Speaking;
@@ -181,18 +179,19 @@ public:
                 interrupted_until_=f.now_us+250000;
         }
         if(speaking)post_speech_until_=0;
-        if(emotion_!=FaceEmotion::Neutral && frame.state==FaceState::Idle && post_speech_until_==0 &&
+        if(!bound && emotion_!=FaceEmotion::Neutral && frame.state==FaceState::Idle && post_speech_until_==0 &&
             f.now_us>=idle_since_ && f.now_us-idle_since_>=2000000)
             emotion_=FaceEmotion::Neutral;
+        const auto chosen=bound?((expressions_.playing() && !output)?FaceEmotion::Neutral:mood.emotion):emotion_;
         frame.preset=StatePreset(frame.state);
         if(!fixed && (frame.state==FaceState::Idle || frame.state==FaceState::Speaking) &&
-            emotion_!=FaceEmotion::Neutral) {
-            frame.emotion=emotion_;frame.preset=EmotionPreset(emotion_);
+            chosen!=FaceEmotion::Neutral) {
+            frame.emotion=chosen;frame.preset=EmotionPreset(chosen);
         } else if(frame.state==FaceState::Thinking)frame.emotion=FaceEmotion::Thinking;
         if(frame.state==FaceState::Listening && f.now_us<interrupted_until_) {
             frame.emotion=FaceEmotion::Surprised;frame.preset=EmotionPreset(FaceEmotion::Surprised);
         }
-        const int64_t animation_us=frame.emotion!=FaceEmotion::Neutral?emotion_us_:state_us_;
+        const int64_t animation_us=frame.emotion!=FaceEmotion::Neutral?(bound?mood.applied_us:emotion_us_):state_us_;
         frame.motion_ms=static_cast<uint32_t>((f.now_us>=animation_us?f.now_us-animation_us:0)/1000);
         if(frame.state==FaceState::Speaking && output) {
             const int64_t dt=f.now_us>=last_us_?f.now_us-last_us_:0;
@@ -216,6 +215,7 @@ public:
             mouth.open=0;
         }
         Animate(f,frame);
+        if(frame.shown && speaking && bound)expressions_.ConfirmShown(o.identity,frame.emotion);
         was_speaking_=speaking;was_draining_=o.draining;
         last_state_=frame.state;last_us_=f.now_us;return frame;
     }
@@ -298,8 +298,9 @@ private:
             else if(age<480000)frame.blink=BlinkAt(age-320000);
         }
     }
+    FaceExpressionController expressions_{};
     FaceEmotion emotion_=FaceEmotion::Neutral; FaceState last_state_=FaceState::Hidden;
-    int64_t emotion_us_=0,idle_since_=0,state_us_=0,last_us_=0,since_=0,gate_us_=0;
+    int64_t emotion_us_=0,idle_since_=0,state_us_=0,last_us_=0,since_=0,gate_us_=0,observed_us_=0;
     int64_t post_speech_until_=0,interrupted_until_=0,transition_us_=0;
     int64_t next_blink_=0,blink_us_=-1,next_gaze_=0,next_action_=0,action_us_=-1;
     uint32_t capture_=0,epoch_=0,connection_=0,rng_=0x43484943;

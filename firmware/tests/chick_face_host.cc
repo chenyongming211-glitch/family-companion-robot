@@ -14,8 +14,15 @@ static FaceFacts Facts(int64_t now=1000000) {
     f.audio.output.connection=9; return f;
 }
 static void Output(FaceFacts& f,uint8_t level=180) {
-    auto& o=f.audio.output; o.connection=9; o.identity={9,4};
+    auto& o=f.audio.output;
+    if(!o.connection)o.connection=9;
+    o.identity={o.connection,4};
     o.valid=true; o.active=true; o.stamp_us=f.now_us; o.level=level;
+    auto& fact=o.playbacks[0];
+    if(fact.identity!=o.identity)fact={};
+    fact.identity=o.identity;
+    if(!fact.first_us)fact.first_us=f.now_us;
+    fact.last_us=f.now_us;fact.valid=true;fact.terminal=false;fact.draining=o.draining;
 }
 static void Presets() {
     assert(kStatePresetCount==12 && kEmotionPresetCount==15);

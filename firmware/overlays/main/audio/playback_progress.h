@@ -51,7 +51,11 @@ public:
     bool Start(PlaybackIdentity id) {
         if (!id || id.connection != connection_ || id.playback <= last_id_) return false;
         last_id_ = id.playback;
-        for (auto& r : records_) if (!r.id) {
+        for (auto& r : records_) if (!r.id
+#if CONFIG_CHICK_FACE_UI
+            || r.orb_retired
+#endif
+            ) {
             r = {}; r.id = id; r.valid = hardware_ok_; return true;
         }
         return false; // bounded degradation: caller must not advertise confirmation
@@ -150,7 +154,8 @@ public:
 #if CONFIG_CHICK_FACE_UI
                     if (s->tag.count) {
                         orb_completed_.identity = {s->tag.id.connection,s->tag.id.playback};
-                        orb_completed_.stamp_us=stamp;
+                        if(!r->orb_first_us) r->orb_first_us=stamp;
+                        r->orb_last_us=stamp;
                         orb_completed_.level=s->tag.level;
                     }
 #endif
@@ -174,12 +179,20 @@ public:
     bool NextReport(int64_t now, PlaybackSnapshot& out) {
         for(auto& r:records_) {
             if(!r.id) continue;
+#if CONFIG_CHICK_FACE_UI
+            if(r.orb_retired) continue;
+#endif
             const bool final=Finished(r);
             if(!final && (now-r.report_time<200000 ||
                 (r.reported && r.reported_played==r.played && r.reported_valid==r.valid))) continue;
             out=Snapshot(r.id);
-            if(final) r={};
-            else { r.report_time=now; r.reported_played=r.played; r.reported_valid=r.valid; r.reported=true; }
+            if(final) {
+#if CONFIG_CHICK_FACE_UI
+                r.orb_retired=true; // UI tombstone; receipt lookup still removes it
+#else
+                r={};
+#endif
+            } else { r.report_time=now; r.reported_played=r.played; r.reported_valid=r.valid; r.reported=true; }
             return true;
         }
         return false;
@@ -196,19 +209,28 @@ public:
         if(auto* r=Find(id)) r->orb_draining=true;
     }
     OrbOutputActivity OrbActivity() const {
-        auto out=orb_completed_;
+        static_assert(kRecords==OrbOutputActivity::kPlaybackFacts,"bounded observer/ledger slots");
+        OrbOutputActivity out;
         out.connection=connection_;
-        const PlaybackIdentity id{out.identity.connection,out.identity.playback};
-        const auto* r=Find(id);
-        out.valid=hardware_ok_ && r && r->valid && id.connection==connection_;
-        out.active=out.valid && !Finished(*r);
-        out.draining=false;
-        for(const auto& tail:records_) {
-            if(tail.id && tail.id.connection==connection_ &&
-               (tail.orb_draining || tail.interrupted) && !Finished(tail) &&
-               (tail.work || HasPending(tail.id))) out.draining=true;
+        out.identity=orb_completed_.identity;
+        out.level=orb_completed_.level;
+        for(size_t i=0;i<records_.size();++i) {
+            const auto& r=records_[i];
+            if(!r.id || r.id.connection!=connection_) continue;
+            const bool terminal=Finished(r);
+            const bool valid=hardware_ok_ && r.valid &&
+                (!terminal || r.interrupted || r.played==r.received);
+            const bool draining=r.orb_draining || r.interrupted;
+            out.playbacks[i]={{r.id.connection,r.id.playback},r.orb_first_us,r.orb_last_us,
+                              valid,terminal,r.interrupted,draining};
+            if(out.identity==r.id) {
+                out.valid=valid && r.orb_first_us>0;
+                out.active=out.valid && !terminal;
+                out.stamp_us=r.orb_last_us;
+            }
+            if(draining && !terminal && (r.work || HasPending(r.id))) out.draining=true;
         }
-        if(!out.valid) {out.level=0; out.stamp_us=0;}
+        if(!out.valid) {out.level=0;out.stamp_us=0;}
         return out;
     }
 #endif
@@ -224,20 +246,32 @@ private:
         PlaybackIdentity id{};
         uint64_t received=0,submitted=0,played=0,reported_played=0;
         int64_t report_time=0;
+#if CONFIG_CHICK_FACE_UI
+        // Sixteen first/last-DMA timestamp pairs, no extra PCM storage.
+        int64_t orb_first_us=0,orb_last_us=0;
+#endif
         uint32_t work=0;
         bool valid=false,sealed=false,interrupted=false,reported=false,reported_valid=false;
 #if CONFIG_CHICK_FACE_UI
-        bool orb_draining=false; // observation only; never changes cancellation
+        bool orb_draining=false,orb_retired=false; // observation only
 #endif
     };
     Record* Find(PlaybackIdentity id) {
         if(!id) return nullptr;
-        for(auto& r:records_) if(r.id==id) return &r;
+        for(auto& r:records_) if(r.id==id
+#if CONFIG_CHICK_FACE_UI
+            && !r.orb_retired
+#endif
+            ) return &r;
         return nullptr;
     }
     const Record* Find(PlaybackIdentity id) const {
         if(!id) return nullptr;
-        for(const auto& r:records_) if(r.id==id) return &r;
+        for(const auto& r:records_) if(r.id==id
+#if CONFIG_CHICK_FACE_UI
+            && !r.orb_retired
+#endif
+            ) return &r;
         return nullptr;
     }
 #if CONFIG_CHICK_FACE_UI
@@ -261,8 +295,14 @@ private:
     uint32_t connection_=0,last_id_=0;
     bool hardware_ok_=true;
 #if CONFIG_CHICK_FACE_UI
-    OrbOutputActivity orb_completed_{};
+    struct OrbCompletion { OrbOutputActivity::Identity identity{};uint8_t level=0; };
+    OrbCompletion orb_completed_{};
 #endif
 };
+#if CONFIG_CHICK_FACE_UI
+// 16 bounded first/last-DMA timestamp pairs; no extra PCM queue or canvas.
+static_assert(sizeof(PlaybackProgress)<=7616,"CHICK playback tracker internal SRAM bound");
+#else
 static_assert(sizeof(PlaybackProgress)<=7360,"playback tracker internal SRAM bound");
+#endif
 } // namespace family_robot
