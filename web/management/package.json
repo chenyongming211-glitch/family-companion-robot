@@ -1,1 +1,25 @@
-{"name":"companion-management-demo","private":true,"version":"0.1.0","type":"module","engines":{"node":">=22.18"},"scripts":{"dev":"vite","test":"node --experimental-strip-types --test tests/*.test.ts","typecheck":"vue-tsc --noEmit","build":"npm run typecheck && vite build"},"dependencies":{"vue":"3.5.45"},"devDependencies":{"vite":"8.3.6","@vitejs/plugin-vue":"6.0.10","typescript":"5.9.3","vue-tsc":"3.3.14","@types/node":"26.6.6"}}
+{
+  "name": "companion-management-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "npm run typecheck && vite build"
+  },
+  "dependencies": {
+    "vue": "3.5.45"
+  },
+  "devDependencies": {
+    "vite": "8.3.6",
+    "@vitejs/plugin-vue": "6.0.10",
+    "typescript": "5.9.3",
+    "vue-tsc": "3.3.14",
+    "@types/node": "26.6.6"
+  }
+}

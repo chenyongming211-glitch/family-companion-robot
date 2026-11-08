@@ -1,0 +1,58 @@
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
+}
+.ops-detail {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  background: #f6f8f6;
+}
+.ops-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.ops-controls input,
+.ops-controls select {
+  max-width: 280px;
+}
+.ops-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ops-options button {
+  background: #f2f5f1;
+  color: #334c3b;
+  border: 1px solid #d6e0d5;
+}
+.ops-options button[aria-pressed="true"] {
+  background: #365f45;
+  color: white;
+}
+.ops-face {
+  text-align: center;
+}
+.face-preview {
+  display: block;
+  width: min(240px, 100%);
+  margin: auto;
+}
+.face-mouth.speaking {
+  transform-origin: 100px 128px;
+  animation: mouth 0.6s ease-in-out infinite alternate;
+}
+@keyframes mouth {
+  to {
+    transform: scaleY(1.6);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .face-mouth.speaking {
+    animation: none;
+  }
+}

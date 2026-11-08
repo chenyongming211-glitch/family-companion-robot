@@ -23,12 +23,12 @@ Files: `web/management/package.json`, `vite.config.ts`, `tsconfig.json`, `index.
 
 Interfaces: `Scope = 'admin' | 'family'`; typed device, conversation, turn, memory, family and capability structures in `types.ts`. `api.ts` exports `createMockApi(storage?)` for tests and shared `api` for pages. Reads and writes return Promises and detached values. Core methods: `listDevices`, `getDevice`, `updateDevice`, `listConversations`, `getConversation`, `reset`.
 
-- [ ] Write behavior tests for device isolation, invalid settings, unknown IDs, forbidden body and snapshot isolation; verify expected failures in cloud before implementing corresponding behavior when cloud access is available.
-- [ ] Implement simple fixtures and API functions, rejecting invalid input before mutation; persist only demonstration state.
-- [ ] Build both entry layouts, shared navigation and core pages: admin overview/devices/device/conversations/configuration and family home/device/conversations/conversation/settings.
-- [ ] Show loaded/empty/error states; make selected device and conversation IDs explicit in links; avoid stale asynchronous data overwriting a newer route.
-- [ ] Cloud `npm install`, `npm test`, `npm run build`; Mac browser checks core flow and responsive layout. Record unavailable checks honestly if access is still blocked.
-- [ ] Review the task's source, fix important findings, commit first batch to main.
+- [x] Write behavior tests for device isolation, invalid settings, unknown IDs, forbidden body and snapshot isolation; verify expected failures in cloud before implementing corresponding behavior when cloud access is available.
+- [x] Implement simple fixtures and API functions, rejecting invalid input before mutation; persist only demonstration state.
+- [x] Build both entry layouts, shared navigation and core pages: admin overview/devices/device/conversations/configuration and family home/device/conversations/conversation/settings.
+- [x] Show loaded/empty/error states; make selected device and conversation IDs explicit in links; avoid stale asynchronous data overwriting a newer route.
+- [x] Cloud `npm install`, `npm test`, `npm run build`; Mac browser checks core flow and responsive layout. Record unavailable checks honestly if access is still blocked.
+- [x] Review the task's source, fix important findings, commit first batch to main.
 
 ## Task 2: Family and data pages (14 pages)
 
@@ -36,11 +36,11 @@ Files: `src/pages/DataPages.vue`, necessary additions to `api.ts`, `types.ts`, `
 
 Interfaces: consume shared typed API and layout; add only page-required functions for families, members/invitation/binding, demonstration login/logout, memories, privacy and daily grouping. Mutations return updated demonstration values and throw named errors; no real account, authorization or archive implementation.
 
-- [ ] Add behavior tests for invitation/binding validation, memory clearing, conversation deletion and privacy preference consistency before relevant API behavior.
-- [ ] Implement admin login/families/family/accounts/policies/memories/daily and family login/family/invite/bind/privacy/memories/memory.
-- [ ] Ensure memory details link to their actual source conversation; deleting one conversation removes its demonstration derived memory/summary, while memory-only clearing preserves chat records.
-- [ ] Check ordinary form feedback, action confirmation, duplicated submissions and persistence/reset semantics.
-- [ ] Cloud focused tests/build; browser all new routes and main mutations; review and commit batch 2.
+- [x] Add behavior tests for invitation/binding validation, memory clearing, conversation deletion and privacy preference consistency before relevant API behavior.
+- [x] Implement admin login/families/family/accounts/policies/memories/daily and family login/family/invite/bind/privacy/memories/memory.
+- [x] Ensure memory details link to their actual source conversation; deleting one conversation removes its demonstration derived memory/summary, while memory-only clearing preserves chat records.
+- [x] Check ordinary form feedback, action confirmation, duplicated submissions and persistence/reset semantics.
+- [x] Cloud focused tests/build; browser all new routes and main mutations; review and commit batch 2.
 
 ## Task 3: Capabilities and operations (7 pages)
 
@@ -48,8 +48,8 @@ Files: `src/pages/OperationsPages.vue`, necessary fixture/API/style additions, R
 
 Interfaces: use shared API types, navigation and feedback. Methods for capability list, expression options, task/firmware/operation/audit demonstration data are narrowly scoped read functions.
 
-- [ ] Implement capabilities/expressions/voiceprints/tasks/firmware/operations/audit, retaining true product-stage wording and fictitious metric labels.
-- [ ] Provide capability filter, 15-expression visual preview and named detail views; unknown or unsupported operations explain their stage rather than claim execution.
-- [ ] Cloud full API tests, typecheck/build and dependency audit; browser 31 routes × 1440/768/390 plus 375 mobile core flow.
-- [ ] Resolve all important review findings, update README, previous plan and handoff with exact achieved/unverified scope.
+- [x] Implement capabilities/expressions/voiceprints/tasks/firmware/operations/audit, retaining true product-stage wording and fictitious metric labels.
+- [x] Provide capability filter, 15-expression visual preview and named detail views; unknown or unsupported operations explain their stage rather than claim execution.
+- [x] Cloud full API tests, typecheck/build and dependency audit; browser 31 routes × 1440/768/390 plus 375 mobile core flow.
+- [x] Resolve all important review findings, update README, previous plan and handoff with exact achieved/unverified scope.
 - [ ] Commit/push main, verify remote SHA and clean working tree, deliver review links and validation evidence.

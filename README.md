@@ -2,6 +2,8 @@
 
 当前产品主线为**Go原生Realtime**，以已经验证的语音核心为基础，后续逐项适配旧Go业务模块。默认入口云端18040，Mac只作客户端；后端依赖、运行测试和部署均在云端。先读[开发交接](docs/DEVELOPMENT_HANDOFF.md)与[代码生命周期清单](docs/CODE_LIFECYCLE.md)。
 
+- [管理平台前端](web/management/README.md)：Vue 3两端31页mock已按三批实现，云端18项行为测试/类型检查/构建和浏览器93项布局复核通过，等待用户UI评审；尚未接管理后端。见[验证记录](docs/verification/2026-11-09-management-frontend.md)。
+
 - 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
 - 当前固件硬件仅支持ESP32-S3（微雪、M5）。2026-11-08起停止ESP32-C3开发、构建与验收；旧源码和证据保留，见[停止支持记录](docs/development-archive/2026-11-08-c3-retirement/README.md)。
 - 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
