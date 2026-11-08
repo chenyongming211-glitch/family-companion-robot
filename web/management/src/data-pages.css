@@ -1,0 +1,5 @@
+.data-extra { margin-top: 20px; }
+.data-detail { margin: 20px 0; padding: 18px; background: #f6f8f6; border-radius: 12px; }
+.data-danger { margin-top: 20px; background: #fff; color: #a33838; border: 1px solid #d6aaaa; }
+.check { display: flex; align-items: center; gap: 8px; }
+.check input { width: auto; }

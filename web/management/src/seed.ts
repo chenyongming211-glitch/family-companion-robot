@@ -13,7 +13,7 @@ export function initialData(): Snapshot {
         { id: 'member-dad', name: '林先生', email: 'dad@example.test', role: '家庭成员', access: '客厅机器人', status: '已加入' },
         { id: 'member-child', name: '安安', email: 'child@example.test', role: '家庭成员', access: '未授权正文', status: '已加入' },
       ] },
-      { id: 'family-zhou', name: '周的家', members: [{ id: 'member-zhou', name: '周女士', email: 'zhou@example.test', role: '家庭管理员', access: '未授权内部正文', status: '已加入' }] },
+      { id: 'family-zhou', name: '周的家', members: [{ id: 'member-zhou', name: '周女士', email: 'zhou@example.test', role: '家庭管理员', access: '未授权正文', status: '已加入' }] },
     ],
     conversations: [
       { id: 'chat-run', deviceId: 'dev-living', familyId: 'family-lin', title: '第一次跑完一公里', date: '2026-11-09', time: '14:32', status: '已归档示例', endReason: '连续30分钟无有效交互', summary: '分享运动进步，讨论热身与散步。', bodyAvailable: true, turns: [
