@@ -165,3 +165,9 @@ Task1功能差分已对实际正式来源`chick-face-20261108/go-release`执行�
 新协议补丁的云端原生基线已按锁定归档和现有0022准备到私有`protocol-baseline-patch22`；生成0023时以provenance中的overlay清单排除覆盖文件，仅保留原生/vendor差分。
 
 Task2提交`2912f1c5544ff9177618381ff9f929602866894a`已推main，五目标CI [42445453846](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42445453846)全部success（微雪、M5产品/软件AEC/原变体、C3）。后续协议变更仍需最终精确SHA的目标构建，不将本轮host或中间CI当作完整交付，未下载中间产物刷机。
+
+### 连续对话 Task1：输入准入代码验证（尚未部署）
+
+VAD开始/停止改为有界候选，匹配当前item的有效流式text/stash预览确认自然插话；最终有效文字才激活回复。620ms空最终结果不再生成主语音、控制或情绪请求；无有效预览的候选不取消旧输出。有预览后撤回为空仍可能已经停播，不能记为绝对零误打断。显式abort保持立即生效，候选PCM与旁路观察器分开所有权，旧/重复/乱序事件不能重新准入。
+
+首轮规格审查发现stop后、final前的有效预览被错误拒绝，已先补text/stash双RED回归，再移除该限制。最终云端`conversation-followup/task1-input-admission/after-stop-green/evidence/`：targeted race、完整`go test -race ./...`、vet、build全exit0；realtimelive22.538s/gateway51.638s，213项源码/fixture摘要前后及当前本机一致。根目录此前漏打包公开fixture/Python基线引起的失败保留，补包后通过。独立规格PASS、随后质量批准，无剩余阻塞项。服务仍为a0fd847-r1，真实连续对话问题尚未验收。

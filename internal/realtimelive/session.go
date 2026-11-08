@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-	"unicode/utf8"
 )
 
 type liveTurn struct {
@@ -33,43 +32,42 @@ type liveTurn struct {
 	expressionCancel        context.CancelFunc
 }
 type Session struct {
-	ws                *websocket.Conn
-	wire              sessionWire
-	inputFrame        int
-	cfg               Config
-	directory         string
-	product           *realtimestate.Product
-	mu                sync.Mutex
-	history           []*liveTurn
-	ring              *realtimestate.AudioRing
-	input             chan []byte
-	listener          *Native
-	controls          *deviceControls
-	diag              *audioDiagnostics
-	memory            *sessionMemory
-	memoryFloor       int64 // Protected by mu; old playback state remains intact.
-	speaker           speakerObserver
-	speakerLatest     int64
-	speakerFailed     bool
-	providerEnd       int64
-	speakerStartValid bool
-	speechStart       *int64
-	seq               int64
-	output, lastInput *liveTurn
-	items             map[string]*liveTurn
-	itemOrder         []string
-	changed           chan struct{}
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
-	rec               recorder
-	manifest          SessionInfo
-	ownerErr          error
-	serverStopping    func() bool
-	failureMu         sync.Mutex
-	failureReason     string
-	generate          func(context.Context, int64, string, []byte, func(string, []byte) error) error
-	selectExpression  func(context.Context, ExpressionInput) ExpressionResult
+	ws               *websocket.Conn
+	wire             sessionWire
+	inputFrame       int
+	cfg              Config
+	directory        string
+	product          *realtimestate.Product
+	mu               sync.Mutex
+	history          []*liveTurn
+	ring             *realtimestate.AudioRing
+	input            chan []byte
+	listener         *Native
+	controls         *deviceControls
+	diag             *audioDiagnostics
+	memory           *sessionMemory
+	memoryFloor      int64 // Protected by mu; old playback state remains intact.
+	speaker          speakerObserver
+	speakerLatest    int64
+	speakerFailed    bool
+	providerEnd      int64
+	seq              int64
+	output           *liveTurn
+	lastInput        *pendingInput
+	items            map[string]*pendingInput
+	itemOrder        []string
+	changed          chan struct{}
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	rec              recorder
+	manifest         SessionInfo
+	ownerErr         error
+	serverStopping   func() bool
+	failureMu        sync.Mutex
+	failureReason    string
+	generate         func(context.Context, int64, string, []byte, func(string, []byte) error) error
+	selectExpression func(context.Context, ExpressionInput) ExpressionResult
 }
 
 func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimestate.Product) *Session {
@@ -82,7 +80,7 @@ func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimesta
 	lc := cfg
 	off := false
 	lc.Search = &off
-	s := &Session{ws: ws, cfg: cfg, directory: dir, product: product, ctx: ctx, cancel: cancel, ring: realtimestate.NewAudioRing(16000 * 35), input: make(chan []byte, 100), listener: NewNative(lc, dir), items: map[string]*liveTurn{}, changed: make(chan struct{}, 1), rec: recorder{dir: dir, memoryOnly: cfg.MemoryOnly}}
+	s := &Session{ws: ws, cfg: cfg, directory: dir, product: product, ctx: ctx, cancel: cancel, ring: realtimestate.NewAudioRing(16000 * 35), input: make(chan []byte, 100), listener: NewNative(lc, dir), items: map[string]*pendingInput{}, changed: make(chan struct{}, 1), rec: recorder{dir: dir, memoryOnly: cfg.MemoryOnly}}
 	s.wire = &macWire{ws: ws}
 	s.inputFrame = 320
 	info, err := ReadSessionInfo(dir)
@@ -188,12 +186,18 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 func (s *Session) addTurn() *liveTurn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.seq++
+	return s.activateTurnLocked(s.seq, time.Now())
+}
+
+// Input admission reserves its ID at capture start and promotes it only after
+// final ASR. addTurn remains the immediate allocator used by other turn tests.
+func (s *Session) activateTurnLocked(id int64, stoppedAt time.Time) *liveTurn {
 	if s.output != nil {
 		s.retireExpressionLocked(s.output)
 	}
-	s.seq++
 	ctx, cancel := context.WithCancel(s.ctx)
-	rt := &liveTurn{turn: realtimestate.NewTurn(s.seq), ctx: ctx, cancel: cancel, done: make(chan struct{}), transcriptReady: make(chan struct{}), stoppedAt: time.Now()}
+	rt := &liveTurn{turn: realtimestate.NewTurn(id), ctx: ctx, cancel: cancel, done: make(chan struct{}), transcriptReady: make(chan struct{}), stoppedAt: stoppedAt}
 	// The selector comes from server configuration, and ownership from the
 	// authenticated adapter. Client messages cannot enlarge the credit window.
 	if s.rec.owner.ClientType == "xiaozhi" && s.cfg.ExtendedPlaybackDevice != "" && s.rec.owner.DeviceID == s.cfg.ExtendedPlaybackDevice {
@@ -201,7 +205,6 @@ func (s *Session) addTurn() *liveTurn {
 	}
 	s.history = append(s.history, rt)
 	s.output = rt
-	s.lastInput = rt
 	return rt
 }
 func closed(ch <-chan struct{}) bool {
@@ -217,7 +220,20 @@ func (s *Session) interruptExpected(expected *liveTurn) error {
 	return s.interruptFrom(expected, "generation_error")
 }
 func (s *Session) interruptFrom(expected *liveTurn, source string) error {
+	return s.interruptInput(expected, source, nil)
+}
+
+func (s *Session) interruptInput(expected *liveTurn, source string, input *pendingInput) error {
 	s.mu.Lock()
+	if source == "device_abort" {
+		s.discardInputLocked()
+	}
+	// Abort/teardown may invalidate a preview or final between its validation
+	// and interruption. A retired capture must not cut a newer output.
+	if input != nil && (s.ctx.Err() != nil || s.lastInput != input || input.retired) {
+		s.mu.Unlock()
+		return nil
+	}
 	rt := s.output
 	var id int64
 	if rt != nil {
@@ -620,100 +636,29 @@ func timestamp(v any) (float64, bool) {
 	return f, e == nil
 }
 func (s *Session) listen() error {
+	defer s.closeInputs()
 	for {
-		event, e := s.listener.ReadListener(s.ctx)
-		if e != nil {
-			return e
+		event, err := s.listener.ReadListener(s.ctx)
+		if err != nil {
+			return err
+		}
+		if s.ctx.Err() != nil {
+			return s.ctx.Err()
 		}
 		switch event["type"] {
 		case "input_audio_buffer.speech_started":
-			if e = s.interruptFrom(nil, "provider_vad_start"); e != nil {
-				return e
-			}
-			s.mu.Lock()
-			end := s.ring.End
-			pos, valid := timestamp(event["audio_start_ms"])
-			start := max(int64(0), end-8000)
-			if valid && pos >= 0 && pos*16 <= float64(end) {
-				start = int64(pos * 16)
-			}
-			s.speechStart = &start
-			s.speakerStartValid = valid && pos >= 0 && pos*16 <= float64(s.providerEnd)
-			s.mu.Unlock()
-			s.beginSpeaker()
-			if e = s.record("speech_started", map[string]any{"sample": start, "received_end": end, "provider_timestamp": valid}); e != nil {
-				return e
-			}
-			if e = s.send(map[string]any{"type": "status", "code": "listening"}); e != nil {
-				return e
-			}
+			err = s.startInput(event)
 		case "input_audio_buffer.speech_stopped":
-			s.mu.Lock()
-			end := s.ring.End
-			pos, valid := timestamp(event["audio_end_ms"])
-			if valid && pos > 0 {
-				end = min(end, int64(pos*16))
-			}
-			start := max(int64(0), end-8000)
-			if s.speechStart != nil {
-				start = *s.speechStart
-			}
-			pcm := s.ring.Slice(start, end)
-			speakerComplete := s.speakerStartValid && valid && pos > 0 && pos*16 <= float64(s.providerEnd) && int64(pos*16) == end
-			s.speechStart = nil
-			s.speakerStartValid = false
-			s.mu.Unlock()
-			if pcm == nil || len(pcm) > 16000*2*25 {
-				if s.cfg.Speaker != nil {
-					s.mu.Lock()
-					id := s.speakerLatest
-					s.mu.Unlock()
-					s.observeSpeaker(id, start, end, pcm, speakerComplete)
-				}
-				if e = s.send(map[string]any{"type": "status", "code": "input_too_long"}); e != nil {
-					return e
-				}
-				continue
-			}
-			if e = s.interruptFrom(nil, "provider_vad_stop"); e != nil {
-				return e
-			}
-			rt := s.addTurn()
-			s.observeSpeaker(rt.turn.ID, start, end, pcm, speakerComplete)
-			if e = s.record("input_segment", map[string]any{"id": rt.turn.ID, "samples": len(pcm) / 2}); e != nil {
-				return e
-			}
-			s.spawn(func() { defer close(rt.done); s.reply(rt, pcm) })
-		case "input_audio_buffer.committed":
-			id, _ := event["item_id"].(string)
-			s.mu.Lock()
-			if s.lastInput != nil {
-				if _, ok := s.items[id]; !ok {
-					s.itemOrder = append(s.itemOrder, id)
-				}
-				s.items[id] = s.lastInput
-				if len(s.itemOrder) > 64 {
-					delete(s.items, s.itemOrder[0])
-					s.itemOrder = s.itemOrder[1:]
-				}
-			}
-			s.mu.Unlock()
+			err = s.stopInput(event)
+		case "conversation.item.input_audio_transcription.delta":
+			err = s.previewInput(event)
 		case "conversation.item.input_audio_transcription.completed":
-			id, _ := event["item_id"].(string)
-			text, valid := event["transcript"].(string)
-			s.mu.Lock()
-			rt := s.items[id]
-			if rt != nil && valid && utf8.RuneCountInString(text) <= 4096 {
-				rt.turn.User = text
-				rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
-				s.maybeStartExpressionLocked(rt)
-			}
-			s.mu.Unlock()
-			if rt != nil && valid && utf8.RuneCountInString(text) <= 4096 {
-				if e = s.record("user_text", map[string]any{"id": rt.turn.ID, "text": text}); e != nil {
-					return e
-				}
-			}
+			err = s.finishInput(event)
+			// committed is only a provider acknowledgment. The item ID already
+			// belongs to its capture; a late commit cannot bind it to another input.
+		}
+		if err != nil {
+			return err
 		}
 	}
 }

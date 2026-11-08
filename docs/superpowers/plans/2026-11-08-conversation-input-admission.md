@@ -12,9 +12,9 @@
 
 Files：`internal/realtimelive/session.go`；新建`session_input.go`/`session_input_test.go`；必要的既有listener fake测试fixture修正。
 
-- [ ] 写生产listen方法的行为测试，先云端RED。覆盖620ms空VAD不取消旧声、0新生成/控制/情绪；有效预览在final之前打断；最终非空一次准入；空/标点/错ID/旧ID/重复final/乱序committed；关闭/abort失效；有界候选；临时文字不执行控制或记忆命令。
-- [ ] 实现有界候选状态和真实item身份，保留语音主路径不等待说话人身份。旧fixture补真实ASR事件，不删除原断言。
-- [ ] 定向race GREEN、全仓race/vet/build，规格/质量分别复核，root提交。
+- [x] 写生产listen方法的行为测试，先云端RED。覆盖620ms空VAD不取消旧声、0新生成/控制/情绪；有效预览在final之前打断；最终非空一次准入；空/标点/错ID/旧ID/重复final/乱序committed；关闭/abort失效；有界候选；临时文字不执行控制或记忆命令。
+- [x] 实现有界候选状态和真实item身份，保留语音主路径不等待说话人身份。旧fixture补真实ASR事件，不删除原断言。
+- [x] 定向race GREEN、全仓race/vet/build，规格/质量分别复核，root提交。复核补齐stop→preview→final的text/stash回归；213项摘要前后及本机一致，尚未部署。
 
 ## Task2：主模型设备能力事实
 

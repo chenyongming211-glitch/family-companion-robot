@@ -336,7 +336,7 @@ func TestAudioDiagnosticsDeviceControlProvenance(t *testing.T) {
 }
 
 func TestAudioDiagnosticsInterruptSources(t *testing.T) {
-	for _, source := range []string{"provider_vad_start", "provider_vad_stop", "device_abort", "generation_error"} {
+	for _, source := range []string{"provider_vad_start", "provider_vad_stop", "provider_asr_preview", "provider_asr_final", "device_abort", "generation_error"} {
 		t.Run(source, func(t *testing.T) {
 			server, _ := testSocket(t)
 			dir := t.TempDir()

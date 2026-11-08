@@ -430,39 +430,28 @@ func TestExpressionNeutralFallbackConsumesSingleSelection(t *testing.T) {
 	}
 }
 
-func TestExpressionLateProviderTranscriptTriggersThroughListener(t *testing.T) {
-	s, _ := expressionSession(t)
-	provider, feed := testSocket(t)
-	s.listener.conn = feed
-	defer s.listener.Close()
-	stop := context.AfterFunc(s.ctx, func() { feed.Close() })
-	defer stop()
-	selected := make(chan ExpressionInput, 1)
-	s.selectExpression = func(_ context.Context, input ExpressionInput) ExpressionResult {
+func TestExpressionFinalProviderTranscriptAdmitsThroughListener(t *testing.T) {
+	r := newAdmissionRig(t)
+	selected := make(chan ExpressionInput, 2)
+	r.s.selectExpression = func(_ context.Context, input ExpressionInput) ExpressionResult {
 		selected <- input
 		return ExpressionResult{Emotion: "neutral", Reason: "completed"}
 	}
-	rt := s.addTurn()
-	s.items["current-item"] = rt
-	history, err := s.settle(rt.ctx, rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.expressionContextReady(rt, history)
-	done := make(chan struct{})
-	go func() { defer close(done); s.listen() }()
-	provider.WriteJSON(map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "current-item", "transcript": "迟到的原话"})
+	r.start(t, "current-item")
+	r.stop(t, "current-item")
+	r.event(t, "input_audio_buffer.committed", "current-item", nil)
+	r.noReply(t)
+	r.final(t, "current-item", "迟到的原话")
 	select {
 	case input := <-selected:
 		if input.CurrentTranscript != "迟到的原话" {
 			t.Fatal(input)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("final ASR after settle did not trigger selector")
+		t.Fatal("final ASR did not trigger selector after admission")
 	}
-	provider.WriteJSON(map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "current-item", "transcript": "重复原话"})
-	s.cancel()
-	<-done
+	r.final(t, "current-item", "重复原话")
+	r.sync(t)
 	select {
 	case <-selected:
 		t.Fatal("duplicate final ASR triggered a second selection")

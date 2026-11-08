@@ -14,7 +14,11 @@ func (s *Session) beginSpeaker() {
 		return
 	}
 	s.mu.Lock()
-	s.speakerLatest = s.seq + 1
+	if s.lastInput == nil || s.ctx.Err() != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.speakerLatest = s.lastInput.id
 	state := "pending"
 	if s.speakerFailed {
 		state = "unavailable"

@@ -151,10 +151,10 @@ func TestSpeakerListenerGeneratesWithoutAwaitingIdentity(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.listen() }()
 	defer func() { s.cancel(); s.listener.Close(); <-done; s.wg.Wait() }()
-	if err := source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_started", "audio_start_ms": 0}); err != nil {
+	if err := source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_started", "item_id": "speaker-input", "audio_start_ms": 0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_stopped", "audio_end_ms": 2000}); err != nil {
+	if err := source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_stopped", "item_id": "speaker-input", "audio_end_ms": 2000}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -165,7 +165,14 @@ func TestSpeakerListenerGeneratesWithoutAwaitingIdentity(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("VAD span did not reach observer")
 	}
-	// The fake observer intentionally never emits an identity result.
+	// Final ASR is required for voice admission; the fake speaker observer
+	// intentionally never emits an identity result.
+	if err := source.WriteJSON(map[string]any{"type": "input_audio_buffer.committed", "item_id": "speaker-input"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.WriteJSON(map[string]any{"type": "conversation.item.input_audio_transcription.completed", "item_id": "speaker-input", "transcript": "讲个故事"}); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-generated:
 	case <-time.After(2 * time.Second):
@@ -196,8 +203,8 @@ func TestSpeakerLongRejectedInputClearsPending(t *testing.T) {
 	s.providerEnd = 416000
 	done := make(chan error, 1)
 	go func() { done <- s.listen() }()
-	_ = source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_started", "audio_start_ms": 0})
-	_ = source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_stopped", "audio_end_ms": 26000})
+	_ = source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_started", "item_id": "speaker-input", "audio_start_ms": 0})
+	_ = source.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_stopped", "item_id": "speaker-input", "audio_end_ms": 26000})
 	_ = source.Close()
 	select {
 	case <-done:

@@ -221,7 +221,7 @@ func (d *audioDiagnostics) interrupt(source string, id int64, active bool) {
 		return
 	}
 	switch source {
-	case "provider_vad_start", "provider_vad_stop", "device_abort", "generation_error":
+	case "provider_vad_start", "provider_vad_stop", "provider_asr_preview", "provider_asr_final", "device_abort", "generation_error":
 	default:
 		source = "unspecified"
 	}
