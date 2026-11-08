@@ -14,10 +14,10 @@
 | 绑定表情的DMA时间与生命周期 | 已实现并接线，云端host/sanitizer与独立规格、质量复核通过；尚未发布 |
 | 固件新能力/协议与界面接线 | 最新32项云端回归及独立规格、质量复核通过；尚未发布 |
 | 无声模型情绪分支与Go回复绑定 | a0fd847已实现，全仓race/vet/build及规格、质量复核通过；尚未发布 |
-| 20场景真实模型及语音开/关对照 | 场景与选择器工具已预注册/审查，固定语音输入已生成；真实调用尚未运行 |
+| 20场景真实模型及语音开/关对照 | 首轮真实选择器20/20通过；配对语音/物理窗口仍待测 |
 | 最小正式来源发布/目标构建/实机联验 | 待完成 |
 
-本表是进度，不是验收成绩。当前没有新表情模型调用，没有新的真人声纹成绩，尚未部署本版功能。独立审查与测试日志将随任务补充；不以单包GREEN代替整条链路验收。
+本表区分代码、模型与整体验收。已完成20次独立真实表情调用；没有新的真人声纹成绩，尚未部署本版功能。独立审查与测试日志将随任务补充；不以选择器GREEN代替整条物理链路验收。
 
 ## 设备名称模块
 
@@ -80,6 +80,25 @@ Task4提交a0fd847采用独立Native文字/工具连接，关闭该分支搜索�
 真实调用前保存原始fixture、来源/版本与初始计划；每次调用前后保存不可覆盖的启动凭证、逐例和前缀汇总。失败、取消、部分usage及写入异常均保留，最终非零退出；不伪称测到物理DMA/播放窗口。最终云端工具race10项顶层测试／1.767秒、表达分支race6.301秒、vet/build退出0。独立规格/质量复核通过，质量复核再次运行fake-only race1.844秒及vet通过。root核对188份来源摘要与云端一致，manifest SHA256 `c9f84c474d5f56995ee6efe71bde862f8cd3cf5bfa0386f032fa1e1b21297c7f`。各版RED及一次漏打包公共identity fixture的无效检查均保留；没有用其替代最终GREEN。
 
 固定语音对照E01/E07/E15/E17已在云端通过edge-tts7.3.1生成、ffmpeg转为16k单声道s16le WAV；首次对照前登记每份WAV/原MP3/文案摘要、选择器场景摘要、来源manifest及off,on,on,off顺序。私有证据`voice-inputs-v1/manifest.json`和`voice-preregistration-v1.json`；没有播放现场、真人录音或声纹成绩。工具阶段尚未发生真实表情调用，配对语音仿真器正在实现。
+
+## 首轮真实选择器结果
+
+工具提交5d3719b后，root逐份将188个来源摘要与该提交的Git内容对照，登记提交、manifest、fixture、工具二进制及版本，再运行`selector-real-v1`。原始清单摘要仍为`0529f0e2b608b31955731fe13a441001d1744457938567fad7b60ff6ff8e9ed5`，集合和2000ms上限未修改。20例全部completed、规范且在预注册集合内，恰好20次请求，无重试、超时、默认或缺失usage。root独立读取20份逐例文件重算，与汇总一致。
+
+| 选择器指标 | 首轮结果 |
+| --- | ---: |
+| 合法、语义集合和期限同时通过 | 20/20 |
+| 总耗时中位数／P95／最大 | 577.5／769／1122ms |
+| 连接耗时中位数／P95／最大 | 126／145／159ms |
+| 输入／输出／合计token | 12821／534／13355 |
+
+E01/02/17为happy，E03loving、E04embarrassed、E05confident、E06relaxed、E07confused、E08surprised、E09delicious、E10silly、E11sad、E12sleepy、E13angry、E14crying，E15/16/19/20neutral、E18confident。证据为私有`task5-tool/selector-real-v1/`、注册与独立重算凭证；summary SHA256 `dde59e1e820e406a4dae87c1d42cdd64f52f885171bbd0f678cf518d37539338`。这只证明合成场景的选择器结果，未测物理DMA生效率或设备情绪与实际语音联动。
+
+## 目标构建与候选来源
+
+C3退休后，df13ea5117c2852ac7684601b23d3f3d68cc3d51的四S3目标[42450694685](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42450694685)及独立原版[42450694646](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42450694646)均success。当前main固件树与df13ea5相同（`115ae2e930e6969f9cd1a43b2be189a4ea4ff37f`）。微雪ZIP摘要`4ab4e49b2c40f57d47909f435914220e91e4b682a44acfe31577482fe44d95dd`及全部SHA256SUMS核对通过；CHICK开启、0021关闭、AEC/阈值/分区/资源保持。离线安装预检通过，未打开USB。候选完整3MiB槽SHA256 `5fa2287737cb4e6faa85c63d7e02d0a33d32da10c0bdce9a74901a07b0234085`、MD5 `fe957c389750c58c20b949bb90755e43`、ELF `e433c7e5a0f95afe85a3457c38bc5c234f22ba01e321e5dc50ce03ebcfddba29`；尚未安装。
+
+仅Task1+4移植到正式来源的`limited-source-expression-v1`已完成全仓race（realtimelive22.057秒）、vet/build，130个Go/module摘要固定；`config.go`仅适配新增字段，未带入MemoryOnly/speaker实验。完整功能规格/质量终审均批准，并独立复核限定来源。预构建候选`58c14cd-window600-chick-expression-a0fd847-r1`及名称CLI已准备，二进制SHA256分别为`1fbbb91f103a00473cef67c3c7bb4cdc86eef364cdbf72f7eb2840863721a56d`、`a0987ac65661761f88a6d94cb52607cc1d190f8ff13bf8be8aaa1f5841b59e24`。此时仅准备，配对语音/资源与实机仍是发布验收门槛，正式服务未更新。
 
 ## ESP32-C3退出支持
 
