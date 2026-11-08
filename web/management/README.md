@@ -59,8 +59,9 @@ ssh -N -L 127.0.0.1:18790:127.0.0.1:18790 ubuntu@82.156.48.111
 ```sh
 ego-browser skill
 ego-browser nodejs < tests/browser-review.mjs
+ego-browser nodejs < tests/browser-history-review.mjs
 ```
 
-脚本核对31路由×1440/768/390共93项，包括正确标题、示例标识、页面宽度与重复ID；结果JSON保存到系统临时目录。操作流程和375px补充检查另外记录在[本轮验证](../../docs/verification/2026-11-09-management-frontend.md)。
+第一个脚本核对31路由×1440/768/390共93项，包括正确标题、示例标识、页面宽度与重复ID；结果JSON保存到系统临时目录。第二个脚本以确定性`pageshow.persisted`事件模拟缓存恢复，验证另一端删除的演示数据不会被旧页面保存复活，不代表自然bfcache路径已复现。操作流程和375px补充检查另外记录在[本轮验证](../../docs/verification/2026-11-09-management-frontend.md)。
 
 设计与执行依据：[实施设计](../../docs/superpowers/specs/2026-11-09-management-frontend-design.md)、[三批计划](../../docs/superpowers/plans/2026-11-09-management-frontend.md)。

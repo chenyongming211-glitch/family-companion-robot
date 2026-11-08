@@ -22,13 +22,18 @@ const update = () => {
   route.value = readRoute(scope);
   refreshAccount();
 };
+const restorePage = (event: PageTransitionEvent) => {
+  if (event.persisted) location.reload();
+};
 onMounted(() => {
   window.addEventListener("hashchange", update);
+  window.addEventListener("pageshow", restorePage);
   window.addEventListener("demo-storage-changed", refreshDemo);
   refreshAccount();
 });
 onUnmounted(() => {
   window.removeEventListener("hashchange", update);
+  window.removeEventListener("pageshow", restorePage);
   window.removeEventListener("demo-storage-changed", refreshDemo);
 });
 const nav = computed(() => (scope === "admin" ? adminNav : familyNav));
