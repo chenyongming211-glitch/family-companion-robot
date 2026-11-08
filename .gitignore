@@ -29,3 +29,8 @@ __pycache__/
 *.wav
 *.pcm
 *.opus
+
+# Frontend dependencies, generated bundles and local browser outputs.
+/web/management/node_modules/
+/web/management/dist/
+/web/management/test-results/
