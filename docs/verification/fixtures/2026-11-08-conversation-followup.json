@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "protocol": "conversation-followup-v1",
+  "registration": "Frozen before this follow-up's real model calls. All prompts are synthetic; no human voiceprint or acoustic acceptance score.",
+  "model_attempts_per_trial": 1,
+  "trial_timeout_seconds": 120,
+  "simulated_playback": true,
+  "physical_dma": false,
+  "cases": [
+    {
+      "id": "C01",
+      "request": "你现在有多少种屏幕表情？请告诉我数量，再举三个例子。",
+      "natural_completion": true,
+      "checks": ["one admitted turn and one main generation", "answers fifteen screen emotions and examples", "no spontaneous new introduction", "one expression selection at most", "all sent samples complete"]
+    },
+    {
+      "id": "C02",
+      "request": "请讲一个小恐龙的短故事，故事里的小恐龙轻轻地小声说话。",
+      "natural_completion": true,
+      "checks": ["one admitted turn and one main generation", "no control planner or device operation", "story has an event and ending", "all sent samples complete"]
+    },
+    {
+      "id": "C03",
+      "request": "请讲一个大约三十秒的探险故事，连续说完。",
+      "interrupt_after_simulated_played_samples": 48000,
+      "interrupt_request": "先停一下，请告诉我你有多少种屏幕表情。",
+      "checks": ["valid real ASR preview cuts first reply before final ASR", "second final input admits exactly one reply", "second reply answers fifteen", "one selector request at most per admitted turn", "no stale expression or device operation", "finite drain then second reply completes"]
+    }
+  ],
+  "controlled_regressions": [
+    "Production listener receives a 620ms empty candidate while old output continues: no cancellation, new generation, control planner or selector.",
+    "Stop then valid text/stash preview then final: interruption before final, generation only after final.",
+    "Query cannot authorize writes; single-field request cannot mutate another field; duplicate or conflicting setters fail before dispatch.",
+    "A verified requested operation completes without another planner response round."
+  ],
+  "notes": "Real voice probes run only on an isolated cloud source with synthetic credentials for the emulated device; provider credentials stay on cloud. Retain all failures and input/source hashes. No automatic retries, threshold or fixture edits to turn a failed trial into a pass. Simulated receipts do not establish speaker sound quality or physical interruption latency."
+}
