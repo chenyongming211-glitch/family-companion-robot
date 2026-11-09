@@ -23,14 +23,27 @@ const context = {
   clearTimeout,
   require: () => assert.fail("Security2 must not load before capability check"),
 };
-vm.runInNewContext(await readFile("dist/app.js", "utf8"), context);
+function runNativeEntry(source) {
+  const module = { exports: {} };
+  const entry = vm.runInNewContext(
+    "(function(require, module, exports) {\n" + source + "\n})",
+    context,
+  );
+  entry(context.require, module, module.exports);
+}
+runNativeEntry(await readFile("dist/app.js", "utf8"));
 assert.equal(typeof app.onShow, "function");
 const main = await readFile("dist/pages/index/index.js", "utf8");
+assert.match(
+  main,
+  /\brequire\(["']\.\.\/\.\.\/provisioning\/security2\.js["']\)/,
+  "WeChat's static dependency scanner must see the deferred crypto require",
+);
 assert.ok(
   !/\b\d+n\b/.test(main),
   "entry bundle must parse on engines without BigInt literals",
 );
-vm.runInNewContext(main, context);
+runNativeEntry(main);
 assert.equal(typeof page.onLoad, "function");
 for (const route of config.pages) {
   for (const ext of ["js", "json", "wxml"])
@@ -69,6 +82,10 @@ instance.onUnload();
 assert.equal(app.onboardingLaunch, undefined);
 assert.equal(app.onboardingCleanup, undefined);
 const crypto = await readFile("dist/provisioning/security2.js", "utf8");
+assert.ok(
+  !/\?\.|\?\?|\b\d+n\b/.test(crypto),
+  "WeChat's packager requires ES2018 syntax even for deferred BigInt code",
+);
 const module = { exports: {} };
 vm.runInNewContext(crypto, {
   module,
@@ -81,6 +98,17 @@ vm.runInNewContext(crypto, {
   console,
 });
 assert.equal(typeof module.exports.Security2Session, "function");
+const vector = JSON.parse(await readFile("tests/security2-vectors/official.json", "utf8"));
+const bytes = (hex) => Uint8Array.from(Buffer.from(hex, "hex"));
+const secure = new module.exports.Security2Session(vector.username, vector.password, async () => bytes(vector.random));
+let step = 0;
+await secure.establish(async (request) => {
+  assert.deepEqual(request, bytes(step === 0 ? vector.cmd0 : vector.cmd1));
+  return bytes(step++ === 0 ? vector.resp0 : vector.resp1);
+});
+assert.deepEqual(secure.encrypt(bytes(vector.plain)), bytes(vector.encrypted));
+assert.deepEqual(secure.decrypt(bytes(vector.cipher_reply)), bytes(vector.reply));
+secure.destroy();
 console.log(
   "native artifact: independent App/page scene and cleanup bridge, routes, WXML handlers and phase-bound success visibility, BigInt-free initial bundle and deferred pure-JS Security2 module verified",
 );

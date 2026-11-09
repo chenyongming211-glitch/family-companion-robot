@@ -3,6 +3,7 @@ import { gcm } from '@noble/ciphers/aes.js'
 
 // ESP-IDF fff9895c82d744c7237be8847347bdd1b07c6643, Security 2 patch 1.
 // RFC5054 3072-bit group, SHA-512, AES-256-GCM. No downgrade support.
+// BigInt constructors preserve the math without unsupported literal syntax in WeChat packaging.
 const N = BigInt('0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AAAC42DAD33170D04507A33A85521ABDF1CBA64ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6BF12FFA06D98A0864D87602733EC86A64521F2B18177B200CBBE117577A615D6C770988C0BAD946E208E24FA074E5AB3143DB5BFCE0FD108E4B82D120A93AD2CAFFFFFFFFFFFFFFFF')
 function join(...parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let at = 0
@@ -14,11 +15,11 @@ function bytes(n: bigint, width = 0): Uint8Array {
   for (let i = 0; i < hex.length / 2; i++) out[out.length - hex.length / 2 + i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
   return out
 }
-function integer(b: Uint8Array): bigint { let n = 0n; for (const v of b) n = (n << 8n) | BigInt(v); return n }
+function integer(b: Uint8Array): bigint { let n = BigInt(0); for (const v of b) n = (n << BigInt(8)) | BigInt(v); return n }
 function hash(...parts: Uint8Array[]): Uint8Array { return sha512(join(...parts)) }
 function pow(base: bigint, exp: bigint): bigint {
-  base = ((base % N) + N) % N; let value = 1n
-  while (exp) { if (exp & 1n) value = value * base % N; base = base * base % N; exp >>= 1n }; return value
+  base = ((base % N) + N) % N; let value = BigInt(1)
+  while (exp) { if (exp & BigInt(1)) value = value * base % N; base = base * base % N; exp >>= BigInt(1) }; return value
 }
 function equal(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false
@@ -64,7 +65,7 @@ export class Security2Session {
     try {
       random = await this.randomBytes(32); alive()
       if (!(random instanceof Uint8Array) || random.length !== 32) throw new Error('Secure random source failed')
-      const a = integer(random) | (1n << 255n), A = pow(5n, a)
+      const a = integer(random) | (BigInt(1) << BigInt(255)), A = pow(BigInt(5), a)
       const ascii = (s: string) => Uint8Array.from(s, c => c.charCodeAt(0))
       const user = ascii(this.username)
       const r0 = response(await exchange(packet(0, 20, join(field(1, user), field(2, bytes(A, 384))))), 1, 21); alive()
@@ -72,12 +73,12 @@ export class Security2Session {
       if (!rawB.length || rawB.length > 384) throw new Error('Invalid SRP public key length')
       if (salt.length < 16 || salt.length > 64) throw new Error('Invalid SRP salt')
       const B = integer(rawB), u = integer(hash(bytes(A, 384), bytes(B, 384)))
-      if (B <= 0n || B >= N || u === 0n) throw new Error('Invalid SRP public key')
+      if (B <= BigInt(0) || B >= N || u === BigInt(0)) throw new Error('Invalid SRP public key')
       // Official Python represents integer hash inputs minimally; fixed factory salts are generated accordingly.
       const x = integer(hash(bytes(integer(salt)), bytes(integer(hash(ascii(this.username + ':' + this.password))))))
-      const k = integer(hash(bytes(N), bytes(5n, 384)))
-      const S = pow(B - k * pow(5n, x), a + u * x); K = hash(bytes(S))
-      const hN = hash(bytes(N)), hg = hash(bytes(5n, 384)); for (let i = 0; i < hN.length; i++) hN[i] = hN[i]! ^ hg[i]!
+      const k = integer(hash(bytes(N), bytes(BigInt(5), 384)))
+      const S = pow(B - k * pow(BigInt(5), x), a + u * x); K = hash(bytes(S))
+      const hN = hash(bytes(N)), hg = hash(bytes(BigInt(5), 384)); for (let i = 0; i < hN.length; i++) hN[i] = hN[i]! ^ hg[i]!
       const M = hash(hN, hash(user), salt, bytes(A, 384), rawB, K)
       const r1 = response(await exchange(packet(2, 22, field(1, M))), 3, 23); alive()
       if (!equal(blob(r1, 2, 64), hash(bytes(A, 384), M, K))) throw new Error('Device authentication failed')
