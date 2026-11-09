@@ -18,7 +18,8 @@ class ConfigureDiagnostics(unittest.TestCase):
 #include <cstdint>
 #include "family_setup_state.h"
 using FamilyOnboarding::SetupPhase;
-constexpr int ESP_OK=0,pdPASS=1,NETWORK_PROV_SECURITY_2=2,NETWORK_PROV_EVENT_HANDLER_NONE=0,network_prov_scheme_ble=1;
+constexpr int ESP_OK=0,pdPASS=1,NETWORK_PROV_SECURITY_2=2,NETWORK_PROV_EVENT_HANDLER_NONE=0,network_prov_scheme_ble=1,eSetValueWithOverwrite=0;
+using TaskHandle_t=void*;
 struct network_prov_mgr_config_t{int scheme,scheme_event_handler;struct{int wifi_conn_attempts;}network_prov_wifi_conn_cfg;};
 struct{const char* salt;size_t salt_len;const char* verifier;size_t verifier_len;}security;
 std::vector<uint8_t> salt(16),verifier(384);
@@ -48,29 +49,30 @@ int network_prov_mgr_disable_auto_stop(int){return result();}
 int network_prov_mgr_start_provisioning(int,void*,const char*,void*){return result();}
 int network_prov_mgr_endpoint_register(const char*,void(*)(void),void*){return result();}
 void network_prov_mgr_stop_provisioning(){++stops;}
-int esp_timer_start_once(int,long long){return 0;}void esp_timer_stop(int){++timer_stops;}
+int esp_timer_start_once(int,long long){return result();}void esp_timer_stop(int){++timer_stops;}
 long long esp_timer_get_time(){return 1;}
 void Worker(void*){}void Claim(){}
-int xTaskCreate(void(*)(void*),const char*,int,void*,int,void*){return result()? -1:pdPASS;}
+int xTaskCreate(void(*)(void*),const char*,int,void*,int,TaskHandle_t* task){if(result())return -1;*task=reinterpret_cast<void*>(1);return pdPASS;}
+int xTaskNotify(TaskHandle_t task,int command,int){assert(task==reinterpret_cast<void*>(1));if(command==2)worker_active=false;else assert(command==1);return pdPASS;}
 struct SystemInfo{static std::string GetMacAddress(){return "PRIVATE_MAC";}};
 '''+snapshot+'\n'+function(source,'void LogConfigure(')+'\n'+replay+'\n'+function(source,'void Configure() {')+r'''
 int main(){
  ReportConfigureStartup();assert(logs.empty());
- const char* failed[]={"manager_init","endpoint_create","auto_stop","provision_start","endpoint_register","worker_create"};
- for(int i=1;i<=6;++i){
+ const char* failed[]={"manager_init","endpoint_create","auto_stop","worker_create","provision_start","endpoint_register","expiry_start"};
+ for(int i=1;i<=7;++i){
   running=worker_active=manager_ready=endpoint_created=false;logs.clear();calls=stops=timer_stops=screen_errors=0;fail_stage=i;
   Configure();assert(screen_errors==1&&!running&&!worker_active);
   assert(!logs.empty()&&logs.back().first==failed[i-1]&&logs.back().second!=0);
-  assert(stops==(i>=4?1:0));assert(timer_stops==(i==6?1:0));
+  assert(stops==(i>=5?1:0));assert(timer_stops==0);
   for(const auto& entry:logs)assert(entry.first.find("PRIVATE")==std::string::npos);
  }
  running=worker_active=manager_ready=endpoint_created=false;logs.clear();calls=screen_errors=0;fail_stage=0;Configure();
- assert(running&&worker_active&&screen_errors==0&&logs.back().first=="worker_create"&&logs.back().second==0);
- const std::vector<std::string> expected={"begin","screen","manager_init","endpoint_create","auto_stop","provision_start","endpoint_register","worker_create"};
+ assert(running&&worker_active&&screen_errors==0&&logs.back().first=="expiry_start"&&logs.back().second==0);
+ const std::vector<std::string> expected={"begin","screen","manager_init","endpoint_create","auto_stop","worker_create","provision_start","endpoint_register","expiry_start"};
  assert(logs.size()==expected.size());for(size_t i=0;i<logs.size();++i)assert(logs[i].first==expected[i]);
  // Late console sees exactly the latest stage, with captured rather than live allocator facts.
  logs.clear();live_heap=999;ReportConfigureStartup();
- assert(logs.size()==1&&logs.back().first=="worker_create"&&logs.back().second==0);
+ assert(logs.size()==1&&logs.back().first=="expiry_start"&&logs.back().second==0);
  logs.clear();ReportConfigureStartup();assert(logs.empty());
  live_heap=100;LogConfigure("manager_init",123);LogConfigure("endpoint_create",456);
  logs.clear();live_heap=999;ReportConfigureStartup();

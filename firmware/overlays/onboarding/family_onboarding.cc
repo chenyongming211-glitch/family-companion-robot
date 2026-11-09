@@ -230,6 +230,10 @@ void TimeSynchronized(struct timeval*) {
     ScheduleClock(); // No TLS or application work in the lwIP callback.
 }
 void Worker(void*) {
+    // Reserve the internal stack before BLE; no setup/TLS work until Configure is ready.
+    if (ulTaskNotifyTake(pdTRUE,portMAX_DELAY)!=1) {
+        worker_active=false;vTaskDelete(nullptr);return;
+    }
     const auto epoch=CurrentSetup();
     bool clock_ready = false;
     while (running && esp_timer_get_time() < deadline) {
@@ -329,6 +333,11 @@ void Configure() {
     security.verifier = reinterpret_cast<const char*>(verifier.data()); security.verifier_len = verifier.size();
     auto mac = SystemInfo::GetMacAddress(); std::string name = "FAMILY_";
     for (char c : mac) if (c != ':') name += c;
+    TaskHandle_t worker=nullptr;
+    worker_active=true;
+    const auto task_result=xTaskCreate(Worker,"family_claim",8192,nullptr,4,&worker);
+    LogConfigure("worker_create",task_result==pdPASS?ESP_OK:static_cast<int>(task_result));
+    if(task_result!=pdPASS) {worker_active=false;ShowSetup(SetupPhase::StartError);return;}
     deadline = esp_timer_get_time() + WindowUs; running = true;
     result=network_prov_mgr_start_provisioning(NETWORK_PROV_SECURITY_2, &security, name.c_str(), nullptr);
     LogConfigure("provision_start",result);
@@ -336,17 +345,16 @@ void Configure() {
         result=network_prov_mgr_endpoint_register("family-claim", Claim, nullptr);
         LogConfigure("endpoint_register",result);
     }
+    if(result==ESP_OK) {
+        result=esp_timer_start_once(expiry_timer,WindowUs);
+        LogConfigure("expiry_start",result);
+    }
     if (result != ESP_OK) {
-        running = false; network_prov_mgr_stop_provisioning(); ShowSetup(SetupPhase::StartError);return;
+        running=false;network_prov_mgr_stop_provisioning();ShowSetup(SetupPhase::StartError);
+        // Keep the retry guard until caller cleanup is complete; cancellation skips Worker cleanup.
+        xTaskNotify(worker,2,eSetValueWithOverwrite);return;
     }
-    esp_timer_start_once(expiry_timer, WindowUs);
-    worker_active = true;
-    const auto task_result=xTaskCreate(Worker, "family_claim", 8192, nullptr, 4, nullptr);
-    LogConfigure("worker_create",task_result==pdPASS?ESP_OK:static_cast<int>(task_result));
-    if (task_result != pdPASS) {
-        worker_active = false; esp_timer_stop(expiry_timer); running = false; network_prov_mgr_stop_provisioning();
-        ShowSetup(SetupPhase::StartError);
-    }
+    xTaskNotify(worker,1,eSetValueWithOverwrite);
 }
 void Start(std::function<void(bool)> connection) {
     if (initialized) return;
