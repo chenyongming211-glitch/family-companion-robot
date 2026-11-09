@@ -342,6 +342,8 @@ func TestPCMSharedCreditDrainAndASR(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &OutputASR{queue: make(chan []byte, 16), Done: make(chan struct{}), cancel: func() {}}
+	// This passive queue fixture has no ASR worker to close Done.
+	t.Cleanup(func() { close(a.Done) })
 	rt.asr = a
 	resampler := realtimeaudio.NewResampler()
 	expectedASR := realtimeaudio.NewResampler()
@@ -535,12 +537,17 @@ func TestPCMEmptyOutputKeepsLegacyOpusTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := NewSession(server, Config{ASRURL: "ws://127.0.0.1:1", Synthetic: true}, t.TempDir(), product)
-	t.Cleanup(s.cancel)
 	s.wire = newXiaozhiWire(server, 1, 60, "opus-session")
 	s.generate = func(ctx context.Context, id int64, prompt string, input []byte, emit func(string, []byte) error) error {
 		return emit("text", []byte("合成空音频"))
 	}
 	rt := s.addTurn()
+	t.Cleanup(func() {
+		s.cancel()
+		if rt.asr != nil {
+			rt.asr.Close()
+		}
+	})
 	done := make(chan struct{})
 	go func() { s.reply(rt, nil); close(done) }()
 	client.SetReadDeadline(time.Now().Add(2 * time.Second))
