@@ -13,6 +13,7 @@ def module():
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
 class S3BleMemory(unittest.TestCase):
     def config(self,tree):
+        (tree/'sdkconfig.defaults.esp32s3').write_text('CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024\n')
         path=tree/'main/boards/m5stack/stopwatch/config.json';path.parent.mkdir(parents=True)
         data={'type':'m5stack-stopwatch','target':'esp32s3','builds':[{'name':n,'sdkconfig_append':['CONFIG_SPIRAM=y','CONFIG_KEEP=y']} for n in ['m5stack-stopwatch','m5stack-stopwatch-software-aec','m5stack-stopwatch-xiaoman']]}
         path.write_text(json.dumps(data));return path,data
@@ -21,18 +22,20 @@ class S3BleMemory(unittest.TestCase):
             tree=Path(d);path,data=self.config(tree)
             wave=tree/'main/boards/waveshare/config.json';wave.parent.mkdir(parents=True);wave.write_text('wave sentinel')
             defaults=tree/'sdkconfig.defaults';defaults.write_text('defaults sentinel\n')
-            prepare=module();self.assertTrue(hasattr(prepare,'prepare_s3_ble_memory'),'missing shared S3 host-allocation policy')
-            prepare.prepare_s3_ble_memory(tree)
+            prepare=module();self.assertTrue(hasattr(prepare,'prepare_s3_memory_policy'),'missing shared S3 host-allocation policy')
+            prepare.prepare_s3_memory_policy(tree)
             self.assertEqual(json.loads(path.read_text()),data)
             self.assertEqual(wave.read_text(),'wave sentinel')
             self.assertTrue(defaults.read_text().startswith('defaults sentinel\n'))
             self.assertEqual(defaults.read_text().count(FLAG),1)
+            self.assertEqual((tree/'sdkconfig.defaults.esp32s3').read_text().count('CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0'),1)
+            self.assertNotIn('CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0', (ROOT/'tools/prepare_experiment.py').read_text())
     @unittest.skipUnless(os.getenv('IDF_PATH'),'requires actual cloud SDK header')
     def test_actual_sdk_allocator_prefers_psram_and_retains_internal_fallback(self):
         with tempfile.TemporaryDirectory() as d:
             tree=Path(d);path,_=self.config(tree);prepare=module()
             defaults=tree/'sdkconfig.defaults';defaults.write_text('')
-            if hasattr(prepare,'prepare_s3_ble_memory'):prepare.prepare_s3_ble_memory(tree)
+            if hasattr(prepare,'prepare_s3_memory_policy'):prepare.prepare_s3_memory_policy(tree)
             enabled=FLAG in defaults.read_text()
             fake=tree/'fake';fake.mkdir();(fake/'esp_log.h').write_text('')
             (fake/'esp_heap_caps.h').write_text('''

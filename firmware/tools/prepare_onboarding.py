@@ -9,10 +9,13 @@ def replace(path, old, new):
     text=path.read_text()
     if text.count(old)!=1: raise ValueError('source anchor mismatch: '+path.name)
     path.write_text(text.replace(old,new))
-def prepare_s3_ble_memory(tree):
-    # Shared factory-only host policy; controller/DMA and task stacks remain internal.
+def prepare_s3_memory_policy(tree):
+    # Shared factory policy: small FST scratch also prefers PSRAM; explicit
+    # controller/DMA/task-stack capabilities remain internal.
     with (tree/'sdkconfig.defaults').open('a') as output:
         output.write('\n# Both supported S3 onboarding profiles have PSRAM.\nCONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y\n')
+    replace(tree/'sdkconfig.defaults.esp32s3','CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024',
+        'CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0')
 def prepare_voice_boot(tree):
     application=tree/'main/application.cc'
     replace(application,'#include "application.h"','#include "application.h"\n#include "family_onboarding.h"')
@@ -89,7 +92,7 @@ def main():
         '        family_setup_.Update(title,detail,packed,size);\n'
         '    }\n')
     prepare_m5_screen(tree)
-    prepare_s3_ble_memory(tree)
+    prepare_s3_memory_policy(tree)
     prepare_configure_replay(tree)
     prepare_voice_boot(tree)
     board=tree/'main/boards/common/wifi_board.cc'
