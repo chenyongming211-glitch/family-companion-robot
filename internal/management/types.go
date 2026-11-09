@@ -57,3 +57,15 @@ type Reader struct {
 	ProfilesPath string
 	Now          func() time.Time
 }
+
+type MemoryDTO struct {
+	ID             string `json:"id"`
+	DeviceID       string `json:"deviceId"`
+	ConversationID string `json:"conversationId"`
+	Text           string `json:"text"`
+	Date           string `json:"date"`
+	User           string `json:"user,omitempty"`
+	Assistant      string `json:"assistant,omitempty"`
+	TextSource     string `json:"textSource,omitempty"`
+	Boundary       string `json:"boundary,omitempty"`
+}

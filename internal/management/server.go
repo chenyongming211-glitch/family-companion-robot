@@ -187,6 +187,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				result = c
 			}
 		}
+	case "memories":
+		var f ConversationFilter
+		f, e = parseFilter(r, true)
+		if e == nil && f.DeviceID == nil {
+			e = ErrInvalid
+		}
+		if e == nil {
+			if id == "" {
+				result, e = s.reader.ListMemories(a.ID, scope, *f.DeviceID)
+			} else {
+				result, e = s.reader.ReadMemory(a.ID, scope, id, *f.DeviceID)
+			}
+			if e == nil {
+				action := "read_memories"
+				if id != "" {
+					action = "read_memory"
+				}
+				e = s.auditAction(a.ID, scope, action, *f.DeviceID, id)
+			}
+		}
 	case "families":
 		result, e = s.families(a, id)
 	case "accounts":

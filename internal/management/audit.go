@@ -50,7 +50,10 @@ func appendAudit(path string, entry auditEntry) error {
 	return f.Sync()
 }
 func (s *Server) audit(a, scope, device, record string) error {
+	return s.auditAction(a, scope, "read_conversation", device, record)
+}
+func (s *Server) auditAction(a, scope, action, device, record string) error {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
-	return s.auditWrite(s.opts.AuditPath, auditEntry{s.now().UTC(), a, scope, "read_conversation", device, record})
+	return s.auditWrite(s.opts.AuditPath, auditEntry{s.now().UTC(), a, scope, action, device, record})
 }
