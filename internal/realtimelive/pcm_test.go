@@ -39,13 +39,38 @@ func newPCMSession(t *testing.T) (*Session, *websocket.Conn) {
 		h.Close()
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { close(done); c.Close(); h.Close() })
+	t.Cleanup(func() {
+		activeDone := singleActiveDone(server)
+		close(done)
+		c.Close()
+		h.Close()
+		if activeDone != nil {
+			select {
+			case <-activeDone:
+			case <-time.After(time.Second):
+				t.Error("PCM handler did not finish")
+			}
+		}
+	})
 	if err = c.WriteJSON(pcmHello()); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case s := <-entered:
-		t.Cleanup(s.cancel)
+		t.Cleanup(func() {
+			// This helper bypasses Run, so it must join the same background
+			// work before TempDir cleanup. OutputASR.Finish is asynchronous.
+			s.cancel()
+			s.wg.Wait()
+			s.mu.Lock()
+			history := append([]*liveTurn(nil), s.history...)
+			s.mu.Unlock()
+			for _, rt := range history {
+				if rt.asr != nil {
+					rt.asr.Close()
+				}
+			}
+		})
 		return s, c
 	case <-time.After(time.Second):
 		t.Fatal("authenticated PCM hello did not reach the common Session")
