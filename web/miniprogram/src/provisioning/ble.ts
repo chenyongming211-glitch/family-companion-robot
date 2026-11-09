@@ -1,7 +1,11 @@
 import { ClientError } from "../api.ts";
 export const SERVICE = "1775244D-6B43-439B-877C-060F2D9BED07";
 const TIMEOUT = 12000;
+// wx owns one adapter/discovery and one connection per device, across BleLinks.
+const nativeLeases = new WeakMap<object, Map<string, object>>();
 export class BleLink {
+  private leases = new Map<string, object>();
+  private native: Map<string, object>;
   private exchanging = false;
   private requestId = 0;
   private timeout: number;
@@ -18,6 +22,12 @@ export class BleLink {
     disconnected?: (error: ClientError) => void,
   ) {
     this.wx = platform;
+    let leases = nativeLeases.get(platform);
+    if (!leases) {
+      leases = new Map();
+      nativeLeases.set(platform, leases);
+    }
+    this.native = leases;
     this.timeout = timeout;
     this.disconnected = disconnected;
   }
@@ -61,16 +71,38 @@ export class BleLink {
       });
     });
   }
+  private claim(resource: string) {
+    const lease = {};
+    this.native.set(resource, lease);
+    this.leases.set(resource, lease);
+    return lease;
+  }
+  private async closeLease(
+    resource: string,
+    lease: object,
+    name: string,
+    args: any = {},
+    lateSuccess = false,
+  ) {
+    const owner = this.native.get(resource);
+    // Late native success may need compensation after close removed our lease,
+    // but can never close a resource acquired by a replacement operation.
+    if (owner !== lease && (owner !== undefined || !lateSuccess)) return;
+    if (owner === lease) this.native.delete(resource);
+    if (this.leases.get(resource) === lease) this.leases.delete(resource);
+    await this.call(name, args).catch(() => {});
+  }
   private async acquire(
+    resource: string,
     name: string,
     args: any,
     closeName: string,
     closeArgs: any,
     generation: number,
   ) {
-    // Native success may arrive even after our timeout or lifecycle cleanup.
-    // Compensate using captured arguments, since close() already clears this.id.
-    const compensate = () => this.call(closeName, closeArgs).catch(() => {});
+    const lease = this.claim(resource);
+    const compensate = () =>
+      this.closeLease(resource, lease, closeName, closeArgs, true);
     await this.call(name, args, this.timeout, () => {
       void compensate();
     });
@@ -91,6 +123,7 @@ export class BleLink {
         throw new ClientError("cancelled", "操作已取消");
     };
     await this.acquire(
+      "adapter",
       "openBluetoothAdapter",
       {},
       "closeBluetoothAdapter",
@@ -119,11 +152,25 @@ export class BleLink {
     };
     this.discoveryHandler = onFound;
     this.wx.onBluetoothDeviceFound(onFound);
+    const discoveryLease = this.claim("discovery");
     try {
-      await this.call("startBluetoothDevicesDiscovery", {
-        services: [SERVICE],
-        allowDuplicatesKey: false,
-      });
+      await this.call(
+        "startBluetoothDevicesDiscovery",
+        {
+          services: [SERVICE],
+          allowDuplicatesKey: false,
+        },
+        this.timeout,
+        () => {
+          void this.closeLease(
+            "discovery",
+            discoveryLease,
+            "stopBluetoothDevicesDiscovery",
+            {},
+            true,
+          );
+        },
+      );
       check();
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 5000);
@@ -141,13 +188,18 @@ export class BleLink {
       this.wakeDiscovery = undefined;
       this.discoveryHandler = undefined;
       this.wx.offBluetoothDeviceFound(onFound);
-      await this.call("stopBluetoothDevicesDiscovery").catch(() => {});
+      await this.closeLease(
+        "discovery",
+        discoveryLease,
+        "stopBluetoothDevicesDiscovery",
+      );
     }
   }
   async connect(id: string): Promise<void> {
     this.id = id;
     const generation = ++this.epoch;
     await this.acquire(
+      "connection:" + id,
       "createBLEConnection",
       { deviceId: id, timeout: 12000 },
       "closeBLEConnection",
@@ -203,7 +255,12 @@ export class BleLink {
     this.wx.onBLECharacteristicValueChange(this.onValue);
   }
   private onConnection = (r: any) => {
-    if (r.deviceId === this.id && !r.connected) {
+    if (
+      r.deviceId === this.id &&
+      !r.connected &&
+      this.native.get("connection:" + this.id) ===
+        this.leases.get("connection:" + this.id)
+    ) {
       this.epoch++;
       const error = new ClientError(
         "ble_disconnected",
@@ -374,12 +431,24 @@ export class BleLink {
     this.pending?.(new ClientError("cancelled", "操作已取消"));
     this.wx.offBLECharacteristicValueChange(this.onValue);
     this.wx.offBLEConnectionStateChange(this.onConnection);
-    const id = this.id;
+    const owned = [...this.leases];
     this.id = "";
     this.endpoints.clear();
-    if (id)
-      await this.call("closeBLEConnection", { deviceId: id }).catch(() => {});
-    await this.call("stopBluetoothDevicesDiscovery").catch(() => {});
-    await this.call("closeBluetoothAdapter").catch(() => {});
+    // Snapshot tokens before yielding. Recheck each against the actual wx owner
+    // immediately before cleanup, including discovery's finally path.
+    for (const [resource, lease] of owned) {
+      if (resource.startsWith("connection:"))
+        await this.closeLease(resource, lease, "closeBLEConnection", {
+          deviceId: resource.slice(11),
+        });
+    }
+    for (const [resource, lease] of owned) {
+      if (resource === "discovery")
+        await this.closeLease(resource, lease, "stopBluetoothDevicesDiscovery");
+    }
+    for (const [resource, lease] of owned) {
+      if (resource === "adapter")
+        await this.closeLease(resource, lease, "closeBluetoothAdapter");
+    }
   }
 }

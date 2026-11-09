@@ -20,8 +20,10 @@ export class Api {
   private cookie = "";
   private epoch = 0;
   private platform: any;
-  constructor(platform: any) {
+  private unauthorized?: (error: ClientError) => void;
+  constructor(platform: any, unauthorized?: (error: ClientError) => void) {
     this.platform = platform;
+    this.unauthorized = unauthorized;
   }
   clear() {
     this.cookie = "";
@@ -61,7 +63,12 @@ export class Api {
             const m = /^management_family=([^;]*)/.exec(c);
             if (m) this.cookie = m[1] ? "management_family=" + m[1] : "";
           }
-          if (r.statusCode === 401) this.clear();
+          if (r.statusCode === 401) {
+            this.clear();
+            this.unauthorized?.(
+              new ClientError("unauthorized", "登录已过期，请重新登录"),
+            );
+          }
           if (r.statusCode < 200 || r.statusCode >= 300) {
             const message: Record<number, string> = {
               400: "输入无效，请检查后重试",
@@ -87,6 +94,9 @@ export class Api {
             reject(new ClientError("invalid_response", "服务响应无效"));
             return;
           }
+          // A committed login owns a new session even when another request was
+          // sent while login was pending. Its late 401/Set-Cookie is now stale.
+          if (path === "/login") this.epoch++;
           resolve(r.data as T);
         },
         fail: () =>
@@ -95,6 +105,7 @@ export class Api {
     );
   }
   login(username: string, password: string) {
+    this.clear();
     return this.request("/login", "POST", { username, password });
   }
   families() {

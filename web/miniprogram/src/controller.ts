@@ -42,7 +42,16 @@ export class Onboarding {
   private emit: (view: View) => void;
   constructor(platform: any, emit: (view: View) => void) {
     this.platform = platform;
-    this.api = new Api(platform);
+    this.api = new Api(platform, (error) => {
+      this.sessionGeneration++;
+      this.view.families = [];
+      this.view.state = {
+        phase: "error",
+        generation: this.view.state.generation + 1,
+        error: error.message,
+      };
+      this.failure(error, this.view.state.generation);
+    });
     this.emit = emit;
   }
   private publish() {
@@ -57,10 +66,6 @@ export class Onboarding {
   }
   private failure(error: unknown, generation: number) {
     if (!this.valid(generation)) return;
-    if (error instanceof ClientError && error.code === "unauthorized") {
-      this.sessionGeneration++;
-      this.view.families = [];
-    }
     this.code = "";
     this.password = "";
     this.wifi = undefined;
@@ -302,6 +307,7 @@ export class Onboarding {
   }
   async cancel() {
     const task = this.task;
+    const session = this.sessionGeneration;
     this.task = undefined;
     this.code = "";
     this.view.devices = [];
@@ -309,7 +315,8 @@ export class Onboarding {
     this.event({ type: "cancel" });
     if (this.timer) clearTimeout(this.timer);
     await this.release();
-    if (task?.status === "waiting")
+    if (task?.status === "waiting" && session === this.sessionGeneration)
+      // Api publishes a current-session 401 even for this best-effort DELETE.
       await this.api.cancel(task.id).catch(() => {});
   }
   async suspend() {

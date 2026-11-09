@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { verifyWxml } from "../verify-wxml.mjs";
-import { ClientError } from "../src/api.ts";
 import { Onboarding } from "../src/controller.ts";
 import { BleLink } from "../src/provisioning/ble.ts";
 import { initial, reduce } from "../src/state.ts";
@@ -424,13 +423,14 @@ test("hidden pending login cannot restore cookie, families or feedback", async (
   assert.equal(p.data.error, "new feedback");
   p.onUnload();
 });
-test("expired family session invalidates a hidden queued scanner result", () => {
+test("expired family session invalidates a hidden queued scanner result", async () => {
+  (globalThis as any).wx.request = (o: any) =>
+    o.success({ statusCode: 401, data: {} });
   const p = page();
   p.scan();
   p.onHide();
   scan.success({ result: "a".repeat(32) });
-  const error = new ClientError("unauthorized", "登录已过期");
-  p.controller.failure(error, p.controller.view.state.generation);
+  await assert.rejects(p.controller.api.families(), /重新登录/);
   p.onShow();
   assert.equal(p.controller.code, "");
   assert.equal(p.scanOperation, undefined);
@@ -471,4 +471,222 @@ test("hide between login acknowledgement and family lookup stops the continuatio
   assert.equal(requests, 1);
   assert.equal(p.controller.view.families.length, 0);
   p.onUnload();
+});
+
+function sharedBluetoothPlatform() {
+  const p = closingPlatform();
+  const opens: any[] = [],
+    connects: any[] = [];
+  let opened = false,
+    discovering = false,
+    connected = false;
+  Object.assign(p.wx, {
+    openBluetoothAdapter: (o: any) => opens.push(o),
+    createBLEConnection: (o: any) => connects.push(o),
+    closeBluetoothAdapter: (o: any) => {
+      opened = false;
+      o.success({});
+    },
+    closeBLEConnection: (o: any) => {
+      connected = false;
+      o.success({});
+    },
+    onBluetoothDeviceFound: () => {},
+    offBluetoothDeviceFound: () => {},
+    onBLEConnectionStateChange: () => {},
+    onBLECharacteristicValueChange: () => {},
+    startBluetoothDevicesDiscovery: (o: any) => {
+      discovering = true;
+      o.success({});
+    },
+    stopBluetoothDevicesDiscovery: (o: any) => {
+      discovering = false;
+      o.success({});
+    },
+    getBLEDeviceServices: (o: any) =>
+      o.success({
+        services: [{ uuid: "1775244D-6B43-439B-877C-060F2D9BED07" }],
+      }),
+    getBLEDeviceCharacteristics: (o: any) =>
+      o.success({
+        characteristics: ["FF51", "FF52", "FF53", "FF50", "FF54"].map((id) => ({
+          uuid: `1775${id}-6B43-439B-877C-060F2D9BED07`,
+          properties: { read: true, write: true },
+        })),
+      }),
+  });
+  return {
+    wx: p.wx,
+    open(index: number) {
+      opened = true;
+      opens[index].success({});
+    },
+    connect(index: number) {
+      connected = true;
+      connects[index].success({});
+    },
+    get opened() {
+      return opened;
+    },
+    get discovering() {
+      return discovering;
+    },
+    get connected() {
+      return connected;
+    },
+  };
+}
+for (const timedOut of [false, true]) {
+  test(`old adapter late success after ${timedOut ? "timeout" : "cancel"} preserves replacement discovery`, async () => {
+    const p = sharedBluetoothPlatform();
+    const old = new BleLink(p.wx, 15),
+      next = new BleLink(p.wx, 100);
+    const oldDiscovery = old.discover();
+    const oldRejected = assert.rejects(
+      oldDiscovery,
+      timedOut ? /超时/ : /取消/,
+    );
+    if (timedOut) await new Promise((resolve) => setTimeout(resolve, 25));
+    else await old.close();
+    const discovery = next.discover();
+    const rejected = assert.rejects(discovery, /取消/);
+    p.open(1);
+    await tick();
+    assert.equal(p.discovering, true);
+    p.open(0);
+    await oldRejected;
+    await tick();
+    assert.equal(p.opened, true);
+    assert.equal(p.discovering, true);
+    await old.close();
+    assert.equal(p.opened, true);
+    assert.equal(p.discovering, true);
+    await next.close();
+    await rejected;
+    assert.equal(p.opened, false);
+    assert.equal(p.discovering, false);
+  });
+}
+test("old same-device connection late success and cleanup preserve replacement connection", async () => {
+  const p = sharedBluetoothPlatform();
+  const old = new BleLink(p.wx, 100),
+    next = new BleLink(p.wx, 100);
+  const connecting = old.connect("synthetic");
+  const rejected = assert.rejects(connecting, /取消/);
+  await old.close();
+  const replacement = next.connect("synthetic");
+  p.connect(1);
+  await replacement;
+  p.connect(0);
+  await rejected;
+  await tick();
+  assert.equal(p.connected, true);
+  await old.close();
+  assert.equal(p.connected, true);
+  await next.close();
+  assert.equal(p.connected, false);
+});
+test("DELETE401 from hidden cancellation invalidates session and erases queued scan", async () => {
+  let cancellation: any;
+  (globalThis as any).wx.request = (o: any) => {
+    cancellation = o;
+  };
+  const p = page();
+  p.controller.api.cookie = "management_family=synthetic";
+  p.controller.view.families = [
+    { id: "family", name: "test", canAddDevices: true },
+  ];
+  p.controller.task = { id: "old-task", status: "waiting" };
+  p.controller.password = "synthetic";
+  p.setData({ loggedIn: true, password: "synthetic" });
+  const session = p.controller.sessionEpoch;
+  p.scan();
+  const scanner = scan;
+  p.onHide();
+  scanner.success({ result: "a".repeat(32) });
+  const queued = p.scanOperation;
+  await tick();
+  assert.equal(cancellation.method, "DELETE");
+  cancellation.success({ statusCode: 401, data: {} });
+  await tick();
+  assert.ok(p.controller.sessionEpoch > session);
+  assert.equal(p.controller.api.cookie, "");
+  assert.deepEqual(p.controller.view.families, []);
+  assert.equal(queued.code, undefined);
+  p.onShow();
+  assert.equal(p.controller.code, "");
+  assert.equal(p.controller.password, "");
+  assert.equal(p.data.password, "");
+  assert.equal(p.data.scanned, false);
+  assert.equal(p.data.loggedIn, false);
+  assert.match(p.data.error, /重新登录/);
+  p.onUnload();
+});
+test("cancel awaiting resource release cannot send old DELETE using a newer login", async () => {
+  let release!: () => void;
+  const requests: any[] = [];
+  const c: any = new Onboarding(
+    {
+      request: (o: any) => {
+        requests.push(o);
+      },
+    },
+    () => {},
+  );
+  c.task = { id: "old-task", status: "waiting" };
+  c.link = {
+    close: () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  };
+  const cancellation = c.cancel();
+  const logging = c.login("synthetic", "synthetic");
+  requests[0].success({
+    statusCode: 200,
+    data: {},
+    cookies: ["management_family=new"],
+  });
+  await tick();
+  requests[1].success({
+    statusCode: 200,
+    data: [{ id: "new-family", name: "new", canAddDevices: true }],
+  });
+  await logging;
+  release();
+  await tick();
+  assert.equal(requests.filter((o) => o.method === "DELETE").length, 0);
+  await cancellation;
+  assert.equal(c.api.cookie, "management_family=new");
+  assert.equal(c.view.families[0].id, "new-family");
+});
+
+test("older discovery finally and cleanup resumed after connection close preserve replacement adapter", async () => {
+  const p = sharedBluetoothPlatform();
+  const old = new BleLink(p.wx, 100),
+    next = new BleLink(p.wx, 100);
+  const oldDiscovery = old.discover();
+  const oldRejected = assert.rejects(oldDiscovery, /取消/);
+  p.open(0);
+  await tick();
+  const connecting = old.connect("synthetic");
+  p.connect(0);
+  await connecting;
+  let finishClose!: () => void;
+  p.wx.closeBLEConnection = (o: any) => {
+    finishClose = () => o.success({});
+  };
+  const closing = old.close();
+  const discovery = next.discover();
+  const rejected = assert.rejects(discovery, /取消/);
+  p.open(1);
+  await tick();
+  await oldRejected;
+  assert.equal(p.discovering, true);
+  finishClose();
+  await closing;
+  assert.equal(p.opened, true);
+  assert.equal(p.discovering, true);
+  await next.close();
+  await rejected;
 });
