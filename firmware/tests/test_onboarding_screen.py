@@ -36,12 +36,13 @@ struct Board {static Board& GetInstance(){static Board b;return b;}Display* GetD
 int main(){
  screen_state.Begin();RenderSetup();assert(captured==nullptr&&captured_size==0);
  screen_code_valid=true;RenderSetup();assert(captured==screen_code.data()+48&&captured_size==CodePixels);
+ screen_state.phase=SetupPhase::WifiError;RenderSetup();assert(captured==nullptr&&captured_size==0);
  screen_state.phase=SetupPhase::CodeError;RenderSetup();assert(captured==nullptr&&captured_size==0);
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory); (directory / 'test.cc').write_text(program)
-            result = subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror',
+            result = subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror','-DCONFIG_BOARD_TYPE_M5STACK_STOPWATCH=1',
                 '-I',str(ROOT / 'overlays/onboarding'),str(directory / 'test.cc'),
                 '-o',str(directory / 'test')],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)

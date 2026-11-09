@@ -26,6 +26,10 @@ void lv_obj_set_size(lv_obj_t* p,int w,int h){p->w=w;p->h=h;}
 void lv_obj_set_pos(lv_obj_t* p,int x,int y){p->x=x;p->y=y;}
 void lv_obj_remove_flag(lv_obj_t* p,int f){p->flags&=~f;}
 void lv_obj_add_flag(lv_obj_t* p,int f){p->flags|=f;}
+void lv_obj_set_style_transform_pivot_x(lv_obj_t*,int,int){}
+void lv_obj_set_style_transform_pivot_y(lv_obj_t*,int,int){}
+void lv_obj_set_style_transform_scale_x(lv_obj_t*,int,int){}
+void lv_obj_set_style_transform_scale_y(lv_obj_t*,int,int){}
 void lv_obj_set_style_radius(lv_obj_t*,int,int){}
 void lv_obj_set_style_border_width(lv_obj_t*,int,int){}
 void lv_obj_set_style_pad_all(lv_obj_t*,int,int){}
@@ -68,4 +72,30 @@ int main(){
     assert(view.Update(nullptr,nullptr,nullptr,0));assert(root->flags&LV_OBJ_FLAG_HIDDEN);
     assert(view.Update("添加成功","设备已绑定家庭",nullptr,0));
     assert(!(root->flags&LV_OBJ_FLAG_HIDDEN)&&title->text=="添加成功");
+    FamilyOnboarding::SetupView small;
+    small.Initialize(&font,240,240);
+    auto* round=top.children.back();
+    auto* round_title=round->children[0];auto* round_card=round->children[1];auto* round_detail=round->children[2];
+    // A synthetic circular code has no secret or actual claim. Check every sampled bit.
+    std::vector<uint8_t> circle(9800,0);
+    for(int y=0;y<280;++y)for(int x=0;x<280;++x)
+        if((x-140)*(x-140)+(y-140)*(y-140)<130*130 && (x+y)%3==0)circle[y*35+x/8]|=0x80>>(x%8);
+    assert(small.Update("微信扫码添加设备","请在小程序中完成登录和配网",circle.data(),circle.size()));
+    assert(round_card->x==8&&round_card->y==8&&round_card->w==224&&round_card->h==224);
+    assert(round_title->flags&LV_OBJ_FLAG_HIDDEN);assert(round_detail->flags&LV_OBJ_FLAG_HIDDEN);
+    auto* round_image=round_card->children[0];auto* rd=round_image->image;
+    assert(round_image->x==0&&round_image->y==0);
+    assert(rd&&rd->header.w==224&&rd->header.h==224&&rd->header.stride==28&&rd->data_size==6280);
+    for(int y=0;y<224;++y)for(int x=0;x<224;++x){
+        int sx=x*280/224,sy=y*280/224;
+        assert(((rd->data[8+y*28+x/8]>>(7-x%8))&1)==((circle[sy*35+sx/8]>>(7-sx%8))&1));
+    }
+    for(const char* status:{"连接 Wi-Fi","正在校时","等待云端确认","添加失败","添加超时","添加成功"}){
+        assert(small.Update(status,"请稍候",nullptr,0));
+        assert(round_card->flags&LV_OBJ_FLAG_HIDDEN);
+        assert(!(round_title->flags&LV_OBJ_FLAG_HIDDEN)&&!(round_detail->flags&LV_OBJ_FLAG_HIDDEN));
+        assert(round_title->x>=30&&round_title->y>=40&&round_title->w/2<=180&&round_title->h/2<=60);
+        assert(round_detail->x>=30&&round_detail->y>=100&&round_detail->w/2<=180&&round_detail->y+round_detail->h/2<=200);
+    }
+    assert(small.Update(nullptr,nullptr,nullptr,0));assert(round->flags&LV_OBJ_FLAG_HIDDEN);
 }

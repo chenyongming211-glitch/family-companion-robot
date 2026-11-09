@@ -45,4 +45,10 @@ class ScreenFactoryTests(unittest.TestCase):
         for bad in (original[:-1],original+b'x'):
             self.screen.write_bytes(bad);self.assertNotEqual(self.run_tool().returncode,0);self.assertFalse(self.out.exists())
         self.screen.write_bytes(original);self.screen.chmod(0o644);self.assertNotEqual(self.run_tool().returncode,0)
-        self.screen.chmod(0o600);self.data['model']='M5 ESP32-S3';self.write();self.assertNotEqual(self.run_tool().returncode,0)
+        self.screen.chmod(0o600);self.data['model']='unsupported';self.write();self.assertNotEqual(self.run_tool().returncode,0)
+
+    def test_m5_screen_real_nvs_fits(self):
+        self.screen_setup();self.data['model']='M5 ESP32-S3';self.write()
+        r=self.run_tool();self.assertEqual(r.returncode,0,r.stderr)
+        raw=self.out.read_bytes();self.assertEqual(len(raw),0x6000)
+        self.assertIn(b'screen_code',raw);self.assertNotIn(self.data['claim_code'].encode(),raw)

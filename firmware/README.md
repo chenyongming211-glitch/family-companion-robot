@@ -560,3 +560,35 @@ Never blindly flash a merged image or overwrite NVS/otadata. The user must be on
 site and notified before serial access, resets, flashing or live capture. AEC
 observation/calibration comes before explicit realtime enable; ten-round real
 acoustic acceptance and USB-noise comparison remain separate pending work.
+
+## Factory onboarding screen (ESP32-S3)
+
+`prepare_onboarding.py` modifies only its fresh isolated candidate tree. Both
+Waveshare and M5 StopWatch load a device-ID-bound, CRC-validated FRC1 280×280
+monochrome screen code from factory NVS before unactivated onboarding. Activated
+normal boot does not load or expose it. Invalid/missing codes show the existing
+configuration error instead of an unvalidated bitmap.
+
+The M5 240×240 round screen renders a deterministic nearest-neighbour 224×224
+I1 code centered at (8,8), without text over the scan area. Subsequent connection,
+time, confirmation, failure, timeout and success screens reuse the offline
+Chinese font at half size. M5 Wi-Fi failure shows the retry status; Waveshare
+retains its original code plus status layout and exact 280×280 bitmap pixels.
+Only independent cloud confirmation (or the existing valid recovery) completes
+adding the device. Host rendering does not establish actual phone scan success.
+
+The onboarding M5 `partitions/v2/16m.csv` alone expands NVS to 0x6000 at 0x9000,
+with otadata at 0xf000 and phy_init at 0x11000. The 0x20000/0x3f0000 application
+slots and 0x800000/8MiB assets stay unchanged. Stock preparation stays unchanged.
+`provision_factory_nvs.py --screen-code` supports both S3 models, keeps strict
+private-file/FRC1 identity/CRC/SRP checks, and creates 0x6000 NVS when M5 carries a
+screen code; ordinary M5 without a screen code retains 0x4000. This is a new
+factory full-flash layout, not an app-only OTA or an overlay for an activated
+unit. Preserve the current identity, runtime NVS and full rollback evidence
+before a separately authorized layout installation.
+
+Framed BLE transport logs only a fixed endpoint label, request length, handler
+status, response length and elapsed milliseconds at INFO. It never logs protocol
+payloads, Wi-Fi values, claim/key material or phone identifiers. These stage
+markers help isolate a native-client timeout; they do not establish its cause or
+change Security2, device proof or strict framing validation.

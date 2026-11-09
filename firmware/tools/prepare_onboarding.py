@@ -9,6 +9,27 @@ def replace(path, old, new):
     text=path.read_text()
     if text.count(old)!=1: raise ValueError('source anchor mismatch: '+path.name)
     path.write_text(text.replace(old,new))
+def prepare_m5_screen(tree):
+    # Only called on the isolated onboarding tree; stock prepare_experiment stays unchanged.
+    board=tree/'main/boards/m5stack/stopwatch/m5stack_stopwatch.cc'
+    replace(board,'#include "display/lcd_display.h"',
+        '#include "display/lcd_display.h"\n#include "family_setup_view.h"\n#include "family_setup_font.h"')
+    replace(board,'class RoundLcdDisplay : public SpiLcdDisplay {',
+        'class RoundLcdDisplay : public SpiLcdDisplay {\n'
+        '    FamilyOnboarding::SetupView family_setup_;\n'
+        'public:\n'
+        '    void SetOnboardingStatus(const char* title,const char* detail,const uint8_t* packed,size_t size) override {\n'
+        '#if CONFIG_CHICK_FACE_UI\n'
+        '        SetFaceScreenOn(title==nullptr);\n'
+        '#endif\n'
+        '        DisplayLockGuard lock(this);if(!lock || !IsSetupUICalled())return;\n'
+        '        family_setup_.Initialize(&family_setup_font,width_,height_);\n'
+        '        family_setup_.Update(title,detail,packed,size);\n'
+        '    }\n')
+    partition=tree/'partitions/v2/16m.csv'
+    replace(partition,'nvs,      data, nvs,     0x9000,    0x4000,','nvs,      data, nvs,     0x9000,    0x6000,')
+    replace(partition,'otadata,  data, ota,     0xd000,    0x2000,','otadata,  data, ota,     0xf000,    0x2000,')
+    replace(partition,'phy_init, data, phy,     0xf000,    0x1000,','phy_init, data, phy,     0x11000,   0x1000,')
 def main():
     p=argparse.ArgumentParser();p.add_argument('--tree',type=pathlib.Path,required=True);p.add_argument('--idf-source',type=pathlib.Path,required=True);p.add_argument('--extra-source',type=pathlib.Path,required=True);args=p.parse_args()
     tree=args.tree.resolve(); idf=args.idf_source.resolve(); extra=args.extra_source.resolve()
@@ -52,6 +73,7 @@ def main():
         '        family_setup_.Initialize(&family_setup_font,width_,height_);\n'
         '        family_setup_.Update(title,detail,packed,size);\n'
         '    }\n')
+    prepare_m5_screen(tree)
     board=tree/'main/boards/common/wifi_board.cc'
     replace(board,'#include "wifi_board.h"','#include "wifi_board.h"\n#include "family_onboarding.h"')
     replace(board,'void WifiBoard::StartNetwork() {','void WifiBoard::StartNetwork() {\n    if (FamilyOnboarding::Present()) {\n        FamilyOnboarding::Start([this](bool connected) {\n            in_config_mode_ = !FamilyOnboarding::Activated();\n            if (network_event_callback_) network_event_callback_(connected ? NetworkEvent::Connected : NetworkEvent::Disconnected, "");\n        });\n        return;\n    }')

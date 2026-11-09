@@ -34,3 +34,14 @@ class OnboardingFramingTests(unittest.TestCase):
 
     def test_user_input_pause_between_complete_exchanges(self):
         self.run_case('pause')
+
+    def test_actual_transport_logs_only_fixed_endpoint_and_numeric_metadata(self):
+        root=Path(__file__).resolve().parents[1]
+        binary=Path(self.directory.name)/'transport-test'
+        result=subprocess.run([os.environ.get('CC','cc'),'-std=c11','-Wall','-Wextra','-Werror',
+            '-I',str(root/'overlays/onboarding'),str(root/'tests/onboarding_transport_host.c'),
+            '-o',str(binary)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        result=subprocess.run([str(binary)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout.strip(),'ok')

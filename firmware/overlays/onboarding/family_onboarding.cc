@@ -57,7 +57,11 @@ void RenderSetup() {
     case SetupPhase::Connecting:
         title="正在连接 Wi-Fi";detail="请保持设备通电，稍候片刻";break;
     case SetupPhase::WifiError:
-        title="Wi-Fi 连接失败";detail="检查网络密码重试";code=true;break;
+        title="Wi-Fi 连接失败";detail="检查网络密码重试";
+#if !CONFIG_BOARD_TYPE_M5STACK_STOPWATCH
+        code=true;
+#endif
+        break;
     case SetupPhase::Clock:
         title="正在同步时间";detail="已连上网络，正在准备安全连接";break;
     case SetupPhase::ClockError:
@@ -305,7 +309,7 @@ void Start(std::function<void(bool)> connection) {
     nvs_handle_t h; if (nvs_open("family_factory", NVS_READONLY, &h) != ESP_OK) return;
     const bool valid = LoadBlob(h, "salt", salt, 16) && LoadBlob(h, "verifier", verifier, 384);
     bool screen_ready=true;
-#if CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16
+#if CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16 || CONFIG_BOARD_TYPE_M5STACK_STOPWATCH
     if (!Activated()) screen_ready=LoadBlob(h,"screen_code",screen_code,CodeSize) &&
         ValidCode(screen_code.data(),screen_code.size(),Settings("family_factory").GetString("device_id"));
     screen_code_valid=screen_ready && screen_code.size()==CodeSize;

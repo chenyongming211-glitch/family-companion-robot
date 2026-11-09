@@ -16,5 +16,6 @@ private:
     lv_image_dsc_t descriptor_{};
     std::vector<uint8_t> pixels_;
     int width_=0;
+    bool compact_=false;
 };
 }
