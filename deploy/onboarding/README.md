@@ -21,6 +21,8 @@
 
 `/api/internal/device-auth` 仅供语音服务回环访问，公网为 404。内部后台、原始记录、Mac 登记/配对、其余家庭 API 和未知路径不代理。Caddy 丢弃客户端 X-Forwarded-For 后重建来源，固定上游 Host/HTTPS；管理服务据此设置 Secure Cookie 并校验写请求来源。
 
+微信原生 wx.request 没有 Origin，且在开发者工具中带 cross-site Fetch Metadata。管理r2仅对可信HTTPS回环代理、无Origin、固定AppID `wxb3f1745f8ed1fa1d` 的严格 `https://servicewechat.com/<AppID>/<devtools或数字版本>/page-frame.html` Referer，放行家庭登录/退出/创建认领的POST与精确认领取消DELETE；其他路径和外部来源不放行。Referer不授予身份，仍须账号、会话及家庭权限；Secure/SameSite Strict Cookie与原浏览器来源检查保持。正式AppID变更时须同步客户端及服务端固定值，重新验证。
+
 ## 云端发布
 
 依赖、测试、构建、私有材料与发布均在云端。Mac 只处理代码/Git，可接收无凭据的小程序构建包作为测试客户端。证书、工厂包、二维码、NVS 和固件产物不进 Git，也不下载到 Mac。
@@ -51,3 +53,5 @@ management provision --config PRIVATE_CONFIG --device-auth PRIVATE_LEGACY_REGIST
 ## 回退
 
 本批云端私有备份为 `/var/backups/family-robot/onboarding-20261109-r1`。先恢复原 Caddy 阻断新认领，再恢复原管理发布链接/单元和语音覆盖配置/旧二进制，daemon-reload 并核对健康。保留旧 binary 与原 drop-in。备份时无真实新工厂设备；以后如已产生新绑定，须保留最新权威配置，不能恢复早期 JSON 丢失绑定。仅确认本批没有业务写入时才可还原配置快照。不要清除源记录、记忆、NVS、证书或 DNS。
+
+管理r2来源兼容补丁的单独回退与保全证据在 `/var/backups/family-robot/management-wechat-20261109-r2`；它未改私有配置、Caddy或语音进程。回退该补丁只需恢复此前管理链接/单元，不恢复旧业务配置。
