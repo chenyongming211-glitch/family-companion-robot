@@ -16,7 +16,11 @@ export type RecordFilter = {
   offset?: number;
   limit?: number;
 };
-export type RecordPage = { items: Conversation[]; hasMore: boolean };
+export type RecordPage = {
+  items: Conversation[];
+  hasMore: boolean;
+  pendingSources?: boolean;
+};
 
 export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
   async function request<T>(
@@ -71,7 +75,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
       limit: String(filter.limit ?? 50),
     });
     if (filter.deviceId !== undefined) params.set("device", filter.deviceId);
-    return request(filter.scope ?? "admin", `conversations?${params}`);
+    return request(filter.scope ?? "admin", `chats?${params}`);
   }
   const unsupported = async (..._args: unknown[]): Promise<never> => {
     throw new ApiError(
@@ -104,7 +108,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
           : `?${new URLSearchParams({ device: expectedDeviceId })}`;
       return request<Conversation>(
         scope,
-        `conversations/${encodeURIComponent(id)}${query}`,
+        `${/^chat_[a-f0-9]{64}$/.test(id) ? "chats" : "conversations"}/${encodeURIComponent(id)}${query}`,
       );
     },
     async listFamilies(scope: Scope = "admin") {

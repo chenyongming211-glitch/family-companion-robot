@@ -190,6 +190,10 @@ main {
 .panel p {
   line-height: 1.7;
 }
+.chat-refresh {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

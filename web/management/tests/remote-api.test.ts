@@ -2,6 +2,31 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRemoteApi } from "../src/remote-api.ts";
 
+test("live lists use business chats while source conversation links remain compatible", async () => {
+  const seen: string[] = [];
+  const api = createRemoteApi((async (input: string | URL | Request) => {
+    seen.push(String(input));
+    return new Response(
+      JSON.stringify({ items: [], hasMore: false, pendingSources: true }),
+    );
+  }) as typeof fetch);
+  const id = "chat_" + "a".repeat(64);
+  const page = await api.listConversationPage({
+    scope: "family",
+    deviceId: "dev_fixture",
+    offset: 0,
+    limit: 50,
+  });
+  await api.getConversation(id, "family", "dev_fixture");
+  await api.getConversation("source-record", "family", "dev_fixture");
+  assert.deepEqual(seen, [
+    "/api/family/chats?offset=0&limit=50&device=dev_fixture",
+    `/api/family/chats/${id}?device=dev_fixture`,
+    "/api/family/conversations/source-record?device=dev_fixture",
+  ]);
+  assert.equal(page.pendingSources, true);
+});
+
 test("live memory reads carry scope and selected device, while clear remains unsupported", async () => {
   const seen: string[] = [];
   const api = createRemoteApi((async (input: string | URL | Request) => {

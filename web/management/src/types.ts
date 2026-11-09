@@ -31,6 +31,8 @@ export type Turn = {
   boundary?: string;
   exactStopKnown?: boolean;
   recognitionMayDiffer?: boolean;
+  sourceRecordId?: string;
+  sourceTurnId?: string;
 };
 export type Conversation = {
   id: string;
@@ -46,6 +48,13 @@ export type Conversation = {
   turns: Turn[];
   sourceKind?: string;
   recordStatus?: "saved" | "pending" | "error";
+  startedAt?: string;
+  lastActivityAt?: string;
+  endedAt?: string;
+  archiveReason?: string;
+  turnCount?: number;
+  connectionCount?: number;
+  sources?: Array<{ recordId: string; sessionId: string; startedAt: string }>;
 };
 export type Memory = {
   id: string;

@@ -24,7 +24,26 @@ const name = ref(""),
   brightness = ref(0);
 const offset = ref(0),
   hasMore = ref(false),
+  pendingSources = ref(false),
   selectedDeviceId = ref("");
+const chatGroups = computed(() => {
+  const result: Array<{ date: string; items: Conversation[] }> = [];
+  for (const c of chats.value.filter((c) => c.title.includes(search.value))) {
+    const last = result[result.length - 1];
+    if (last?.date === c.date) last.items.push(c);
+    else result.push({ date: c.date, items: [c] });
+  }
+  return result;
+});
+function endingBasis(conversation: Conversation) {
+  if (liveMode && conversation.sourceKind === "business_chat") {
+    if (conversation.archiveReason === "explicit_end")
+      return "已收到明确结束信号，聊天已归档";
+    if (conversation.archiveReason === "inactivity")
+      return "轮次结算后30分钟无有效交流，聊天已归档";
+  }
+  return conversation.endReason;
+}
 let request = 0;
 let inFlight = false;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -88,7 +107,8 @@ async function load(silent = false) {
     let d: Device | null = null,
       cs: Conversation[] = [],
       c: Conversation | null = null,
-      more = false;
+      more = false,
+      pending = false;
     if (
       ["device", "settings", "configuration"].includes(page) &&
       (selectedDevice || hasDevice)
@@ -107,6 +127,7 @@ async function load(silent = false) {
       const result = await api.listConversationPage(filter);
       cs = result.items;
       more = result.hasMore;
+      pending = "pendingSources" in result && result.pendingSources === true;
     }
     if (page === "conversation")
       c = await api.getConversation(
@@ -122,6 +143,7 @@ async function load(silent = false) {
     chats.value = cs;
     chat.value = c;
     hasMore.value = more;
+    pendingSources.value = pending;
     if (d) {
       name.value = d.name;
       volume.value = d.volume ?? 0;
@@ -135,6 +157,7 @@ async function load(silent = false) {
       chats.value = [];
       selectedDeviceId.value = "";
       hasMore.value = false;
+      pendingSources.value = false;
       error.value = message(e);
     }
   } finally {
@@ -320,7 +343,7 @@ async function deleteChat() {
         </div>
         <div class="panel">
           <span>聊天记录</span><strong>{{ chats.length }}</strong
-          ><small>{{ liveMode ? "当前加载的连接记录" : "示例会话" }}</small>
+          ><small>{{ liveMode ? "当前加载的聊天" : "示例会话" }}</small>
         </div>
         <div class="panel">
           <span>服务状态</span
@@ -501,7 +524,7 @@ async function deleteChat() {
           <p>
             {{
               liveMode
-                ? "仅展示本次绑定后的记录，当前每次连接单独展示，30分钟聊天归档尚未接入。"
+                ? "仅展示本次绑定后的获授权聊天。明确结束后归档；轮次结算后连续30分钟无有效交流则自动归档。"
                 : "按日期查看示例会话；实际归档功能待开发。"
             }}
           </p>
@@ -510,7 +533,9 @@ async function deleteChat() {
       <div class="panel">
         <div v-if="liveMode" class="section-head">
           <p>每5秒检查当前页面的新记录。</p>
-          <button :disabled="loading" @click="load()">刷新记录</button>
+          <button class="chat-refresh" :disabled="loading" @click="load()">
+            刷新记录
+          </button>
         </div>
         <label for="chat-device">选择设备</label
         ><select
@@ -549,29 +574,40 @@ async function deleteChat() {
         <template v-if="displayState === 'normal'"
           ><label for="search">筛选当前页标题</label
           ><input id="search" v-model="search" placeholder="输入聊天标题" />
+          <p v-if="liveMode" class="muted">
+            当前页按聊天开始日期整理，跨零点不拆分。
+          </p>
+          <p v-if="liveMode && pendingSources" role="status">
+            有记录仍在写入，列表可能继续更新。
+          </p>
           <div
             v-if="!chats.filter((c) => c.title.includes(search)).length"
             class="empty"
           >
             没有匹配的聊天记录
           </div>
-          <a
-            v-for="c in chats.filter((c) => c.title.includes(search))"
-            :key="c.id"
-            class="list-row"
-            :href="chatLink(c)"
-            ><span
-              ><b>{{ c.title }}</b
-              ><small
-                >{{ c.date }} {{ c.time }} · {{ c.status }} ·
-                {{
-                  devices.find((d) => d.id === c.deviceId)?.name || "未知设备"
-                }}</small
-              ><small>{{
-                c.summary ||
-                (c.bodyAvailable ? "点击查看文字与播放记录" : "正文未授权")
-              }}</small></span
-            ><span>›</span></a
+          <template v-for="group in chatGroups" :key="group.date"
+            ><h2 v-if="liveMode">{{ group.date }}</h2>
+            <a
+              v-for="c in group.items"
+              :key="c.id"
+              class="list-row"
+              :href="chatLink(c)"
+              ><span
+                ><b>{{ c.title }}</b
+                ><small
+                  >{{ c.date }} {{ c.time }} · {{ c.status }} ·
+                  {{
+                    devices.find((d) => d.id === c.deviceId)?.name || "未知设备"
+                  }}</small
+                ><small v-if="liveMode && c.sourceKind === 'business_chat'"
+                  >{{ c.turnCount }}轮 · {{ c.connectionCount }}个连接</small
+                ><small>{{
+                  c.summary ||
+                  (c.bodyAvailable ? "点击查看文字与播放记录" : "正文未授权")
+                }}</small></span
+              ><span>›</span></a
+            ></template
           ></template
         >
       </div></template
@@ -594,7 +630,17 @@ async function deleteChat() {
             / {{ chat.date }}
           </p>
           <h1>{{ chat.title }}</h1>
-          <p>{{ chat.time }} · {{ chat.status }} · {{ chat.endReason }}</p>
+          <p>{{ chat.time }} · {{ chat.status }} · {{ endingBasis(chat) }}</p>
+          <p v-if="liveMode && chat.sourceKind === 'connection_record'">
+            这是来源连接记录，按原始连接查看文字和播放证据。
+          </p>
+          <p v-if="liveMode && chat.sourceKind === 'business_chat'">
+            {{ chat.turnCount }}轮交流 · {{ chat.connectionCount }}个连接<span
+              v-if="chat.endedAt"
+            >
+              · 归档时间：{{ lastSeen(chat.endedAt) }}</span
+            >
+          </p>
         </div>
       </div>
       <section class="panel">
@@ -602,6 +648,24 @@ async function deleteChat() {
         <p v-if="liveMode && chat.recordStatus === 'pending'" role="status">
           记录仍在更新，请稍后刷新。
         </p>
+        <p v-if="liveMode && chat.status === '待结算'" role="status">
+          缺少轮次结算或记录尚未完整，暂不推定聊天已结束。
+        </p>
+        <details v-if="liveMode && chat.sources?.length">
+          <summary>查看来源连接（{{ chat.sources.length }}）</summary>
+          <a
+            v-for="source in chat.sources"
+            :key="source.recordId"
+            class="list-row"
+            :href="
+              linkTo(scope, 'conversation', {
+                device: chat.deviceId,
+                chat: source.recordId,
+              })
+            "
+            >{{ lastSeen(source.startedAt) }} · 来源连接 →</a
+          >
+        </details>
         <button
           v-if="!liveMode"
           class="danger-button"
