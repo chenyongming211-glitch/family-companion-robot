@@ -32,7 +32,8 @@ SemaphoreHandle_t lock;
 std::string claim_id, challenge;
 std::vector<uint8_t> salt, verifier;
 network_prov_security2_params_t security{};
-std::atomic<bool> connected{false}, running{false}, worker_active{false}, clock_worker{false}, clock_synced{false};
+std::atomic<bool> connected{false}, running{false}, worker_active{false}, clock_worker{false}, clock_synced{false}, connection_reported{false};
+std::atomic<uint32_t> network_generation{0};
 std::atomic<int64_t> deadline{0};
 bool initialized = false;
 bool manager_ready = false;
@@ -125,6 +126,23 @@ bool SecureClock() {
     Board::GetInstance().GetDisplay()->ShowNotification("时间同步失败，请检查网络后重试");
     return false;
 }
+void ScheduleClock() {
+    if (!Activated() || !connected || connection_reported || clock_worker.exchange(true)) return;
+    if (xTaskCreate([](void*) {
+        const auto generation = network_generation.load();
+        if (SecureClock() && connected && generation == network_generation && callback &&
+            !connection_reported.exchange(true)) callback(true);
+        clock_worker = false;
+        // Sync can arrive after the bounded wait times out but before this task
+        // clears its guard. Recheck after clearing so that notification is not lost.
+        if (clock_synced && connected && !connection_reported) ScheduleClock();
+        vTaskDelete(nullptr);
+    }, "family_clock", 4096, nullptr, 4, nullptr) != pdPASS) clock_worker = false;
+}
+void TimeSynchronized(struct timeval*) {
+    clock_synced = true;
+    ScheduleClock(); // No TLS or application work in the lwIP callback.
+}
 void Worker(void*) {
     bool clock_ready = false;
     while (running && esp_timer_get_time() < deadline) {
@@ -156,18 +174,13 @@ void Event(void*, esp_event_base_t base, int32_t event, void*) {
     }
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_START) esp_wifi_connect();
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_DISCONNECTED) {
-        connected = false;
+        connected = false; ++network_generation; connection_reported = false;
         if (Activated()) { if (callback) callback(false); esp_wifi_connect(); }
     }
     if (base == IP_EVENT && event == IP_EVENT_STA_GOT_IP) {
         if (!clock_synced) esp_netif_sntp_start();
         connected = true;
-        if (Activated() && !clock_worker.exchange(true)) {
-            if (xTaskCreate([](void*) {
-                if (SecureClock() && connected && callback) callback(true);
-                clock_worker = false; vTaskDelete(nullptr);
-            }, "family_clock", 4096, nullptr, 4, nullptr) != pdPASS) clock_worker = false;
-        }
+        ScheduleClock();
     }
 }
 }
@@ -230,6 +243,7 @@ void Start(std::function<void(bool)> connection) {
     timer.name = "family_expiry";
     if (esp_timer_create(&timer, &expiry_timer) != ESP_OK) return;
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    sntp.sync_cb = TimeSynchronized;
     sntp.start = false; // Start after IP, avoiding pre-Wi-Fi retry backoff.
     if (esp_netif_sntp_init(&sntp) != ESP_OK) return;
     initialized = true;
