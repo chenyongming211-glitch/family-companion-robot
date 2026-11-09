@@ -12,10 +12,13 @@ import (
 	"time"
 )
 
-const passwordIterations = 600000
+const (
+	passwordIterations = 600000
+	passwordMinBytes   = 8
+)
 
 func HashPassword(password string) (PasswordHash, error) {
-	if len(password) < 12 || len(password) > 256 {
+	if len(password) < passwordMinBytes || len(password) > 256 {
 		return PasswordHash{}, ErrInvalid
 	}
 	salt := make([]byte, 16)
@@ -29,7 +32,7 @@ func HashPassword(password string) (PasswordHash, error) {
 	return PasswordHash{hex.EncodeToString(salt), hex.EncodeToString(key), passwordIterations}, nil
 }
 func VerifyPassword(password string, h PasswordHash) bool {
-	if len(password) < 12 || len(password) > 256 || h.Iterations < 600000 || h.Iterations > 2000000 {
+	if len(password) < passwordMinBytes || len(password) > 256 || h.Iterations < 600000 || h.Iterations > 2000000 {
 		return false
 	}
 	salt, e := hex.DecodeString(h.Salt)
