@@ -49,10 +49,17 @@ def main():
     ws=tree/'main/protocols/websocket_protocol.cc'
     replace(ws,'#include "websocket_protocol.h"','#include "websocket_protocol.h"\n#include "family_onboarding.h"')
     replace(ws,'    int version = settings.GetInt("version");','    int version = settings.GetInt("version");\n    if (FamilyOnboarding::Present()) {\n        if (!FamilyOnboarding::Activated()) return false;\n        url = FamilyOnboarding::Voice; token = FamilyOnboarding::Key(); version = 1;\n        if (token.size() != 43) return false;\n    }')
+    # New factory units only: use the previously unused tail for two larger OTA slots.
+    partition = tree/'partitions/waveshare-xiaoman-16m.csv'
+    replace(partition, '# Name,Type,SubType,Offset,Size', '# NEW FACTORY FULL FLASH ONLY; incompatible with legacy app-only OTA\n# Name,Type,SubType,Offset,Size')
+    replace(partition, 'ota_0,app,ota_0,0x20000,0x300000', 'ota_0,app,ota_0,0x20000,0x370000')
+    replace(partition, 'ota_1,app,ota_1,0x320000,0x300000', 'ota_1,app,ota_1,0x390000,0x370000')
+    replace(partition, 'assets,data,spiffs,0x620000,0x600000', 'assets,data,spiffs,0x700000,0x600000')
+    replace(partition, 'storage,data,spiffs,0xc20000,0x300000', 'storage,data,spiffs,0xd00000,0x300000')
     with (tree/'sdkconfig.defaults').open('a') as f:
-        f.write('\n# Factory-only Security2; legacy factory-absent branch remains upstream.\nCONFIG_BT_ENABLED=y\nCONFIG_BT_BLUEDROID_ENABLED=y\nCONFIG_BT_BLE_ENABLED=y\nCONFIG_BT_BLE_42_FEATURES_SUPPORTED=y\nCONFIG_BT_BLE_50_FEATURES_SUPPORTED=n\nCONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2=y\nCONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y\nCONFIG_MBEDTLS_HAVE_TIME_DATE=y\nCONFIG_NETWORK_PROV_NETWORK_TYPE_WIFI=y\n')
+        f.write('\n# Factory-only Security2; legacy factory-absent branch remains upstream.\nCONFIG_OTA_URL="https://robot.songguoxue.com/api/device/bootstrap"\nCONFIG_BT_ENABLED=y\nCONFIG_BT_BLUEDROID_ENABLED=y\nCONFIG_BT_BLE_ENABLED=y\nCONFIG_BT_BLE_42_FEATURES_SUPPORTED=y\nCONFIG_BT_BLE_50_FEATURES_SUPPORTED=n\nCONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2=y\nCONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y\nCONFIG_MBEDTLS_HAVE_TIME_DATE=y\nCONFIG_NETWORK_PROV_NETWORK_TYPE_WIFI=y\n')
     dependencies = FIRMWARE/'dependencies.onboarding.lock'
     if hashlib.sha256(dependencies.read_bytes()).hexdigest() != dependencies.with_name(dependencies.name+'.sha256').read_text().strip(): raise ValueError('onboarding dependency lock mismatch')
     shutil.copyfile(dependencies, tree/'dependencies.lock')
-    (tree/'.family-onboarding-source.json').write_text(json.dumps({'lock_sha256':hashlib.sha256((FIRMWARE/'onboarding.lock.json').read_bytes()).hexdigest(),'target':'esp32s3','physical_validation':'not_run', 'inputs': {str(p.relative_to(FIRMWARE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted([*list((FIRMWARE/'overlays/onboarding').glob('*')), *list((FIRMWARE/'patches/onboarding').glob('*.patch')), pathlib.Path(__file__).resolve(), dependencies]) if p.is_file()}},indent=2)+'\n')
+    (tree/'.family-onboarding-source.json').write_text(json.dumps({'lock_sha256':hashlib.sha256((FIRMWARE/'onboarding.lock.json').read_bytes()).hexdigest(),'target':'esp32s3','new_factory_full_flash_only': True,'physical_validation':'not_run', 'inputs': {str(p.relative_to(FIRMWARE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted([*list((FIRMWARE/'overlays/onboarding').glob('*')), *list((FIRMWARE/'patches/onboarding').glob('*.patch')), pathlib.Path(__file__).resolve(), dependencies]) if p.is_file()}},indent=2)+'\n')
 if __name__=='__main__': main()

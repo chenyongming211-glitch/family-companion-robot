@@ -49,7 +49,7 @@ def main():
             writer.writerow(['activated','data','i32','0'])
             for key in ['salt','verifier']:writer.writerow([key,'file','binary',str(directory/(key+'.bin'))])
         # Captured diagnostics may contain paths; never relay output or bundle values.
-        subprocess.run([sys.executable,str(generator),'generate',str(directory/'factory.csv'),str(directory/'factory.bin'),'0x4000'],check=True,capture_output=True)
+        subprocess.run([sys.executable,str(generator),'generate',str(directory/'factory.csv'),str(directory/'factory.bin'),'0x6000' if bundle['model']=='微雪 ESP32-S3' else '0x4000'],check=True,capture_output=True)
         fd=os.open(a.output,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
         with os.fdopen(fd,'wb') as f:f.write((directory/'factory.bin').read_bytes());f.flush();os.fsync(f.fileno())
     print('Private ESP32-S3 factory NVS candidate created; not flashed.')

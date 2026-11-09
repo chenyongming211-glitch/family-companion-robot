@@ -16,6 +16,8 @@ class FactoryTests(unittest.TestCase):
     def test_real_official_nvs_private_no_claim_secret_and_no_overwrite(self):
         result=self.run_tool();self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(self.out.stat().st_size,0x4000);self.assertEqual(stat.S_IMODE(self.out.stat().st_mode),0o600)
         self.assertNotIn(self.data['claim_code'].encode(),self.out.read_bytes()); original=self.out.read_bytes();self.assertNotEqual(self.run_tool().returncode,0);self.assertEqual(self.out.read_bytes(),original)
+    def test_waveshare_image_fills_its_nvs_partition(self):
+        self.data["model"]="微雪 ESP32-S3";self.write();result=self.run_tool();self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(self.out.stat().st_size,0x6000)
     def test_public_bundle_rejected(self):self.bundle.chmod(0o644);self.assertNotEqual(self.run_tool().returncode,0);self.assertFalse(self.out.exists())
     def test_untrusted_url_rejected(self):self.data['bootstrap_url']='https://example.com/';self.write();self.assertNotEqual(self.run_tool().returncode,0);self.assertFalse(self.out.exists())
     def test_retired_target_rejected(self):self.data['model']='ESP32-C3';self.write();self.assertNotEqual(self.run_tool().returncode,0);self.assertFalse(self.out.exists())
