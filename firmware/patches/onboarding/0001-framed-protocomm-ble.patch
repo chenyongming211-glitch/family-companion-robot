@@ -1,0 +1,66 @@
+--- a/components/protocomm/src/transports/protocomm_ble.c
++++ b/components/protocomm/src/transports/protocomm_ble.c
+@@ -157,8 +157,10 @@
+     }
+     return NULL;
+ }
+ 
++#include "protocomm_ble_framed_transport.inc"
++
+ static void transport_simple_ble_read(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
+ {
+     static const uint8_t *read_buf = NULL;
+     static uint16_t read_len = 0;
+@@ -317,8 +319,12 @@
+         }
+         return;
+     }
+ 
++    if (transport_family_framed_write(gatts_if, param)) {
++        return;
++    }
++
+     if (param->write.is_prep) {
+         ret = prepare_write_event_env(gatts_if, param);
+         if (ret != ESP_OK) {
+             ESP_LOGE(TAG, "Error appending to prepare buffer");
+@@ -503,8 +509,9 @@
+ }
+ 
+ static void transport_simple_ble_disconnect(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
+ {
++    family_ble_frame_reset(&family_frame);
+     esp_err_t ret;
+     ESP_LOGD(TAG, "Inside disconnect w/ session - %d", param->disconnect.conn_id);
+ 
+     /* Drop any staged prepare-write data when a connection ends */
+@@ -553,8 +560,9 @@
+ }
+ 
+ static void transport_simple_ble_connect(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
+ {
++    family_ble_frame_reset(&family_frame);
+     esp_err_t ret;
+     ESP_LOGD(TAG, "Inside BLE connect w/ conn_id - %d", param->connect.conn_id);
+ 
+     /* Start each connection with a clean prepare-write buffer */
+@@ -749,8 +757,9 @@
+ }
+ 
+ esp_err_t protocomm_ble_start(protocomm_t *pc, const protocomm_ble_config_t *config)
+ {
++    family_ble_frame_reset(&family_frame);
+     if (!pc || !config || !config->nu_lookup) {
+         return ESP_ERR_INVALID_ARG;
+     }
+ 
+@@ -924,8 +933,9 @@
+ }
+ 
+ esp_err_t protocomm_ble_stop(protocomm_t *pc)
+ {
++    family_ble_frame_reset(&family_frame);
+     if ((pc == NULL) ||
+             (protoble_internal == NULL ) ||
+             (pc != protoble_internal->pc_ble)) {
+         return ESP_ERR_INVALID_ARG;

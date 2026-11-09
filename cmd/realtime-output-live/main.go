@@ -25,6 +25,7 @@ func main() {
 	root := flag.String("records", "/var/lib/family-robot-realtime-test/verification/output-live-go", "private per-session text directory")
 	deviceListen := flag.String("device-listen", "", "optional device-only listener: 0.0.0.0:18041")
 	deviceConfig := flag.String("device-config", "/etc/family-robot/server.env", "protected server-only device authentication configuration")
+	onboardingAuth := flag.String("onboarding-auth", "", "optional literal loopback factory admission authority")
 	maxSessions := flag.Int("max-sessions", 1, "maximum simultaneous terminal sessions (1-8)")
 	deviceProfiles := flag.String("device-profiles", "", "optional private device presentation profile JSON")
 	memory := flag.Bool("memory", true, "restore bounded recent conversation memory per authenticated device")
@@ -68,6 +69,12 @@ func main() {
 		dc, err := realtimelive.LoadDeviceConfig(*deviceConfig)
 		if err != nil {
 			log.Fatal("protected_device_config_invalid")
+		}
+		if *onboardingAuth != "" {
+			dc, err = dc.WithOnboardingAuthURL(*onboardingAuth)
+			if err != nil {
+				log.Fatal("onboarding_authority_invalid")
+			}
 		}
 		servers = append(servers, &http.Server{Addr: *deviceListen, Handler: app.DeviceHandler(dc), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384})
 	}

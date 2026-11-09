@@ -17,6 +17,7 @@ import (
 type DeviceConfig struct {
 	Token, AllowedDevice string
 	RegistryPath         string
+	OnboardingAuthURL    string
 	registry             *deviceauth.Registry
 }
 
@@ -30,7 +31,7 @@ func LoadDeviceConfig(path string) (DeviceConfig, error) {
 	c := DeviceConfig{}
 	for _, line := range strings.Split(string(raw), "\n") {
 		key, value, ok := strings.Cut(line, "=")
-		if !ok || (key != "ROBOT_DEVICE_TOKEN" && key != "ROBOT_ALLOWED_DEVICE" && key != "ROBOT_DEVICE_REGISTRY") {
+		if !ok || (key != "ROBOT_DEVICE_TOKEN" && key != "ROBOT_ALLOWED_DEVICE" && key != "ROBOT_DEVICE_REGISTRY" && key != "ROBOT_ONBOARDING_AUTH_URL") {
 			continue
 		}
 		value = strings.TrimSpace(value)
@@ -47,8 +48,10 @@ func LoadDeviceConfig(path string) (DeviceConfig, error) {
 			c.Token = value
 		} else if key == "ROBOT_ALLOWED_DEVICE" {
 			c.AllowedDevice = value
-		} else {
+		} else if key == "ROBOT_DEVICE_REGISTRY" {
 			c.RegistryPath = value
+		} else {
+			c.OnboardingAuthURL = value
 		}
 	}
 	return validateDeviceConfig(c)
@@ -59,6 +62,9 @@ func validateDeviceConfig(c DeviceConfig) (DeviceConfig, error) {
 		return DeviceConfig{}, errors.New("device_config_invalid")
 	}
 	c.AllowedDevice = mac.String()
+	if c.OnboardingAuthURL != "" && !validOnboardingAuthURL(c.OnboardingAuthURL) {
+		return DeviceConfig{}, errors.New("device_config_invalid")
+	}
 	if c.registry == nil {
 		var err error
 		if c.RegistryPath != "" {
@@ -77,6 +83,7 @@ func validateDeviceConfig(c DeviceConfig) (DeviceConfig, error) {
 // or Mac routes. It may be bound publicly while Handler remains loopback-only.
 func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 	cfg, configErr := validateDeviceConfig(config)
+	authority := newOnboardingAuthority(cfg.OnboardingAuthURL)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /xiaozhi/v1/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/xiaozhi/v1/" {
@@ -97,13 +104,28 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 			return
 		}
 		entry, registered := cfg.registry.Lookup(mac.String())
-		if !registered {
+		if !registered && authority == nil {
 			w.WriteHeader(403)
 			return
 		}
-		if _, ok := cfg.registry.Authenticate(mac.String(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); !ok || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-			w.WriteHeader(401)
-			return
+		var device voiceidentity.Device
+		if registered {
+			if _, ok := cfg.registry.Authenticate(mac.String(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); !ok || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+				w.WriteHeader(401)
+				return
+			}
+		} else {
+			token, ok := validFactoryBearer(r.Header.Get("Authorization"))
+			if !ok {
+				w.WriteHeader(401)
+				return
+			}
+			var status int
+			device, status = authority.authenticate(r.Context(), mac.String(), token)
+			if status != 0 {
+				w.WriteHeader(status)
+				return
+			}
 		}
 		version := r.Header.Get("Protocol-Version")
 		if version == "" {
@@ -113,10 +135,13 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 			w.WriteHeader(400)
 			return
 		}
-		device, err := s.devices.BindXiaozhi(mac.String(), entry.Token)
-		if err != nil {
-			w.WriteHeader(503)
-			return
+		if registered {
+			var err error
+			device, err = s.devices.BindXiaozhi(mac.String(), entry.Token)
+			if err != nil {
+				w.WriteHeader(503)
+				return
+			}
 		}
 		s.mu.Lock()
 		lease := s.reserveLocked(device.ID)
