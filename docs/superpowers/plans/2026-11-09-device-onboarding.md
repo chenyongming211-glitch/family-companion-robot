@@ -1,6 +1,6 @@
 # 扫码添加设备 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 接通微信小程序页面、一次性认领/独立设备确认接口和ESP32-S3官方安全蓝牙配网，设备连接自有服务，保留真实绑定与历史边界。
 
@@ -31,8 +31,8 @@
 
 **Interfaces:** 供应CLI产生云端私有工厂包；新家庭onboarding DTO、设备activation/bootstrap、回环device-auth见Shared Contracts。`Options.ConfigPath`启用可持久化快照，`Options.PublicOrigin`明确公网HTTPS源，CLI提供同名参数。未提供配置路径时旧只读测试保持兼容。
 
-- [ ] 写实际HTTP/持久化测试：未授权403、待确认不授予设备、新设备独立确认后才出现绑定与设备授权；两个家庭并发只能一个成功，重放/过期/错误设备/取消/写失败均拒绝，重启后结果可查。现有绑定与内容起点逐字段保持。
-- [ ] 云端Go环境先验证RED，例如新测试中的`POST /api/family/onboarding`应因尚无接口而失败，不把编译错误当行为RED。
+- [x] 写实际HTTP/持久化测试：未授权403、待确认不授予设备、新设备独立确认后才出现绑定与设备授权；两个家庭并发只能一个成功，重放/过期/错误设备/取消/写失败均拒绝，重启后结果可查。现有绑定与内容起点逐字段保持。
+- [x] 云端Go环境先验证RED，例如新测试中的`POST /api/family/onboarding`应因尚无接口而失败，不把编译错误当行为RED。
 
 ```go
 // 测试主线：登录A，创建任务，确认前ListDevices仍空；错误设备确认失败；
@@ -43,10 +43,10 @@ if got := persisted.Bindings[len(persisted.Bindings)-1].From; !got.Equal(now) {
 }
 ```
 
-- [ ] 最小实现私有单文件事务：同一固定锁文件跨进程排他，锁内重新加载最新配置→检查权限/任务/设备→原子写完整新配置。读请求使用独立不可变快照，不修改并发共享Reader.Config。
-- [ ] 加明确`CanAddDevices`默认false、供货命令默认不授予真实账号；工厂包O_EXCL/0600且只保存在云端。拒绝重复MAC/序列号、现有身份冲突、未知字段/重复键与过量任务。
-- [ ] 实现公网代理边界、会话Cookie及登录限流，保留本机HTTP预览；新设备接口不接收家庭归属作为身份依据，回环认证不对公网开放。返回值不含工厂密钥、认领码或Wi-Fi口令。
-- [ ] 云端完整`go test -race ./internal/management ./cmd/management`、`go vet`及构建一次；提交本任务文件并写报告，明确RED/GREEN、测试数与剩余现场条件。
+- [x] 最小实现私有单文件事务：同一固定锁文件跨进程排他，锁内重新加载最新配置→检查权限/任务/设备→原子写完整新配置。读请求使用独立不可变快照，不修改并发共享Reader.Config。
+- [x] 加明确`CanAddDevices`默认false、供货命令默认不授予真实账号；工厂包O_EXCL/0600且只保存在云端。拒绝重复MAC/序列号、现有身份冲突、未知字段/重复键与过量任务。
+- [x] 实现公网代理边界、会话Cookie及登录限流，保留本机HTTP预览；新设备接口不接收家庭归属作为身份依据，回环认证不对公网开放。返回值不含工厂密钥、认领码或Wi-Fi口令。
+- [x] 云端完整`go test -race ./internal/management ./cmd/management`、`go vet`及构建一次；提交本任务文件并写报告，明确RED/GREEN、测试数与剩余现场条件。
 
 ### Task 2: 原生小程序向导和BLE传输
 
@@ -54,7 +54,7 @@ if got := persisted.Bindings[len(persisted.Bindings)-1].From; !got.Equal(now) {
 
 **Interfaces:** 使用Shared Contracts中的真实HTTPS接口、family Cookie和`Security2Session`。扫描scene原值只保存在内存；先创建任务取得序列号，再用scene作Security2证明，通过`family-claim`端点传递id/challenge，最后调用官方Wi-Fi配置端点。
 
-- [ ] 先编写状态/API/蓝牙行为测试：未确认不可success、云端过期/401/网络失败可反馈、取消阻止旧回调覆盖新任务、后台/页面销毁清理密码与BLE、分包超时拒绝；云端Node运行RED。
+- [x] 先编写状态/API/蓝牙行为测试：未确认不可success、云端过期/401/网络失败可反馈、取消阻止旧回调覆盖新任务、后台/页面销毁清理密码与BLE、分包超时拒绝；云端Node运行RED。
 
 ```ts
 assert.equal(state.phase, "waiting_cloud");
@@ -64,10 +64,10 @@ state = reduce(state, { type: "cloud_status", status: "confirmed", deviceId: "de
 assert.equal(state.phase, "success");
 ```
 
-- [ ] 实现登录/扫码与家庭选择、Wi-Fi列表/密码、进度与成功反馈；一个家庭自动选，昵称可选。原生简单页面，不引入跨端UI框架，不预填真实账号/设备凭据，不将Wi-Fi密码写storage或console。
-- [ ] 实现wx.request Cookie处理、固定HTTPS源、客户端请求错误与有时限轮询；scan结果校验仅接受32位小写hex或明确的scene包装，不跟随二维码任意URL。
-- [ ] 实现BLE发现、GATT端点发现、20字节起分包、响应拼接/超时和断开处理；仅安全会话完成后写Wi-Fi，不能明文fallback。实际协议endpoint及protobuf字段以Task 3官方互通证据为准。
-- [ ] 云端完成Node行为测试、TypeScript和打包；编译产物不入Git；README说明测试号导入/预览方式、需要微信登录的边界及未完成实机项。提交并写报告。
+- [x] 实现登录/扫码与家庭选择、Wi-Fi列表/密码、进度与成功反馈；一个家庭自动选，昵称可选。原生简单页面，不引入跨端UI框架，不预填真实账号/设备凭据，不将Wi-Fi密码写storage或console。
+- [x] 实现wx.request Cookie处理、固定HTTPS源、客户端请求错误与有时限轮询；scan结果校验仅接受32位小写hex或明确的scene包装，不跟随二维码任意URL。
+- [x] 实现BLE发现、GATT端点发现、20字节起分包、响应拼接/超时和断开处理；仅安全会话完成后写Wi-Fi，不能明文fallback。实际协议endpoint及protobuf字段以Task 3官方互通证据为准。
+- [x] 云端完成Node行为测试、TypeScript和打包；编译产物不入Git；README说明测试号导入/预览方式、需要微信登录的边界及未完成实机项。提交并写报告。
 
 ### Task 3: Security 2互通与S3固件适配
 
@@ -75,12 +75,12 @@ assert.equal(state.phase, "success");
 
 **Interfaces:** Shared Contracts固定TS Security2Session与加密transport；固件新增官方自定义`family-claim`endpoint，接收id/challenge，不接收服务器URL或长期凭据。工厂包为Task 1格式，云端工具派生SRP盐/验证器到设备NVS候选，不入Git。
 
-- [ ] 从固定ESP-IDF6.1与network_provisioning官方源码确认SRP参数、protobuf、AES-GCM nonce/counter与端点映射，锁定组件版本。先写官方交叉向量测试，在云端证明未实现时失败。
-- [ ] 最小实现官方Security2客户端协议适配；密码算法用维护的标准库，随机数来自wx安全随机接口并可注入确定性测试值。认证失败、计数器错误、篡改均fail closed，无Security0/无PoP降级。
-- [ ] 用官方Python/设备端实现交叉验证完整握手、请求/响应加密解密、篡改拒绝；非仅与自己写的server对照。保留命令、版本、输入类型与结果，向量只用公开合成值。
-- [ ] 适配上游S3入口：新工厂身份启用官方BLE配网和180秒窗口；默认自有HTTPS bootstrap，证书校验；独立Bearer认证activation后才完成绑定并停配网，再取自有WSS。现用无工厂身份设备保持原链路，配置失败不能落到官方云。
-- [ ] 云端S3候选构建与host检查；只验证支持的微雪/M5目标，不运行C3。记录实际构建目标/产物状态，私有产物留云端，不自动刷机或触碰麦克风。
-- [ ] 提交本任务文件并写报告；遇到微信或官方协议确实不兼容，提供具体失败与已完成交叉证据，不假装实机可用。
+- [x] 从固定ESP-IDF6.1与network_provisioning官方源码确认SRP参数、protobuf、AES-GCM nonce/counter与端点映射，锁定组件版本。先写官方交叉向量测试，在云端证明未实现时失败。
+- [x] 最小实现官方Security2客户端协议适配；密码算法用维护的标准库，随机数来自wx安全随机接口并可注入确定性测试值。认证失败、计数器错误、篡改均fail closed，无Security0/无PoP降级。
+- [x] 用官方Python/设备端实现交叉验证完整握手、请求/响应加密解密、篡改拒绝；非仅与自己写的server对照。保留命令、版本、输入类型与结果，向量只用公开合成值。
+- [x] 适配上游S3入口：新工厂身份启用官方BLE配网和180秒窗口；默认自有HTTPS bootstrap，证书校验；独立Bearer认证activation后才完成绑定并停配网，再取自有WSS。现用无工厂身份设备保持原链路，配置失败不能落到官方云。
+- [x] 云端S3候选构建与host检查；只验证支持的微雪/M5目标，不运行C3。记录实际构建目标/产物状态，私有产物留云端，不自动刷机或触碰麦克风。
+- [x] 提交本任务文件并写报告；遇到微信或官方协议确实不兼容，提供具体失败与已完成交叉证据，不假装实机可用。
 
 ### Task 4: 统一语音身份、HTTPS路由与隔离部署
 
@@ -88,9 +88,28 @@ assert.equal(state.phase, "success");
 
 **Interfaces:** `DeviceConfig.OnboardingAuthURL`仅允许固定回环HTTP地址的`/api/internal/device-auth`，默认空。旧白名单已有MAC仍按原凭据认证；仅未知MAC尝试受限回环factory认证，确认后的稳定ID来自管理权威源。新设备不调用BindXiaozhi再次生成ID。
 
-- [ ] 云端先写RED：未知MAC未激活/错key拒绝，认证服务断开fail closed、超时有界，已激活返回权威ID并在新记录归属中使用；已登记旧MAC错key不走fallback。正常测试不打开模型连接或生成语音。
-- [ ] 接入可选factory认证客户端，调用固定URL、严格解析 bounded响应，timeout<=2秒，拒绝重定向与非回环/非固定path；只在新设备新连接读取，不改已有会话。
-- [ ] 配置Caddy精确开放小程序所需family login/logout/me/families、onboarding、设备activation/bootstrap及设备WSS；不开放admin、内部device-auth、源记录、Mac登记/配对。代理显式覆盖X-Forwarded-For/Proto，不能信客户端伪造来源。
-- [ ] 隔离配置/合成设备验证跨账号权限、原子绑定、重放/过期/断连/重启、Cookie与来源、HTTPS/WS握手与路径限制；完整Go专项race/vet、前端构建、S3候选证据及源码复审通过后发布已验证部分。
-- [ ] 迁移真实配置只显式授予现有owner在自有家庭的添加权限，保留其原绑定/正文权限；不生成测试工厂设备进真实配置。管理服务可独立发布；语音factory开关根据兼容/发布证据安排，记录实装版本，不整包未经验证的main替换正式语音。
-- [ ] 写最终验证，准确分开已实现、已部署、自动验证与真实手机/设备待验证；提交推送main，不要求用户再确认既定入口。
+- [x] 云端先写RED：未知MAC未激活/错key拒绝，认证服务断开fail closed、超时有界，已激活返回权威ID并在新记录归属中使用；已登记旧MAC错key不走fallback。正常测试不打开模型连接或生成语音。
+- [x] 接入可选factory认证客户端，调用固定URL、严格解析 bounded响应，timeout<=2秒，拒绝重定向与非回环/非固定path；只在新设备新连接读取，不改已有会话。
+- [x] 配置Caddy精确开放小程序所需family login/logout/session/families、onboarding、设备activation/bootstrap及设备WSS；不开放admin、内部device-auth、源记录、Mac登记/配对。代理显式覆盖X-Forwarded-For/Proto，不能信客户端伪造来源。
+- [x] 隔离配置/合成设备验证跨账号权限、原子绑定、重放/过期/断连/重启、Cookie与来源、HTTPS/WS握手与路径限制；完整Go专项race/vet、前端构建、S3候选证据及源码复审通过后发布已验证部分。
+- [x] 迁移真实配置只显式授予现有owner在自有家庭的添加权限，保留其原绑定/正文权限；不生成测试工厂设备进真实配置。管理服务可独立发布；语音factory开关根据兼容/发布证据安排，记录实装版本，不整包未经验证的main替换正式语音。
+- [x] 写最终验证，准确分开已实现、已部署、自动验证与真实手机/设备待验证；提交推送main，不要求用户再确认既定入口。
+
+### Task 5: 受控生成设备小程序码
+
+**Files:** 新建`tools/onboarding_mini_code.py`、`tools/tests/test_onboarding_mini_code.py`及简短操作说明。CLI读取Task1私有工厂包与云端0600微信配置，不接触管理公开API。
+
+**Interfaces:** 小程序码scene为工厂claim_code，page固定`pages/index/index`，环境develop/trial/release由操作者显式指定。微信服务端凭据只从云端私有文件读取，使用固定官方HTTPS API获取token并生成码，不打印或缓存token，不从截图复制密钥。
+
+- [x] 云端写RED：固定page/scene与环境、严格私有输入、HTTP错误/JSON错误不可保存为图片、输出O_EXCL0600、凭据不进错误/stdout；使用受控本地HTTP模拟，不调用真实微信。
+- [x] 标准库最小实现受控CLI；HTTPS校验、固定API域名、禁止重定向、响应长度界限、PNG/JPEG签名与类型校验。官方接口不允许的测试号或缺少云端凭据明确报失败，不伪造正式小程序码。
+- [x] 云端专项测试及源码复审通过后提交。真实微信小程序码生成/扫码唤起需要账号权限、云端有效凭据和已上传版本，继续单独记录待验证，不以普通文本二维码替代正式唤起功能。
+
+
+## 执行结果（2026-11-09）
+
+源码与云端集成发布完成，详见[验证记录](../../verification/2026-11-09-device-onboarding.md)。Task1 65a5fc4；Task2 5a39a8c及多轮生命周期/原生码修复至1d2a764；Task3 05c8a23至2aab4f4；Task4 88a98af/eda6909及PCM测试清理3c0837a/b6b2017；Task5 41941cb/2091d14。各任务和最终整体复审通过，非阻断Minor保留为时钟回绕误超时与前导零SRP附加向量覆盖。
+
+云端发布onboarding-20261109-r1，既有绑定、正文权限、源记录/记忆和语音设置保持。原生客户端完整68测试/类型/构建/审计通过；固件最终136host零skip与M5/微雪两板同源构建通过；后端和选择性实际生产基线语音race/vet/build、整链合成及42项公网检查通过。回退脚本的权限/失败隔离/恢复验证经过云端隔离检查。
+
+本计划的实现步骤勾选不代表真实现场通过。仍未进行微信开发者工具原生编译/上传、真实平台码生成、手机BLE权限/无线互通、工厂NVS供应/新板刷写、真实绑定和播放验收；现有设备未自动操作。Mac无凭据导入包位于artifacts/miniprogram-onboarding-20261109/dist，固件/工厂材料仅留云端。之后按这些现场条件验证，不重复开发一套注册服务。

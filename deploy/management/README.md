@@ -1,10 +1,12 @@
-# 独立只读管理服务
+# 独立管理服务
 
-本模板仅供后续发布使用；添加模板不会安装、启动或重启任何服务。正式语音进程与设备固件不在本服务范围内。仅支持已确认的 ESP32-S3 设备。
+2026-11-09 新增小程序设备认领与独立激活写接口，已发布 onboarding-20261109-r1；既有设备/聊天/设置页面仍只读。公网仅通过 Caddy 精确代理必要路径，详见[接入与供应](../onboarding/README.md)及[验证](../../docs/verification/2026-11-09-device-onboarding.md)。
+
+本模板用于云端发布；添加模板本身不会安装、启动或重启任何服务。正式语音进程与设备固件不在本管理单元范围内。仅支持已确认的 ESP32-S3 设备。
 
 所有构建、命令与配置初始化在云端执行。发布目录采用 `/opt/family-robot-management/releases/<build>/`，包含 `management` 二进制及前端 **live** 构建 `dist-live/`；`current` 指向核验过的发布目录。不要把 mock 构建部署到真实入口。模板中的 `@RECORDS_ROOT@`、`@PROFILES_DIR@`、`@BUILD_ID@` 必须替换为部署时核验的路径/版本（无空格）；若无 profiles 参数，移除对应参数和 BindReadOnlyPaths 中的资料映射。只读源记录与资料路径必须位于 ProtectHome 可访问的系统路径，不移动或修改正式源数据以适应模板。
 
-服务需要 root 读取既有 root/0700 记录目录；不得放宽源目录权限。模板将源记录目录和仅包含展示资料的 presentation 目录只读挂载到服务专属的 `/run/family-robot-management/` 视图，绕开源父目录其他属主的0700遍历限制；原数据不移动、不复制，能力集继续为空。资料源必须是经核验的窄范围 presentation 目录，不能绑定包含其他私密配置的上级目录；服务通过 `/run/family-robot-management/presentation/profiles.json` 读取资料，目录挂载确保源文件原子替换后能读到新版本。systemd 限制写入管理服务自己的 `/var/lib/family-robot-management`，配置0600、父目录0700，审计0600；原记录、资料和配置设置为只读。仅监听 `127.0.0.1:18791`，客户端通过 SSH 转发访问，不直接暴露互联网，不开启跨域。Cookie 因此使用 HTTP、HttpOnly、SameSite=Strict；不要将此模板直接改成公网 HTTP。
+服务需要 root 读取既有 root/0700 记录目录；不得放宽源目录权限。模板将源记录目录和仅包含展示资料的 presentation 目录只读挂载到服务专属的 `/run/family-robot-management/` 视图，绕开源父目录其他属主的0700遍历限制；原数据不移动、不复制，能力集继续为空。资料源必须是经核验的窄范围 presentation 目录，不能绑定包含其他私密配置的上级目录；目录挂载确保原子替换后能读到新版本。systemd 只允许写管理服务自己的 `/var/lib/family-robot-management`，配置0600、父目录0700、审计0600，配置文件本身不能再只读 bind，否则认领的原子替换无法生效；原记录和资料继续只读。进程仅监听 `127.0.0.1:18791`，网页仍通过 SSH 转发访问；公网小程序走固定 HTTPS 代理及 `--public-origin`。公网 Cookie 为 Secure/HttpOnly/SameSite=Strict，本机 HTTP 转发兼容，不开启跨域或公网 HTTP。
 
 显式初始化示例（占位符必须人工替换为核实设备 ID）：
 
@@ -20,7 +22,7 @@ install -d -m 0700 /var/lib/family-robot-management
 
 会话保留在内存中，重启须重新登录；两端分别退出。每IP每分钟最多10次登录尝试，同时最多2次密码校验；最大1024会话、4096限流IP条目，达到上限明确拒绝。正文读取先完成权限校验和私有审计追加/fsync，失败则503且不输出正文。审计只有UTC、账号ID、入口、操作、设备ID、记录ID，无正文或凭据；请由后续运维维护磁盘空间与审计留存，服务不自动删除。
 
-API只有登录/退出会修改会话，其他公开能力均只读。设备、家庭、账号和聊天的修改/删除、记忆清除及硬件操作不支持。近期记忆列表/详情只读接口已接入，使用现有记录根目录内.memory快照及相同正文/绑定授权，不增加挂载，不调用recordstore.Open/Load，不写原始快照或锁。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html、family.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
+专用 onboarding/activation 接口可创建认领与新绑定；其余已发布业务 API 仍只读，设备/家庭/账号编辑、删除、记忆清除及硬件操作不支持。近期记忆使用原记录根目录内.memory快照和相同正文/绑定授权，不增加挂载，不调用recordstore.Open/Load，不写源快照或锁。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html、family.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
 
 验证门槛：云端 `go test -race ./internal/management ./cmd/management`、`go vet ./internal/management ./cmd/management`、`go build -o <private-output>/management ./cmd/management`，配合已核验的 live 前端。部署后的浏览器验收与用户新实机发言验证分开记录，合成测试不代表现场验收。
 
