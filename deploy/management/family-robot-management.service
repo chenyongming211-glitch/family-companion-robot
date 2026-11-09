@@ -1,0 +1,38 @@
+[Unit]
+Description=Family Robot read-only management
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/opt/family-robot-management/current
+ExecStart=/opt/family-robot-management/current/management serve --listen 127.0.0.1:18791 --config /var/lib/family-robot-management/config.json --records @RECORDS_ROOT@ --profiles @PROFILES_FILE@ --static /opt/family-robot-management/current/dist-live --audit /var/lib/family-robot-management/access.jsonl --build @BUILD_ID@
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+StateDirectory=family-robot-management
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=@RECORDS_ROOT@ @PROFILES_FILE@ /var/lib/family-robot-management/config.json
+ReadWritePaths=/var/lib/family-robot-management
+MemoryMax=256M
+CPUQuota=50%
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
