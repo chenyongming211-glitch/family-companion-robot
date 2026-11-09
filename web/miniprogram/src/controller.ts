@@ -13,6 +13,7 @@ export type View = {
   networks: string[];
   serial: string;
   model: string;
+  progress: string;
 };
 export class Onboarding {
   private api: Api;
@@ -24,6 +25,7 @@ export class Onboarding {
     networks: [],
     serial: "",
     model: "",
+    progress: "",
   };
   private code = "";
   private password = "";
@@ -102,6 +104,7 @@ export class Onboarding {
       throw new ClientError("permission", "当前账号没有可添加设备的家庭");
   }
   async start(familyId: string, name: string) {
+    if (["connecting", "wifi", "applying", "waiting_cloud"].includes(this.view.state.phase)) return;
     if (!this.code) throw new ClientError("scan", "请先扫码");
     if (!this.view.families.some((f) => f.id === familyId))
       throw new ClientError("family", "请选择有权限的家庭");
@@ -136,23 +139,25 @@ export class Onboarding {
       }
       if (
         task.status !== "waiting" ||
+        !/^FAMILY_[a-f0-9]{12}$/.test(task.ble_name || "") ||
         !task.challenge ||
         !task.serial ||
         !Number.isFinite(Date.parse(task.expires_at))
       )
         throw new ClientError("task", "认领任务无效，请重新扫码");
+      this.view.progress = "正在寻找机器人";
+      this.publish();
       this.link = new BleLink(this.platform, undefined, (error) =>
         this.failure(error, generation),
       );
       const devices = await this.link.discover();
       if (!this.valid(generation)) return;
-      this.view.devices = devices;
-      this.publish();
-      if (!devices.length)
-        throw new ClientError(
-          "ble_missing",
-          "没有发现配网设备，请让设备进入配网模式后重试",
-        );
+      const matches = devices.filter((d) => d.name === task.ble_name);
+      const targets = [...new Set(matches.map((d) => d.deviceId))];
+      if (targets.length !== 1)
+        throw new ClientError("ble_missing", targets.length ? "发现多个同名机器人，请重新扫码重试" : "没有找到对应机器人，请让机器人进入配网模式后重新扫码");
+      this.view.devices = matches;
+      await this.connect(targets[0]);
     } catch (error) {
       this.failure(error, generation);
     }
@@ -170,6 +175,8 @@ export class Onboarding {
       return;
     this.connecting = true;
     try {
+      this.view.progress = "正在验证设备身份";
+      this.publish();
       await this.link.connect(deviceId);
       if (!this.valid(generation)) return;
       const version = JSON.parse(text(await this.link.read("proto-ver")));
@@ -228,6 +235,8 @@ export class Onboarding {
           "设备拒绝了认领任务，请重新扫码",
         );
       this.wifi = new WifiProvisioner(exchange);
+      this.view.progress = "正在扫描 Wi-Fi";
+      this.publish();
       const networks = await this.wifi.scan();
       if (!this.valid(generation)) return;
       this.view.networks = networks;
@@ -235,7 +244,7 @@ export class Onboarding {
     } catch (error) {
       this.failure(error, generation);
     } finally {
-      this.connecting = false;
+      if (this.valid(generation)) this.connecting = false;
     }
   }
   async scanWifi() {
@@ -298,6 +307,7 @@ export class Onboarding {
   }
   private async release() {
     this.password = "";
+    this.connecting = false;
     this.security?.destroy();
     this.security = undefined;
     this.wifi = undefined;

@@ -432,3 +432,17 @@ func TestConfigStoreCrossProcessProvisionOneWinner(t *testing.T) {
 		t.Fatal("lost/duplicate write", e)
 	}
 }
+
+func TestOnboardingAuthenticatedBLENameUsesFactoryMAC(t *testing.T) {
+	s, b, _, _ := onboardingFixture(t)
+	c := login(t, s, "family", "alice")
+	v := startClaim(t, s, b, c, "home-a")
+	if v["ble_name"] != "FAMILY_020000000001" {
+		t.Fatalf("trusted MAC target missing for arbitrary serial UNIT001: %v", v["ble_name"])
+	}
+	for _, key := range []string{"claim_code", "claim_hash", "device_key", "key_hash"} {
+		if _, ok := v[key]; ok {
+			t.Fatalf("credential disclosed: %s", key)
+		}
+	}
+}

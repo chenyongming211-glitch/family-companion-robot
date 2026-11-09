@@ -80,6 +80,7 @@ func claimDTO(c Config, t OnboardingClaim, challenge bool, now time.Time) any {
 	out := map[string]any{"id": t.ID, "status": status, "expires_at": t.ExpiresAt, "serial": d.Serial, "model": d.Model}
 	if challenge && status == "waiting" {
 		out["challenge"] = t.Challenge
+		out["ble_name"] = "FAMILY_" + strings.ReplaceAll(d.MAC, ":", "")
 	}
 	if t.Name != "" {
 		out["name"] = t.Name

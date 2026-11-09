@@ -93,6 +93,7 @@ test("untrusted or malformed mini-code paths cannot fall back to valid raw conte
 });
 test("warm App onShow supersedes old scanner and queues only until page visible", async () => {
   const p = page();
+  const starts:any[]=[]; p.controller.start=async(...args:any[])=>starts.push(args);
   p.controller.api.cookie = "management_family=synthetic";
   p.controller.view.families = [
     { id: "family", name: "test", canAddDevices: true },
@@ -112,7 +113,8 @@ test("warm App onShow supersedes old scanner and queues only until page visible"
   assert.equal(p.data.scanned, false);
   p.onShow();
   assert.equal(p.controller.code, next);
-  assert.equal(p.data.scanned, true);
+  assert.equal(p.data.scanned, false);
+  assert.deepEqual(starts, [["family", ""]]);
   old.success({ result: code });
   assert.equal(p.controller.code, next);
   assert.equal(p.controller.api.cookie, "management_family=synthetic");
@@ -191,4 +193,49 @@ test("cold load scene is accepted without retaining an App-level code", () => {
   const p = page({ scene: code });
   assert.equal(p.controller.code, code);
   p.onUnload();
+});
+
+test("foreground scan automatically starts once; multiple families wait for selection", async()=>{
+ for(const count of [1,2]) {
+ const p=page(); const calls:any[]=[];
+ p.controller.view.families=Array.from({length:count},(_,i)=>({id:`family-${i}`,name:`家${i}`,canAddDevices:true}));
+ p.data.families=p.controller.view.families; p.data.loggedIn=true;
+ p.controller.start=async(...args:any[])=>calls.push(args);
+ p.scan(); scanner.success({result:code}); p.onShow();
+ assert.equal(calls.length,count===1?1:0);
+ if(count===2){p.family({detail:{value:"1"}}); assert.deepEqual(calls,[["family-1",""]]);}
+ p.onUnload();
+ }
+});
+test("scan before login continues after successful login",async()=>{
+ const p=page();const calls:any[]=[];
+ p.scan();scanner.success({result:code});
+ p.controller.login=async()=>{p.controller.view.families=[{id:"home",name:"家",canAddDevices:true}];p.data.families=p.controller.view.families;p.data.loggedIn=true;};
+ p.controller.start=async(...args:any[])=>calls.push(args);
+ await p.login();assert.deepEqual(calls,[["home",""]]);p.onUnload();
+});
+test("prelogin code survives initial username input but cancel during login cannot revive it",async()=>{
+ const p=page({scene:code});const calls:any[]=[];let finish:any;
+ p.input({currentTarget:{dataset:{key:"username"}},detail:{value:"f"}});
+ p.input({currentTarget:{dataset:{key:"username"}},detail:{value:"first-user"}});
+ assert.equal(p.readyCode,code);
+ p.controller.login=()=>new Promise(resolve=>{finish=()=>{p.data.families=[{id:"home"}];resolve(undefined);};});
+ p.controller.start=async(...args:any[])=>calls.push(args);
+ const login=p.login();await p.cancel();finish();await login;
+ assert.deepEqual(calls,[]);assert.equal(p.readyCode,"");p.onUnload();
+});
+test("confirmed task bypasses Bluetooth and preserves server identity",async()=>{
+ const p=page();p.controller.view.families=[{id:"home"}];p.controller.setCode(code);
+ p.controller.api.start=async()=>({status:"confirmed",device_id:"dev_"+"1".repeat(32)});
+ await p.controller.start("home","");assert.equal(p.controller.view.state.phase,"success");assert.equal(p.controller.link,undefined);p.onUnload();
+});
+test("prelogin scanned code has an active absolute expiry timer",()=>{
+ const p=page();p.scan();scanner.success({result:code});
+ assert.ok(p.scanTimer,"retained code must keep its bounded erase timer");p.onUnload();
+});
+test("session invalidation erases a foreground code waiting for family selection",async()=>{
+ const p=page();p.scan();scanner.success({result:code});
+ (globalThis as any).wx.request=(o:any)=>o.success({statusCode:401,data:{}});
+ await assert.rejects(p.controller.api.families(),/重新登录/);
+ const retained=p.readyCode;p.onUnload();assert.equal(retained,"");
 });

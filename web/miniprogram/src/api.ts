@@ -7,6 +7,7 @@ export type Task = {
   serial: string;
   model: string;
   challenge?: string;
+  ble_name?: string;
   device_id?: string;
 };
 export class ClientError extends Error {

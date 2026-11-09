@@ -13,9 +13,9 @@ Page({
     username: "",
     loginPassword: "",
     families: [],
-    familyIndex: 0,
+    familyIndex: -1,
     familyNames: [],
-    name: "",
+    progress: "",
     devices: [],
     networks: [],
     ssid: "",
@@ -40,14 +40,20 @@ Page({
     | undefined,
   scanTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   scanNotice: "",
+  readyCode: "",
+  readyExpiresAt: 0,
+  readySessionEpoch: 0,
+  loginContinuing: false,
+  accountAttempted: false,
   onLoad(this: any, options: any) {
     this.active = true;
     this.controller = new Onboarding(wx, (view) => {
       if (
-        this.scanOperation &&
-        this.scanOperation.sessionEpoch !== this.controller.sessionEpoch
+        (this.scanOperation &&
+        this.scanOperation.sessionEpoch !== this.controller.sessionEpoch) ||
+        (this.readyCode && this.readySessionEpoch !== this.controller.sessionEpoch)
       )
-        this.invalidateScan();
+        if (!this.loginContinuing) this.invalidateScan();
       this.setData({
         loggedIn: view.families.length > 0,
         phase: view.state.phase,
@@ -55,13 +61,15 @@ Page({
         deviceId: view.state.deviceId || "",
         families: view.families,
         familyNames: view.families.map((f) => f.name),
-        devices: view.devices,
+        progress: view.progress,
         networks: view.networks,
         serial: view.serial,
         model: view.model,
       });
     });
     const cleanup = (terminal = false) => {
+      this.readyCode = "";
+      if (this.scanTimer && !this.scanOperation) clearTimeout(this.scanTimer);
       this.active = false;
       this.visibilityEpoch++;
       if (terminal) {
@@ -73,7 +81,6 @@ Page({
         loginPassword: "",
         scanned: false,
         ssid: "",
-        name: "",
       });
     };
     setCleanup(() => cleanup());
@@ -103,32 +110,51 @@ Page({
   },
   input(this: any, e: any) {
     const key = e.currentTarget.dataset.key;
-    if (key === "username" && e.detail.value !== this.data.username)
+    if (key === "username" && (this.scanOperation || this.data.loggedIn || this.accountAttempted) && e.detail.value !== this.data.username)
       this.invalidateScan();
-    if (["username", "loginPassword", "name", "ssid", "password"].includes(key))
+    if (["username", "loginPassword", "ssid", "password"].includes(key))
       this.setData({ [key]: e.detail.value });
   },
   family(this: any, e: any) {
-    this.setData({ familyIndex: Number(e.detail.value) });
+    const index = Number(e.detail.value);
+    if (!Number.isInteger(index) || !this.data.families[index]) return;
+    this.setData({ familyIndex: index });
+    this.continueScan();
   },
   network(this: any, e: any) {
     this.setData({ ssid: this.data.networks[Number(e.detail.value)] || "" });
   },
   async login(this: any) {
+    this.accountAttempted = true;
+    const pending = this.readyCode;
+    const expiresAt = this.readyExpiresAt;
     this.invalidateScan();
+    if (pending && Date.now() < expiresAt) this.retainCode(pending, expiresAt);
+    const epoch = this.scanEpoch;
+    this.loginContinuing = true;
     const visibility = this.visibilityEpoch;
     const password = this.data.loginPassword;
     this.setData({ loginPassword: "", error: "" });
     try {
       await this.controller.login(this.data.username, password);
-      if (this.active && visibility === this.visibilityEpoch)
-        this.setData({ loggedIn: true, familyIndex: 0 });
+      if (this.active && visibility === this.visibilityEpoch) {
+        this.setData({ loggedIn: true, familyIndex: this.data.families.length === 1 ? 0 : -1 });
+        if (this.readyCode && epoch === this.scanEpoch && Date.now() < expiresAt) {
+          this.readySessionEpoch = this.controller.sessionEpoch;
+          this.controller.setCode(this.readyCode);
+          this.continueScan();
+        }
+      }
     } catch (e) {
-      if (this.active && visibility === this.visibilityEpoch)
-        this.setData({ error: errorMessage(e) });
-    }
+      if (epoch === this.scanEpoch) {
+        this.invalidateScan();
+        if (this.active && visibility === this.visibilityEpoch)
+          this.setData({ error: errorMessage(e) });
+      }
+    } finally { this.loginContinuing = false; }
   },
   invalidateScan(this: any) {
+    this.readyCode = "";
     this.scanEpoch++;
     if (this.scanTimer) clearTimeout(this.scanTimer);
     this.scanTimer = undefined;
@@ -158,8 +184,10 @@ Page({
     const { code, error } = operation;
     this.invalidateScan();
     if (code) {
+      this.retainCode(code, operation.expiresAt);
       this.controller.setCode(code);
       this.setData({ scanned: true, error: "" });
+      this.continueScan();
     } else this.setData({ error: error || "扫码未完成，请重试" });
   },
   receiveLaunch(this: any, options: any) {
@@ -172,7 +200,6 @@ Page({
       password: "",
       loginPassword: "",
       ssid: "",
-      name: "",
     });
     const operation = this.beginScan();
     try {
@@ -237,19 +264,35 @@ Page({
       },
     });
   },
-  async start(this: any) {
-    this.setData({ error: "" });
-    try {
-      await this.controller.start(
-        this.data.families[this.data.familyIndex]?.id,
-        this.data.name,
-      );
-    } catch (e) {
-      this.setData({ error: errorMessage(e) });
-    }
+  retainCode(this: any, code: string, expiresAt: number) {
+    this.readyCode = code;
+    this.readySessionEpoch = this.controller.sessionEpoch;
+    this.readyExpiresAt = expiresAt;
+    if (this.scanTimer) clearTimeout(this.scanTimer);
+    this.scanTimer = setTimeout(() => {
+      this.invalidateScan();
+      void this.controller.cancel();
+      if (this.active) this.setData({ scanned: false, error: "扫码已超时，请重新扫描" });
+    }, Math.max(0, expiresAt - Date.now()));
   },
-  async connect(this: any, e: any) {
-    await this.controller.connect(e.currentTarget.dataset.id);
+  continueScan(this: any) {
+    if (!this.active || !this.readyCode || !this.data.loggedIn) return;
+    if (Date.now() >= this.readyExpiresAt) {
+      this.invalidateScan();
+      this.setData({ scanned: false, error: "扫码已超时，请重新扫描" });
+      return;
+    }
+    const families = this.data.families;
+    const index = families.length === 1 ? 0 : this.data.familyIndex;
+    if (!families[index]) return;
+    this.readyCode = "";
+    if (this.scanTimer) clearTimeout(this.scanTimer);
+    this.scanTimer = undefined;
+    const epoch = this.scanEpoch;
+    this.setData({ error: "", scanned: false });
+    void this.controller.start(families[index].id, "").catch((e: unknown) => {
+      if (this.active && epoch === this.scanEpoch) this.setData({ error: errorMessage(e) });
+    });
   },
   async refresh(this: any) {
     await this.controller.scanWifi();

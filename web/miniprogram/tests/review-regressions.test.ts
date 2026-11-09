@@ -177,6 +177,7 @@ test("superseded scanner cannot replace a newer scan result", () => {
   old.fail();
   assert.equal(p.controller.code, "b".repeat(32));
   assert.equal(p.data.error, "");
+  p.onUnload();
 });
 test("scanner result after onShow completes the same suspended operation", () => {
   const p = page();
@@ -187,9 +188,11 @@ test("scanner result after onShow completes the same suspended operation", () =>
   operation.success({ result: "a".repeat(32) });
   assert.equal(p.controller.code, "a".repeat(32));
   assert.equal(p.data.scanned, true);
+  p.onUnload();
 });
 test("scanner queues a validated hidden result until onShow and preserves RAM family session", async () => {
   const p = page();
+  const starts:any[]=[]; p.controller.start=async(...args:any[])=>starts.push(args);
   p.controller.api.cookie = "management_family=synthetic";
   p.controller.view.families = [
     { id: "family", name: "test", canAddDevices: true },
@@ -211,7 +214,8 @@ test("scanner queues a validated hidden result until onShow and preserves RAM fa
   assert.equal(p.controller.view.families.length, 1);
   p.onShow();
   assert.equal(p.controller.code, "a".repeat(32));
-  assert.equal(p.data.scanned, true);
+  assert.equal(p.data.scanned, false);
+  assert.deepEqual(starts, [["family", ""]]);
   await p.onUnload();
 });
 for (const invalidate of ["cancel", "onUnload"]) {
@@ -354,7 +358,7 @@ test("idle BLE disconnect immediately reports failure while entering Wi-Fi", asy
   });
   const original = BleLink.prototype.discover;
   BleLink.prototype.discover = async () => [
-    { deviceId: "synthetic", name: "test" },
+    { deviceId: "synthetic", name: "FAMILY_020000000001" },
   ];
   try {
     const c: any = new Onboarding(p.wx, () => {});
@@ -362,14 +366,15 @@ test("idle BLE disconnect immediately reports failure while entering Wi-Fi", asy
       id: "task",
       status: "waiting",
       serial: "synthetic",
+      ble_name: "FAMILY_020000000001",
       model: "test",
       challenge: "synthetic",
       expires_at: new Date(Date.now() + 60000).toISOString(),
     });
     c.setCode("a".repeat(32));
     c.view.families = [{ id: "family", name: "test", canAddDevices: true }];
+    c.connect=async(id:string)=>c.link.connect(id);
     await c.start("family", "");
-    await c.link.connect("synthetic");
     c.view.state = { phase: "wifi", generation: c.view.state.generation };
     connection({ deviceId: "synthetic", connected: false });
     assert.equal(c.view.state.phase, "error");
