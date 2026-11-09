@@ -67,8 +67,20 @@ main `0fa91d801119051626b3079243eb9af4ffc8fa0c`在BLE启动前创建原8192字�
 
 锁定SDK ESP-IDF6.1源码确认：S3构建实际复用SDK `controller/esp32c3/bt.c`控制器实现，失败包装器仍使用INTERNAL|DMA；这是SDK共享代码路径，不增加C3固件工作。M5默认关闭`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`。该[官方主机内存选项](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/kconfig-reference.html#config-bt-allocation-from-spiram-first)通过真实bt_user_config/bt_common/osi allocator宏，让主机malloc/calloc优先PSRAM、再回退internal，给控制器保留内部余量；不改变控制器DMA或任务栈要求。控制器原日志没有请求尺寸，不虚构确切失败缓冲区或将其归因于密码/协议校验。
 
-继续的候选仅在隔离配网树M5三项board builds追加上述选项，普通stock准备、Wave与全局defaults保持；core配网/证明/安全协议继续共用。真实SDK头的分配优先级/回退测试与板级保持测试RED→GREEN，完整151/151（82.263秒、零失败/错误/跳过）和独立源码复核通过；重新生成sdkconfig实际只有这一项n→y。底层构建中，最终产物及非app逐项比较、刷写和手机重试未通过前不交付成功。
+继续的候选仅在隔离配网树M5三项board builds追加上述选项，普通stock准备、Wave与全局defaults保持；core配网/证明/安全协议继续共用。真实SDK头的分配优先级/回退测试与板级保持测试RED→GREEN，完整151/151（82.263秒、零失败/错误/跳过）和独立源码复核通过；重新生成sdkconfig实际只有这一项n→y。最终main `105eca5bae6536c22e908cc762c29dcc59b62a6a`的2488步原生构建/合并及核验通过，255源码与提交逐项一致。最终manifest `d51faba18012db56b65d24eadcbd0ed2e9b24fecdd6ba40eed4037282dcb8923`，app3482224字节、SHA `ceaf066accc4734bb9455af8b32cc830d3a0c6ece90015bf559ba55b8a87abf8`，九产物/五段及所有非应用段与旧版严格比较，四项非应用段（包括重编译的bootloader）均逐字节相同。实际原生allocator对象引用malloc/calloc_prefer，六份SDK输入与锁定官方提交逐项一致；这些证据不代替现场连接。
 
 新一轮回退快照验证当前整片仍为8a5，原工厂八项/SRP/FRC/activated0、OTA0及36KiB新读运行元数据通过，未写Flash。00:26:59保护审计确认十份文件/315旧来源/四PID和语音二进制保持；管理配置仅目标M5添加任务变化，去除该目标claims后原账号/家庭/微雪设备/绑定/权限/所有工厂项逐字段相同。当前无有效M5任务或绑定；继续保持同一身份，不反复供应。
 
-全部私有包、FRC、NVS、旧/当前备份、整片、原始串口及操作日志只在云端root0700/0600的`m5-screen-20261109`、`m5-screen-diagnostic-20261109`、`m5-screen-worker-fix-20261109`备份目录；旧资料仍在初次安装目录。Mac仅Git、原有USB字节中继和微信客户端。
+## 最新实际安装与待验收边界
+
+新一次更新助手原13项及最终三项pins/独立复审通过。实际同M5一次写应用槽后，00:38:38.996摘要通过，00:40:56.409完成4128768字节全槽回读并逐字节相同，槽SHA `316a8b2f6fbd5dc1e93e7b5b83dc58696837efb571d5ed34a93d7853af72da63`；槽外两段硬件MD5保持，整片预期与硬件匹配`7470a09418c4904060bd5646552d2cc9ecc30ed413e2e28b5e99471842c88cb9`。未写出厂NVS/分区/OTA/PHY/资产，未再注册身份或改云端服务。
+
+00:42:11.841再次同连接核对全部输入、目标ROM/安全状态、整片MD5及无有效用户认领后，官方WDT仅启动一次；同进程立即被动采集。11秒统计内部空闲14683、最低14224，保留阶段`expiry_start=0`（当时internal14415/largest7680/free8 4480039）。这证明本次服务/任务/定时器成功，启动内部余量高于0fa的7819；**尚未收到新版手机测试回执，不能据此证明蓝牙连接已经通过**。
+
+已展示现场请求，但00:42之后未收到新的扫码任务/完整framed请求，仍没有M5管理设备/绑定/confirmed。3分钟设备窗口已到期，等待用户确认方便现场后重新开启，不再要求重新刷固件。当前实现/安装/启动内存检查通过；新版本Android BLE、安全握手、Wi-Fi、独立确认/家庭授权及实际语音仍待验收。iOS也不补记通过。
+
+00:47:17真实HTTPS准入只到协议前置拒绝：旧M5凭据403，未绑定新M5凭据403、bootstrap409；微雪新密钥进入故意无效Protocol-Version0守卫400。没有打开测试WebSocket或调用模型；未绑定设备仍不能读取家庭内容。最新105同SHA CI两项已success：[stock](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42656662676)、[software AEC](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42656663336)。最终639..105整体源码复审通过，无Critical/Important/未解决Minor。
+
+300秒被动日志完整结束共2145字节，未收到新版手机尝试回执，也未观测到新任务/完整BLE请求/确认；零Malloc失败只说明该采样区间，不能记为蓝牙问题验收通过。结束时再次验证十份保护文件、315旧来源与四PID/语音二进制保持；管理配置仅目标M5历史任务变化，其他账号/家庭/微雪/权限/工厂项保持，ready/memory_ready active0。只关闭本轮M5字节中继与对应SSH反向42217；Mac监听/串口占用及云端反向监听均为空，未重启服务或触碰微雪。最终私有`final-readiness.json`明确`awaiting_user_availability`、M5未绑定；等待现场答复后重新开启配网窗口即可继续，不重复刷固件。
+
+全部私有包、FRC、NVS、旧/当前备份、整片、原始串口及操作日志只在云端root0700/0600的`m5-screen-20261109`、`m5-screen-diagnostic-20261109`、`m5-screen-worker-fix-20261109`、`m5-screen-ble-memory-20261109`备份目录；旧资料仍在初次安装目录。Mac仅Git、原有USB字节中继和微信客户端。
