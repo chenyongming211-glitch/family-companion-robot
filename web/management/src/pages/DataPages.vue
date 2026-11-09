@@ -669,7 +669,7 @@ function memoryDate(date: string) {
       <section v-else class="panel">
         <div v-if="liveMode" class="section-head">
           <p>片段可能截断，完整内容请查看来源聊天。长期人物记忆尚未接入。</p>
-          <button @click="load">刷新记忆</button>
+          <button class="memory-refresh" @click="load">刷新记忆</button>
         </div>
         <label for="memory-device">选择设备</label
         ><select

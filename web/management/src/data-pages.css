@@ -8,6 +8,10 @@
   border-radius: 12px;
   overflow-wrap: anywhere;
 }
+.memory-refresh {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .data-danger {
   margin-top: 20px;
   background: #fff;
