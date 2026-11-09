@@ -400,3 +400,85 @@ func TestChatsPartialTailClosedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestChatsExplicitEndDeadlinePriority(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		for _, earlier := range []bool{false, true} {
+			for _, delay := range []time.Duration{0, time.Second} {
+				t.Run(fmt.Sprintf("empty=%v/earlier=%v/delay=%s", empty, earlier, delay), func(t *testing.T) {
+					r, i := chatFixture(t)
+					deadline := i.StartedAt.Add(31 * time.Minute)
+					events := []map[string]any{{"event": "user_text", "id": 1, "text": "合成"}, {"event": "generated", "id": 1, "text": "", "sent": 0, "at": i.StartedAt.Add(time.Minute).Unix()}}
+					chatWrite(t, r, i, "one", events...)
+					before, err := r.ListChats("alice", "family", ConversationFilter{})
+					if err != nil || len(before.Items) != 1 {
+						t.Fatalf("%+v %v", before, err)
+					}
+					if earlier {
+						events = append(events, map[string]any{"event": "generated", "id": 1, "text": "", "sent": 0, "at": deadline.Unix()})
+					}
+					close := map[string]any{"event": "closed", "reason": "client_stop", "at": deadline.Add(delay).Unix()}
+					if empty {
+						j := i
+						j.SessionID = "1123456789abcdef0123456789abcdef"
+						j.StartedAt = i.StartedAt.Add(time.Minute)
+						chatWrite(t, r, j, "empty", close)
+					} else {
+						events = append(events, close)
+					}
+					chatWrite(t, r, i, "one", events...)
+					p, err := r.ListChats("alice", "family", ConversationFilter{})
+					if err != nil || len(p.Items) != 1 {
+						t.Fatalf("%+v %v", p, err)
+					}
+					c := p.Items[0]
+					want := "explicit_end"
+					connections := 1
+					if delay > 0 {
+						want = "inactivity"
+					} else if empty {
+						connections = 2
+					}
+					if c.ID != before.Items[0].ID || c.ArchiveReason != want || c.ConnectionCount != connections || c.Status != "已归档" {
+						t.Fatalf("%+v", c)
+					}
+					d, err := r.ReadChat("alice", "family", c.ID, nil)
+					if err != nil || len(d.Sources) != connections || d.ArchiveReason != want {
+						t.Fatalf("%+v %v", d, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestChatsDeadlineOldSourceIsolation(t *testing.T) {
+	r, i := chatFixture(t)
+	deadline := i.StartedAt.Add(31 * time.Minute)
+	chatWrite(t, r, i, "one", map[string]any{"event": "user_text", "id": 1, "text": "合成"}, map[string]any{"event": "generated", "id": 1, "text": "", "sent": 0, "at": i.StartedAt.Add(time.Minute).Unix()}, map[string]any{"event": "user_text", "id": 2, "text": "新聊天", "at": deadline.Unix()})
+	j := i
+	j.SessionID = "1123456789abcdef0123456789abcdef"
+	j.StartedAt = i.StartedAt.Add(time.Minute)
+	chatWrite(t, r, j, "old", map[string]any{"event": "user_text", "id": 1, "text": "合成"}, map[string]any{"event": "generated", "id": 1, "text": "", "sent": 0}, map[string]any{"event": "closed", "reason": "client_stop", "at": deadline.Unix()})
+	p, err := r.ListChats("alice", "family", ConversationFilter{})
+	if err != nil || len(p.Items) != 2 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	var oldID, newID string
+	for _, c := range p.Items {
+		if c.StartedAt == deadline.Format(time.RFC3339) {
+			newID = c.ID
+			if c.EndedAt != "" || c.ArchiveReason != "" || c.Status != "待结算" || c.ConnectionCount != 1 {
+				t.Fatalf("new: %+v", c)
+			}
+		} else {
+			oldID = c.ID
+			if c.ArchiveReason != "explicit_end" || c.EndedAt != deadline.Format(time.RFC3339) || c.ConnectionCount != 2 {
+				t.Fatalf("old: %+v", c)
+			}
+		}
+	}
+	if oldID == "" || newID == "" || oldID == newID {
+		t.Fatalf("IDs: %+v", p)
+	}
+}

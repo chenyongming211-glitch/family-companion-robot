@@ -202,3 +202,81 @@ func TestTailUncertaintySurvivesClose(t *testing.T) {
 		}
 	}
 }
+
+func TestExplicitEndDeadlinePriority(t *testing.T) {
+	deadline := epoch.Add(31 * time.Minute)
+	stop := func(at time.Time) Fact { return Fact{Kind: "close", At: at, Reason: "client_stop"} }
+	base := func() Source { return source("a", fact("admit", 0, 1), fact("settle", 1, 1)) }
+	for _, tc := range []struct {
+		name           string
+		empty, earlier bool
+		delay          time.Duration
+	}{
+		{name: "same source"}, {name: "same source earlier fact", earlier: true},
+		{name: "empty source", empty: true}, {name: "empty source earlier fact", empty: true, earlier: true},
+		{name: "same source after", delay: time.Nanosecond}, {name: "empty source after", empty: true, delay: time.Nanosecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := base()
+			before := reduce(t, 31, a)[0]
+			if tc.earlier {
+				a.Facts = append(a.Facts, fact("settle", 31, 1))
+			}
+			ss := []Source{a}
+			if tc.empty {
+				b := source("b", stop(deadline.Add(tc.delay)))
+				b.StartedAt = epoch.Add(time.Minute)
+				ss = append(ss, b)
+			} else {
+				ss[0].Facts = append(ss[0].Facts, stop(deadline.Add(tc.delay)))
+			}
+			got := reduce(t, 32, ss...)
+			want := "explicit_end"
+			sources := 1
+			if tc.delay > 0 {
+				want = "inactivity"
+			} else if tc.empty {
+				sources = 2
+			}
+			if len(got) != 1 || got[0].ArchiveReason != want || got[0].ID != before.ID || !got[0].EndedAt.Equal(deadline) || !got[0].LastActivityAt.Equal(before.LastActivityAt) || len(got[0].SourceIDs) != sources || got[0].Pending {
+				t.Fatalf("%+v", got)
+			}
+			if reverse := func() []Chat {
+				for i, j := 0, len(ss)-1; i < j; i, j = i+1, j-1 {
+					ss[i], ss[j] = ss[j], ss[i]
+				}
+				return reduce(t, 32, ss...)
+			}(); !reflect.DeepEqual(got, reverse) {
+				t.Fatal("source order changed")
+			}
+		})
+	}
+	t.Run("same source new admit before stop", func(t *testing.T) {
+		a := base()
+		a.Facts = append(a.Facts, fact("admit", 31, 2), stop(deadline))
+		got := reduce(t, 32, a)
+		if len(got) != 2 || got[0].ArchiveReason != "inactivity" || got[1].ArchiveReason != "explicit_end" || got[0].ID == got[1].ID {
+			t.Fatal(got)
+		}
+	})
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("new active old source empty=%v", empty), func(t *testing.T) {
+			a := base()
+			a.Facts = append(a.Facts, fact("admit", 31, 2))
+			b := source("b")
+			b.StartedAt = epoch.Add(time.Minute)
+			if !empty {
+				b.Facts = append(b.Facts, fact("admit", 1, 1), fact("settle", 1, 1))
+			}
+			b.Facts = append(b.Facts, stop(deadline))
+			got := reduce(t, 32, a, b)
+			want := "explicit_end"
+			if empty {
+				want = "inactivity"
+			}
+			if len(got) != 2 || got[0].ArchiveReason != want || got[1].EndedAt != nil || !got[1].Pending {
+				t.Fatal(got)
+			}
+		})
+	}
+}

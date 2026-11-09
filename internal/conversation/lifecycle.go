@@ -131,6 +131,7 @@ func Reduce(sources []Source, now time.Time) ([]Chat, error) {
 	chats := make([]Chat, 0)
 	details := make([]chatState, 0)
 	active := map[Scope]int{}
+	lastInactivity := map[Scope]int{}
 	accepted := 0
 	archive := func(index int, at time.Time, reason string) {
 		c := &chats[index]
@@ -147,6 +148,7 @@ func Reduce(sources []Source, now time.Time) ([]Chat, error) {
 			deadline := chats[i].LastActivityAt.Add(IdleTimeout)
 			if !at.Before(deadline) {
 				archive(i, deadline, "inactivity")
+				lastInactivity[sc] = i
 			}
 		}
 	}
@@ -243,14 +245,29 @@ func Reduce(sources []Source, now time.Time) ([]Chat, error) {
 			if f.Reason == "client_stop" {
 				i := st.latest
 				if i < 0 {
-					if candidate, ok := active[s.Scope]; ok && !s.StartedAt.Before(chats[candidate].StartedAt) {
+					candidate, ok := active[s.Scope]
+					// A preceding fact at this timestamp may already have expired
+					// the chat. Only an exact tie can refine that archive reason.
+					if !ok {
+						candidate, ok = lastInactivity[s.Scope]
+						ok = ok && chats[candidate].ArchiveReason == "inactivity" && chats[candidate].EndedAt.Equal(f.At)
+					}
+					if ok && !s.StartedAt.Before(chats[candidate].StartedAt) {
 						i = candidate
-						details[i].sources[s.ID] = true
-						chats[i].SourceIDs = append(chats[i].SourceIDs, s.ID)
+						if !details[i].sources[s.ID] {
+							details[i].sources[s.ID] = true
+							chats[i].SourceIDs = append(chats[i].SourceIDs, s.ID)
+						}
 					}
 				}
-				if i >= 0 && chats[i].EndedAt == nil {
-					archive(i, f.At, "explicit_end")
+				if i >= 0 {
+					if chats[i].EndedAt == nil {
+						archive(i, f.At, "explicit_end")
+					} else if chats[i].ArchiveReason == "inactivity" && chats[i].EndedAt.Equal(f.At) {
+						// Classification only: never reopen an archive or remove a
+						// newer active chat belonging to another admitted turn.
+						chats[i].ArchiveReason = "explicit_end"
+					}
 				}
 			}
 		}
