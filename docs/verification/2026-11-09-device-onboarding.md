@@ -2,6 +2,8 @@
 
 本批按用户已确认的小程序＋蓝牙入口实施，覆盖原生页面、注册认领接口、独立设备激活和新工厂 ESP32-S3 候选。代码直接 main；所有依赖安装、测试和构建在云端，Mac 仅代码/Git与接收小程序测试客户端。现有设备未刷机、配网或开麦，无真实新绑定和模型调用。
 
+后续核对：实现及发布记录提交 `4a341e3102a9f64f96a2dc9d5bdabf68f90a3a92` 的 GitHub Actions 已全部成功，[实验工作流](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42570044086)四个 ESP32-S3 job 与[stock工作流](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42570044069)一个 job 均为 success。常规 CI 和本批新工厂候选的云端两板构建是分别验证的，均不代表手机/设备现场通过。
+
 ## 实现与边界
 
 - 复用家庭账号和 Go 管理服务。默认无添加权限，可信操作者可单独授予。配置每请求读取快照，跨进程 flock、锁内重读和原子 fsync 写；供应私有包先持久化再提交权威配置。
