@@ -239,3 +239,47 @@ test("session invalidation erases a foreground code waiting for family selection
  await assert.rejects(p.controller.api.families(),/重新登录/);
  const retained=p.readyCode;p.onUnload();assert.equal(retained,"");
 });
+
+for (const changeAccount of [false, true]) {
+  test(`pending login serializes native auth and ${changeAccount ? "invalidates changed account" : "continues retained scan once"}`, async () => {
+    const native = (globalThis as any).wx;
+    const previous = native.request;
+    const requests: any[] = [];
+    native.request = (request: any) => requests.push(request);
+    const p = page({ scene: code });
+    const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+    try {
+      p.input({ currentTarget: { dataset: { key: "username" } }, detail: { value: "synthetic-account" } });
+      p.setData({ loginPassword: "synthetic-password" });
+      const first = p.login();
+      p.setData({ loginPassword: "synthetic-password-again" });
+      const duplicate = p.login();
+      assert.equal(requests.length, 1, "duplicate submit must not create a second auth request");
+      assert.equal(p.data.loginPending, true);
+      assert.equal(p.readyCode, code, "duplicate submit retains prelogin code");
+      if (changeAccount) p.input({ currentTarget: { dataset: { key: "username" } }, detail: { value: "different-synthetic-account" } });
+      requests[0].success({ statusCode: 200, data: { ok: true }, cookies: ["management_family=synthetic"] });
+      await settle();
+      assert.equal(requests.length, 2);
+      assert.match(requests[1].url, /\/families$/);
+      await duplicate;
+      assert.equal(p.data.loginPending, true, "duplicate completion cannot clear pending feedback");
+      requests[1].success({ statusCode: 200, data: [{ id: "home", name: "家", canAddDevices: true }] });
+      await first;
+      await settle();
+      assert.equal(p.data.loginPending, false);
+      const starts = requests.filter(r => r.url.endsWith("/onboarding"));
+      assert.equal(starts.length, changeAccount ? 0 : 1);
+      assert.equal(p.readyCode, "");
+      if (!changeAccount) {
+        assert.deepEqual(starts[0].data, { family_id: "home", claim_code: code });
+        starts[0].success({ statusCode: 200, data: { id: "synthetic-task", status: "confirmed", device_id: "dev_" + "a".repeat(32) } });
+        await settle();
+        assert.equal(p.data.phase, "success");
+      }
+    } finally {
+      p.onUnload();
+      native.request = previous;
+    }
+  });
+}

@@ -17,7 +17,7 @@
   <view class="section-kicker">01 · 家庭账号</view><view class="status">登录家庭账号</view><view class="note card-note">使用您的家庭账号继续添加设备</view>
   <input placeholder="账号" value="{{username}}" data-key="username" bindinput="input" maxlength="128" />
   <input placeholder="账号密码" password value="{{loginPassword}}" data-key="loginPassword" bindinput="input" maxlength="256" />
-  <button type="primary" bindtap="login">登录</button>
+  <button type="primary" bindtap="login" loading="{{loginPending}}" disabled="{{loginPending}}">登录</button>
  </view>
  <view class="card" wx:if="{{phase==='idle' || phase==='error'}}">
   <view class="section-kicker">02 · 连接设备</view><view class="status">扫描机器人设备码</view><view class="note card-note">请让机器人保持通电，并靠近手机</view><button class="scan-button" bindtap="scan" disabled="{{loggedIn && families.length > 1 && familyIndex < 0}}">{{scanned?'已扫描设备码，重新扫描':'扫描设备码'}}</button>

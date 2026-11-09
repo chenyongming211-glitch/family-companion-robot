@@ -9,6 +9,7 @@ Page({
     phase: "idle",
     error: "",
     loggedIn: false,
+    loginPending: false,
     scanned: false,
     username: "",
     loginPassword: "",
@@ -125,6 +126,7 @@ Page({
     this.setData({ ssid: this.data.networks[Number(e.detail.value)] || "" });
   },
   async login(this: any) {
+    if (this.loginContinuing) return;
     this.accountAttempted = true;
     const pending = this.readyCode;
     const expiresAt = this.readyExpiresAt;
@@ -134,7 +136,7 @@ Page({
     this.loginContinuing = true;
     const visibility = this.visibilityEpoch;
     const password = this.data.loginPassword;
-    this.setData({ loginPassword: "", error: "" });
+    this.setData({ loginPassword: "", error: "", loginPending: true });
     try {
       await this.controller.login(this.data.username, password);
       if (this.active && visibility === this.visibilityEpoch) {
@@ -151,7 +153,10 @@ Page({
         if (this.active && visibility === this.visibilityEpoch)
           this.setData({ error: errorMessage(e) });
       }
-    } finally { this.loginContinuing = false; }
+    } finally {
+      this.loginContinuing = false;
+      this.setData({ loginPending: false });
+    }
   },
   invalidateScan(this: any) {
     this.readyCode = "";
