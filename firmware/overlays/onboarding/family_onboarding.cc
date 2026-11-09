@@ -8,6 +8,7 @@
 #include <esp_netif.h>
 #include <esp_netif_sntp.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include "board.h"
 #include "display.h"
 #include <esp_timer.h>
@@ -45,6 +46,15 @@ bool initialized = false;
 bool manager_ready = false;
 bool endpoint_created = false;
 esp_timer_handle_t expiry_timer = nullptr;
+
+// Only fixed Configure stage literals and numeric allocator/API facts are logged.
+void LogConfigure(const char* stage,int result) {
+    constexpr uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
+    ESP_LOGI("FamilySetup","configure stage=%s err=%d internal=%u largest=%u free8=%u",stage,result,
+        static_cast<unsigned>(heap_caps_get_free_size(caps)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(caps)),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)));
+}
 
 void RenderSetup() {
     const char *title="", *detail="";
@@ -273,32 +283,44 @@ bool Activated() { return Settings("family_factory").GetInt("activated") == 1; }
 std::string Key() { return Settings("family_factory").GetString("key"); }
 void Configure() {
     if (!initialized || running || worker_active || Activated()) return;
+    LogConfigure("begin",ESP_OK);
     BeginSetup();
+    LogConfigure("screen",ESP_OK);
     if (!manager_ready) {
         network_prov_mgr_config_t config{}; config.scheme = network_prov_scheme_ble;
         config.scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE;
         config.network_prov_wifi_conn_cfg.wifi_conn_attempts = 3;
-        if (network_prov_mgr_init(config) != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
+        const auto result=network_prov_mgr_init(config);LogConfigure("manager_init",result);
+        if (result != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
         manager_ready = true;
     }
     ClearClaim();
     if (!endpoint_created) {
-        if (network_prov_mgr_endpoint_create("family-claim") != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
+        const auto result=network_prov_mgr_endpoint_create("family-claim");LogConfigure("endpoint_create",result);
+        if (result != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
         endpoint_created = true;
     }
-    if (network_prov_mgr_disable_auto_stop(1000) != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
+    auto result=network_prov_mgr_disable_auto_stop(1000);LogConfigure("auto_stop",result);
+    if (result != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
     security.salt = reinterpret_cast<const char*>(salt.data()); security.salt_len = salt.size();
     security.verifier = reinterpret_cast<const char*>(verifier.data()); security.verifier_len = verifier.size();
     auto mac = SystemInfo::GetMacAddress(); std::string name = "FAMILY_";
     for (char c : mac) if (c != ':') name += c;
     deadline = esp_timer_get_time() + WindowUs; running = true;
-    if (network_prov_mgr_start_provisioning(NETWORK_PROV_SECURITY_2, &security, name.c_str(), nullptr) != ESP_OK ||
-        network_prov_mgr_endpoint_register("family-claim", Claim, nullptr) != ESP_OK) {
+    result=network_prov_mgr_start_provisioning(NETWORK_PROV_SECURITY_2, &security, name.c_str(), nullptr);
+    LogConfigure("provision_start",result);
+    if (result==ESP_OK) {
+        result=network_prov_mgr_endpoint_register("family-claim", Claim, nullptr);
+        LogConfigure("endpoint_register",result);
+    }
+    if (result != ESP_OK) {
         running = false; network_prov_mgr_stop_provisioning(); ShowSetup(SetupPhase::StartError);return;
     }
     esp_timer_start_once(expiry_timer, WindowUs);
     worker_active = true;
-    if (xTaskCreate(Worker, "family_claim", 8192, nullptr, 4, nullptr) != pdPASS) {
+    const auto task_result=xTaskCreate(Worker, "family_claim", 8192, nullptr, 4, nullptr);
+    LogConfigure("worker_create",task_result==pdPASS?ESP_OK:static_cast<int>(task_result));
+    if (task_result != pdPASS) {
         worker_active = false; esp_timer_stop(expiry_timer); running = false; network_prov_mgr_stop_provisioning();
         ShowSetup(SetupPhase::StartError);
     }
