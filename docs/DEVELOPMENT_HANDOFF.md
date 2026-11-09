@@ -1,5 +1,9 @@
 # 换电脑开发交接
 
+**微雪屏幕扫码配网页面已实现，实刷仍未执行（2026-11-09最新）：** 用户要求现在补齐设备码/配网进度/绑定结果。c22b807（供应4d540a5、屏幕295a202、字库c22b807）已推main；复用正式平台码工具，私有FRC1位图与工厂NVS/设备ID一致，离线显示，无AppSecret/raw claim字符串写入设备。微雪提供待扫码/Wi-Fi/校时/云端确认/失败/超时/成功，只有独立云端确认或合法恢复才成功，2秒后回机器人；无效码不显示，普通已激活启动不暴露码。专用30px SC静态小字库补齐联网前中文，普通固件/M5显示保留。云端20码工具、8真实NVS供应、完整142项S3/共用零skip及实际LVGL78400像素/100次生命周期/10种状态圆屏渲染通过，专项及整体复审通过。微雪最终native build/merge和实际分区/merged/来源/ZIP校验通过，app3467120/3604480，余137360；M5同源native/merge/实际产物也通过（3408416/4128768）；精确c22的4S3+stock共5个CI job均success，不能替代实机。证据/home/ubuntu/onboarding-screen-20261109，两板SDK缓存已按逐文件一致性复用旧task-3/candidate/managed_components（保留此目标），回收约1.44GiB，最终产物摘要保持。见[屏幕验证](verification/2026-11-09-waveshare-onboarding-screen.md)。
+
+**刷写前置：** 尚无真实平台设备码、工厂NVS或手机配网验证，未刷任何设备/部署服务/开麦。已询问云端有效微信配置路径，不使用截图旧AppSecret。现用微雪已有legacy身份与家庭绑定；新工厂供应拒绝MAC冲突，实刷前必须准备备份、匹配码/NVS和既有身份迁移，不可擦除后再补。候选仅完整新工厂刷写，非OTA/app-only。Mac只有公开字体源码及合成离屏截图，不含真实二维码/NVS/固件产物。以下小程序主题和此前“设备无屏幕码”为前一阶段。
+
 **扁平主题与微信原生预览已完成，手机BLE仍待验收（2026-11-09最新）：** 用户提供参考图后，将添加设备小程序统一为蓝紫浅色、白卡片、扁平机器人/步骤图标和局部半透明，不新增导航功能。主题6af25aa、原生生命周期/请求3cab149、打包兼容ba6e620均经专项复审。首次onShow不再依赖尚未暴露的getApp；CommonJS字面量require防止加密模块被过滤，ES2018语法及等价BigInt构造器通过实际微信压缩预览，保留原认证/加密与BigInt能力检查。最新云端70/70零skip、tsc/build、编译后官方完整握手/双向密文通过；管理完整race/vet/build通过。原生Stable2.01.2510280/基础库3.10.3首屏正常、Errors0/SDK Warnings2，真实合成错误账号401及中文反馈正确；58KB预览仅过滤private.config，Security2已入包，域名校验与压缩开启。Mac正确工程仍在artifacts/miniprogram-onboarding-20261109/dist，不操作songguo工程。
 
 **当前服务与边界：** 管理已单独更新onboarding-20261109-r2/PID2645283，严格固定本AppID的微信来源兼容，不以Referer代替身份。私有配置及5份保护文件保持；voice仍r1/PID2556943、ready/memory_ready、active0，没有重启或改当前固件。r2后公网42项/TLS/308再次通过；私有证据/回退在/var/backups/family-robot/management-wechat-20261109-r2。真实账号、手机扫码生命周期、BLE权限/无线Security2/Wi-Fi/新工厂S3绑定/后续播放仍未验收；375px和后续阶段原生视觉待补。工具预览码只是开发版入口，不是设备码；未使用AppSecret、创建真实工厂身份或刷机。下方原生预览待验证与管理r1是此前阶段。见[最新验证](verification/2026-11-09-device-onboarding.md)、[主题计划](superpowers/plans/2026-11-09-miniprogram-theme.md)。
