@@ -1,8 +1,15 @@
-# Public connectivity checks only. Registration handlers are not deployed yet.
-# This configuration does not proxy the private management or voice listeners.
+# Only the required family-onboarding and authenticated device routes are public.
 {
 	servers {
 		protocols h1 h2
+	}
+}
+
+(onboarding_backend) {
+	request_header -X-Forwarded-For
+	reverse_proxy 127.0.0.1:18791 {
+		header_up Host robot.songguoxue.com
+		header_up X-Forwarded-Proto https
 	}
 }
 
@@ -26,7 +33,7 @@ robot.songguoxue.com {
 	}
 	handle @connectivity {
 		header Content-Type application/json
-		respond `{"https":"ok","onboarding":"not_implemented"}` 200
+		respond `{"https":"ok","onboarding":"development"}` 200
 	}
 
 	@home {
@@ -34,7 +41,39 @@ robot.songguoxue.com {
 		path /
 	}
 	handle @home {
-		respond "机器人服务：HTTPS连接已就绪，扫码添加设备功能开发中。" 200
+		respond "机器人服务：HTTPS连接已就绪，扫码添加设备功能联调中。" 200
+	}
+
+	@family {
+		path /api/family/login /api/family/logout /api/family/session /api/family/families /api/family/onboarding
+	}
+	handle @family {
+		import onboarding_backend
+	}
+	@claim path_regexp claim ^/api/family/onboarding/claim_[a-f0-9]{32}$
+	handle @claim {
+		import onboarding_backend
+	}
+	@activation {
+		method POST
+		path /api/device/activation
+	}
+	handle @activation {
+		import onboarding_backend
+	}
+	@bootstrap {
+		method GET POST
+		path /api/device/bootstrap
+	}
+	handle @bootstrap {
+		import onboarding_backend
+	}
+	@device {
+		method GET
+		path /xiaozhi/v1/
+	}
+	handle @device {
+		reverse_proxy 127.0.0.1:18041
 	}
 
 	handle {

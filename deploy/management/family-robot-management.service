@@ -1,5 +1,5 @@
 [Unit]
-Description=Family Robot read-only management
+Description=Family Robot management and device onboarding
 After=network.target
 
 [Service]
@@ -8,7 +8,7 @@ User=root
 Group=root
 UMask=0077
 WorkingDirectory=/opt/family-robot-management/current
-ExecStart=/opt/family-robot-management/current/management serve --listen 127.0.0.1:18791 --config /var/lib/family-robot-management/config.json --records /run/family-robot-management/records --profiles /run/family-robot-management/presentation/profiles.json --static /opt/family-robot-management/current/dist-live --audit /var/lib/family-robot-management/access.jsonl --build @BUILD_ID@
+ExecStart=/opt/family-robot-management/current/management serve --listen 127.0.0.1:18791 --config /var/lib/family-robot-management/config.json --public-origin https://robot.songguoxue.com --records /run/family-robot-management/records --profiles /run/family-robot-management/presentation/profiles.json --static /opt/family-robot-management/current/dist-live --audit /var/lib/family-robot-management/access.jsonl --build @BUILD_ID@
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
@@ -31,7 +31,6 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
 BindReadOnlyPaths=@RECORDS_ROOT@:/run/family-robot-management/records @PROFILES_DIR@:/run/family-robot-management/presentation
-ReadOnlyPaths=/var/lib/family-robot-management/config.json
 ReadWritePaths=/var/lib/family-robot-management
 MemoryMax=256M
 CPUQuota=50%
