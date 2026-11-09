@@ -56,7 +56,7 @@ Interfaces: explicit live build (`VITE_MANAGEMENT_API_MODE=live`) selects real c
 - [x] Create private initial account/family and binding timestamp at actual deployment; historical data remains outside authorized range. Deliver initial account access without credential files on Mac or Git.
 - [x] Deploy standalone manager127.0.0.1:18791 and built live UI, keep mock18790; SSH forwarding for browser only. Bound service filesystem writes to its own config/audit/runtime area.
 - [x] Cloud HTTP/browser validate real login, authorized device and initial empty scope; synthetic two-family/body/evidence tests remain distinct from physical acceptance.
-- [x] Service/UI ready 后已请求用户正常发言；目前无完成回执，按本项要求明确报告physical step pending，未代用户开麦。
+- [x] Service/UI ready 后已请求用户正常发言；用户回复暂时不方便，实机验证保留待完成，未代用户开麦。
 - [ ] 用户新实机发言后，核对新增记录、最终转写与播放证据；此现场验收仍待完成。
 - [x] Final broad review, fix findings with focused verification; update handoff/roadmap and validation report, commit/push main and verify remote SHA/clean tree.
 

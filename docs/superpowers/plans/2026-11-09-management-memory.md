@@ -26,10 +26,10 @@ Interfaces: `MemoryDTO{ID,DeviceID,ConversationID,Text,Date,User,Assistant,TextS
 
 HTTP list/detail as spec, mandatory exactly1 device query only. Invalid400, forbidden403, notfound404, source/tooLarge503. Audit read_memories/read_memory before output, even empty list; no text. Existing APIs unaffected.
 
-- [ ] Add failing tests for allowed snapshot/source link and double-family/body/admin denial; observe RED in cloud.
-- [ ] Add privacy/time/source/path/size/damage/atomic replacement tests and implement bounded reader. Verify no snapshot/lock/directory writes.
-- [ ] Add failing HTTP tests for mandatory/query/body/device/audit checks; implement branches and small auditAction helper retaining old conversation audit behavior.
-- [ ] Cloud gofmt, race/vet/build management+CLI; independent spec/quality review, fix then commit.
+- [x] Add failing tests for allowed snapshot/source link and double-family/body/admin denial; observe RED in cloud.
+- [x] Add privacy/time/source/path/size/damage/atomic replacement tests and implement bounded reader. Verify no snapshot/lock/directory writes.
+- [x] Add failing HTTP tests for mandatory/query/body/device/audit checks; implement branches and small auditAction helper retaining old conversation audit behavior.
+- [x] Cloud gofmt, race/vet/build management+CLI; independent spec/quality review, fix then commit.
 
 Core test shape (using synthetic existing fixture):
 ```go
@@ -46,10 +46,10 @@ Files: remote-api.ts/mock-api.ts/types.ts/App.vue/CorePages.vue/DataPages.vue an
 
 Interfaces: remote listMemories({deviceId?,scope?}) uses scoped query, getMemory(id,scope?,expectedDeviceId?) passes selected device; mock getMemory gains optional expectedDeviceId check. Memory types add optionaluser/assistant/textSource/boundary. App real whitelist adds memories bothscopes and memory family; admin detail stays existing memories?memory route. DataPages resolves omitted device to first authorized only, explicitly invalid device never substituted. Render live source/provenance/date, ordinary refresh; no clear action in live mode.
 
-- [ ] Add failing transport tests for exact memory endpoints/query and rejection of clear without fetch; implement methods.
-- [ ] Wire existing pages/default selection/source links/readonly controls and truthful policy labels; preserve mock and stale-response guards.
-- [ ] Cloud npm test/typecheck/mock+live builds; source review and commit.
-- [ ] Mac browser: bothscope list/empty/default/wrongdevice/error/fixture detail/source link/refresh/no-clear/mobile, mock memory regression. Runtime source remains cloud.
+- [x] Add failing transport tests for exact memory endpoints/query and rejection of clear without fetch; implement methods.
+- [x] Wire existing pages/default selection/source links/readonly controls and truthful policy labels; preserve mock and stale-response guards.
+- [x] Cloud npm test/typecheck/mock+live builds; source review and commit.
+- [x] Mac browser: bothscope list/empty/default/wrongdevice/error/fixture detail/source link/refresh/no-clear/mobile, mock memory regression. Runtime source remains cloud.
 
 Example transport:
 ```ts
@@ -60,8 +60,14 @@ await assert.rejects(api.clearMemories("dev_fixture","family"), /尚未接入/);
 
 ## Task 3: Deploy, review and handoff
 
-- [ ] Broad source review across both tasks; resolve important findings with covering tests.
-- [ ] Cloud install new binary/live bundle to new release; restart management only. No reinitialization or binding/password changes. Existing recordroot readonly mount already includes .memory.
-- [ ] Actual authenticated API new-binding filtered memory result, no raw snapshot export; source snapshot hashes/directory metadata before/after unchanged. Unauthorized responses checked synthetically.
-- [ ] Voice process/health/protectedhashes unchanged; documentation/roadmap/handoff distinguish implemented/deployed/syntheticverified/physicalpending.
-- [ ] Commit/push main, verify originSHA/clean tree; give same preview URLs. User deferred physical utterance; keep actual new-record/memory validation pending.
+- [x] Broad source review across both tasks; resolve important findings with covering tests.
+- [x] Cloud install new binary/live bundle to new release; restart management only. No reinitialization or binding/password changes. Existing recordroot readonly mount already includes .memory.
+- [x] Actual authenticated API new-binding filtered memory result, no raw snapshot export; source snapshot hashes/directory metadata before/after unchanged. Unauthorized responses checked synthetically.
+- [x] Voice process/health/protectedhashes unchanged; documentation/roadmap/handoff distinguish implemented/deployed/syntheticverified/physicalpending.
+- [x] Commit/push main, verify originSHA/clean tree; give same preview URLs. User deferred physical utterance; keep actual new-record/memory validation pending.
+
+## 交付结果
+
+后端2224c70、前端功能97b7f0d及样式4b57bde，管理发布memory-20261109-r3。实际API仅返回当前绑定范围内的空列表，源文件和语音保护核对保持；云端与浏览器证据见[验证记录](../../verification/2026-11-09-management-memory.md)。
+
+- [ ] 用户后续方便时验证实机新对话→近期记忆保存→页面显示。本项现场验收不计为开发/合成检查完成。
