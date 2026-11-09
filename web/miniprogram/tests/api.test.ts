@@ -42,6 +42,15 @@ test("network failures use sanitized feedback", async () => {
   });
   await assert.rejects(api.families(), /网络连接失败/);
 });
+test("invalid login reports credentials while clearing the RAM session", async () => {
+  const api: any = new Api({
+    request: (o: any) =>
+      o.success({ statusCode: 401, data: { code: "invalid_login" } }),
+  });
+  api.cookie = "management_family=synthetic";
+  await assert.rejects(api.login("synthetic", "wrong"), /账号或密码不正确/);
+  assert.equal(api.cookie, "");
+});
 test("cleared RAM session rejects late login cookie and cannot restore it", async () => {
   let finish: any;
   const api: any = new Api({

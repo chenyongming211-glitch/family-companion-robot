@@ -6,9 +6,9 @@ export function setCleanup(fn: (() => void) | undefined) {
 export function setLaunch(fn: ((options: any) => void) | undefined) {
   getApp().onboardingLaunch = fn;
 }
-export function hide() {
-  getApp().onboardingCleanup?.();
+export function hide(app: any) {
+  app.onboardingCleanup?.();
 }
-export function show(options: any) {
-  getApp().onboardingLaunch?.(options);
+export function show(app: any, options: any) {
+  app.onboardingLaunch?.(options);
 }

@@ -85,7 +85,11 @@ export class Api {
                 r.statusCode === 401
                   ? "unauthorized"
                   : String(r.data?.code || "request_failed"),
-                message[r.statusCode] || "请求失败，请稍后重试",
+                path === "/login" &&
+                  r.statusCode === 401 &&
+                  r.data?.code === "invalid_login"
+                  ? "账号或密码不正确"
+                  : message[r.statusCode] || "请求失败，请稍后重试",
               ),
             );
             return;

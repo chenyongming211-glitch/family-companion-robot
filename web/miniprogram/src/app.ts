@@ -1,9 +1,9 @@
 import { hide, show } from "./lifecycle.ts";
 App({
   onShow(options: any) {
-    show(options);
+    show(this, options);
   },
   onHide() {
-    hide();
+    hide(this);
   },
 });

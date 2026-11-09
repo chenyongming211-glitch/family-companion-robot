@@ -16,6 +16,7 @@ import (
 )
 
 const onboardingOrigin = "https://robot.songguoxue.com"
+const onboardingMiniProgramID = "wxb3f1745f8ed1fa1d"
 
 type FactoryDevice struct {
 	DeviceID    string `json:"device_id"`
@@ -233,6 +234,40 @@ func loopback(r *http.Request) bool {
 func (s *Server) publicRequest(r *http.Request) bool {
 	return s.opts.PublicOrigin == onboardingOrigin && loopback(r) && r.Host == "robot.songguoxue.com" && r.Header.Get("X-Forwarded-Proto") == "https"
 }
+
+// This is only a source/CSRF compatibility check. Family credentials and every
+// operation's authorization remain required; the Referer never grants identity.
+func wechatOnboardingRequest(r *http.Request) bool {
+	allowed := r.Method == "POST" && (r.URL.Path == "/api/family/login" || r.URL.Path == "/api/family/logout" || r.URL.Path == "/api/family/onboarding")
+	const cancelPrefix = "/api/family/onboarding/claim_"
+	if r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, cancelPrefix) {
+		allowed = claimCode.MatchString(strings.TrimPrefix(r.URL.Path, cancelPrefix))
+	}
+	if !allowed {
+		return false
+	}
+	u, e := url.Parse(r.Referer())
+	if e != nil || u.Scheme != "https" || u.Host != "servicewechat.com" || u.User != nil || u.Opaque != "" || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return false
+	}
+	parts := strings.Split(u.Path, "/")
+	if len(parts) != 4 || parts[0] != "" || parts[1] != onboardingMiniProgramID || parts[3] != "page-frame.html" {
+		return false
+	}
+	if parts[2] == "devtools" {
+		return true
+	}
+	if len(parts[2]) == 0 || len(parts[2]) > 10 {
+		return false
+	}
+	for _, c := range parts[2] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) checkOrigin(r *http.Request) bool {
 	public := s.publicRequest(r)
 	if r.Header.Get("X-Forwarded-Proto") != "" && !public {
@@ -243,6 +278,11 @@ func (s *Server) checkOrigin(r *http.Request) bool {
 	}
 	raw := r.Header.Get("Origin")
 	if public {
+		// Native wx.request has no Origin and can carry cross-site Fetch
+		// Metadata. Only this mini-program's exact platform page is accepted.
+		if raw == "" && wechatOnboardingRequest(r) {
+			return true
+		}
 		return (raw == "" || raw == onboardingOrigin) && r.Header.Get("Sec-Fetch-Site") != "cross-site"
 	}
 	if s.origin.Check(r) != nil {

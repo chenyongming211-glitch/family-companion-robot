@@ -28,6 +28,28 @@ function page(options: any = {}) {
 }
 const code = "a".repeat(32),
   next = "b".repeat(32);
+test("App callbacks use their native receiver before getApp registration", () => {
+  const previous = (globalThis as any).getApp;
+  const events: unknown[] = [];
+  const receiver = {
+    ...app,
+    onboardingLaunch: (options: any) => events.push(options),
+    onboardingCleanup: () => events.push("hidden"),
+  };
+  const options = { path: "pages/index/index", query: { scene: code } };
+  (globalThis as any).getApp = () => undefined;
+  try {
+    assert.doesNotThrow(() => receiver.onShow(options));
+    receiver.onHide();
+    assert.deepEqual(events, [options, "hidden"]);
+    receiver.onboardingLaunch = undefined;
+    receiver.onboardingCleanup = undefined;
+    assert.doesNotThrow(() => receiver.onShow(options));
+    assert.doesNotThrow(() => receiver.onHide());
+  } finally {
+    (globalThis as any).getApp = previous;
+  }
+});
 for (const prefix of ["", "/"]) {
   test(`WX_CODE callback accepts exact owned ${prefix}page scene path`, () => {
     const p = page();

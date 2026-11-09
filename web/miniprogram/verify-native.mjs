@@ -9,6 +9,11 @@ const context = {
     page = p;
   },
   App: (value) => {
+    // Native App construction can dispatch the first onShow before getApp()
+    // exposes the instance. The callback must use its actual receiver.
+    assert.doesNotThrow(() =>
+      value.onShow({ path: "pages/index/index", query: {} }),
+    );
     app = value;
   },
   getApp: () => app,
