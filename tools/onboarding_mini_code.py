@@ -118,7 +118,7 @@ def _inputs(bundle_path, config_path):
         _fail()
     # device_key is deliberately not accessed or sent. It belongs to device
     # authentication, not to WeChat code generation.
-    return bundle["claim_code"], config
+    return bundle["claim_code"], config, bundle["device_id"]
 
 
 def _post(path, payload, maximum, factory):
@@ -149,7 +149,7 @@ def _image(data, content_type):
     return False
 
 
-def generate(bundle_path, config_path, environment, output_path, *, connection_factory=None):
+def generate(bundle_path, config_path, environment, output_path, *, connection_factory=None, output_format="image"):
     """Write one new 0600 image; sanitize errors, clean up and re-raise cancellation.
 
     All input and output checks occur before sending secrets. The output parent
@@ -159,9 +159,9 @@ def generate(bundle_path, config_path, environment, output_path, *, connection_f
     fd = None
     created = False
     try:
-        if environment not in ("develop", "trial", "release"):
+        if environment not in ("develop", "trial", "release") or output_format not in ("image", "screen"):
             _fail()
-        scene, config = _inputs(bundle_path, config_path)
+        scene, config, device_id = _inputs(bundle_path, config_path)
         directory, name = _parent(output_path)
         info = os.fstat(directory)
         if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
@@ -186,12 +186,18 @@ def generate(bundle_path, config_path, environment, output_path, *, connection_f
                 or type(token_result.get("expires_in")) is not int
                 or not 0 < token_result["expires_in"] <= 7200):
             _fail()
+        image_options = {}
+        if output_format == "screen":
+            image_options = {"width": 280, "auto_color": False, "line_color": {"r": 0, "g": 0, "b": 0}, "is_hyaline": False}
         image_type, image_data = _post("/wxa/getwxacodeunlimit?" + urlencode({"access_token": token}), {
             "scene": scene, "page": "pages/index/index", "env_version": environment,
-            "check_path": environment == "release",
+            "check_path": environment == "release", **image_options,
         }, MAX_IMAGE, factory)
         if not _image(image_data, image_type):
             _fail()
+        if output_format == "screen":
+            from onboarding_screen_code import encode
+            image_data = encode(image_data, device_id)
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=directory)
         created = True
         os.fchmod(fd, 0o600)
@@ -238,8 +244,9 @@ def main(argv=None):
         parser.add_argument("--wechat-config", required=True)
         parser.add_argument("--environment", required=True, choices=("develop", "trial", "release"))
         parser.add_argument("--output", required=True)
+        parser.add_argument("--format", choices=("image", "screen"), default="image")
         args = parser.parse_args(argv)
-        generate(args.bundle, args.wechat_config, args.environment, args.output)
+        generate(args.bundle, args.wechat_config, args.environment, args.output, output_format=args.format)
     except KeyboardInterrupt:
         print("Mini-program code generation cancelled.", file=sys.stderr)
         return 130

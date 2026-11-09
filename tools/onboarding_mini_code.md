@@ -38,3 +38,19 @@ python3 -m unittest discover -s tools/tests -p test_onboarding_mini_code.py -v
 ```
 
 接口语义已核对微信[稳定版 token 文档](https://developers.weixin.qq.com/doc/subscription/api/base/api_getstableaccesstoken.html)、[不限量小程序码文档](https://developers.weixin.qq.com/miniprogram/dev/server/API/qrcode-link/qr-code/api_getunlimitedqrcode.html)，以及腾讯 [CloudBase 参数化分享示例](https://docs.cloudbase.net/en/recipes/add-share-with-params-miniprogram)。本工具使用现有服务器直接 HTTPS 调用，无需启用示例里的云函数服务。
+
+## 微雪屏幕码（云端）
+
+默认 `image` 继续原样保存平台图片，不需要 Pillow。屏幕输出仅在云端隔离环境安装
+`python -m pip install -r tools/onboarding_screen_requirements.txt`，并在相同命令追加
+`--format screen`，输出例如私有目录中的 `device.frc`。无需先生成或保留中间图片。
+该模式向同一官方接口显式请求 `width=280`、`auto_color=false`、黑色
+`line_color`、`is_hyaline=false`。拒绝损坏、多帧或尺寸不匹配的图片；不缩放，
+透明像素合成白底，灰度小于128记黑，不抖动。父目录0700，文件0600，失败/取消清理输出。
+
+FRC1为9848字节：`FRC1`、LE16宽280、LE16高280、ASCII设备ID36字节、
+LE32载荷CRC32、9800字节逐行MSB优先位图（1黑0白，每行35字节）。CRC仅检测损坏。
+`firmware/tools/provision_factory_nvs.py` 的既有供应命令可追加 `--screen-code /私有目录/device.frc`；
+仅微雪支持，严格检查尺寸、长度、设备ID、CRC与私有文件权限，写入
+`family_factory/screen_code` blob。仍不写原始claim，真实NVS生成器使用微雪的0x6000分区。
+该文件包含可认领设备的私有码，和工厂包同等保管，不得提交Git或下载到Mac。

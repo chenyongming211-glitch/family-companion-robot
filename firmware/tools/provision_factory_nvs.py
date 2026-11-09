@@ -16,7 +16,7 @@ def unique(pairs):
         out[key]=value
     return out
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--bundle',type=pathlib.Path,required=True);p.add_argument('--output',type=pathlib.Path,required=True);p.add_argument('--official-srp',type=pathlib.Path,required=True);p.add_argument('--idf-source',type=pathlib.Path,required=True);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--bundle',type=pathlib.Path,required=True);p.add_argument('--output',type=pathlib.Path,required=True);p.add_argument('--official-srp',type=pathlib.Path,required=True);p.add_argument('--idf-source',type=pathlib.Path,required=True);p.add_argument('--screen-code',type=pathlib.Path);a=p.parse_args()
     lock=json.loads((FIRMWARE/'onboarding.lock.json').read_text())
     import importlib.metadata
     if importlib.metadata.version('esp-idf-nvs-partition-gen') != lock['nvs_generator_version']: raise ValueError('NVS package version mismatch')
@@ -26,6 +26,23 @@ def main():
     for key,pattern in [('device_id',r'dev_[0-9a-f]{32}'),('mac',r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'),('serial',r'[A-Za-z0-9_.-]{1,64}'),('device_key',r'[A-Za-z0-9_-]{43}'),('claim_code',r'[0-9a-f]{32}')]:
         if not isinstance(bundle[key],str) or not re.fullmatch(pattern,bundle[key]): raise ValueError('invalid identity field')
     if bundle['model'] not in ['微雪 ESP32-S3','M5 ESP32-S3'] or bundle['bootstrap_url']!='https://robot.songguoxue.com/api/device/bootstrap' or bundle['voice_url']!='wss://robot.songguoxue.com/xiaozhi/v1/': raise ValueError('unsupported target')
+    screen_code=None
+    if a.screen_code is not None:
+        if bundle['model']!='微雪 ESP32-S3': raise ValueError('unsupported screen target')
+        sys.path.insert(0,str(FIRMWARE.parent/'tools'))
+        from onboarding_mini_code import _parent
+        from onboarding_screen_code import parse
+        parent,name=_parent(a.screen_code)
+        try:
+            if os.fstat(parent).st_mode & 0o077: raise ValueError('private screen directory required')
+            fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+            try:
+                info=os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o600 or info.st_uid!=os.geteuid() or info.st_nlink!=1 or info.st_size!=9848: raise ValueError('private screen required')
+                screen_code=os.read(fd,9849)
+            finally: os.close(fd)
+        finally: os.close(parent)
+        parse(screen_code,bundle['device_id'])
     official=a.official_srp.resolve()
     for name in ['srp6a.py','utils.py']:
         if hashlib.sha256((official/name).read_bytes()).hexdigest()!=lock['official_python'][name]: raise ValueError('official SRP source hash mismatch')
@@ -43,11 +60,13 @@ def main():
     os.umask(0o077)
     with tempfile.TemporaryDirectory(dir=a.output.parent,prefix='.factory-') as directory:
         directory=pathlib.Path(directory); (directory/'salt.bin').write_bytes(salt);(directory/'verifier.bin').write_bytes(verifier)
+        if screen_code is not None: (directory/'screen.bin').write_bytes(screen_code)
         with (directory/'factory.csv').open('w',newline='') as f:
             writer=csv.writer(f); writer.writerow(['key','type','encoding','value']);writer.writerow(['family_factory','namespace','',''])
             for key,value in [('device_id',bundle['device_id']),('mac',bundle['mac'].lower()),('serial',bundle['serial']),('key',bundle['device_key'])]:writer.writerow([key,'data','string',value])
             writer.writerow(['activated','data','i32','0'])
             for key in ['salt','verifier']:writer.writerow([key,'file','binary',str(directory/(key+'.bin'))])
+            if screen_code is not None:writer.writerow(['screen_code','file','binary',str(directory/'screen.bin')])
         # Captured diagnostics may contain paths; never relay output or bundle values.
         subprocess.run([sys.executable,str(generator),'generate',str(directory/'factory.csv'),str(directory/'factory.bin'),'0x6000' if bundle['model']=='微雪 ESP32-S3' else '0x4000'],check=True,capture_output=True)
         fd=os.open(a.output,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)

@@ -1,0 +1,2 @@
+# Install only in the isolated cloud supply environment.
+Pillow==12.0.0

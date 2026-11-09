@@ -23,3 +23,26 @@ class FactoryTests(unittest.TestCase):
     def test_retired_target_rejected(self):self.data['model']='ESP32-C3';self.write();self.assertNotEqual(self.run_tool().returncode,0);self.assertFalse(self.out.exists())
     def test_duplicate_schema_and_no_secret_diagnostics(self):
         self.bundle.write_text(json.dumps(self.data)[:-1]+',"schema_version":1}');r=self.run_tool();self.assertNotEqual(r.returncode,0);self.assertNotIn(self.data['device_key'],r.stderr+r.stdout);self.assertNotIn(self.data['claim_code'],r.stderr+r.stdout)
+
+@unittest.skipUnless(os.getenv('ONBOARDING_OFFICIAL') and os.getenv('IDF_PATH'),'requires cloud official source fixtures')
+class ScreenFactoryTests(unittest.TestCase):
+    setUp = FactoryTests.setUp
+    write = FactoryTests.write
+    def run_tool(self):
+        if not hasattr(self,'screen'):return FactoryTests.run_tool(self)
+        return subprocess.run([sys.executable,str(ROOT/'tools/provision_factory_nvs.py'),'--bundle',str(self.bundle),'--output',str(self.out),'--official-srp',os.environ['ONBOARDING_OFFICIAL'],'--idf-source',os.environ['IDF_PATH'],'--screen-code',str(self.screen)],capture_output=True,text=True)
+    def screen_setup(self):
+        import struct,zlib
+        self.data['model']='微雪 ESP32-S3';self.write();payload=b'\x80'+bytes(9799)
+        self.screen=self.root/'screen.frc';self.screen.write_bytes(b'FRC1'+struct.pack('<HH',280,280)+self.data['device_id'].encode()+struct.pack('<I',zlib.crc32(payload))+payload);self.screen.chmod(0o600)
+    def test_screen_real_nvs_fits(self):
+        self.screen_setup();r=self.run_tool();self.assertEqual(r.returncode,0,r.stderr);raw=self.out.read_bytes();self.assertEqual(len(raw),0x6000);self.assertIn(b'screen_code',raw);self.assertNotIn(self.data['claim_code'].encode(),raw)
+    def test_screen_invalid(self):
+        self.screen_setup();original=self.screen.read_bytes()
+        for offset in (0,4,6,8,44,48):
+            bad=bytearray(original);bad[offset]^=1;self.screen.write_bytes(bad)
+            self.assertNotEqual(self.run_tool().returncode,0);self.assertFalse(self.out.exists())
+        for bad in (original[:-1],original+b'x'):
+            self.screen.write_bytes(bad);self.assertNotEqual(self.run_tool().returncode,0);self.assertFalse(self.out.exists())
+        self.screen.write_bytes(original);self.screen.chmod(0o644);self.assertNotEqual(self.run_tool().returncode,0)
+        self.screen.chmod(0o600);self.data['model']='M5 ESP32-S3';self.write();self.assertNotEqual(self.run_tool().returncode,0)
