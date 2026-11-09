@@ -1,4 +1,4 @@
-# Shared S3 ordinary-allocation policy hypothesis
+# Shared S3 ordinary-allocation policy and verification
 
 Scope: onboarding candidates for BOTH supported ESP32-S3 boards. No stock firmware, model, wake threshold, VAD, protocol/security, Wi-Fi power-save, controller/DMA or task-stack capability changes. Hardware installation and field acceptance remain root-owned.
 
@@ -39,3 +39,14 @@ Wave `idf.py build` + `idf.py merge-bin` exit0 (`build-wave.log`, `merge-wave.lo
 Wave manifest `evidence/waveshare/manifest.json` SHA256 `03fef1e7a4aaeabdbd42a328589c3e58db27ae8223f43b3cf88932276385557d`; app3470480 bytes SHA256 `1e41711e55122d55cbf9f4634016899c9941f9bd9040fc15401f8c215171992d`; ELF `5fa253bc81cd41cb310773742cbd2d13f1278e359142626e17204d5d7657beee`; merged `ece7db10a8ee252f2a75898637304834a891f60123ecf2956070fae4c26b746a`. Slot3604480 leaves134000 bytes. Both profiles assets5376385 bytes.
 
 The final frozen native sources match clean preparation for both profiles. M5 frozen evidence stayed unchanged while Wave compiled. Existing caches were reused; old13d/105/00bb/744 artifacts were not overwritten or removed. Physical validation of either new app remains outside the worker result: host allocation routing and native builds do not establish a measured startup minimum or absence of the real PHY abort. Root owns bound-state-preserving installation, rollback and field acceptance.
+
+
+## Root installation and startup observation
+
+Root pushed source624addd and installed only M5, preserving its confirmed family-home binding/version1/From and owner-user body grant. Fresh current snapshot f549 combined36864 actual runtime bytes with verified immutable regions/whole hardwareMD5; app-slot update completed02:35:47 Beijing. The complete4128768-byte slot readback equals expected10e0aebeba0f04008e033eb25835e3a2e4fe1206e05876c822b00e5062b9f47c; all nonapp regions and expected whole8763460493264a49da3f023f227f836c502ccfad68c68934ac20aea95a7de2f8 matched hardware. No factory/layout/state resupply.
+
+After one reviewed controlled boot at02:38:06, the complete300-second passive capture contains50243 bytes,30 heap samples, two FST builds and no NO_MEM/abort/backtrace/reboot/brownout/watchdog message. Logged heap timestamps remain monotonic10352→299392ms; wall-clock capture duration is300seconds, not an exact conversion from those log ticks. Last internal free98643 bytes, reported minimum33468; prior13d minimum16 with a real first-boot PHY abort remains a failure record. Cleanup succeeded and reclaimed12700 bytes. This establishes this startup observation, not long-duration or acoustic acceptance.
+
+Root verified original config projection,315 old source hashes,11 protected files, other servicePIDs and Go3256763/df5386 unchanged. Both devices' authenticated bootstrap returns ownWSS/version1; invalid-protocol requests stop at400 without opening testWS/model. Native relay/serial and reverse42217 have been closed. Raw logs, images, NVS and private proofs remain cloudroot0700/0600 under m5-shared-heap-20261110; no firmware binaries or private data were copied to Mac/Git.
+
+Exact624 CI stock42673686993 and AEC42673686679 passed on attempt2; AEC covers all four supported S3 build variants. The initial missing-job/internal-server-error infrastructure failure and retries are retained, with no product/workflow changes for rerun. User listening/popping/natural-interruption feedback is still pending; the existing question asks for normal long speech and an interruption, without re-registration.

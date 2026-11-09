@@ -1,5 +1,35 @@
 # M5 实体圆屏设备码与首次配网
 
+## 当前交付与待验收（2026-11-10，Asia/Shanghai）
+
+M5已实际扫码加入原family-home，绑定version1/from01:22:26.104337476，仅owner-user有正文权限；微雪原绑定/10:05起点保持。原配置去除新增M5设备/绑定/授权/claims后的投影相同，315份旧来源摘要全相同，旧M5语音身份未导入或绑定。后续两次修复都是已绑定设备的单应用槽更新，没有重供身份或覆写旧NVS。
+
+Go c6f6f13已部署统一机器人600ms发送信用窗口，删除单台微雪选择器，原生客户端维持300ms。实际136来源与精确7文件补丁由根代理重构核对；候选无额外Go输入，race/vet/build和独立复审通过。运行SHA df5386e590e9c0d1de790bd77519da001e2bfa8afa8f2f6b720a5b9e5ba17c65/PID3256763，专用环境选择器不存在。health版本标签development，实际release路径、摘要与来源清单是版本依据；未整包部署main。此前300→600的爆音对照改的是Go，旧配置只覆盖微雪，M5遗漏已收口；本轮新试听尚无回执，不能宣称爆音消失。
+
+13d应用回收实测12700B后，首次冷启动仍在FST阶段因PHY定时器INTERNAL|8BIT分配失败abort；随后一轮连续运行，最低内部16B。该失败保留，蓝牙回收单独不足以修好瞬时峰值。实际链接FST确定化/最小化辅助函数含普通小块malloc/calloc；阈值1024优先内部，内部保留池可消耗。624addd把共用S3目标默认阈值改0，普通正尺寸分配优先PSRAM、保留fallback及显式内部/DMA/栈要求，未改模型、VAD、RF/省电或协议。两S3通用实现/配置统一，硬件codec预算差异保留。
+
+精确624addd：154/154（189.466秒，零fail/error/skip）、实际SDK分配器RED→GREEN、两板无旧sdkconfig的真实kconfgen全部配置相等、两板原生/合并/核验及11共用源一致通过。根代理独立将全部257来源与Git提交逐项核对。M5 app3483952B/SHA6fcccb91fb77596ed43d0011712be972077f6645915c576f8e6ffcf1334dd5d6，manifest0f4159021956b965ab275b776f7301946c8875b65547891ea4917626e1121fae。微雪仅完成同源构建，没有硬件更新；新策略普通对象的缓存/延迟影响仍以实际使用观察为准。详细源码/干净配置/双板产物见[策略记录](2026-11-10-shared-s3-heap-policy.md)。
+
+最新f549快照使用36864B实际新读运行数据和整片硬件MD5验证，activated1/原八项工厂/SRP/FRC/CRC/9namespace/66条记录及Wi-Fi保持。最终助手与独立复审通过后单次写应用槽，02:35:47完成4128768B全槽逐字节一致：SHA10e0aebeba0f04008e033eb25835e3a2e4fe1206e05876c822b00e5062b9f47c；槽外两段及整片预期8763460493264a49da3f023f227f836c502ccfad68c68934ac20aea95a7de2f8硬件MD5匹配。刷写工具未写NVS/分区/OTA/PHY/资产，没有自动重写或重试。
+
+02:38:06再次核对硬件/已绑定授权/全部回读证据后仅一次官方WDT，同进程捕获完整300秒/50243B。30个堆样本，末次内部空闲98643B、最低33468B，两个FST构图，cleanup stage3/err0/回收12700B，零ESP_ERR_NO_MEM、abort、回溯或额外重启。已越过原出错初始化阶段；仅记录本次启动窗口，不增加真人声音/插话、物理屏幕、iOS或长期运行成绩。构建ELF为bb6d62e5…，USB重枚举未捕获ELF横幅，不把未出现的横幅写作实测；应用身份由写后整槽/OTA0及启动前整片证据关联。
+
+02:45/02:46审计：原配置投影、315旧来源、11保护文件、其他服务PID及voice3256763/df5386均保持，ready/memory_ready、max2、诊断false。M5和微雪真实HTTPS bootstrap200/自有WSS协议1、故意Protocol-Version0到达认证后400守卫；无测试WebSocket/模型调用。临时Mac中继/串口和云端反向42217均已关闭。私有field-observation.json、final-audit.json及原始日志只在云端m5-shared-heap-20261110目录，Mac仅代码/Git/USB客户端。
+
+同SHA624addd的[stock](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42673686993)与[AEC四S3矩阵](https://github.com/chenyongming211-glitch/family-companion-robot/actions/runs/42673686679)均第二次执行成功。首次stock没有job/编译日志，AEC三矩阵成功、M5xiaoman缺失job，页面给出Internal server error；同提交各重跑一次后全部实际执行通过，未改工作流或代码。CI、原生构建、实际启动观察、真人听感分别记账。
+
+待用户：用M5正常长回复并插话，确认爆音、是否正确打断/回应。无需再注册；现有试听问题仍待答复。以下均为此前阶段原始记录，不能用其中“未绑定/activated0/尚未实刷”等覆盖上述当前状态。
+
+## 此前注册与13d修复阶段（保留失败记录）
+
+当前用户已确认手机注册完成，随后确认M5可连接并对话，但有爆音。后台独立确认唯一confirmed，M5新设备于01:22:26加入原family-home/version1；微雪binding-home-1及10:05:08起点保持。真实HTTPS bootstrap200返回自有WSS/protocol1，M5故意无效Protocol-Version0请求到达认证后守卫400；未创建测试WebSocket或模型会话。确认后管理配置已在云端root0600私有备份；禁止再用下文activated0/未绑定窗口或整片出厂流程。
+
+本轮根代理仅接入被动USB日志，未运行预备的窗口脚本，intent不存在，未主动复位或刷写。首次打开USB是否另触发一次复位尚未证实。原始串口62473字节仅存云端，捕获5次同一`ESP_ERROR_CHECK`/`ESP_ERR_NO_MEM`异常后软件复位。冻结105的精确ELF SHA `ef19e33024344dad64a140ac3499443da7ffc5336f39c0f4bdb79184f14697ad`解析为`phy_track_pll_init`内部`esp_timer_create`失败，经Wi-Fi PHY/pm_dream/ppTask触发abort；无证据归因于TLS缓冲。用户后续已能对话，不能据旧捕获断言当前一直重启。
+
+源码核对两板模型/主要PSRAM参数一致，但M5软件AEC适配有至少40160字节内部参考PCM存储和两条4096字节诊断任务栈，Wave无该组分配；这证明资源预算存在差异，不是实测净差额或唯一崩溃原因。SDK定时器对象要求INTERNAL|8BIT，BLE静态保留内存在已绑定启动仍未释放。正在验证两S3共用的已绑定资源回收方案，不能将候选或主机测试称作实机修好。
+
+爆音旧修复位于Go服务端：实际进程仍仅对微雪启用600ms播放信用窗口，新M5走300ms。用户要求所有通用S3功能同一实现，已记入AGENTS.md；正在将通用蓝牙生命周期/内存策略与机器人服务端播放窗口收口，板级只保留真实硬件差异。当前尚未部署此修正，M5爆音未验收。
+
 用户要求直接扫描 M5 自身二维码加入既有家庭。初次通用候选缺少M5显示接入，电脑设备码不满足该要求。本次补齐实体圆屏码和状态，保留同一M5工厂身份、已有微雪和全部家庭/旧历史边界。首次安卓BLE超时尚待本轮实际日志定位，不凭编译成功宣称修复。
 
 ## 代码、构建与渲染
