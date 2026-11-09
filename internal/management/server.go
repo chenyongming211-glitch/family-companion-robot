@@ -296,7 +296,7 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if name != "index.html" && !strings.HasPrefix(name, "assets/") {
+	if name != "index.html" && name != "family.html" && !strings.HasPrefix(name, "assets/") {
 		if !strings.Contains(path.Base(name), ".") {
 			name = "index.html"
 		} else {

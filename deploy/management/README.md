@@ -20,6 +20,6 @@ install -d -m 0700 /var/lib/family-robot-management
 
 会话保留在内存中，重启须重新登录；两端分别退出。每IP每分钟最多10次登录尝试，同时最多2次密码校验；最大1024会话、4096限流IP条目，达到上限明确拒绝。正文读取先完成权限校验和私有审计追加/fsync，失败则503且不输出正文。审计只有UTC、账号ID、入口、操作、设备ID、记录ID，无正文或凭据；请由后续运维维护磁盘空间与审计留存，服务不自动删除。
 
-API只有登录/退出会修改会话，其他公开能力均只读。设备、家庭、账号和聊天的修改、删除、记忆及硬件操作不支持。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
+API只有登录/退出会修改会话，其他公开能力均只读。设备、家庭、账号和聊天的修改、删除、记忆及硬件操作不支持。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html、family.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
 
 验证门槛：云端 `go test -race ./internal/management ./cmd/management`、`go vet ./internal/management ./cmd/management`、`go build -o <private-output>/management ./cmd/management`，配合已核验的 live 前端。部署后的浏览器验收与用户新实机发言验证分开记录，合成测试不代表现场验收。

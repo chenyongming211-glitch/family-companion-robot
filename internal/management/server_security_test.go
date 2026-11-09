@@ -75,6 +75,26 @@ func TestHTTPBodyIsolationAudit(t *testing.T) {
 		t.Fatalf("list %d %s", w.Code, w.Body)
 	}
 }
+func TestHTTPStaticEntryPoints(t *testing.T) {
+	s, _ := httpFixture(t)
+	s.opts.StaticDir = t.TempDir()
+	for name, body := range map[string]string{"index.html": "ADMIN ENTRY", "family.html": "FAMILY ENTRY"} {
+		if err := os.WriteFile(filepath.Join(s.opts.StaticDir, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, method := range []string{"GET", "HEAD"} {
+			w := request(s, method, "/"+name, "", nil)
+			wantBody := body
+			if method == "HEAD" {
+				wantBody = ""
+			}
+			if w.Code != 200 || w.Body.String() != wantBody {
+				t.Fatalf("%s /%s: status=%d body=%q", method, name, w.Code, w.Body.String())
+			}
+		}
+	}
+}
+
 func TestHTTPStaticPrivateAndSymlinks(t *testing.T) {
 	s, _ := httpFixture(t)
 	root := t.TempDir()
