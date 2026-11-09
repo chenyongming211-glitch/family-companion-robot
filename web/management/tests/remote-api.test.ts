@@ -2,6 +2,22 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRemoteApi } from "../src/remote-api.ts";
 
+test("live memory reads carry scope and selected device, while clear remains unsupported", async () => {
+  const seen: string[] = [];
+  const api = createRemoteApi((async (input: string | URL | Request) => {
+    seen.push(String(input));
+    return new Response(JSON.stringify([]));
+  }) as typeof fetch);
+  await api.listMemories({ scope: "family", deviceId: "dev_fixture" });
+  await api.getMemory("mem-fixture-1", "admin", "dev_fixture");
+  assert.deepEqual(seen, [
+    "/api/family/memories?device=dev_fixture",
+    "/api/admin/memories/mem-fixture-1?device=dev_fixture",
+  ]);
+  await assert.rejects(api.clearMemories("dev_fixture", "family"), /尚未接入/);
+  assert.equal(seen.length, 2);
+});
+
 test("live login and reads use scoped same-origin endpoints with cookies", async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const fakeFetch = async (

@@ -469,9 +469,15 @@ export function createMockApi(storage?: DemoStorage) {
         ),
       );
     },
-    async getMemory(id: string, scope: Scope = "admin") {
+    async getMemory(
+      id: string,
+      scope: Scope = "admin",
+      expectedDeviceId?: string,
+    ) {
       const m = state.memories.find((item) => item.id === id);
       if (!m) return fail("not_found", "未找到这条记忆");
+      if (expectedDeviceId !== undefined && m.deviceId !== expectedDeviceId)
+        return fail("device_mismatch", "这条记忆不属于所选设备。");
       findConversation(m.conversationId, scope, m.deviceId);
       return clone(m);
     },

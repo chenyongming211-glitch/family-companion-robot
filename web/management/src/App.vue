@@ -40,6 +40,7 @@ const implemented =
         "families",
         "family",
         "accounts",
+        "memories",
         "login",
       ]
     : [
@@ -48,6 +49,8 @@ const implemented =
         "conversations",
         "conversation",
         "settings",
+        "memories",
+        "memory",
         "family",
         "login",
       ];

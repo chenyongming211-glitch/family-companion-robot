@@ -26,6 +26,7 @@ const accounts = ref<
   >([]),
   daily = ref<Array<{ date: string; conversations: Conversation[] }>>([]);
 const boundDevice = ref<Device | null>(null);
+const selectedMemoryDeviceId = ref("");
 const loading = ref(false),
   error = ref(""),
   feedback = ref(""),
@@ -50,6 +51,7 @@ function changed() {
   window.dispatchEvent(new Event("demo-storage-changed"));
 }
 async function load() {
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
   const token = ++request,
     page = props.route.page,
     scope = props.scope,
@@ -66,6 +68,7 @@ async function load() {
   memories.value = [];
   families.value = [];
   daily.value = [];
+  selectedMemoryDeviceId.value = "";
   try {
     const a = await api.getAccount(scope);
     const ds = page === "login" ? [] : await api.listDevices(scope);
@@ -91,22 +94,29 @@ async function load() {
       f = await api.getFamily(selectedFamily, scope);
     }
     if (page === "accounts") ac = await api.listAccounts();
-    if (["memories", "memory"].includes(page))
-      ms = await api.listMemories({ deviceId, scope });
+    const memoryDevice =
+      liveMode && !params.has("device") ? (ds[0]?.id ?? "") : deviceId;
+    if (
+      ["memories", "memory"].includes(page) &&
+      (!liveMode || memoryDevice || params.has("device"))
+    )
+      ms = await api.listMemories({ deviceId: memoryDevice, scope });
     if (
       page === "memory" ||
-      (page === "memories" &&
-        scope === "admin" &&
-        new URLSearchParams(location.hash.split("?")[1] || "").has("memory"))
+      (page === "memories" && scope === "admin" && params.has("memory"))
     ) {
-      m = await api.getMemory(memoryId, scope);
-      if (m.deviceId !== deviceId) throw new Error("这条记忆不属于所选设备。");
+      if (!liveMode || memoryDevice || params.has("device")) {
+        m = await api.getMemory(memoryId, scope, memoryDevice);
+        if (m.deviceId !== memoryDevice)
+          throw new Error("这条记忆不属于所选设备。");
+      }
     }
     if (["privacy", "policies"].includes(page))
       p = await api.getPrivacy(deviceId, scope);
     if (page === "daily") days = await api.getDailySummaries(scope, deviceId);
     if (token !== request) return;
     devices.value = ds;
+    selectedMemoryDeviceId.value = memoryDevice;
     account.value = a;
     families.value = fs;
     family.value = f;
@@ -246,6 +256,7 @@ async function savePrivacy() {
   });
 }
 async function clear() {
+  if (liveMode) return;
   const id = props.route.device,
     scope = props.scope,
     token = request;
@@ -270,6 +281,13 @@ function chatLink(m: Memory) {
     device: m.deviceId,
     chat: m.conversationId,
   });
+}
+function memoryDate(date: string) {
+  if (!liveMode) return date;
+  const value = new Date(date);
+  return Number.isNaN(value.getTime())
+    ? "时间未知"
+    : value.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
 }
 </script>
 <template>
@@ -636,14 +654,27 @@ function chatLink(m: Memory) {
         <div>
           <p class="eyebrow">记录 / 记忆</p>
           <h1>{{ route.page === "memory" ? "记忆详情" : "设备记忆" }}</h1>
-          <p>设备近期记忆示例：最近7天、最多24轮。人物长期记忆仍待独立验收。</p>
+          <p>
+            {{
+              liveMode
+                ? "机器人保存的近期上下文片段：最近7天、最多24轮；仅显示本次绑定后的获授权内容。"
+                : "设备近期记忆示例：最近7天、最多24轮。人物长期记忆仍待独立验收。"
+            }}
+          </p>
         </div>
       </div>
-      <section class="panel">
+      <section v-if="liveMode && !devices.length" class="panel empty">
+        暂无可访问设备
+      </section>
+      <section v-else class="panel">
+        <div v-if="liveMode" class="section-head">
+          <p>片段可能截断，完整内容请查看来源聊天。长期人物记忆尚未接入。</p>
+          <button @click="load">刷新记忆</button>
+        </div>
         <label for="memory-device">选择设备</label
         ><select
           id="memory-device"
-          :value="route.device"
+          :value="selectedMemoryDeviceId"
           @change="switchDevice"
         >
           <option v-for="d in devices" :key="d.id" :value="d.id">
@@ -652,22 +683,38 @@ function chatLink(m: Memory) {
         </select>
         <div v-if="memory" class="data-detail">
           <h2>记忆详情</h2>
-          <p>{{ memory.text }}</p>
-          <small>{{ memory.date }}</small>
+          <template v-if="liveMode"
+            ><h3>用户 · 保存的转写片段</h3>
+            <p>{{ memory.user || "未保存用户文字" }}</p>
+            <h3>伴伴 · 保存的回复片段</h3>
+            <p>{{ memory.assistant || "未保存回复文字" }}</p>
+            <small v-if="memory.textSource === 'output_asr'"
+              >回复片段来自已播音频识别，可能有误差。</small
+            ></template
+          >
+          <p v-else>{{ memory.text }}</p>
+          <small>{{ memoryDate(memory.date) }}</small>
           <p><a :href="chatLink(memory)">查看来源聊天 →</a></p>
         </div>
         <template v-if="route.page === 'memories'"
-          ><div v-if="!memories.length" class="empty">暂无记忆</div>
+          ><div v-if="!memories.length" class="empty">
+            {{ liveMode ? "暂无本次绑定后可查看的近期记忆" : "暂无记忆" }}
+          </div>
           <a
             v-for="m in memories"
             :key="m.id"
             class="list-row"
             :href="memoryLink(m)"
             ><span
-              ><b>{{ m.text }}</b
-              ><small>{{ m.date }}</small></span
+              ><b>{{
+                liveMode && m.text.length > 100
+                  ? m.text.slice(0, 100) + "…"
+                  : m.text
+              }}</b
+              ><small>{{ memoryDate(m.date) }}</small></span
             >›</a
           ><button
+            v-if="!liveMode"
             class="data-danger"
             :disabled="saving || !memories.length"
             @click="clear"
@@ -675,7 +722,9 @@ function chatLink(m: Memory) {
             清除本设备记忆
           </button>
           <p role="status">{{ feedback }}</p></template
-        ><a v-else :href="linkTo(scope, 'memories', { device: route.device })"
+        ><a
+          v-else
+          :href="linkTo(scope, 'memories', { device: selectedMemoryDeviceId })"
           >返回记忆列表</a
         >
       </section></template

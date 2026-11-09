@@ -481,7 +481,6 @@ async function deleteChat() {
             >›</a
           ><a
             class="list-row"
-            v-if="!liveMode"
             :href="linkTo(scope, 'memories', { device: device.id })"
             ><span><b>设备记忆</b><small>查看近期记忆片段</small></span
             >›</a

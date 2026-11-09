@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+test("memory details reject an explicitly mismatched device", async () => {
+  const api = createMockApi();
+  await assert.rejects(api.getMemory("memory-story", "family", "dev-desk"));
+});
 import { createMockApi } from "../src/api.ts";
 
 test("clearing one device memory preserves chats and other device memories", async () => {

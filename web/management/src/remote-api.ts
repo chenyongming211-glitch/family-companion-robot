@@ -1,6 +1,13 @@
 import type { MockApi } from "./mock-api.ts";
 import { ApiError } from "./mock-api.ts";
-import type { Account, Conversation, Device, Family, Scope } from "./types.ts";
+import type {
+  Account,
+  Conversation,
+  Device,
+  Family,
+  Memory,
+  Scope,
+} from "./types.ts";
 
 export type RecordFilter = {
   deviceId?: string;
@@ -141,8 +148,24 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     joinFamily: unsupported,
     bindDevice: unsupported,
     updateMemberAccess: unsupported,
-    listMemories: unsupported,
-    getMemory: unsupported,
+    async listMemories(filter: { deviceId?: string; scope?: Scope } = {}) {
+      const params = new URLSearchParams();
+      if (filter.deviceId !== undefined) params.set("device", filter.deviceId);
+      return request<Memory[]>(filter.scope ?? "admin", `memories?${params}`);
+    },
+    async getMemory(
+      id: string,
+      scope: Scope = "admin",
+      expectedDeviceId?: string,
+    ) {
+      const params = new URLSearchParams();
+      if (expectedDeviceId !== undefined)
+        params.set("device", expectedDeviceId);
+      return request<Memory>(
+        scope,
+        `memories/${encodeURIComponent(id)}?${params}`,
+      );
+    },
     clearMemories: unsupported,
     getPrivacy: unsupported,
     updatePrivacy: unsupported,

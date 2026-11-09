@@ -53,6 +53,10 @@ export type Memory = {
   conversationId: string;
   text: string;
   date: string;
+  user?: string;
+  assistant?: string;
+  textSource?: string;
+  boundary?: string;
 };
 export type Member = {
   id: string;
