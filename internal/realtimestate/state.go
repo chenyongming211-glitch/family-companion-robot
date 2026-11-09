@@ -16,7 +16,7 @@ const RecentTurnLimit = 16
 const PacketSamples int64 = 1440
 const WindowSamples int64 = 7200
 
-// ExtendedWindowSamples covers the selected robot's 200ms DMA receipts, their
+// ExtendedWindowSamples covers the authenticated robots' 200ms DMA receipts, their
 // 60ms quantization and network transit without changing other clients' credit.
 const ExtendedWindowSamples int64 = 14400
 

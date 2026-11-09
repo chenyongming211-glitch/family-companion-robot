@@ -15,7 +15,6 @@ type Config struct {
 	Search                         *bool
 	Tools                          []any
 	Synthetic                      bool
-	ExtendedPlaybackDevice         string
 	DeviceProfilesPath             string
 	MaxSessions                    int
 	MemoryEnabled                  bool

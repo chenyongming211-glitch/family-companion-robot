@@ -2,38 +2,38 @@ package realtimelive
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
-func TestPlaybackWindowUsesAuthenticatedDeviceOnly(t *testing.T) {
-	selected := "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+func TestPlaybackWindowUsesCommonAuthenticatedRobotPolicy(t *testing.T) {
 	for _, tc := range []struct {
-		name, configured, device, client string
-		wantExtended                     bool
+		name, device, client string
+		ownerErr             error
+		wantExtended         bool
 	}{
-		{"selected robot", selected, selected, "xiaozhi", true},
-		{"disabled", "", selected, "xiaozhi", false},
-		{"another robot", selected, "dev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "xiaozhi", false},
-		{"missing owner", selected, "", "xiaozhi", false},
-		{"mac using same owner", selected, selected, "mac_fixture", false},
+		{"robot one", "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "xiaozhi", nil, true},
+		{"robot two", "dev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "xiaozhi", nil, true},
+		{"missing owner", "", "xiaozhi", nil, false},
+		{"malformed owner", "untrusted", "xiaozhi", nil, false},
+		{"invalid manifest", "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "xiaozhi", errors.New("invalid_session_manifest"), false},
+		{"native client", "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mac_fixture", nil, false},
+		{"missing client", "dev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Session{ctx: context.Background(), cfg: Config{ExtendedPlaybackDevice: tc.configured}, rec: recorder{owner: Ownership{DeviceID: tc.device, ClientType: tc.client}}}
-			for i := 0; i < 2; i++ {
+			s := &Session{ctx: context.Background(), ownerErr: tc.ownerErr, rec: recorder{owner: Ownership{DeviceID: tc.device, ClientType: tc.client}}}
+			for i := 0; i < 3; i++ {
 				rt := s.addTurn()
 				t.Cleanup(rt.cancel)
 				rt.turn.Sent = 7200
 				if rt.turn.CanSend() != tc.wantExtended {
-					t.Fatal("playback window leaked outside the selected robot or was not applied to a new turn")
+					t.Fatalf("turn %d: common authenticated robot policy extended=%v, want %v", i, rt.turn.CanSend(), tc.wantExtended)
+				}
+				rt.turn.Sent = 14400
+				if rt.turn.CanSend() {
+					t.Fatal("playback credit exceeded 600ms")
 				}
 			}
 		})
-	}
-}
-
-func TestPlaybackWindowRejectsMalformedSelector(t *testing.T) {
-	app := NewServer(Config{ExtendedPlaybackDevice: "untrusted"}, nil, t.TempDir(), "test")
-	if app.InitializationError() == nil {
-		t.Fatal("invalid authenticated device selector accepted")
 	}
 }

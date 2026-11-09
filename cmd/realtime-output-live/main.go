@@ -52,7 +52,6 @@ func main() {
 	cfg.DeviceProfilesPath = *deviceProfiles
 	cfg.DiagnosticsDevice = *diagnosticDevice
 	cfg.DiagnosticsDuration = *diagnosticDuration
-	cfg.ExtendedPlaybackDevice = os.Getenv("OUTPUT_LIVE_EXTENDED_PLAYBACK_DEVICE")
 	product, e := realtimestate.LoadProduct(*identity)
 	if e != nil {
 		log.Fatal("identity_invalid")

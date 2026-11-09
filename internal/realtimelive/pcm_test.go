@@ -348,7 +348,7 @@ func TestPCMSharedCreditDrainAndASR(t *testing.T) {
 	resampler := realtimeaudio.NewResampler()
 	expectedASR := realtimeaudio.NewResampler()
 	frame := pcmSamples(1440)
-	for range 5 {
+	for range 10 {
 		if ok, err := s.release(rt, frame, nil, resampler); err != nil || !ok {
 			t.Fatal(err)
 		}
@@ -369,13 +369,13 @@ func TestPCMSharedCreditDrainAndASR(t *testing.T) {
 			t.Fatal("output ASR input missing")
 		}
 	}
-	if rt.turn.CanSend() || rt.turn.Sent != 7200 || a.InputSamples() != 4800 {
+	if rt.turn.CanSend() || rt.turn.Sent != 14400 || a.InputSamples() != 9600 {
 		t.Fatalf("window/ASR changed: sent=%d asr=%d", rt.turn.Sent, a.InputSamples())
 	}
 	if err := s.interrupt(); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ReadJSON(&event); err != nil || event["reason"] != "drain" || event["sent_samples"] != float64(7200) {
+	if err := c.ReadJSON(&event); err != nil || event["reason"] != "drain" || event["sent_samples"] != float64(14400) {
 		t.Fatal("wrong seal", event, err)
 	}
 	if ok, err := s.binary(rt, frame); err != nil || ok {
@@ -389,13 +389,13 @@ func TestPCMSharedCreditDrainAndASR(t *testing.T) {
 		}
 		return e
 	}
-	if err := s.receiveReceipt(receipt(w.scope, 8640)); err == nil {
+	if err := s.receiveReceipt(receipt(w.scope, 15840)); err == nil {
 		t.Fatal("receipt beyond sent accepted")
 	}
-	if err := s.receiveReceipt(receipt(w.scope, 7200)); err != nil {
+	if err := s.receiveReceipt(receipt(w.scope, 14400)); err != nil {
 		t.Fatal(err)
 	}
-	if !rt.turn.PlaybackFinal || rt.turn.PlaybackBasis != "i2s_dma" || rt.turn.Completed != 7200 {
+	if !rt.turn.PlaybackFinal || rt.turn.PlaybackBasis != "i2s_dma" || rt.turn.Completed != 14400 {
 		t.Fatal("DMA drain evidence lost", rt.turn)
 	}
 	select {
@@ -411,7 +411,7 @@ func TestPCMSharedCreditDrainAndASR(t *testing.T) {
 	if next.turn.ID != 2 || next.turn.Cut {
 		t.Fatal("new turn did not remain independent")
 	}
-	if err := s.receiveReceipt(receipt(w.scope, 7200)); err != nil {
+	if err := s.receiveReceipt(receipt(w.scope, 14400)); err != nil {
 		t.Fatal("late duplicate changed old receipt", err)
 	}
 	if next.turn.Completed != 0 || next.turn.Cut {

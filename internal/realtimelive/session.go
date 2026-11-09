@@ -198,9 +198,9 @@ func (s *Session) activateTurnLocked(id int64, stoppedAt time.Time) *liveTurn {
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	rt := &liveTurn{turn: realtimestate.NewTurn(id), ctx: ctx, cancel: cancel, done: make(chan struct{}), transcriptReady: make(chan struct{}), stoppedAt: stoppedAt}
-	// The selector comes from server configuration, and ownership from the
-	// authenticated adapter. Client messages cannot enlarge the credit window.
-	if s.rec.owner.ClientType == "xiaozhi" && s.cfg.ExtendedPlaybackDevice != "" && s.rec.owner.DeviceID == s.cfg.ExtendedPlaybackDevice {
+	// Robot ownership comes from the authenticated adapter. Apply the same
+	// playback credit to every robot; client messages cannot enlarge it.
+	if s.ownerErr == nil && s.rec.owner.ClientType == "xiaozhi" && diagnosticDevicePattern.MatchString(s.rec.owner.DeviceID) {
 		rt.turn.PlaybackWindowSamples = realtimestate.ExtendedWindowSamples
 	}
 	s.history = append(s.history, rt)

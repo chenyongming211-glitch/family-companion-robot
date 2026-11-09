@@ -45,9 +45,6 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 	}
 	cfg = cfg.snapshot()
 	devices, initErr := voiceidentity.Open(filepath.Join(root, "devices.json"))
-	if cfg.ExtendedPlaybackDevice != "" && !diagnosticDevicePattern.MatchString(cfg.ExtendedPlaybackDevice) {
-		initErr = errors.New("invalid_playback_window_device")
-	}
 	if cfg.MaxSessions < 1 || cfg.MaxSessions > 8 {
 		initErr = errors.New("invalid_max_sessions")
 	}
