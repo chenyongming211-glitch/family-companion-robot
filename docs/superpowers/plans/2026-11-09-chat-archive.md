@@ -43,9 +43,9 @@ Scope comparable; sourceID32lowerhex, bindingversion>0. Fact Kind admit/settle r
 
 Reducer rules exactly design: settle can precedeadmit, firstsettlementfreeze; pending preventsidle; repeatedadmit/settle ignore; advancebeforeeveryfact andfinalnow; thresholdinclusive; close pending unknown onlyonce andonlyclient_stoparchivesmappedsourcechat; oldsourceclosedchatneverendsnewchat. Emptynewsourceclient_stop mayendactiveonlyifsource.StartedAt>=chat.StartedAt. Uncertain markerholds source'slatestunarchivedchat, no newchat, no reopen; explicitclosecanstillarchive. Sourceclosedthenlateradmit invalid. No midnight logic. Return chats stable chronological order (adapter sortsnewestforpage).
 
-- [ ] Add cloudRED tests for basicadmit/settle/30min/reconnect andimplement reducer.
-- [ ] Add exactboundary/midnight/longpending/overlap/duplicate/settlebeforeadmit/late/explicitstopvsdisconnect/emptyclose/uncertain/crash/restartstable/scopes/invalid/budgets tests; cloud race/vet.
-- [ ] Spec+qualityreview, fix findings, commit task1.
+- [x] Add cloudRED tests for basicadmit/settle/30min/reconnect andimplement reducer.
+- [x] Add exactboundary/midnight/longpending/overlap/duplicate/settlebeforeadmit/late/explicitstopvsdisconnect/emptyclose/uncertain/crash/restartstable/scopes/invalid/budgets tests; cloud race/vet.
+- [x] Spec+qualityreview, fix findings, commit task1.
 
 Example:
 ```go
@@ -62,9 +62,9 @@ Interfaces: Reader.ListChats(accountID,scope string,f ConversationFilter)(Conver
 
 Validate bodygrantbeforeopenfile, filteronlyeligible sources/body; recheckmanifestidentityandboundedraw. ExistingprojectvalidatesJSONownership/playbackevidence andproducesTurnDTO; extractor derivesnormalizedfacts fromcompleteevents at(validboundeddecimaltimestamp). Onlyuser_text=>admit; validI2S terminalplayback=>settle; knownsent0generated/generated_interrupted/interrupt=>settle; drain_timeout=>settleunknown; no turn_error-alone/positivegenerated/progresssettle. First completeclosed eventpreferred, manifestfallback; mismatchfailure. Incomplete tail addsuncertainatlastcompleteevent timestamp(orstart); pagePendingSources. Readallbeforegroup/page;64MiB/100000events/10000turnbudget. CaptureNowafterread. No new persistentstate or source writes.
 
-- [ ] Add cloudRED reader/HTTP tests and implement normalized timeline with source-safeprojectreuse.
-- [ ] Add timing/eventordering/partial/legacy/bounds/foreign/no-body(no eventsopened)/binding/expecteddevice/restartID/source links/auditfailclosed tests.
-- [ ] Cloud race conversation+management+CLI, vet and candidatebuild; source review/fix/commit.
+- [x] Add cloudRED reader/HTTP tests and implement normalized timeline with source-safeprojectreuse.
+- [x] Add timing/eventordering/partial/legacy/bounds/foreign/no-body(no eventsopened)/binding/expecteddevice/restartID/source links/auditfailclosed tests.
+- [x] Cloud race conversation+management+CLI, vet and candidatebuild; source review/fix/commit.
 
 Run `go test -race ./internal/conversation ./internal/management ./cmd/management && go vet ./internal/conversation ./internal/management ./cmd/management && go build -o ../management-chat-candidate ./cmd/management`.
 
@@ -74,14 +74,19 @@ Files: web/management/src/remote-api.ts/types.ts/pages/CorePages.vue and tests; 
 
 Interfaces: live listConversationPage/listConversations use/chats. getConversation chooses/chats onlyforchat_64hex, otherwise/conversations sourcecompat; expecteddevicepreserved. ExtendoptionalDTOfieldsinclpendingSources andsource refs. No dependencies/newnavigationframework.
 
-- [ ] RED transport testnewlist/detail andsourcecompat; implement adapters/types.
-- [ ] Currentpage groupedbychatstartdate, showrounds/connections/status/pendingbanner; detailshowbusinessmetadataandsourcecollapsedlinks. Sourceconnection detaillabelclearlydifferent. Keepgenerated/playedASRtruth, errorhiding/pollinflight/cacheguards/mock.
-- [ ] Cloud28existing+newtests,typecheck/mock+livebuilds; source review/commit.
-- [ ] Browser synthetictwo-connectionsonechat/midnight/archive/source links/status/pagination/403503/refresh/mobile; realinitialempty andmockcore regression.
+- [x] RED transport testnewlist/detail andsourcecompat; implement adapters/types.
+- [x] Currentpage groupedbychatstartdate, showrounds/connections/status/pendingbanner; detailshowbusinessmetadataandsourcecollapsedlinks. Sourceconnection detaillabelclearlydifferent. Keepgenerated/playedASRtruth, errorhiding/pollinflight/cacheguards/mock.
+- [x] Cloud28existing+newtests,typecheck/mock+livebuilds; source review/commit.
+- [x] Browser synthetictwo-connectionsonechat/midnight/archive/source links/status/pagination/403503/refresh/mobile; realinitialempty andmockcore regression.
 
 ## Task 4: Release and handoff
 
-- [ ] Broad review, focusfixes; cloudsource/binary/frontendtraceable release, restartmanagementonly, keep18790mock and18791real+sameaccount/binding.
-- [ ] Verify actualempty/new-onlyscope, sourcefiles+voicePID/health/protectedhashesunchanged, no model/firmware/physicaloperation.
-- [ ] Updatehandoff/platformplan/README/verification; commit/pushmain, verifyremoteSHA/clean tree.
-- [ ] Actualusernewtalk/stop/reconnect segmentverification stayspendinguntiluseravailable; syntheticchecks notfieldPASS.
+- [x] Broad review, focusfixes; cloudsource/binary/frontendtraceable release, restartmanagementonly, keep18790mock and18791real+sameaccount/binding.
+- [x] Verify actualempty/new-onlyscope, sourcefiles+voicePID/health/protectedhashesunchanged, no model/firmware/physicaloperation.
+- [x] Updatehandoff/platformplan/README/verification; commit/pushmain, verifyremoteSHA/clean tree.
+- [x] 用户实机步骤已明确保留待完成，不再请求当前操作；合成检查不计现场PASS。
+- [ ] 用户后续实际发言/明确结束/重连后的新聊天分段与播放事实核对。
+
+## 当前交付
+
+后端4c2a309、前端b5f29e7，独立管理发布chat-20261109-r1。读模型/两端实现、云端与浏览器复核完成；现场验收及语音上下文接入仍待后续。证据见[验证记录](../../verification/2026-11-09-chat-archive.md)。

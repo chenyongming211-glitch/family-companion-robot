@@ -23,3 +23,5 @@ install -d -m 0700 /var/lib/family-robot-management
 API只有登录/退出会修改会话，其他公开能力均只读。设备、家庭、账号和聊天的修改/删除、记忆清除及硬件操作不支持。近期记忆列表/详情只读接口已接入，使用现有记录根目录内.memory快照及相同正文/绑定授权，不增加挂载，不调用recordstore.Open/Load，不写原始快照或锁。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html、family.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
 
 验证门槛：云端 `go test -race ./internal/management ./cmd/management`、`go vet ./internal/management ./cmd/management`、`go build -o <private-output>/management ./cmd/management`，配合已核验的 live 前端。部署后的浏览器验收与用户新实机发言验证分开记录，合成测试不代表现场验收。
+
+业务聊天使用`GET /api/{scope}/chats`与`/chats/<chat_64hex>`，依据有效user_text和结算事实归档，列表也须正文许可；设备过滤和分页沿用连接接口，详情和列表均先写无正文审计。原`/conversations`保留来源兼容，记录与.memory目录挂载和账号/绑定配置不变。归档没有另存正文或删除源，缺失终态/部分尾行保留不确定；不修改语音模型上下文。
