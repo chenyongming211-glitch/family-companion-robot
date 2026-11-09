@@ -157,7 +157,7 @@ void Worker(void*) {
             if (Activate(id, proof)) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
                 running = false; esp_timer_stop(expiry_timer); ClearClaim(); network_prov_mgr_stop_provisioning();
-                if (callback) callback(true);
+                if (callback && !connection_reported.exchange(true)) callback(true);
                 worker_active = false; vTaskDelete(nullptr); return;
             }
             std::fill(proof.begin(), proof.end(), '\0');
@@ -259,7 +259,7 @@ void Start(std::function<void(bool)> connection) {
             while (!connected && esp_timer_get_time() < until) vTaskDelay(pdMS_TO_TICKS(250));
             if (connected && SecureClock() && Activate("", "")) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
-                worker_active = false; if (callback) callback(true);
+                worker_active = false; if (callback && !connection_reported.exchange(true)) callback(true);
             } else {
                 esp_wifi_disconnect(); esp_wifi_stop(); connected = false; worker_active = false;
                 Configure();
