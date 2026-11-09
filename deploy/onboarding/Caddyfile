@@ -1,0 +1,43 @@
+# Public connectivity checks only. Registration handlers are not deployed yet.
+# This configuration does not proxy the private management or voice listeners.
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
+robot.songguoxue.com {
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+		}
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Cache-Control no-store
+	}
+
+	@connectivity {
+		method GET HEAD
+		path /healthz
+	}
+	handle @connectivity {
+		header Content-Type application/json
+		respond `{"https":"ok","onboarding":"not_implemented"}` 200
+	}
+
+	@home {
+		method GET HEAD
+		path /
+	}
+	handle @home {
+		respond "机器人服务：HTTPS连接已就绪，扫码添加设备功能开发中。" 200
+	}
+
+	handle {
+		respond 404
+	}
+}
