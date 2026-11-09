@@ -10,7 +10,7 @@ import type {
   Account,
   Conversation,
 } from "../types.ts";
-import { api } from "../api.ts";
+import { api, liveMode } from "../api.ts";
 import { linkTo } from "../navigation.ts";
 import "../data-pages.css";
 const props = defineProps<{ scope: Scope; route: PageRoute }>();
@@ -67,8 +67,8 @@ async function load() {
   families.value = [];
   daily.value = [];
   try {
-    const ds = await api.listDevices(scope);
     const a = await api.getAccount(scope);
+    const ds = page === "login" ? [] : await api.listDevices(scope);
     let fs: Family[] = [],
       f: Family | null = null,
       ms: Memory[] = [],
@@ -77,8 +77,19 @@ async function load() {
     let ac: typeof accounts.value = [],
       days: typeof daily.value = [];
     if (page === "families") fs = await api.listFamilies(scope);
-    if (["family", "invite", "bind"].includes(page))
-      f = await api.getFamily(familyId, scope);
+    if (["family", "invite", "bind"].includes(page)) {
+      let selectedFamily = familyId;
+      if (
+        liveMode &&
+        !selectedFamily &&
+        !new URLSearchParams(location.hash.split("?")[1] || "").has("family")
+      ) {
+        fs = await api.listFamilies(scope);
+        selectedFamily = fs[0]?.id ?? "";
+      }
+      if (!selectedFamily) throw new Error("当前账号未关联可访问家庭。");
+      f = await api.getFamily(selectedFamily, scope);
+    }
     if (page === "accounts") ac = await api.listAccounts();
     if (["memories", "memory"].includes(page))
       ms = await api.listMemories({ deviceId, scope });
@@ -104,8 +115,11 @@ async function load() {
     privacy.value = p;
     accounts.value = ac;
     daily.value = days;
-    email.value =
-      scope === "admin" ? "admin@example.test" : "family@example.test";
+    email.value = liveMode
+      ? "owner"
+      : scope === "admin"
+        ? "admin@example.test"
+        : "family@example.test";
     secret.value = "";
   } catch (e) {
     if (token === request) error.value = message(e);
@@ -153,7 +167,7 @@ async function logout() {
     await api.logout(scope);
     if (token === request) {
       account.value = null;
-      feedback.value = "已退出演示账号。";
+      feedback.value = liveMode ? "已退出账号。" : "已退出演示账号。";
     }
   });
 }
@@ -259,7 +273,9 @@ function chatLink(m: Memory) {
 }
 </script>
 <template>
-  <div v-if="loading" class="panel" role="status">正在加载演示数据…</div>
+  <div v-if="loading" class="panel" role="status">
+    {{ liveMode ? "正在读取资料…" : "正在加载演示数据…" }}
+  </div>
   <div v-else-if="error" class="panel error" role="alert">
     <h1>暂时无法显示</h1>
     <p>{{ error }}</p>
@@ -269,36 +285,44 @@ function chatLink(m: Memory) {
     <template v-if="route.page === 'login'"
       ><div class="heading">
         <div>
-          <p class="eyebrow">演示账号</p>
+          <p class="eyebrow">{{ liveMode ? "账号登录" : "演示账号" }}</p>
           <h1>{{ scope === "admin" ? "内部登录" : "家庭登录" }}</h1>
-          <p>仅用于前端演示，请勿输入真实凭据。</p>
+          <p>
+            {{
+              liveMode
+                ? "请使用为你配置的管理平台账号。"
+                : "仅用于前端演示，请勿输入真实凭据。"
+            }}
+          </p>
         </div>
       </div>
       <form class="panel form" @submit.prevent="login">
-        <label for="login-email">邮箱</label
+        <label for="login-email">{{ liveMode ? "账号" : "邮箱" }}</label
         ><input
           id="login-email"
           v-model="email"
-          type="email"
-          pattern="[^@\s]+@example\.test"
+          :type="liveMode ? 'text' : 'email'"
+          :pattern="liveMode ? undefined : '[^@\\s]+@example\\.test'"
+          autocomplete="username"
           required
-        /><small>仅接受 @example.test 示例邮箱。</small
+        /><small v-if="!liveMode">仅接受 @example.test 示例邮箱。</small
         ><label for="login-secret">{{
-          scope === "admin" ? "演示密码" : "6 位演示验证码"
+          liveMode ? "密码" : scope === "admin" ? "演示密码" : "6 位演示验证码"
         }}</label
         ><input
           id="login-secret"
           v-model="secret"
-          :type="scope === 'admin' ? 'password' : 'text'"
+          :type="liveMode || scope === 'admin' ? 'password' : 'text'"
+          autocomplete="current-password"
           required
-          :inputmode="scope === 'family' ? 'numeric' : undefined"
-        /><small>不发送真实邮件或短信。</small
+          :inputmode="!liveMode && scope === 'family' ? 'numeric' : undefined"
+        /><small v-if="!liveMode">不发送真实邮件或短信。</small
         ><button :disabled="saving">
-          {{ saving ? "登录中…" : "登录演示" }}
+          {{ saving ? "登录中…" : liveMode ? "登录" : "登录演示" }}
         </button>
         <p role="status">{{ feedback }}</p>
         <p v-if="account">
-          当前演示账号：{{ account.email }}
+          {{ liveMode ? "当前账号：" : "当前演示账号：" }}{{ account.email }}
           <button
             type="button"
             class="text-button"
@@ -315,7 +339,11 @@ function chatLink(m: Memory) {
         <div>
           <p class="eyebrow">工作台 / 家庭</p>
           <h1>家庭管理</h1>
-          <p>查看虚构家庭及成员信息。</p>
+          <p>
+            {{
+              liveMode ? "查看已授权家庭与设备。" : "查看虚构家庭及成员信息。"
+            }}
+          </p>
         </div>
       </div>
       <div class="panel">
@@ -327,7 +355,12 @@ function chatLink(m: Memory) {
           :href="linkTo(scope, 'family', { family: f.id })"
           ><span
             ><b>{{ f.name }}</b
-            ><small>{{ f.id }} · {{ f.members.length }} 位成员</small></span
+            ><small
+              >{{ f.id }} ·
+              {{
+                liveMode ? "已授权家庭" : f.members.length + " 位成员"
+              }}</small
+            ></span
           >›</a
         >
       </div></template
@@ -337,12 +370,21 @@ function chatLink(m: Memory) {
         <div>
           <p class="eyebrow">家庭 / 成员</p>
           <h1>{{ family.name }}</h1>
-          <p>以下为本浏览器中的演示数据。</p>
+          <p>
+            {{
+              liveMode
+                ? "当前账号可访问的家庭与设备。"
+                : "以下为本浏览器中的演示数据。"
+            }}
+          </p>
         </div>
       </div>
       <div class="columns">
         <section class="panel">
-          <h2>家庭成员</h2>
+          <h2>{{ liveMode ? "访问范围" : "家庭成员" }}</h2>
+          <p v-if="liveMode">
+            本账号可查看本家庭获授权设备在本次绑定后的新记录。成员邀请与权限编辑尚未接入。
+          </p>
           <div
             v-for="member in family.members"
             :key="member.id"
@@ -355,7 +397,7 @@ function chatLink(m: Memory) {
                 {{ member.status }}</small
               ><small>正文访问：{{ member.access }}</small></span
             ><select
-              v-if="scope === 'admin'"
+              v-if="scope === 'admin' && !liveMode"
               :value="member.access"
               :disabled="saving"
               aria-label="正文访问权限"
@@ -389,7 +431,7 @@ function chatLink(m: Memory) {
           </div>
           <p role="status">{{ feedback }}</p>
           <a
-            v-if="scope === 'family'"
+            v-if="scope === 'family' && !liveMode"
             class="button"
             :href="linkTo(scope, 'invite', { family: family.id })"
             >邀请成员</a
@@ -411,14 +453,14 @@ function chatLink(m: Memory) {
             暂无设备
           </p>
           <a
-            v-if="scope === 'family'"
+            v-if="scope === 'family' && !liveMode"
             :href="linkTo(scope, 'bind', { family: family.id })"
             >绑定设备 →</a
           >
         </section>
       </div>
       <form
-        v-if="scope === 'family'"
+        v-if="scope === 'family' && !liveMode"
         class="panel form data-extra"
         @submit.prevent="join"
       >
@@ -504,7 +546,13 @@ function chatLink(m: Memory) {
         <div>
           <p class="eyebrow">工作台 / 账号</p>
           <h1>账号管理</h1>
-          <p>内部角色与聊天正文授权分别展示，均为演示。</p>
+          <p>
+            {{
+              liveMode
+                ? "内部工作角色与聊天正文授权分别管理。"
+                : "内部角色与聊天正文授权分别展示，均为演示。"
+            }}
+          </p>
         </div>
       </div>
       <section class="panel">

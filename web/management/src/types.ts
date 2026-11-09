@@ -16,9 +16,9 @@ export type Device = {
   activity: string;
   lastSeen: string;
   battery: number | null;
-  volume: number;
-  brightness: number;
-  revision: number;
+  volume: number | null;
+  brightness: number | null;
+  revision: number | null;
 };
 export type Turn = {
   id: string;
@@ -27,6 +27,10 @@ export type Turn = {
   generated: string;
   playback: "played" | "interrupted" | "unknown";
   saved: boolean;
+  textSource?: string;
+  boundary?: string;
+  exactStopKnown?: boolean;
+  recognitionMayDiffer?: boolean;
 };
 export type Conversation = {
   id: string;
@@ -40,6 +44,8 @@ export type Conversation = {
   summary: string;
   bodyAvailable: boolean;
   turns: Turn[];
+  sourceKind?: string;
+  recordStatus?: "saved" | "pending" | "error";
 };
 export type Memory = {
   id: string;

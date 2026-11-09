@@ -1,3 +1,4 @@
+import { liveMode } from "./api.ts";
 import type { Scope, PageRoute } from "./types.ts";
 export const adminNav = [
   ["overview", "总览"],
@@ -81,9 +82,9 @@ export function readRoute(scope: Scope): PageRoute {
   const params = new URLSearchParams(query);
   return {
     page: path?.replace(/^\//, "") || (scope === "admin" ? "overview" : "home"),
-    device: params.get("device") ?? "dev-living",
-    chat: params.get("chat") ?? "chat-run",
-    memory: params.get("memory") ?? "memory-run",
-    family: params.get("family") ?? "family-lin",
+    device: params.get("device") ?? (liveMode ? "" : "dev-living"),
+    chat: params.get("chat") ?? (liveMode ? "" : "chat-run"),
+    memory: params.get("memory") ?? (liveMode ? "" : "memory-run"),
+    family: params.get("family") ?? (liveMode ? "" : "family-lin"),
   };
 }

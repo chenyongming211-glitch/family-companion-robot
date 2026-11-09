@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Scope, PageRoute, Device, Conversation } from "../types.ts";
-import { api } from "../api.ts";
+import { api, liveMode } from "../api.ts";
 import { linkTo } from "../navigation.ts";
 const props = defineProps<{ scope: Scope; route: PageRoute }>();
 const emit = defineEmits<{ storageChanged: [] }>();
@@ -22,9 +22,27 @@ const explicitDevice = computed(() => {
 const name = ref(""),
   volume = ref(0),
   brightness = ref(0);
+const offset = ref(0),
+  hasMore = ref(false),
+  selectedDeviceId = ref("");
 let request = 0;
+let inFlight = false;
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  if (liveMode)
+    refreshTimer = setInterval(() => {
+      if (
+        document.visibilityState === "visible" &&
+        ["conversations", "conversation"].includes(props.route.page) &&
+        !inFlight &&
+        !saving.value
+      )
+        void load(true);
+    }, 5000);
+});
 onBeforeUnmount(() => {
   request++;
+  if (refreshTimer) clearInterval(refreshTimer);
 });
 const core = [
   "overview",
@@ -46,63 +64,116 @@ function message(e: unknown) {
         ? "没有找到这条记录，请检查链接。"
         : "加载失败，请稍后重试。";
 }
-async function load() {
-  const token = ++request;
-  loading.value = true;
-  error.value = "";
+async function load(silent = false) {
+  if (silent && inFlight) return;
+  inFlight = true;
+  const token = ++request,
+    selected = { ...props.route },
+    scope = props.scope,
+    hasDevice = explicitDevice.value;
+  if (!silent) {
+    loading.value = true;
+    device.value = null;
+    chat.value = null;
+    devices.value = [];
+    chats.value = [];
+  }
   feedback.value = "";
-  device.value = null;
-  chat.value = null;
-  devices.value = [];
-  chats.value = [];
   try {
-    const page = props.route.page;
-    const ds = await api.listDevices(props.scope);
+    const ds = await api.listDevices(scope);
+    const selectedDevice =
+      selected.device ||
+      (!hasDevice && liveMode ? (ds[0]?.id ?? "") : selected.device);
+    const page = selected.page;
     let d: Device | null = null,
       cs: Conversation[] = [],
-      c: Conversation | null = null;
-    if (["device", "settings", "configuration"].includes(page))
-      d = await api.getDevice(props.route.device, props.scope);
-    if (["overview", "home", "conversations"].includes(page))
-      cs = await api.listConversations({
-        scope: props.scope,
+      c: Conversation | null = null,
+      more = false;
+    if (
+      ["device", "settings", "configuration"].includes(page) &&
+      (selectedDevice || hasDevice)
+    )
+      d = await api.getDevice(selectedDevice, scope);
+    if (["overview", "home", "conversations"].includes(page)) {
+      const filter = {
+        scope,
         ...(page === "conversations" &&
-        (props.scope === "family" || explicitDevice.value)
-          ? { deviceId: props.route.device }
+        ((scope === "family" && selectedDevice !== "") || hasDevice)
+          ? { deviceId: selectedDevice }
           : {}),
-      });
+        offset: page === "conversations" ? offset.value : 0,
+        limit: page === "conversations" ? 50 : 5,
+      };
+      const result = await api.listConversationPage(filter);
+      cs = result.items;
+      more = result.hasMore;
+    }
     if (page === "conversation")
       c = await api.getConversation(
-        props.route.chat,
-        props.scope,
-        explicitDevice.value ? props.route.device : undefined,
+        selected.chat,
+        scope,
+        hasDevice ? selected.device : undefined,
       );
     if (token !== request) return;
+    error.value = "";
     devices.value = ds;
+    selectedDeviceId.value = selectedDevice;
     device.value = d;
     chats.value = cs;
     chat.value = c;
+    hasMore.value = more;
     if (d) {
       name.value = d.name;
-      volume.value = d.volume;
-      brightness.value = d.brightness;
+      volume.value = d.volume ?? 0;
+      brightness.value = d.brightness ?? 0;
     }
   } catch (e) {
-    if (token === request) error.value = message(e);
+    if (token === request) {
+      device.value = null;
+      chat.value = null;
+      devices.value = [];
+      chats.value = [];
+      selectedDeviceId.value = "";
+      hasMore.value = false;
+      error.value = message(e);
+    }
   } finally {
-    if (token === request) loading.value = false;
+    if (token === request) {
+      loading.value = false;
+      inFlight = false;
+    }
   }
 }
+function changePage(step: number) {
+  offset.value = Math.max(0, offset.value + step * 50);
+  void load();
+}
+function connectionLabel(value: string) {
+  return value === "unknown"
+    ? "未上报"
+    : value === "latest_connection"
+      ? "最近有连接"
+      : value;
+}
+function lastSeen(value: string) {
+  if (!value) return "未上报";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
+}
+
 watch(
   () => props.route,
   () => {
     displayState.value = "normal";
+    offset.value = 0;
     load();
   },
   { immediate: true },
 );
 async function save() {
-  if (!device.value) return;
+  if (liveMode || !device.value) return;
   const id = device.value.id;
   const token = request;
   saving.value = true;
@@ -167,6 +238,7 @@ function chatLink(c: Conversation) {
 }
 async function deleteChat() {
   if (
+    liveMode ||
     !chat.value ||
     saving.value ||
     !confirm("删除这段演示聊天及其关联的演示记忆、每日条目？真实记录不受影响。")
@@ -196,12 +268,25 @@ async function deleteChat() {
     <h1>页面正在准备中</h1>
     <p>此演示页面将在后续批次提供。</p>
   </div>
-  <div v-else-if="loading" class="panel" role="status">正在加载演示数据…</div>
+  <div v-else-if="loading" class="panel" role="status">
+    {{ liveMode ? "正在读取记录…" : "正在加载演示数据…" }}
+  </div>
   <div v-else-if="error" class="panel error" role="alert">
     <h1>暂时无法显示</h1>
     <p>{{ error }}</p>
-    <button @click="load">重试</button>
+    <button @click="load()">重试</button>
   </div>
+  <section
+    v-else-if="
+      liveMode &&
+      !devices.length &&
+      ['device', 'settings', 'configuration'].includes(route.page)
+    "
+    class="panel"
+  >
+    <h1>暂无可访问设备</h1>
+    <p>请联系家庭管理员配置设备访问范围。</p>
+  </section>
   <template v-else>
     <template v-if="route.page === 'overview' || route.page === 'home'">
       <div class="heading">
@@ -210,13 +295,19 @@ async function deleteChat() {
             {{ scope === "admin" ? "工作台 / 总览" : "你好，欢迎回来" }}
           </p>
           <h1>{{ scope === "admin" ? "管理总览" : "和家人一起，慢慢长大" }}</h1>
-          <p>这里展示虚构的设备和聊天示例。</p>
+          <p>
+            {{
+              liveMode
+                ? "查看已授权的设备和本次绑定后的聊天记录。"
+                : "这里展示虚构的设备和聊天示例。"
+            }}
+          </p>
         </div>
         <a
           class="button"
           :href="
             linkTo(scope, scope === 'admin' ? 'devices' : 'device', {
-              device: route.device,
+              device: selectedDeviceId,
             })
           "
           >查看设备 →</a
@@ -225,15 +316,18 @@ async function deleteChat() {
       <div class="stats">
         <div class="panel">
           <span>设备</span><strong>{{ devices.length }}</strong
-          ><small>演示设备</small>
+          ><small>{{ liveMode ? "获授权设备" : "演示设备" }}</small>
         </div>
         <div class="panel">
           <span>聊天记录</span><strong>{{ chats.length }}</strong
-          ><small>示例会话</small>
+          ><small>{{ liveMode ? "当前加载的连接记录" : "示例会话" }}</small>
         </div>
         <div class="panel">
-          <span>服务状态</span><strong class="status">演示模式</strong
-          ><small>未连接真实服务</small>
+          <span>服务状态</span
+          ><strong class="status">{{
+            liveMode ? "真实只读" : "演示模式"
+          }}</strong
+          ><small>{{ liveMode ? "管理服务已接入" : "未连接真实服务" }}</small>
         </div>
       </div>
       <div class="columns">
@@ -243,7 +337,7 @@ async function deleteChat() {
             <a
               :href="
                 linkTo(scope, scope === 'admin' ? 'devices' : 'device', {
-                  device: route.device,
+                  device: selectedDeviceId,
                 })
               "
               >查看全部 →</a
@@ -259,17 +353,26 @@ async function deleteChat() {
             ><span
               ><b>{{ d.name }}</b
               ><small>{{ d.location }} · {{ d.model }}</small></span
-            ><span class="badge">{{ d.connection }}</span></a
+            ><span class="badge">{{ connectionLabel(d.connection) }}</span></a
           >
         </section>
         <section class="panel">
           <div class="section-head">
             <h2>最近聊天</h2>
-            <a :href="linkTo(scope, 'conversations', { device: route.device })"
+            <a
+              :href="
+                linkTo(scope, 'conversations', { device: selectedDeviceId })
+              "
               >查看记录 →</a
             >
           </div>
-          <div v-if="!chats.length" class="empty">暂无聊天记录</div>
+          <div v-if="!chats.length" class="empty">
+            {{
+              liveMode
+                ? "暂无绑定后的聊天记录；机器人连接并说话后可刷新查看。"
+                : "暂无聊天记录"
+            }}
+          </div>
           <a
             v-for="c in chats.slice(0, 4)"
             :key="c.id"
@@ -288,7 +391,13 @@ async function deleteChat() {
         <div>
           <p class="eyebrow">工作台 / 设备</p>
           <h1>设备管理</h1>
-          <p>查看设备与家庭的示例关联。</p>
+          <p>
+            {{
+              liveMode
+                ? "查看当前账号获授权的设备。"
+                : "查看设备与家庭的示例关联。"
+            }}
+          </p>
         </div>
       </div>
       <div class="panel">
@@ -302,7 +411,7 @@ async function deleteChat() {
           ><span
             ><b>{{ d.name }}</b
             ><small>{{ d.id }} · {{ d.model }} · {{ d.location }}</small></span
-          ><span class="badge">{{ d.connection }}</span
+          ><span class="badge">{{ connectionLabel(d.connection) }}</span
           ><span>›</span></a
         >
       </div></template
@@ -316,7 +425,7 @@ async function deleteChat() {
           <h1>{{ device.name }}</h1>
           <p>{{ device.location }} · {{ device.model }}</p>
         </div>
-        <span class="badge">{{ device.connection }}</span>
+        <span class="badge">{{ connectionLabel(device.connection) }}</span>
       </div>
       <div class="columns">
         <section class="panel">
@@ -324,19 +433,29 @@ async function deleteChat() {
           <dl>
             <div>
               <dt>当前状态</dt>
-              <dd>{{ device.activity }}</dd>
+              <dd>
+                {{ device.activity === "unknown" ? "未上报" : device.activity }}
+              </dd>
             </div>
             <div>
               <dt>最近上报</dt>
-              <dd>{{ device.lastSeen }}</dd>
+              <dd>{{ lastSeen(device.lastSeen) }}</dd>
             </div>
             <div>
               <dt>音量</dt>
-              <dd>{{ device.volume }}%</dd>
+              <dd>
+                {{ device.volume === null ? "未上报" : device.volume + "%" }}
+              </dd>
             </div>
             <div>
               <dt>屏幕亮度</dt>
-              <dd>{{ device.brightness }}%</dd>
+              <dd>
+                {{
+                  device.brightness === null
+                    ? "未上报"
+                    : device.brightness + "%"
+                }}
+              </dd>
             </div>
           </dl>
           <a
@@ -354,10 +473,15 @@ async function deleteChat() {
           <a
             class="list-row"
             :href="linkTo(scope, 'conversations', { device: device.id })"
-            ><span><b>聊天记录</b><small>查看这台设备的示例聊天</small></span
+            ><span
+              ><b>聊天记录</b
+              ><small>{{
+                liveMode ? "查看这台设备的文字记录" : "查看这台设备的示例聊天"
+              }}</small></span
             >›</a
           ><a
             class="list-row"
+            v-if="!liveMode"
             :href="linkTo(scope, 'memories', { device: device.id })"
             ><span><b>设备记忆</b><small>查看近期记忆片段</small></span
             >›</a
@@ -375,10 +499,20 @@ async function deleteChat() {
         <div>
           <p class="eyebrow">记录 / 聊天</p>
           <h1>聊天记录</h1>
-          <p>按日期查看示例会话；实际归档功能待开发。</p>
+          <p>
+            {{
+              liveMode
+                ? "仅展示本次绑定后的记录，当前每次连接单独展示，30分钟聊天归档尚未接入。"
+                : "按日期查看示例会话；实际归档功能待开发。"
+            }}
+          </p>
         </div>
       </div>
       <div class="panel">
+        <div v-if="liveMode" class="section-head">
+          <p>每5秒检查当前页面的新记录。</p>
+          <button :disabled="loading" @click="load()">刷新记录</button>
+        </div>
         <label for="chat-device">选择设备</label
         ><select
           id="chat-device"
@@ -387,7 +521,7 @@ async function deleteChat() {
               ? route.device
               : scope === 'admin'
                 ? ''
-                : route.device
+                : selectedDeviceId
           "
           @change="selectChatDevice"
         >
@@ -395,8 +529,8 @@ async function deleteChat() {
           <option v-for="d in devices" :key="d.id" :value="d.id">
             {{ d.name }} · {{ d.location }}
           </option></select
-        ><label for="chat-state">演示显示状态</label
-        ><select id="chat-state" v-model="displayState">
+        ><label v-if="!liveMode" for="chat-state">演示显示状态</label
+        ><select v-if="!liveMode" id="chat-state" v-model="displayState">
           <option value="normal">正常</option>
           <option value="loading">加载中</option>
           <option value="empty">空记录</option>
@@ -414,7 +548,7 @@ async function deleteChat() {
           }}
         </p>
         <template v-if="displayState === 'normal'"
-          ><label for="search">搜索标题</label
+          ><label for="search">筛选当前页标题</label
           ><input id="search" v-model="search" placeholder="输入聊天标题" />
           <div
             v-if="!chats.filter((c) => c.title.includes(search)).length"
@@ -434,13 +568,24 @@ async function deleteChat() {
                 {{
                   devices.find((d) => d.id === c.deviceId)?.name || "未知设备"
                 }}</small
-              ><small>{{ c.summary || "正文不可用" }}</small></span
+              ><small>{{
+                c.summary ||
+                (c.bodyAvailable ? "点击查看文字与播放记录" : "正文未授权")
+              }}</small></span
             ><span>›</span></a
           ></template
         >
       </div></template
     >
-    <template v-else-if="route.page === 'conversation' && chat"
+    <div v-if="liveMode && route.page === 'conversations'" class="section-head">
+      <button :disabled="offset === 0 || loading" @click="changePage(-1)">
+        上一页</button
+      ><span>第{{ Math.floor(offset / 50) + 1 }}页</span
+      ><button :disabled="!hasMore || loading" @click="changePage(1)">
+        下一页
+      </button>
+    </div>
+    <template v-if="route.page === 'conversation' && chat"
       ><div class="heading">
         <div>
           <p class="eyebrow">
@@ -455,7 +600,15 @@ async function deleteChat() {
       </div>
       <section class="panel">
         <p class="muted">{{ chat.summary }}</p>
-        <button class="danger-button" :disabled="saving" @click="deleteChat">
+        <p v-if="liveMode && chat.recordStatus === 'pending'" role="status">
+          记录仍在更新，请稍后刷新。
+        </p>
+        <button
+          v-if="!liveMode"
+          class="danger-button"
+          :disabled="saving"
+          @click="deleteChat"
+        >
           删除这段演示聊天
         </button>
         <p role="status">{{ feedback }}</p>
@@ -476,7 +629,15 @@ async function deleteChat() {
                     : "播放状态未知"
               }}</b
             >
-            <p>{{ turn.played || "暂无已播正文" }}</p>
+            <p>
+              {{
+                turn.played ||
+                (liveMode ? "暂无可靠的已播文字记录" : "暂无已播正文")
+              }}
+            </p>
+            <small v-if="liveMode && turn.textSource === 'output_asr'"
+              >这部分文字来自已播音频识别，可能有误差。</small
+            >
             <small>记录{{ turn.saved ? "已保存" : "保存状态未知" }}</small>
             <details v-if="turn.generated && turn.generated !== turn.played">
               <summary>查看生成稿</summary>
@@ -494,10 +655,41 @@ async function deleteChat() {
         <div>
           <p class="eyebrow">设备 / 设置</p>
           <h1>{{ scope === "admin" ? "设备配置" : device.name + "的设置" }}</h1>
-          <p>只修改当前浏览器中的示例数据。</p>
+          <p>
+            {{
+              liveMode
+                ? "当前显示只读资料，网页设置下发尚未接入。"
+                : "只修改当前浏览器中的示例数据。"
+            }}
+          </p>
         </div>
       </div>
-      <form class="panel form" @submit.prevent="save">
+      <section v-if="liveMode" class="panel form">
+        <h2>只读设备资料</h2>
+        <dl>
+          <div>
+            <dt>名称</dt>
+            <dd>{{ device.name }}</dd>
+          </div>
+          <div>
+            <dt>音量</dt>
+            <dd>
+              {{ device.volume === null ? "未上报" : device.volume + "%" }}
+            </dd>
+          </div>
+          <div>
+            <dt>亮度</dt>
+            <dd>
+              {{
+                device.brightness === null ? "未上报" : device.brightness + "%"
+              }}
+            </dd>
+          </div>
+        </dl>
+        <p>网页修改名称、音量和亮度将在后续接入；这里不会下发设备操作。</p>
+        <a class="button" :href="linkTo(scope, 'family')">查看家庭与访问范围</a>
+      </section>
+      <form v-else class="panel form" @submit.prevent="save">
         <label for="settings-device">选择设备</label
         ><select
           id="settings-device"

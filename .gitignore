@@ -33,4 +33,5 @@ __pycache__/
 # Frontend dependencies, generated bundles and local browser outputs.
 /web/management/node_modules/
 /web/management/dist/
+/web/management/dist-live/
 /web/management/test-results/
