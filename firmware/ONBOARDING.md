@@ -2,6 +2,8 @@
 
 **NEW FACTORY FULL FLASH ONLY.** This is an isolated candidate workflow for new Waveshare/M5 ESP32-S3 units. It is not an OTA or app-only update for existing boards. It does not flash devices or replace the current standard firmware builds. Real phone/device interoperation remains a separate acceptance step.
 
+An existing Waveshare may enter this factory layout only through the separately authorized [backed-up legacy migration](../docs/superpowers/specs/2026-11-09-waveshare-legacy-migration-design.md): preserve its original device/binding/history, verify two complete private Flash backups, stage matching factory authority/code/NVS, then perform a complete-image installation with full readback. Do not overlay factory NVS or an app image onto a running legacy layout. The current board's actual preparation and phone deferral are tracked in the [migration verification](../docs/verification/2026-11-09-waveshare-legacy-migration.md).
+
 Use the cloud server for dependencies, tests, builds and private factory material. Never put factory bundles, NVS images or generated firmware into Git or copy them onto the Mac. No C3 target is supported.
 
 1. Obtain the exact IDF/extra-component sources and S3 submodule revisions recorded in `onboarding.lock.json`. Install IDF v6.1.0 tools for ESP32-S3 in an isolated directory. The `lib_esp32c3_family` SDK submodule also contains the S3 BLE controller; its name does not imply C3 product support.
