@@ -37,7 +37,7 @@ int xTaskCreate(void(*fn)(void*),const char*,int size,void*,int,TaskHandle_t* ha
 void join(){if(task){task->thread.join();delete task;task=nullptr;}}
 void vTaskDelete(void*){++deleted;}void vTaskDelay(unsigned){}
 void LogConfigure(const char*,int){}
-bool Activated(){return false;}void BeginSetup(){}void ClearClaim(){}
+bool Activated(){return false;}bool PrepareActivatedVoice(){assert(false);return false;}void BeginSetup(){}void ClearClaim(){}
 void ShowSetup(SetupPhase p,uint32_t=0){if(p==SetupPhase::StartError)++errors;}
 unsigned CurrentSetup(){assert(service_ready&&endpoint_ready&&timer_ready);++epoch_reads;return 1;}
 bool SecureClock(){assert(service_ready&&endpoint_ready&&timer_ready);++tls;return false;}

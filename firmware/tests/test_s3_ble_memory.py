@@ -1,4 +1,4 @@
-"""Cloud checks for isolated M5 config and actual pinned Bluedroid allocator macros."""
+"""Cloud checks for shared S3 config and actual pinned Bluedroid allocator macros."""
 import importlib.util
 import json
 import os
@@ -11,28 +11,29 @@ FLAG='CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y'
 def module():
     spec=importlib.util.spec_from_file_location('prepare',ROOT/'tools/prepare_onboarding.py')
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
-class M5BleMemory(unittest.TestCase):
+class S3BleMemory(unittest.TestCase):
     def config(self,tree):
         path=tree/'main/boards/m5stack/stopwatch/config.json';path.parent.mkdir(parents=True)
         data={'type':'m5stack-stopwatch','target':'esp32s3','builds':[{'name':n,'sdkconfig_append':['CONFIG_SPIRAM=y','CONFIG_KEEP=y']} for n in ['m5stack-stopwatch','m5stack-stopwatch-software-aec','m5stack-stopwatch-xiaoman']]}
         path.write_text(json.dumps(data));return path,data
-    def test_only_isolated_m5_build_entries_gain_host_psram_preference(self):
+    def test_common_onboarding_default_preserves_both_board_profiles(self):
         with tempfile.TemporaryDirectory() as d:
             tree=Path(d);path,data=self.config(tree)
             wave=tree/'main/boards/waveshare/config.json';wave.parent.mkdir(parents=True);wave.write_text('wave sentinel')
-            defaults=tree/'sdkconfig.defaults';defaults.write_text('defaults sentinel')
-            prepare=module();self.assertTrue(hasattr(prepare,'prepare_m5_ble_memory'),'missing isolated M5 host-allocation config')
-            prepare.prepare_m5_ble_memory(tree)
-            expected=json.loads(json.dumps(data))
-            for build in expected['builds']:build['sdkconfig_append'].append(FLAG)
-            self.assertEqual(json.loads(path.read_text()),expected)
-            self.assertEqual(wave.read_text(),'wave sentinel');self.assertEqual(defaults.read_text(),'defaults sentinel')
+            defaults=tree/'sdkconfig.defaults';defaults.write_text('defaults sentinel\n')
+            prepare=module();self.assertTrue(hasattr(prepare,'prepare_s3_ble_memory'),'missing shared S3 host-allocation policy')
+            prepare.prepare_s3_ble_memory(tree)
+            self.assertEqual(json.loads(path.read_text()),data)
+            self.assertEqual(wave.read_text(),'wave sentinel')
+            self.assertTrue(defaults.read_text().startswith('defaults sentinel\n'))
+            self.assertEqual(defaults.read_text().count(FLAG),1)
     @unittest.skipUnless(os.getenv('IDF_PATH'),'requires actual cloud SDK header')
     def test_actual_sdk_allocator_prefers_psram_and_retains_internal_fallback(self):
         with tempfile.TemporaryDirectory() as d:
             tree=Path(d);path,_=self.config(tree);prepare=module()
-            if hasattr(prepare,'prepare_m5_ble_memory'):prepare.prepare_m5_ble_memory(tree)
-            enabled=FLAG in json.loads(path.read_text())['builds'][0]['sdkconfig_append']
+            defaults=tree/'sdkconfig.defaults';defaults.write_text('')
+            if hasattr(prepare,'prepare_s3_ble_memory'):prepare.prepare_s3_ble_memory(tree)
+            enabled=FLAG in defaults.read_text()
             fake=tree/'fake';fake.mkdir();(fake/'esp_log.h').write_text('')
             (fake/'esp_heap_caps.h').write_text('''
 #define MALLOC_CAP_DEFAULT 1

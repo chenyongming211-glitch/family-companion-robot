@@ -31,6 +31,7 @@ constexpr int NETWORK_PROV_WIFI_CRED_FAIL=1,WIFI_EVENT_STA_START=2,WIFI_EVENT_ST
 std::atomic<bool> running{false},connected{false},clock_worker{false},clock_synced{false},connection_reported{false};
 std::atomic<unsigned> network_generation{0};
 std::function<void(bool)> callback;
+bool resources_ready=true;bool VoiceResourcesReady(){return resources_ready;}
 bool activated=false; int resets=0,notices=0,sntp_starts=0,waits=0,sync_result=ESP_OK,connects=0,queued=0;
 void (*task)(void*)=nullptr; std::function<void()> on_wait;
 bool Activated(){return activated;}
@@ -48,6 +49,9 @@ struct Board {static Board& GetInstance(){static Board b;return b;} Display* Get
         body=fake+'\n'+function(source,'bool SecureClock() {')+'\n'+function(source,'bool PostConnected(')+'\n'+function(source,'void ScheduleClock() {')+'\n'+function(source,'void TimeSynchronized(')+'\n'+function(source,'void Event(')+r'''
 void deliver(){auto pending=events;events.clear();for(auto generation:pending)Event(nullptr,FAMILY_CONNECTION_EVENT,ClockReady,&generation);}
 int main(){
+ int blocked=0;callback=[&](bool){++blocked;};activated=connected=clock_synced=true;resources_ready=false;
+ uint32_t gen=network_generation.load();Event(nullptr,FAMILY_CONNECTION_EVENT,ClockReady,&gen);ScheduleClock();assert(blocked==0&&queued==0);
+ resources_ready=true;activated=connected=clock_synced=false;callback=nullptr;
  running=true; Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_RECV,nullptr);
  assert(screens.size()==1&&screens.back()==SetupPhase::Connecting);
  Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_FAIL,nullptr); assert(resets==1&&notices==1);

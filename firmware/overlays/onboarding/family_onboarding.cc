@@ -9,6 +9,8 @@
 #include <esp_netif_sntp.h>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <esp_bt.h>
+#include <esp_bt_main.h>
 #include "board.h"
 #include "display.h"
 #include <esp_timer.h>
@@ -45,29 +47,56 @@ std::atomic<int64_t> deadline{0};
 bool initialized = false;
 bool manager_ready = false;
 bool endpoint_created = false;
+std::atomic<bool> voice_resources_ready{false};
 esp_timer_handle_t expiry_timer = nullptr;
 
+bool VoiceResourcesReady() {
+    return voice_resources_ready.load();
+}
 struct ConfigureStartupSnapshot {
     const char* stage=nullptr;
     int result=0;
     unsigned internal=0,largest=0,free8=0;
+    int reclaimed=0;unsigned resource_stage=0,prior_internal=0;
 };
 ConfigureStartupSnapshot configure_startup;
 bool configure_startup_pending=false;
 portMUX_TYPE configure_startup_mux=portMUX_INITIALIZER_UNLOCKED;
 
 // Only fixed Configure stage literals and numeric allocator/API facts are logged.
-void LogConfigure(const char* stage,int result) {
+void LogConfigure(const char* stage,int result,int reclaimed=0,unsigned resource_stage=0,unsigned prior_internal=0) {
     constexpr uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
     const ConfigureStartupSnapshot snapshot{stage,result,
-        static_cast<unsigned>(heap_caps_get_free_size(caps)),
+        resource_stage?static_cast<unsigned>(static_cast<int>(prior_internal)+reclaimed):static_cast<unsigned>(heap_caps_get_free_size(caps)),
         static_cast<unsigned>(heap_caps_get_largest_free_block(caps)),
-        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT))};
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),reclaimed,resource_stage,prior_internal};
     portENTER_CRITICAL(&configure_startup_mux);
     configure_startup=snapshot;configure_startup_pending=true;
     portEXIT_CRITICAL(&configure_startup_mux);
-    ESP_LOGI("FamilySetup","configure stage=%s err=%d internal=%u largest=%u free8=%u",
-        snapshot.stage,snapshot.result,snapshot.internal,snapshot.largest,snapshot.free8);
+    ESP_LOGI("FamilySetup","configure stage=%s err=%d internal=%u largest=%u free8=%u reclaimed=%d resource_stage=%u prior_internal=%u",
+        snapshot.stage,snapshot.result,snapshot.internal,snapshot.largest,snapshot.free8,snapshot.reclaimed,snapshot.resource_stage,snapshot.prior_internal);
+}
+
+bool PrepareActivatedVoice() {
+    if(!Activated())return false; // Never make an unbound retry's BLE memory unavailable.
+    if(VoiceResourcesReady())return true;
+    const auto before=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    unsigned stage=1;
+    auto result=ESP_OK;
+    if(manager_ready) {
+        result=network_prov_mgr_deinit(); // Blocking: no voice callback until transport teardown completes.
+        if(result==ESP_OK) {manager_ready=false;endpoint_created=false;}
+    }
+    if(result==ESP_OK) {
+        stage=2;
+        if(esp_bt_controller_get_status()!=ESP_BT_CONTROLLER_STATUS_IDLE ||
+            esp_bluedroid_get_status()!=ESP_BLUEDROID_STATUS_UNINITIALIZED)result=ESP_ERR_INVALID_STATE;
+    }
+    if(result==ESP_OK) {stage=3;result=esp_bt_mem_release(ESP_BT_MODE_BLE);}
+    const auto after=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    LogConfigure("voice_bt_cleanup",result,static_cast<int>(after)-static_cast<int>(before),stage,static_cast<unsigned>(before));
+    if(result==ESP_OK)voice_resources_ready=true;
+    return result==ESP_OK;
 }
 
 void RenderSetup() {
@@ -210,7 +239,7 @@ bool PostConnected(uint32_t generation) {
     return esp_event_post(FAMILY_CONNECTION_EVENT, ClockReady, &generation, sizeof(generation), pdMS_TO_TICKS(500)) == ESP_OK;
 }
 void ScheduleClock() {
-    if (!Activated() || !connected || connection_reported || clock_worker.exchange(true)) return;
+    if (!VoiceResourcesReady() || !Activated() || !connected || connection_reported || clock_worker.exchange(true)) return;
     if (xTaskCreate([](void*) {
         const auto generation = network_generation.load();
         const bool ready = SecureClock();
@@ -249,7 +278,10 @@ void Worker(void*) {
             ShowSetup(SetupPhase::Confirming,epoch);
             if (Activate(id, proof)) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
-                running = false; esp_timer_stop(expiry_timer); ClearClaim(); network_prov_mgr_stop_provisioning();
+                running = false; esp_timer_stop(expiry_timer); ClearClaim();
+                if(!PrepareActivatedVoice()) {
+                    ShowSetup(SetupPhase::StartError,epoch);worker_active=false;vTaskDelete(nullptr);return;
+                }
                 ShowSetup(SetupPhase::Success,epoch);
                 vTaskDelay(pdMS_TO_TICKS(2000));
                 ShowSetup(SetupPhase::Hidden,epoch);
@@ -267,7 +299,7 @@ void Worker(void*) {
 void Event(void*, esp_event_base_t base, int32_t event, void* data) {
     if (base == FAMILY_CONNECTION_EVENT && event == ClockReady) {
         const auto generation = *static_cast<const uint32_t*>(data);
-        if (generation == network_generation && connected && Activated() && clock_synced &&
+        if (VoiceResourcesReady() && generation == network_generation && connected && Activated() && clock_synced &&
             !connection_reported.exchange(true) && callback) callback(true);
         return;
     }
@@ -295,10 +327,17 @@ void ReportConfigureStartup() {
     ConfigureStartupSnapshot snapshot;
     portENTER_CRITICAL(&configure_startup_mux);
     const bool report=configure_startup_pending;
-    if(report) {snapshot=configure_startup;configure_startup_pending=false;}
+    if(report) {
+        snapshot=configure_startup;
+        // Early USB output can be lost: repeat only the fixed cleanup fact in existing heap telemetry.
+        configure_startup_pending=snapshot.resource_stage!=0;
+    }
     portEXIT_CRITICAL(&configure_startup_mux);
-    if(report) ESP_LOGI("FamilySetup","configure replay stage=%s err=%d internal=%u largest=%u free8=%u",
-        snapshot.stage,snapshot.result,snapshot.internal,snapshot.largest,snapshot.free8);
+    if(report) ESP_LOGI("FamilySetup","configure replay stage=%s err=%d internal=%u largest=%u free8=%u reclaimed=%d resource_stage=%u prior_internal=%u",
+        snapshot.stage,snapshot.result,snapshot.internal,snapshot.largest,snapshot.free8,snapshot.reclaimed,snapshot.resource_stage,snapshot.prior_internal);
+}
+bool PrepareVoiceOnBoot() {
+    return !Present() || !Activated() || PrepareActivatedVoice();
 }
 bool Present() {
     nvs_handle_t h; const auto err = nvs_open("family_factory", NVS_READONLY, &h);
@@ -372,6 +411,7 @@ void Start(std::function<void(bool)> connection) {
     if (!valid || key.size() != 43 || Settings("family_factory").GetString("mac") != SystemInfo::GetMacAddress()) return;
     lock = xSemaphoreCreateMutex(); if (!lock) return;
     if (!screen_ready) {BeginSetup();ShowSetup(SetupPhase::CodeError);return;}
+    if(Activated() && !PrepareActivatedVoice()) {BeginSetup();ShowSetup(SetupPhase::StartError);return;}
     auto err = esp_netif_init(); if (err != ESP_OK) return;
     err = esp_event_loop_create_default(); if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return;
     if (!esp_netif_create_default_wifi_sta()) return;
@@ -407,6 +447,9 @@ void Start(std::function<void(bool)> connection) {
             if (ready)ShowSetup(SetupPhase::Confirming,epoch);
             if (ready && Activate("", "")) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
+                if(!PrepareActivatedVoice()) {
+                    ShowSetup(SetupPhase::StartError,epoch);worker_active=false;vTaskDelete(nullptr);return;
+                }
                 ShowSetup(SetupPhase::Success,epoch);vTaskDelay(pdMS_TO_TICKS(2000));
                 ShowSetup(SetupPhase::Hidden,epoch);
                 worker_active = false; if (!PostConnected(network_generation.load())) ScheduleClock();

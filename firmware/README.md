@@ -592,3 +592,12 @@ status, response length and elapsed milliseconds at INFO. It never logs protocol
 payloads, Wi-Fi values, claim/key material or phone identifiers. These stage
 markers help isolate a native-client timeout; they do not establish its cause or
 change Security2, device proof or strict framing validation.
+
+Both supported S3 onboarding profiles share Bluetooth host PSRAM preference and
+activated-only Bluetooth cleanup. After a durable activation receipt, the common
+path blocks until the provisioning manager shuts down, releases unused BLE
+memory, then permits voice callbacks. Activated boot performs that release before
+Wi-Fi initialization. Unbound failures, expiry and retries retain BLE resources;
+cleanup failure keeps voice gated and records numeric diagnostics for the existing
+heap telemetry. Stock preparation and board codec/DMA adapters retain their
+existing behavior. Host/native checks do not replace stable-device observation.

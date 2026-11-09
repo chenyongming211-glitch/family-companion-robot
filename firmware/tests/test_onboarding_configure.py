@@ -35,9 +35,9 @@ void portENTER_CRITICAL(portMUX_TYPE*){assert(critical_depth++==0);}
 void portEXIT_CRITICAL(portMUX_TYPE*){assert(--critical_depth==0);}
 size_t heap_caps_get_free_size(uint32_t caps){assert(!critical_depth);assert(caps==2||caps==3);return caps==3?live_heap:1000;}
 size_t heap_caps_get_largest_free_block(uint32_t caps){assert(!critical_depth);assert(caps==3);return 50;}
-void LogInfo(const char* tag,const char* format,const char* stage,int result,unsigned internal,unsigned largest,unsigned free8){
- assert(!critical_depth);assert(std::string(tag)=="FamilySetup");assert(std::string(format)=="configure stage=%s err=%d internal=%u largest=%u free8=%u"||std::string(format)=="configure replay stage=%s err=%d internal=%u largest=%u free8=%u");
- assert(internal==100&&largest==50&&free8==1000);logs.emplace_back(stage,result);
+void LogInfo(const char* tag,const char* format,const char* stage,int result,unsigned internal,unsigned largest,unsigned free8,int reclaimed,unsigned resource_stage,unsigned prior_internal){
+ assert(!critical_depth);assert(std::string(tag)=="FamilySetup");assert(std::string(format)=="configure stage=%s err=%d internal=%u largest=%u free8=%u reclaimed=%d resource_stage=%u prior_internal=%u"||std::string(format)=="configure replay stage=%s err=%d internal=%u largest=%u free8=%u reclaimed=%d resource_stage=%u prior_internal=%u");
+ assert(largest==50&&free8==1000);if(std::string(stage)=="voice_bt_cleanup"){assert(reclaimed==12345&&resource_stage==3&&prior_internal==100&&internal==12445);}else{assert(internal==100&&reclaimed==0&&resource_stage==0&&prior_internal==0);}logs.emplace_back(stage,result);
 }
 #define ESP_LOGI LogInfo
 bool Activated(){return false;}
@@ -78,6 +78,9 @@ int main(){
  logs.clear();live_heap=999;ReportConfigureStartup();
  assert(logs.size()==1&&logs.back().first=="endpoint_create"&&logs.back().second==456);
  logs.clear();ReportConfigureStartup();assert(logs.empty());
+ live_heap=100;LogConfigure("voice_bt_cleanup",0,12345,3,100);logs.clear();live_heap=999;
+ ReportConfigureStartup();assert(logs.size()==1&&logs.back().first=="voice_bt_cleanup");
+ logs.clear();ReportConfigureStartup();assert(logs.size()==1&&logs.back().first=="voice_bt_cleanup");
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:

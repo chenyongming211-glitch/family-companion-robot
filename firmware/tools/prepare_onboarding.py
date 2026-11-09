@@ -9,15 +9,16 @@ def replace(path, old, new):
     text=path.read_text()
     if text.count(old)!=1: raise ValueError('source anchor mismatch: '+path.name)
     path.write_text(text.replace(old,new))
-def prepare_m5_ble_memory(tree):
-    # Host allocations may use PSRAM; controller/DMA and task stacks stay internal.
-    path=tree/'main/boards/m5stack/stopwatch/config.json'
-    config=json.loads(path.read_text())
-    if config.get('target')!='esp32s3' or config.get('type')!='m5stack-stopwatch':
-        raise ValueError('requires M5 ESP32-S3 build configuration')
-    for build in config['builds']:
-        build['sdkconfig_append'].append('CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y')
-    path.write_text(json.dumps(config,indent=4)+'\n')
+def prepare_s3_ble_memory(tree):
+    # Shared factory-only host policy; controller/DMA and task stacks remain internal.
+    with (tree/'sdkconfig.defaults').open('a') as output:
+        output.write('\n# Both supported S3 onboarding profiles have PSRAM.\nCONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y\n')
+def prepare_voice_boot(tree):
+    application=tree/'main/application.cc'
+    replace(application,'#include "application.h"','#include "application.h"\n#include "family_onboarding.h"')
+    replace(application,'    // Setup the audio service',
+        '    if(!FamilyOnboarding::PrepareVoiceOnBoot()) {SystemInfo::PrintHeapStats();vTaskDelete(nullptr);return;}\n'
+        '    // Setup the audio service')
 def prepare_configure_replay(tree):
     system_info=tree/'main/system_info.cc'
     replace(system_info,'#include "system_info.h"','#include "system_info.h"\n#include "family_onboarding.h"')
@@ -67,7 +68,7 @@ def main():
     for name in ['family_onboarding.h','family_onboarding.cc','family_setup_state.h','family_setup_view.h','family_setup_view.cc','family_setup_font.h','family_setup_font.c']:
         shutil.copyfile(FIRMWARE/'overlays/onboarding'/name,tree/'main'/name)
     replace(tree/'main/CMakeLists.txt','            "ota.cc"','            "ota.cc"\n            "family_onboarding.cc"\n            "family_setup_view.cc"\n            "family_setup_font.c"')
-    replace(tree/'main/CMakeLists.txt','                    PRIV_REQUIRES','                    PRIV_REQUIRES\n                        network_provisioning\n                        esp_http_client\n                        esp_wifi')
+    replace(tree/'main/CMakeLists.txt','                    PRIV_REQUIRES','                    PRIV_REQUIRES\n                        network_provisioning\n                        esp_http_client\n                        esp_wifi\n                        bt')
     replace(tree/'main/idf_component.yml', 'dependencies:\n', 'dependencies:\n  espressif/esp_jpeg: ==1.3.1\n  espressif/iot_usbh_cdc: ==3.1.0\n')
     replace(tree/'main/display/display.h','    virtual void SetStatus(const char* status);',
         '    virtual void SetStatus(const char* status);\n'
@@ -88,8 +89,9 @@ def main():
         '        family_setup_.Update(title,detail,packed,size);\n'
         '    }\n')
     prepare_m5_screen(tree)
-    prepare_m5_ble_memory(tree)
+    prepare_s3_ble_memory(tree)
     prepare_configure_replay(tree)
+    prepare_voice_boot(tree)
     board=tree/'main/boards/common/wifi_board.cc'
     replace(board,'#include "wifi_board.h"','#include "wifi_board.h"\n#include "family_onboarding.h"')
     replace(board,'void WifiBoard::StartNetwork() {','void WifiBoard::StartNetwork() {\n    if (FamilyOnboarding::Present()) {\n        FamilyOnboarding::Start([this](bool connected) {\n            in_config_mode_ = !FamilyOnboarding::Activated();\n            if (network_event_callback_) network_event_callback_(connected ? NetworkEvent::Connected : NetworkEvent::Disconnected, "");\n        });\n        return;\n    }')
