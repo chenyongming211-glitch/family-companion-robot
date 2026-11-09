@@ -1,15 +1,26 @@
 <view class="page">
- <view class="title">添加家庭机器人</view>
- <view class="note">扫描设备码，登录家庭账号，再通过加密蓝牙配置 Wi-Fi。只有云端确认绑定后才会显示成功。</view>
+ <view class="hero">
+  <view class="hero-wave wave-one"></view><view class="hero-wave wave-two"></view>
+  <view class="hero-copy"><view class="eyebrow">家庭设备 · 轻松添加</view><view class="title">添加家庭机器人</view><view class="hero-note">扫码连接，为机器人配置网络</view></view>
+  <view class="robot-art"><view class="art-panel panel-back"></view><view class="art-panel panel-front"></view><view class="robot-antenna"></view><view class="robot-ear ear-left"></view><view class="robot-ear ear-right"></view><view class="robot-head"><view class="robot-face"><view class="robot-eye eye-left"></view><view class="robot-eye eye-right"></view><view class="robot-smile"></view></view></view><view class="robot-body"></view><view class="art-spark spark-one"></view><view class="art-spark spark-two"></view></view>
+ </view>
+ <view class="content">
+ <view class="steps">
+  <view class="step {{!loggedIn?'step-current':'step-done'}}"><view class="step-icon account-icon"><view class="account-head"></view><view class="account-body"></view></view><text>家庭账号</text></view>
+  <view class="step {{loggedIn && (phase==='idle' || phase==='error' || phase==='connecting')?'step-current':''}}"><view class="step-icon scan-icon"><view class="scan-frame"></view><view class="scan-line"></view><view class="scan-dot"></view></view><text>连接设备</text></view>
+  <view class="step {{phase==='wifi' || phase==='applying' || phase==='waiting_cloud'?'step-current':''}}"><view class="step-icon wifi-icon"><view class="wifi-arc arc-outer"></view><view class="wifi-arc arc-inner"></view><view class="wifi-dot"></view></view><text>配置网络</text></view>
+  <view class="step {{phase==='success'?'step-current':''}}"><view class="step-icon check-icon"><view class="check-paper"></view><view class="check-mark"></view></view><text>完成添加</text></view>
+ </view>
+ <view class="intro">先登录家庭账号，再扫描机器人设备码。<text class="intro-detail">添加过程中，请保持机器人通电。</text></view>
  <view wx:if="{{error}}" class="error">{{error}}</view>
  <view class="card" wx:if="{{!loggedIn}}">
-  <view class="status">登录家庭账号</view>
+  <view class="section-kicker">01 · 家庭账号</view><view class="status">登录家庭账号</view><view class="note card-note">使用您的家庭账号继续添加设备</view>
   <input placeholder="账号" value="{{username}}" data-key="username" bindinput="input" maxlength="128" />
   <input placeholder="账号密码" password value="{{loginPassword}}" data-key="loginPassword" bindinput="input" maxlength="256" />
   <button type="primary" bindtap="login">登录</button>
  </view>
  <view class="card" wx:if="{{phase==='idle' || phase==='error'}}">
-  <button bindtap="scan">{{scanned?'已扫描设备码，重新扫描':'扫描设备码'}}</button>
+  <view class="section-kicker">02 · 连接设备</view><view class="status">扫描机器人设备码</view><view class="note card-note">请让机器人保持通电，并靠近手机</view><button class="scan-button" bindtap="scan">{{scanned?'已扫描设备码，重新扫描':'扫描设备码'}}</button>
   <block wx:if="{{loggedIn}}">
    <view class="label">选择家庭</view><picker range="{{familyNames}}" value="{{familyIndex}}" bindchange="family">{{familyNames[familyIndex] || '没有添加权限的家庭'}}</picker>
    <input placeholder="设备昵称（选填）" value="{{name}}" data-key="name" bindinput="input" maxlength="64" />
@@ -17,18 +28,19 @@
   </block>
  </view>
  <view class="card" wx:if="{{phase==='connecting'}}">
-  <view class="status">连接设备并验证安全身份</view><view class="note">{{serial}} · {{model}}</view>
+  <view class="section-kicker">02 · 连接设备</view><view class="status">连接设备并验证安全身份</view><view class="note">{{serial}} · {{model}}</view>
   <view class="note">请在附近设备中选择您的机器人。设备码会校验身份，选错设备无法通过验证。</view>
   <button wx:for="{{devices}}" wx:key="deviceId" data-id="{{item.deviceId}}" bindtap="connect">{{item.name}}</button>
  </view>
  <view class="card" wx:if="{{phase==='wifi'}}">
-  <view class="status">设置 Wi-Fi</view><view class="note">请选择机器人能连接的 2.4 GHz 网络。密码只在本次操作内存中使用。</view>
+  <view class="section-kicker">03 · 配置网络</view><view class="status">为机器人连接 Wi-Fi</view><view class="note">请选择机器人能连接的 2.4 GHz 网络。密码只在本次操作内存中使用。</view>
   <picker range="{{networks}}" bindchange="network">{{ssid || '选择扫描到的 Wi-Fi'}}</picker><button size="mini" bindtap="refresh">刷新网络</button>
   <input placeholder="Wi-Fi 名称（也可手动输入）" value="{{ssid}}" data-key="ssid" bindinput="input" maxlength="32" />
   <input placeholder="Wi-Fi 密码（开放网络可留空）" password value="{{password}}" data-key="password" bindinput="input" maxlength="64" />
   <button type="primary" bindtap="apply" disabled="{{!ssid}}">安全发送并等待绑定</button>
  </view>
- <view class="card" wx:if="{{phase==='applying' || phase==='waiting_cloud'}}"><view class="status">{{phase==='applying'?'正在加密发送配置':'等待设备向云端确认'}}</view><view class="note">请保持机器人通电。Wi-Fi 配置完成不代表绑定成功。</view></view>
- <view class="card" wx:if="{{phase==='success'}}"><view class="status">设备添加成功</view><view class="note">云端已确认绑定，可回到家庭管理页面查看设备。</view></view>
- <button wx:if="{{phase!=='idle' && phase!=='success'}}" bindtap="cancel">取消本次添加</button>
+ <view class="card" wx:if="{{phase==='applying' || phase==='waiting_cloud'}}"><view class="waiting-symbol"><view class="waiting-dot"></view><view class="waiting-dot"></view><view class="waiting-dot"></view></view><view class="status">{{phase==='applying'?'正在加密发送配置':'等待设备向云端确认'}}</view><view class="note">请保持机器人通电。Wi-Fi 配置完成不代表绑定成功。</view></view>
+ <view class="card" wx:if="{{phase==='success'}}"><view class="success-symbol"><view class="check-mark"></view></view><view class="status">设备添加成功</view><view class="note">云端已确认绑定，可回到家庭管理页面查看设备。</view></view>
+ <button class="cancel-button" wx:if="{{phase!=='idle' && phase!=='success'}}" bindtap="cancel">取消本次添加</button>
+</view>
 </view>
