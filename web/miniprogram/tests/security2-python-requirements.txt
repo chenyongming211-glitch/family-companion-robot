@@ -1,0 +1,16 @@
+cffi==2.1.1
+click==8.5.1
+cryptography==50.0.2
+esp-pylib==1.2.1
+esp_idf_nvs_partition_gen==0.3.0
+grpcio==1.85.1
+grpcio-tools==1.85.1
+markdown-it-py==4.2.0
+mdurl==0.1.2
+protobuf==7.36.2
+pycparser==3.12
+Pygments==2.21.0
+rich==15.0.0
+rich-click==1.9.9
+setuptools==84.2.1
+typing_extensions==4.16.0
