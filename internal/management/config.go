@@ -21,11 +21,13 @@ var (
 )
 
 type Config struct {
-	SchemaVersion int             `json:"schema_version"`
-	Accounts      []AccountConfig `json:"accounts"`
-	Families      []FamilyConfig  `json:"families"`
-	Devices       []DeviceConfig  `json:"devices"`
-	Bindings      []Binding       `json:"bindings"`
+	SchemaVersion    int               `json:"schema_version"`
+	Accounts         []AccountConfig   `json:"accounts"`
+	Families         []FamilyConfig    `json:"families"`
+	Devices          []DeviceConfig    `json:"devices"`
+	Bindings         []Binding         `json:"bindings"`
+	FactoryDevices   []FactoryDevice   `json:"factory_devices,omitempty"`
+	OnboardingClaims []OnboardingClaim `json:"onboarding_claims,omitempty"`
 }
 type AccountConfig struct {
 	ID            string       `json:"id"`
@@ -40,8 +42,9 @@ type PasswordHash struct {
 	Iterations int    `json:"iterations"`
 }
 type Membership struct {
-	FamilyID string        `json:"family_id"`
-	Devices  []DeviceGrant `json:"devices"`
+	FamilyID      string        `json:"family_id"`
+	CanAddDevices bool          `json:"can_add_devices,omitempty"`
+	Devices       []DeviceGrant `json:"devices"`
 }
 type DeviceGrant struct {
 	DeviceID    string `json:"device_id"`
@@ -125,7 +128,7 @@ func ValidateConfig(c Config) error {
 			}
 		}
 	}
-	return nil
+	return validateOnboarding(c)
 }
 func LoadConfig(path string) (Config, error) {
 	var c Config
@@ -201,6 +204,10 @@ func uniqueConfigKeys(dec *json.Decoder, depth int) error {
 func WritePrivateConfig(path string, c Config) error {
 	if e := ValidateConfig(c); e != nil {
 		return e
+	}
+	raw, e := json.Marshal(c)
+	if e != nil || len(raw) > 2<<20 {
+		return ErrTooLarge
 	}
 	if e := voiceidentity.WritePrivateJSON(path, c); e != nil {
 		return ErrSource

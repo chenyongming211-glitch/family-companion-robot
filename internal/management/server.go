@@ -2,6 +2,7 @@ package management
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,6 +20,7 @@ import (
 
 type Options struct {
 	RecordsPath, ProfilesPath, StaticDir, AuditPath, Build string
+	ConfigPath, PublicOrigin                               string
 	Now                                                    func() time.Time
 }
 type Server struct {
@@ -39,6 +41,14 @@ type Server struct {
 func NewServer(c Config, o Options) (*Server, error) {
 	if ValidateConfig(c) != nil || o.RecordsPath == "" || o.AuditPath == "" {
 		return nil, ErrInvalid
+	}
+	if o.PublicOrigin != "" && o.PublicOrigin != onboardingOrigin {
+		return nil, ErrInvalid
+	}
+	if o.ConfigPath != "" {
+		if _, e := LoadConfig(o.ConfigPath); e != nil {
+			return nil, e
+		}
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -101,22 +111,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.static(w, r)
 		return
 	}
-	if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
-		if e := s.origin.Check(r); e != nil {
-			sourceError(w, ErrForbidden)
-			return
-		}
-		if raw := r.Header.Get("Origin"); raw != "" {
-			u, e := url.Parse(raw)
-			scheme := "http"
-			if r.TLS != nil {
-				scheme = "https"
-			}
-			if e != nil || u.Scheme != scheme || u.Host != r.Host || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
-				sourceError(w, ErrForbidden)
-				return
-			}
-		}
+	c, e := s.snapshot()
+	if e != nil {
+		sourceError(w, ErrSource)
+		return
+	}
+	r = r.WithContext(context.WithValue(r.Context(), configContextKey{}, c))
+	reader := s.reader
+	reader.Config = c
+	if !s.checkOrigin(r) {
+		sourceError(w, ErrForbidden)
+		return
+	}
+	if s.deviceEndpoint(w, r, c) {
+		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/"), "/")
 	if len(parts) < 2 || len(parts) > 3 || (parts[0] != "admin" && parts[0] != "family") {
@@ -145,6 +153,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.logout(w, r, scope)
 		return
 	}
+	if resource == "onboarding" && scope == "family" {
+		s.familyOnboarding(w, r, a, parts)
+		return
+	}
 	if r.Method != "GET" {
 		apiError(w, 405, "method_not_allowed", "请求方法不支持")
 		return
@@ -158,7 +170,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var result any
-	var e error
 	switch resource {
 	case "session":
 		if len(parts) != 2 {
@@ -168,19 +179,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "devices":
 		if id == "" {
-			result, e = s.reader.ListDevices(a.ID, scope)
+			result, e = reader.ListDevices(a.ID, scope)
 		} else {
-			result, e = s.reader.GetDevice(a.ID, scope, id)
+			result, e = reader.GetDevice(a.ID, scope, id)
 		}
 	case "conversations":
 		var f ConversationFilter
 		f, e = parseFilter(r, id != "")
 		if e == nil {
 			if id == "" {
-				result, e = s.reader.ListConversations(a.ID, scope, f)
+				result, e = reader.ListConversations(a.ID, scope, f)
 			} else {
 				var c ConversationDTO
-				c, e = s.reader.ReadConversation(a.ID, scope, id, f.DeviceID)
+				c, e = reader.ReadConversation(a.ID, scope, id, f.DeviceID)
 				if e == nil {
 					e = s.audit(a.ID, scope, c.DeviceID, c.ID)
 				}
@@ -196,11 +207,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				device = *f.DeviceID
 			}
 			if id == "" {
-				result, e = s.reader.ListChats(a.ID, scope, f)
+				result, e = reader.ListChats(a.ID, scope, f)
 			} else {
 				action = "read_chat"
 				var c ConversationDTO
-				c, e = s.reader.ReadChat(a.ID, scope, id, f.DeviceID)
+				c, e = reader.ReadChat(a.ID, scope, id, f.DeviceID)
 				result, device = c, c.DeviceID
 			}
 			if e == nil {
@@ -215,9 +226,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if e == nil {
 			if id == "" {
-				result, e = s.reader.ListMemories(a.ID, scope, *f.DeviceID)
+				result, e = reader.ListMemories(a.ID, scope, *f.DeviceID)
 			} else {
-				result, e = s.reader.ReadMemory(a.ID, scope, id, *f.DeviceID)
+				result, e = reader.ReadMemory(a.ID, scope, id, *f.DeviceID)
 			}
 			if e == nil {
 				action := "read_memories"
@@ -228,7 +239,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case "families":
-		result, e = s.families(a, id)
+		result, e = s.families(c, a, id)
 	case "accounts":
 		if scope != "admin" {
 			e = ErrForbidden
@@ -236,7 +247,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			e = ErrNotFound
 		} else {
 			out := []map[string]string{}
-			for _, ac := range s.cfg.Accounts {
+			for _, ac := range c.Accounts {
 				if ac.InternalAdmin {
 					out = append(out, map[string]string{"name": ac.Username, "email": ac.Username, "role": "内部管理员", "access": "内部工作权限"})
 				}
@@ -288,16 +299,16 @@ func parseFilter(r *http.Request, detail bool) (ConversationFilter, error) {
 	}
 	return f, nil
 }
-func (s *Server) families(a AccountConfig, id string) (any, error) {
+func (s *Server) families(c Config, a AccountConfig, id string) (any, error) {
 	out := []map[string]any{}
 	for _, m := range a.Memberships {
-		for _, f := range s.cfg.Families {
+		for _, f := range c.Families {
 			if f.ID != m.FamilyID || (id != "" && id != f.ID) {
 				continue
 			}
 			members := []map[string]string{}
 			if id != "" {
-				for _, ac := range s.cfg.Accounts {
+				for _, ac := range c.Accounts {
 					for _, am := range ac.Memberships {
 						if am.FamilyID == id {
 							members = append(members, map[string]string{"id": ac.ID, "name": ac.Username, "email": ac.Username, "role": "家庭成员", "access": "已配置设备权限", "status": "有效"})
@@ -305,7 +316,7 @@ func (s *Server) families(a AccountConfig, id string) (any, error) {
 					}
 				}
 			}
-			out = append(out, map[string]any{"id": f.ID, "name": f.Name, "members": members})
+			out = append(out, map[string]any{"id": f.ID, "name": f.Name, "members": members, "canAddDevices": m.CanAddDevices})
 		}
 	}
 	if id != "" {

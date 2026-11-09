@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -79,7 +80,7 @@ func (s *Server) account(r *http.Request, scope string) (AccountConfig, bool) {
 	if !ok || v.scope != scope {
 		return AccountConfig{}, false
 	}
-	a, ok := s.cfg.AccountByID(v.actor)
+	a, ok := requestConfig(r).AccountByID(v.actor)
 	return a, ok && (scope != "admin" || a.InternalAdmin)
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request, scope string) {
@@ -93,6 +94,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, scope string) {
 	ip, _, e := net.SplitHostPort(r.RemoteAddr)
 	if e != nil {
 		ip = r.RemoteAddr
+	}
+	// Only the explicitly configured HTTPS proxy is trusted to identify its
+	// immediate client. Use the final entry, never an arbitrary supplied prefix.
+	if s.publicRequest(r) {
+		forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+		if parsed := net.ParseIP(strings.TrimSpace(forwarded[len(forwarded)-1])); parsed != nil {
+			ip = parsed.String()
+		}
 	}
 	s.mu.Lock()
 	s.prune()
@@ -115,7 +124,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, scope string) {
 		apiError(w, 429, "rate_limited", "尝试过于频繁，请稍后重试")
 		return
 	}
-	a, ok := s.cfg.FindAccount(in.Username)
+	a, ok := requestConfig(r).FindAccount(in.Username)
 	h := s.dummy
 	if ok {
 		h = a.Password
@@ -140,7 +149,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, scope string) {
 	}
 	s.sessions[sha256.Sum256([]byte(token))] = session{a.ID, scope, s.now().Add(8 * time.Hour)}
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: cookieName(scope), Value: token, Path: "/api/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 28800})
+	http.SetCookie(w, &http.Cookie{Name: cookieName(scope), Value: token, Path: "/api/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.publicRequest(r), MaxAge: 28800})
 	writeJSON(w, frontendAccount(a, scope))
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, scope string) {
@@ -152,7 +161,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, scope string) {
 	s.mu.Lock()
 	delete(s.sessions, sha256.Sum256([]byte(c.Value)))
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: cookieName(scope), Path: "/api/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: cookieName(scope), Path: "/api/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.publicRequest(r), MaxAge: -1})
 	writeJSON(w, struct{}{})
 }
 func frontendAccount(a AccountConfig, scope string) any {
