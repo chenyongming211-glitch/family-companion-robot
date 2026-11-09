@@ -130,6 +130,8 @@ for (const cancelled of [true, false]) {
   });
 }
 let definition: any, scan: any;
+const app: any = {};
+(globalThis as any).getApp = () => app;
 (globalThis as any).Page = (p: any) => {
   definition = p;
 };

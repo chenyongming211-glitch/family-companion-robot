@@ -128,7 +128,9 @@ export class Api {
     );
   }
 }
-export function claimCode(raw: string): string {
+export function claimCode(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length > 102)
+    throw new ClientError("bad_scan", "请扫描本产品的小程序设备码");
   let value = raw;
   if (value.startsWith("scene=")) {
     try {
@@ -140,4 +142,47 @@ export function claimCode(raw: string): string {
   if (!/^[a-f0-9]{32}$/.test(value))
     throw new ClientError("bad_scan", "请扫描本产品的小程序设备码");
   return value;
+}
+
+// Only this application's issued mini-code path is an accepted scene carrier.
+export function scannedClaim(result: {
+  path?: unknown;
+  result?: unknown;
+}): string {
+  if (result.path !== undefined && result.path !== "") {
+    if (typeof result.path !== "string" || result.path.length > 128)
+      throw new ClientError("bad_scan", "请扫描本产品的小程序设备码");
+    const match = /^\/?pages\/index\/index\?scene=([^?&#]{1,96})$/.exec(
+      result.path,
+    );
+    if (!match) throw new ClientError("bad_scan", "请扫描本产品的小程序设备码");
+    return sceneClaim(match[1]);
+  }
+  return claimCode(result.result);
+}
+function sceneClaim(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length > 96)
+    throw new ClientError("bad_scan", "二维码格式无效");
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    throw new ClientError("bad_scan", "二维码格式无效");
+  }
+  if (!/^[a-f0-9]{32}$/.test(decoded))
+    throw new ClientError("bad_scan", "请扫描本产品的小程序设备码");
+  return decoded;
+}
+export function launchClaim(options: any): string {
+  if (
+    typeof options?.path !== "string" ||
+    !/^\/?pages\/index\/index$/.test(options.path) ||
+    !options.query ||
+    typeof options.query !== "object" ||
+    Array.isArray(options.query) ||
+    Object.keys(options.query).length !== 1 ||
+    !Object.prototype.hasOwnProperty.call(options.query, "scene")
+  )
+    throw new ClientError("bad_scan", "请扫描本产品的小程序设备码");
+  return sceneClaim(options.query.scene);
 }

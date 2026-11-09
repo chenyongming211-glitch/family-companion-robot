@@ -1,6 +1,6 @@
 import { Onboarding } from "../../controller.ts";
-import { setCleanup } from "../../lifecycle.ts";
-import { claimCode } from "../../api.ts";
+import { setCleanup, setLaunch } from "../../lifecycle.ts";
+import { launchClaim, scannedClaim } from "../../api.ts";
 function errorMessage(e: unknown) {
   return e instanceof Error ? e.message : "操作失败，请重试";
 }
@@ -78,14 +78,12 @@ Page({
     };
     setCleanup(() => cleanup());
     this.cleanup = cleanup;
-    if (options.scene) {
-      try {
-        this.controller.setCode(decodeURIComponent(options.scene));
-        this.setData({ scanned: true });
-      } catch (e) {
-        this.setData({ error: errorMessage(e) });
-      }
-    }
+    setLaunch((options) => this.receiveLaunch(options));
+    if (options.scene !== undefined)
+      this.receiveLaunch({
+        path: "pages/index/index",
+        query: { scene: options.scene },
+      });
   },
   onShow(this: any) {
     this.active = true;
@@ -101,6 +99,7 @@ Page({
   onUnload(this: any) {
     this.cleanup?.(true);
     setCleanup(undefined);
+    setLaunch(undefined);
   },
   input(this: any, e: any) {
     const key = e.currentTarget.dataset.key;
@@ -163,8 +162,28 @@ Page({
       this.setData({ scanned: true, error: "" });
     } else this.setData({ error: error || "扫码未完成，请重试" });
   },
-  scan(this: any) {
-    if (!this.active) return;
+  receiveLaunch(this: any, options: any) {
+    if (options?.query?.scene === undefined) return;
+    // A new external code supersedes both any scanner and the previous task.
+    // Keep the scene only in the existing bounded, session-scoped RAM queue.
+    void this.controller.suspend();
+    this.setData({
+      scanned: false,
+      password: "",
+      loginPassword: "",
+      ssid: "",
+      name: "",
+    });
+    const operation = this.beginScan();
+    try {
+      operation.code = launchClaim(options);
+    } catch (error) {
+      operation.error = errorMessage(error);
+    }
+    operation.done = true;
+    this.applyScan();
+  },
+  beginScan(this: any) {
     this.invalidateScan();
     const operation = {
       epoch: this.scanEpoch,
@@ -175,12 +194,6 @@ Page({
       error: undefined as string | undefined,
     };
     this.scanOperation = operation;
-    const valid = () =>
-      this.scanOperation === operation &&
-      operation.epoch === this.scanEpoch &&
-      operation.sessionEpoch === this.controller.sessionEpoch &&
-      Date.now() < operation.expiresAt &&
-      !operation.done;
     // Keep a hidden result only for this bounded native scan operation. It never
     // reaches controller state until onShow; terminal cleanup erases the queue.
     this.scanTimer = setTimeout(() => {
@@ -192,13 +205,24 @@ Page({
         this.scanNotice = "";
       }
     }, 60000);
+    return operation;
+  },
+  scan(this: any) {
+    if (!this.active) return;
+    const operation = this.beginScan();
+    const valid = () =>
+      this.scanOperation === operation &&
+      operation.epoch === this.scanEpoch &&
+      operation.sessionEpoch === this.controller.sessionEpoch &&
+      Date.now() < operation.expiresAt &&
+      !operation.done;
     wx.scanCode({
       onlyFromCamera: true,
-      scanType: ["qrCode"],
+      scanType: ["qrCode", "wxCode"],
       success: (r: any) => {
         if (!valid()) return;
         try {
-          operation.code = claimCode(r.result);
+          operation.code = scannedClaim(r);
         } catch (e) {
           operation.error = errorMessage(e);
         }
