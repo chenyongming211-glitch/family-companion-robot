@@ -1,0 +1,19 @@
+{
+  "name": "family-robot-miniprogram",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs && node verify-native.mjs"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.0.1",
+    "@noble/ciphers": "2.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3"
+  }
+}
