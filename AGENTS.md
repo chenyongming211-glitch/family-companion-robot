@@ -9,6 +9,7 @@
 
 # Implementation principles
 
+- Waveshare and M5 are supported ESP32-S3 boards. Keep all shared functionality in the same common implementation, including onboarding, Bluetooth lifecycle/resource cleanup, audio transport/playback flow control and backend behavior. Do not copy or fork common logic by board. Limit board-specific code/configuration to demonstrated hardware differences such as display, pins, codec and required memory capabilities; verify both supported boards when common logic changes.
 - Use the smallest working implementation that meets the current requirement. Reuse existing code and avoid speculative abstractions, extra services, frameworks or dependencies for hypothetical future needs.
 - Keep frontend interactions simple: straightforward pages, lists, forms and clear feedback. Add complex interaction or animation only when the current task needs it.
 - Deliver the core workflow first and expand in small steps. Keep necessary correctness, access checks and verification; simplicity is a scope and implementation principle.
