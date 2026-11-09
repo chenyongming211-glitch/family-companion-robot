@@ -9,6 +9,15 @@ def replace(path, old, new):
     text=path.read_text()
     if text.count(old)!=1: raise ValueError('source anchor mismatch: '+path.name)
     path.write_text(text.replace(old,new))
+def prepare_m5_ble_memory(tree):
+    # Host allocations may use PSRAM; controller/DMA and task stacks stay internal.
+    path=tree/'main/boards/m5stack/stopwatch/config.json'
+    config=json.loads(path.read_text())
+    if config.get('target')!='esp32s3' or config.get('type')!='m5stack-stopwatch':
+        raise ValueError('requires M5 ESP32-S3 build configuration')
+    for build in config['builds']:
+        build['sdkconfig_append'].append('CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y')
+    path.write_text(json.dumps(config,indent=4)+'\n')
 def prepare_configure_replay(tree):
     system_info=tree/'main/system_info.cc'
     replace(system_info,'#include "system_info.h"','#include "system_info.h"\n#include "family_onboarding.h"')
@@ -79,6 +88,7 @@ def main():
         '        family_setup_.Update(title,detail,packed,size);\n'
         '    }\n')
     prepare_m5_screen(tree)
+    prepare_m5_ble_memory(tree)
     prepare_configure_replay(tree)
     board=tree/'main/boards/common/wifi_board.cc'
     replace(board,'#include "wifi_board.h"','#include "wifi_board.h"\n#include "family_onboarding.h"')
