@@ -22,14 +22,16 @@
 
 **Interfaces:** waiting create DTO adds `ble_name: "FAMILY_" + strings.ReplaceAll(d.MAC, ":", "")`; MAC is already canonical lower-case validated by factory store. Confirmed shortcut unchanged. `View` carries a plain text connection progress field. `Onboarding.start(familyId, name)` automatically discovers exact target and internally connects; page no longer exposes connect-device buttons. Existing native service filter stays intact.
 
-- [ ] Write failing cloud tests for authenticated target name (including arbitrary serial), no credential disclosure, automatic unique-target connection, no target/duplicate name failure, confirmed bypass, duplicate start guard and stale cancellation. Page tests cover exactly-once foreground scan→start, queued hidden scan only after onShow, login→continue, multiple families require explicit selection, and cancel/unload/session invalidation.
-- [ ] Run those tests on cloud and record actual expected RED failures before implementation. Use Go binary `/home/ubuntu/management-backend-20261109/runtime/go/bin/go` and Node from `/home/ubuntu/management-frontend-20261109/node-v24.22.2-linux-x64/bin`; SSH control `/tmp/family-management-preview-chen/control` to `ubuntu@82.156.48.111`.
-- [ ] Implement minimal DTO, controller auto connection and page auto start. Remove manual discovery/device list/nickname, keep default name and optional family selection. Show bounded connection feedback and clear no-match error; final Wi-Fi button “连接”. Keep official RSSI fix, literal deferred crypto require, lifecycle cleanup and server confirmation unchanged.
-- [ ] Run full cloud `go test -race ./internal/management ./cmd/management`, vet/build; mini-program `npm test`, typecheck/build/verify-native. Review against spec and commit scoped implementation. Report exact results and any limits.
-- [ ] Task spec/quality review and final broad review pass; resolve findings with cloud tests.
+- [x] Write failing cloud tests for authenticated target name (including arbitrary serial), no credential disclosure, automatic unique-target connection, no target/duplicate name failure, confirmed bypass, duplicate start guard and stale cancellation. Page tests cover exactly-once foreground scan→start, queued hidden scan only after onShow, login→continue, multiple families require explicit selection, and cancel/unload/session invalidation.
+- [x] Run those tests on cloud and record actual expected RED failures before implementation. Use Go binary `/home/ubuntu/management-backend-20261109/runtime/go/bin/go` and Node from `/home/ubuntu/management-frontend-20261109/node-v24.22.2-linux-x64/bin`; SSH control `/tmp/family-management-preview-chen/control` to `ubuntu@82.156.48.111`.
+- [x] Implement minimal DTO, controller auto connection and page auto start. Remove manual discovery/device list/nickname, keep default name and optional family selection. Show bounded connection feedback and clear no-match error; final Wi-Fi button “连接”. Keep official RSSI fix, literal deferred crypto require, lifecycle cleanup and server confirmation unchanged.
+- [x] Run full cloud `go test -race ./internal/management ./cmd/management`, vet/build; mini-program `npm test`, typecheck/build/verify-native. Review against spec and commit scoped implementation. Report exact results and any limits.
+- [x] Task spec/quality review and final broad review pass; resolve findings with cloud tests.
 
 ### Delivery (root)
 
-- [ ] Snapshot cloud service identity/config/protected hashes; deploy only management binary with same static assets/config/mounts. Verify health, protection invariants and confirmed ownership using safe read-only checks. Do not disturb real voice session.
-- [ ] Independently hash cloud-built client outputs, copy only public dist to the existing Mac native client, preserve private tool configuration, generate official CLI preview.
-- [ ] Update handoff/verification with actual tested/untested boundaries, commit/push main and verify origin exact HEAD.
+- [x] Snapshot cloud service identity/config/protected hashes; deploy only management binary with same static assets/config/mounts. Verify health, protection invariants and confirmed ownership using safe read-only checks. Do not disturb real voice session.
+- [x] Independently hash cloud-built client outputs, copy only public dist to the existing Mac native client, preserve private tool configuration, generate official CLI preview.
+- [x] Update handoff/verification with actual tested/untested boundaries, commit/push main and verify origin exact HEAD.
+
+代码/云端验证/独立复审/管理部署/原生预览已完成，证据见 [验证记录](../../verification/2026-11-09-onboarding-auto-connect.md)。本表完成指本次开发交付，不代表新设备手机现场整链验收；现场边界保留于验证记录。
