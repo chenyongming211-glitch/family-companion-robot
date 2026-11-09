@@ -150,7 +150,7 @@ def _image(data, content_type):
 
 
 def generate(bundle_path, config_path, environment, output_path, *, connection_factory=None):
-    """Write one new 0600 image or raise only a sanitized MiniCodeError.
+    """Write one new 0600 image; sanitize errors, clean up and re-raise cancellation.
 
     All input and output checks occur before sending secrets. The output parent
     must be owned by this uid and 0700. No token cache or diagnostic log is made.
@@ -205,7 +205,7 @@ def generate(bundle_path, config_path, environment, output_path, *, connection_f
         os.close(fd)
         fd = None
         os.fsync(directory)
-    except Exception:
+    except BaseException as error:
         if fd is not None:
             os.close(fd)
             fd = None
@@ -215,6 +215,8 @@ def generate(bundle_path, config_path, environment, output_path, *, connection_f
                 os.fsync(directory)
             except OSError:
                 pass
+        if not isinstance(error, Exception):
+            raise
         # Upstream error bodies, URLs and file contents are never re-emitted.
         raise MiniCodeError(ERROR) from None
     finally:
@@ -238,6 +240,9 @@ def main(argv=None):
         parser.add_argument("--output", required=True)
         args = parser.parse_args(argv)
         generate(args.bundle, args.wechat_config, args.environment, args.output)
+    except KeyboardInterrupt:
+        print("Mini-program code generation cancelled.", file=sys.stderr)
+        return 130
     except Exception:
         print(ERROR, file=sys.stderr)
         return 1

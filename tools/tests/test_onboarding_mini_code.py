@@ -219,5 +219,48 @@ class MiniCodeTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), 'Mini-program code generation failed.\n')
         self.assertFalse(self.out.exists())
 
+    def test_cancellation_during_output_is_cleaned_and_preserved(self):
+        original_write, original_fsync = os.write, os.fsync
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            for stage in ('partial_write', 'file_fsync', 'directory_fsync'):
+                with self.subTest(exception=exception_type.__name__, stage=stage):
+                    interruption = exception_type('synthetic cancellation')
+                    interrupted = False
+                    def write(fd, data):
+                        nonlocal interrupted
+                        if stage == 'partial_write' and not interrupted:
+                            interrupted = True
+                            original_write(fd, data[:8])
+                            raise interruption
+                        return original_write(fd, data)
+                    def fsync(fd):
+                        nonlocal interrupted
+                        directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+                        if not interrupted and ((stage == 'file_fsync' and not directory) or (stage == 'directory_fsync' and directory)):
+                            interrupted = True
+                            raise interruption
+                        return original_fsync(fd)
+                    try:
+                        with mock.patch.object(code.os, 'write', side_effect=write), mock.patch.object(code.os, 'fsync', side_effect=fsync):
+                            with self.assertRaises(exception_type) as caught:
+                                self.run_generator()
+                        self.assertIs(caught.exception, interruption)
+                        self.assertFalse(self.out.exists(), 'cancellation must remove the final pathname')
+                    finally:
+                        self.out.unlink(missing_ok=True)
+
+    def test_cli_keyboard_interrupt_is_generic_and_returns_130(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        transport = Transport()
+        with mock.patch.object(code.http.client, 'HTTPSConnection', transport), mock.patch.object(code.os, 'write', side_effect=KeyboardInterrupt(TOKEN + SECRET + CLAIM + KEY)), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                result = code.main(['--bundle', str(self.bundle), '--wechat-config', str(self.config), '--environment', 'trial', '--output', str(self.out)])
+            except KeyboardInterrupt:
+                self.fail('CLI cancellation must return a sanitized status without a traceback')
+        self.assertEqual(result, 130)
+        self.assertEqual(stdout.getvalue(), '')
+        self.assertEqual(stderr.getvalue(), 'Mini-program code generation cancelled.\n')
+        self.assertFalse(self.out.exists())
+
 if __name__ == '__main__':
     unittest.main()
