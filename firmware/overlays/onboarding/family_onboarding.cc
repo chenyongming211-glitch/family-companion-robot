@@ -150,6 +150,10 @@ void Worker(void*) {
     worker_active = false; vTaskDelete(nullptr);
 }
 void Event(void*, esp_event_base_t base, int32_t event, void*) {
+    if (base == NETWORK_PROV_EVENT && event == NETWORK_PROV_WIFI_CRED_FAIL && running) {
+        network_prov_mgr_reset_wifi_sm_state_on_failure();
+        Board::GetInstance().GetDisplay()->ShowNotification("Wi-Fi 连接失败，请重新输入密码");
+    }
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_START) esp_wifi_connect();
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_DISCONNECTED) {
         connected = false;
@@ -218,7 +222,8 @@ void Start(std::function<void(bool)> connection) {
     if (!esp_netif_create_default_wifi_sta()) return;
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&config) != ESP_OK || esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) return;
-    if (esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, Event, nullptr) != ESP_OK ||
+    if (esp_event_handler_register(NETWORK_PROV_EVENT, NETWORK_PROV_WIFI_CRED_FAIL, Event, nullptr) != ESP_OK ||
+        esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, Event, nullptr) != ESP_OK ||
         esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, Event, nullptr) != ESP_OK) return;
     esp_timer_create_args_t timer{};
     timer.callback = [](void*) { running = false; network_prov_mgr_stop_provisioning(); };
