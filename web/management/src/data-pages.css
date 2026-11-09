@@ -6,6 +6,7 @@
   padding: 18px;
   background: #f6f8f6;
   border-radius: 12px;
+  overflow-wrap: anywhere;
 }
 .data-danger {
   margin-top: 20px;
