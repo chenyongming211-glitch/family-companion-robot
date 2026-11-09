@@ -1,6 +1,33 @@
 import { ClientError } from "../api.ts";
 export const SERVICE = "1775244D-6B43-439B-877C-060F2D9BED07";
 const TIMEOUT = 12000;
+function failureMessage(name: string, error: unknown): string {
+  // Only discovery APIs are safe to expose: protocol writes may carry secrets.
+  const stage =
+    name === "openBluetoothAdapter"
+      ? "开启蓝牙失败"
+      : name === "startBluetoothDevicesDiscovery"
+        ? "开始搜索设备失败"
+        : name === "getBluetoothDevices"
+          ? "读取附近设备失败"
+          : "";
+  if (!stage) return "蓝牙操作失败，请检查权限并靠近设备";
+  const details =
+    error && typeof error === "object"
+      ? (error as { errCode?: unknown; errMsg?: unknown })
+      : {};
+  const code = Number.isSafeInteger(details.errCode)
+    ? `（errCode: ${details.errCode}）`
+    : "";
+  const message =
+    typeof details.errMsg === "string"
+      ? details.errMsg
+          .replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, "")
+          .trim()
+          .slice(0, 160)
+      : "";
+  return `${stage}${code}${message ? `：${message}` : ""}，请确认手机蓝牙已开启、微信蓝牙权限已允许，并靠近设备`;
+}
 // wx owns one adapter/discovery and one connection per device, across BleLinks.
 const nativeLeases = new WeakMap<object, Map<string, object>>();
 export class BleLink {
@@ -60,12 +87,12 @@ export class BleLink {
           clearTimeout(timer);
           resolve(r);
         },
-        fail: () => {
+        fail: (error: unknown) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           reject(
-            new ClientError("ble_error", "蓝牙操作失败，请检查权限并靠近设备"),
+            new ClientError("ble_error", failureMessage(name, error)),
           );
         },
       });

@@ -154,3 +154,101 @@ test("leaving during discovery removes listener immediately and rejects stale re
   await rejection;
   assert.equal(removed, true);
 });
+
+const discoveryStages = [
+  ["openBluetoothAdapter", "开启蓝牙失败"],
+  ["startBluetoothDevicesDiscovery", "开始搜索设备失败"],
+  ["getBluetoothDevices", "读取附近设备失败"],
+] as const;
+async function discoveryFailure(
+  t: any,
+  api: string,
+  failure: unknown,
+  check: (error: any) => boolean,
+) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  Object.assign(f.wx, {
+    openBluetoothAdapter: (o: any) => o.success({}),
+    onBluetoothDeviceFound: () => {},
+    offBluetoothDeviceFound: () => {},
+    startBluetoothDevicesDiscovery: (o: any) => o.success({}),
+    getBluetoothDevices: (o: any) => o.success({ devices: [] }),
+    [api]: (o: any) => o.fail(failure),
+  });
+  const link = new BleLink(f.wx);
+  const rejection = assert.rejects(link.discover(), check);
+  // Reach the scan wait without changing its real production duration.
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  t.mock.timers.tick(5000);
+  await rejection;
+  await link.close();
+}
+for (const [api, stage] of discoveryStages) {
+  test(`${api} preserves safe error details with a readable failure stage`, async (t) => {
+    await discoveryFailure(t, api, { errCode: 10001, errMsg: `${api}:fail unavailable` }, (error) => {
+      assert.equal(error.code, "ble_error");
+      assert.match(error.message, new RegExp(stage));
+      assert.match(error.message, /errCode: 10001/);
+      assert.ok(error.message.includes(`${api}:fail unavailable`));
+      assert.match(error.message, /蓝牙.*开启/);
+      assert.match(error.message, /微信.*权限/);
+      return true;
+    });
+  });
+}
+for (const [label, failure] of [
+  ["missing details", undefined],
+  ["null details", null],
+  ["primitive details", "unexpected"],
+  ["object details", { errCode: "10001", errMsg: { private: "do not stringify" } }],
+  ["nonfinite code", { errCode: Infinity, errMsg: 123 }],
+  ["fractional code", { errCode: 1.5 }],
+  ["unsafe code", { errCode: Number.MAX_SAFE_INTEGER + 1 }],
+  ["NaN code", { errCode: NaN }],
+  ["empty message", { errMsg: " \n\t\u0000" }],
+] as const) {
+  test(`discovery ${label} retains useful hints without coercion`, async (t) => {
+    await discoveryFailure(t, "openBluetoothAdapter", failure, (error) => {
+      assert.equal(error.code, "ble_error");
+      assert.match(error.message, /开启蓝牙失败/);
+      assert.match(error.message, /蓝牙.*开启/);
+      assert.match(error.message, /微信.*权限/);
+      assert.doesNotMatch(error.message, /errCode|undefined|null|unexpected|object|Infinity|NaN/);
+      return true;
+    });
+  });
+}
+test("discovery strips controls and bounds diagnostic text", async (t) => {
+  await discoveryFailure(t, "openBluetoothAdapter", {
+    errCode: 0,
+    errMsg: "\u0000\n\r\t\u007f\u0085\u202e" + "x".repeat(200) + "hidden-tail",
+  }, (error) => {
+    assert.equal(error.code, "ble_error");
+    assert.match(error.message, /errCode: 0/);
+    assert.ok(error.message.includes("x".repeat(160)));
+    assert.ok(!error.message.includes("x".repeat(161)));
+    assert.doesNotMatch(error.message, /[\u0000-\u001f\u007f-\u009f\u202e]|hidden-tail/);
+    assert.ok(error.message.length < 260);
+    return true;
+  });
+});
+for (const api of ["createBLEConnection", "getBLEDeviceServices", "getBLEDeviceCharacteristics", "writeBLECharacteristicValue"]) {
+  test(`${api} keeps native payload details private`, async () => {
+    const f = fixture();
+    const link = new BleLink(f.wx);
+    if (api === "writeBLECharacteristicValue") await link.connect("phone");
+    f.wx[api] = (o: any) => o.fail({ errCode: 10003, errMsg: "synthetic-wifi-secret" });
+    const operation = api === "writeBLECharacteristicValue"
+      ? link.exchange("prov-session", new Uint8Array([3]))
+      : link.connect("phone");
+    await assert.rejects(operation, (error: any) => {
+      assert.equal(error.code, "ble_error");
+      assert.equal(error.message, "蓝牙操作失败，请检查权限并靠近设备");
+      return true;
+    });
+    await link.close();
+  });
+}
