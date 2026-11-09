@@ -187,6 +187,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				result = c
 			}
 		}
+	case "chats":
+		var f ConversationFilter
+		f, e = parseFilter(r, id != "")
+		if e == nil {
+			action, device := "list_chats", ""
+			if f.DeviceID != nil {
+				device = *f.DeviceID
+			}
+			if id == "" {
+				result, e = s.reader.ListChats(a.ID, scope, f)
+			} else {
+				action = "read_chat"
+				var c ConversationDTO
+				c, e = s.reader.ReadChat(a.ID, scope, id, f.DeviceID)
+				result, device = c, c.DeviceID
+			}
+			if e == nil {
+				e = s.auditAction(a.ID, scope, action, device, id)
+			}
+		}
 	case "memories":
 		var f ConversationFilter
 		f, e = parseFilter(r, true)

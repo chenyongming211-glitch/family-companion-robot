@@ -17,6 +17,8 @@ type DeviceDTO struct {
 	Revision   *uint64 `json:"revision"`
 }
 type TurnDTO struct {
+	SourceRecordID       string `json:"sourceRecordId,omitempty"`
+	SourceTurnID         string `json:"sourceTurnId,omitempty"`
 	ID                   string `json:"id"`
 	User                 string `json:"user"`
 	Played               string `json:"played"`
@@ -28,28 +30,41 @@ type TurnDTO struct {
 	ExactStopKnown       bool   `json:"exactStopKnown"`
 	RecognitionMayDiffer bool   `json:"recognitionMayDiffer"`
 }
+type ChatSourceDTO struct {
+	RecordID  string `json:"recordId"`
+	SessionID string `json:"sessionId"`
+	StartedAt string `json:"startedAt"`
+}
 type ConversationDTO struct {
-	ID            string    `json:"id"`
-	DeviceID      string    `json:"deviceId"`
-	FamilyID      string    `json:"familyId"`
-	Title         string    `json:"title"`
-	Date          string    `json:"date"`
-	Time          string    `json:"time"`
-	Status        string    `json:"status"`
-	EndReason     string    `json:"endReason"`
-	Summary       string    `json:"summary"`
-	BodyAvailable bool      `json:"bodyAvailable"`
-	Turns         []TurnDTO `json:"turns"`
-	SourceKind    string    `json:"sourceKind,omitempty"`
-	RecordStatus  string    `json:"recordStatus,omitempty"`
+	StartedAt       string          `json:"startedAt,omitempty"`
+	LastActivityAt  string          `json:"lastActivityAt,omitempty"`
+	EndedAt         string          `json:"endedAt,omitempty"`
+	ArchiveReason   string          `json:"archiveReason,omitempty"`
+	TurnCount       int             `json:"turnCount,omitempty"`
+	ConnectionCount int             `json:"connectionCount,omitempty"`
+	Sources         []ChatSourceDTO `json:"sources,omitempty"`
+	ID              string          `json:"id"`
+	DeviceID        string          `json:"deviceId"`
+	FamilyID        string          `json:"familyId"`
+	Title           string          `json:"title"`
+	Date            string          `json:"date"`
+	Time            string          `json:"time"`
+	Status          string          `json:"status"`
+	EndReason       string          `json:"endReason"`
+	Summary         string          `json:"summary"`
+	BodyAvailable   bool            `json:"bodyAvailable"`
+	Turns           []TurnDTO       `json:"turns"`
+	SourceKind      string          `json:"sourceKind,omitempty"`
+	RecordStatus    string          `json:"recordStatus,omitempty"`
 }
 type ConversationFilter struct {
 	DeviceID      *string
 	Offset, Limit int
 }
 type ConversationPage struct {
-	Items   []ConversationDTO `json:"items"`
-	HasMore bool              `json:"hasMore"`
+	PendingSources bool              `json:"pendingSources,omitempty"`
+	Items          []ConversationDTO `json:"items"`
+	HasMore        bool              `json:"hasMore"`
 }
 type Reader struct {
 	Config       Config

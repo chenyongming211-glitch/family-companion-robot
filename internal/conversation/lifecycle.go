@@ -218,7 +218,7 @@ func Reduce(sources []Source, now time.Time) ([]Chat, error) {
 				}
 			}
 		case "uncertain":
-			if !st.closed && st.uncertainChat < 0 && st.latest >= 0 && chats[st.latest].EndedAt == nil {
+			if st.uncertainChat < 0 && st.latest >= 0 && chats[st.latest].EndedAt == nil {
 				st.uncertainChat = st.latest
 				details[st.latest].uncertain++
 			}
@@ -238,10 +238,8 @@ func Reduce(sources []Source, now time.Time) ([]Chat, error) {
 					}
 				}
 			}
-			if st.uncertainChat >= 0 {
-				details[st.uncertainChat].uncertain--
-				st.uncertainChat = -1
-			}
+			// Closing settles known admitted turns, but cannot resolve an unread
+			// source tail. Keep that uncertainty even when explicit end archives.
 			if f.Reason == "client_stop" {
 				i := st.latest
 				if i < 0 {
@@ -252,7 +250,7 @@ func Reduce(sources []Source, now time.Time) ([]Chat, error) {
 					}
 				}
 				if i >= 0 && chats[i].EndedAt == nil {
-					archive(i, f.At, "client_stop")
+					archive(i, f.At, "explicit_end")
 				}
 			}
 		}

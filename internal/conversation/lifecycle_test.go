@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -61,11 +62,11 @@ func TestLifecycleCases(t *testing.T) {
 		{"early settlement", []Fact{fact("settle", 0, 1), fact("admit", 10, 1)}, 40, 1, false, "inactivity", 10},
 		{"duplicate late", []Fact{fact("admit", 0, 1), fact("settle", 1, 1), fact("settle", 50, 1), fact("admit", 60, 1)}, 99, 1, false, "inactivity", 1},
 		{"disconnect", []Fact{fact("admit", 0, 1), {Kind: "close", At: epoch.Add(time.Minute), Reason: "transport_lost"}}, 2, 1, false, "", 1},
-		{"explicit stop", []Fact{fact("admit", 0, 1), {Kind: "close", At: epoch.Add(time.Minute), Reason: "client_stop"}}, 2, 1, false, "client_stop", 1},
+		{"explicit stop", []Fact{fact("admit", 0, 1), {Kind: "close", At: epoch.Add(time.Minute), Reason: "client_stop"}}, 2, 1, false, "explicit_end", 1},
 		{"uncertain", []Fact{fact("admit", 0, 1), fact("settle", 1, 1), fact("uncertain", 2, 0)}, 99, 1, true, "", 1},
 		{"late uncertain", []Fact{fact("admit", 0, 1), fact("settle", 1, 1), fact("uncertain", 31, 0)}, 99, 1, false, "inactivity", 1},
 		{"empty uncertain", []Fact{fact("uncertain", 0, 0)}, 99, 0, false, "", 0},
-		{"uncertain stop", []Fact{fact("admit", 0, 1), fact("uncertain", 1, 0), {Kind: "close", At: epoch.Add(2 * time.Minute), Reason: "client_stop"}}, 99, 1, false, "client_stop", 2},
+		{"uncertain stop", []Fact{fact("admit", 0, 1), fact("uncertain", 1, 0), {Kind: "close", At: epoch.Add(2 * time.Minute), Reason: "client_stop"}}, 99, 1, true, "explicit_end", 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -98,7 +99,7 @@ func TestCloseSourceMappingAndRestart(t *testing.T) {
 		t.Fatal("old empty source ended new chat")
 	}
 	empty.StartedAt = epoch.Add(41 * time.Minute)
-	if got := reduce(t, 46, a, b, empty); got[1].ArchiveReason != "client_stop" || len(got[1].SourceIDs) != 2 || got[1].SourceIDs[1] != empty.ID {
+	if got := reduce(t, 46, a, b, empty); got[1].ArchiveReason != "explicit_end" || len(got[1].SourceIDs) != 2 || got[1].SourceIDs[1] != empty.ID {
 		t.Fatal(got)
 	}
 }
@@ -159,7 +160,7 @@ func TestUncertainSourceAcrossOtherSourceStop(t *testing.T) {
 	b := source("b", Fact{Kind: "close", At: epoch.Add(3 * time.Minute), Reason: "client_stop"})
 	b.StartedAt = epoch.Add(2 * time.Minute)
 	c := reduce(t, 100, a, b)
-	if len(c) != 2 || c[0].ArchiveReason != "client_stop" || !c[1].Pending || c[1].EndedAt != nil {
+	if len(c) != 2 || c[0].ArchiveReason != "explicit_end" || !c[1].Pending || c[1].EndedAt != nil {
 		t.Fatal(c)
 	}
 }
@@ -170,5 +171,34 @@ func TestInputNotMutated(t *testing.T) {
 	c[0].Turns[0].TurnID = 99
 	if !reflect.DeepEqual(s.Facts, original) || reduce(t, 2, s)[0].Turns[0].TurnID != 1 {
 		t.Fatal("input/output alias")
+	}
+}
+
+func TestTailUncertaintySurvivesClose(t *testing.T) {
+	for _, afterClose := range []bool{false, true} {
+		for _, reason := range []string{"transport_lost", "client_stop"} {
+			t.Run(fmt.Sprintf("%s/after=%v", reason, afterClose), func(t *testing.T) {
+				fs := []Fact{fact("admit", 0, 1), fact("settle", 1, 1)}
+				close := Fact{Kind: "close", At: epoch.Add(2 * time.Minute), Reason: reason}
+				uncertainty := fact("uncertain", 2, 0)
+				if afterClose {
+					fs = append(fs, close, uncertainty)
+				} else {
+					fs = append(fs, uncertainty, close)
+				}
+				c := reduce(t, 99, source("a", fs...))[0]
+				if reason == "client_stop" {
+					if c.ArchiveReason != "explicit_end" || c.EndedAt == nil {
+						t.Fatalf("%+v", c)
+					}
+					// An already archived chat is never modified by a later uncertainty fact.
+					if c.Pending == afterClose {
+						t.Fatalf("pending: %+v", c)
+					}
+				} else if c.EndedAt != nil || !c.Pending || !c.LastActivityAt.Equal(epoch.Add(time.Minute)) {
+					t.Fatalf("%+v", c)
+				}
+			})
+		}
 	}
 }
