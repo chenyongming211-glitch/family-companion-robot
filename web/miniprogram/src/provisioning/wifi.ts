@@ -7,11 +7,25 @@ export function field(n:number,v:number|Uint8Array):number[]{return typeof v==='
 export function message(...fields:number[][]):Uint8Array{return new Uint8Array(fields.flat());}
 export function parse(data:Uint8Array):Map<number,Array<number|Uint8Array>>{
  if(data.length>8192)throw new ClientError('proto','设备响应过大');const result=new Map<number,Array<number|Uint8Array>>();let at=0;
- const read=()=>{let n=0,m=1;for(let i=0;i<5;i++){if(at>=data.length)throw new ClientError('proto','设备响应截断');const c=data[at++];n+=(c&127)*m;if(!(c&128))return n;m*=128;}throw new ClientError('proto','设备响应无效');};
- while(at<data.length){const key=read(),number=key>>>3,wire=key&7;if(!number)throw new ClientError('proto','设备响应无效');let value:number|Uint8Array;if(wire===0)value=read();else if(wire===2){const length=read();if(at+length>data.length)throw new ClientError('proto','设备响应截断');value=data.slice(at,at+length);at+=length;}else throw new ClientError('proto','设备响应格式不兼容');const values=result.get(number)||[];values.push(value);result.set(number,values);}
+ const read=(scalar=false)=>{
+  // Keep two exact uint32 halves: negative int32 uses a sign-extended uint64
+  // varint. Tags/lengths stay uint32; no BigInt is needed in the initial bundle.
+  let low=0,high=0;
+  for(let i=0;i<(scalar?10:5);i++){
+   if(at>=data.length)throw new ClientError('proto','设备响应截断');const c=data[at++],bits=c&127;
+   if((!scalar&&i===4&&bits>15)||(i===9&&bits>1))throw new ClientError('proto','设备响应无效');
+   if(i<4)low+=bits*2**(7*i);else if(i===4){low+=(bits&15)*2**28;high=Math.floor(bits/16);}else high+=bits*2**(7*i-32);
+   if(!(c&128)){
+    if(high===4294967295&&low>=2147483648)return low-4294967296;
+    const value=low+high*4294967296;if(!Number.isSafeInteger(value))throw new ClientError('proto','设备响应无效');return value;
+   }
+  }
+  throw new ClientError('proto','设备响应无效');
+ };
+ while(at<data.length){const key=read(),number=key>>>3,wire=key&7;if(!number)throw new ClientError('proto','设备响应无效');let value:number|Uint8Array;if(wire===0)value=read(true);else if(wire===2){const length=read();if(at+length>data.length)throw new ClientError('proto','设备响应截断');value=data.slice(at,at+length);at+=length;}else throw new ClientError('proto','设备响应格式不兼容');const values=result.get(number)||[];values.push(value);result.set(number,values);}
  return result;
 }
-const num=(m:Map<number,Array<number|Uint8Array>>,n:number)=>{const v=m.get(n)?.[0];if(v===undefined)return 0;if(typeof v!=='number')throw new ClientError('proto','设备响应格式无效');return v;};
+const num=(m:Map<number,Array<number|Uint8Array>>,n:number)=>{const v=m.get(n)?.[0];if(v===undefined)return 0;if(typeof v!=='number'||v<0||v>4294967295)throw new ClientError('proto','设备响应格式无效');return v;};
 const bytes=(m:Map<number,Array<number|Uint8Array>>,n:number)=>{const v=m.get(n)?.[0];if(!(v instanceof Uint8Array))throw new ClientError('proto','设备响应缺失');return v;};
 export type SecureExchange=(endpoint:string,payload:Uint8Array)=>Promise<Uint8Array>;
 export class WifiProvisioner {
