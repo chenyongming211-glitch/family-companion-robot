@@ -26,6 +26,8 @@
 
 namespace FamilyOnboarding {
 namespace {
+ESP_EVENT_DEFINE_BASE(FAMILY_CONNECTION_EVENT);
+constexpr int ClockReady = 1;
 constexpr int64_t WindowUs = 180LL * 1000000;
 std::function<void(bool)> callback;
 SemaphoreHandle_t lock;
@@ -126,16 +128,22 @@ bool SecureClock() {
     Board::GetInstance().GetDisplay()->ShowNotification("时间同步失败，请检查网络后重试");
     return false;
 }
+bool PostConnected(uint32_t generation) {
+    return esp_event_post(FAMILY_CONNECTION_EVENT, ClockReady, &generation, sizeof(generation), pdMS_TO_TICKS(500)) == ESP_OK;
+}
 void ScheduleClock() {
     if (!Activated() || !connected || connection_reported || clock_worker.exchange(true)) return;
     if (xTaskCreate([](void*) {
         const auto generation = network_generation.load();
-        if (SecureClock() && connected && generation == network_generation && callback &&
-            !connection_reported.exchange(true)) callback(true);
+        const bool ready = SecureClock();
+        // Only the default event loop may check/mark/notify connection state.
+        // Clearing the task guard before posting also permits the next link to retry.
         clock_worker = false;
-        // Sync can arrive after the bounded wait times out but before this task
-        // clears its guard. Recheck after clearing so that notification is not lost.
-        if (clock_synced && connected && !connection_reported) ScheduleClock();
+        const bool posted = ready && PostConnected(generation);
+        if (clock_synced && connected && !connection_reported &&
+            (!posted || generation != network_generation)) {
+            vTaskDelay(pdMS_TO_TICKS(250)); ScheduleClock();
+        }
         vTaskDelete(nullptr);
     }, "family_clock", 4096, nullptr, 4, nullptr) != pdPASS) clock_worker = false;
 }
@@ -157,7 +165,7 @@ void Worker(void*) {
             if (Activate(id, proof)) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
                 running = false; esp_timer_stop(expiry_timer); ClearClaim(); network_prov_mgr_stop_provisioning();
-                if (callback && !connection_reported.exchange(true)) callback(true);
+                if (!PostConnected(network_generation.load())) ScheduleClock();
                 worker_active = false; vTaskDelete(nullptr); return;
             }
             std::fill(proof.begin(), proof.end(), '\0');
@@ -167,7 +175,13 @@ void Worker(void*) {
     running = false; esp_timer_stop(expiry_timer); ClearClaim(); network_prov_mgr_stop_provisioning();
     worker_active = false; vTaskDelete(nullptr);
 }
-void Event(void*, esp_event_base_t base, int32_t event, void*) {
+void Event(void*, esp_event_base_t base, int32_t event, void* data) {
+    if (base == FAMILY_CONNECTION_EVENT && event == ClockReady) {
+        const auto generation = *static_cast<const uint32_t*>(data);
+        if (generation == network_generation && connected && Activated() && clock_synced &&
+            !connection_reported.exchange(true) && callback) callback(true);
+        return;
+    }
     if (base == NETWORK_PROV_EVENT && event == NETWORK_PROV_WIFI_CRED_FAIL && running) {
         network_prov_mgr_reset_wifi_sm_state_on_failure();
         Board::GetInstance().GetDisplay()->ShowNotification("Wi-Fi 连接失败，请重新输入密码");
@@ -235,7 +249,8 @@ void Start(std::function<void(bool)> connection) {
     if (!esp_netif_create_default_wifi_sta()) return;
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&config) != ESP_OK || esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) return;
-    if (esp_event_handler_register(NETWORK_PROV_EVENT, NETWORK_PROV_WIFI_CRED_FAIL, Event, nullptr) != ESP_OK ||
+    if (esp_event_handler_register(FAMILY_CONNECTION_EVENT, ClockReady, Event, nullptr) != ESP_OK ||
+        esp_event_handler_register(NETWORK_PROV_EVENT, NETWORK_PROV_WIFI_CRED_FAIL, Event, nullptr) != ESP_OK ||
         esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, Event, nullptr) != ESP_OK ||
         esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, Event, nullptr) != ESP_OK) return;
     esp_timer_create_args_t timer{};
@@ -259,7 +274,7 @@ void Start(std::function<void(bool)> connection) {
             while (!connected && esp_timer_get_time() < until) vTaskDelay(pdMS_TO_TICKS(250));
             if (connected && SecureClock() && Activate("", "")) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
-                worker_active = false; if (callback && !connection_reported.exchange(true)) callback(true);
+                worker_active = false; if (!PostConnected(network_generation.load())) ScheduleClock();
             } else {
                 esp_wifi_disconnect(); esp_wifi_stop(); connected = false; worker_active = false;
                 Configure();

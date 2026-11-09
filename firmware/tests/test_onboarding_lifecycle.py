@@ -16,7 +16,10 @@ class NativeLifecycle(unittest.TestCase):
 #include <atomic>
 #include <cassert>
 #include <functional>
+#include <cstdint>
+#include <vector>
 using esp_event_base_t=const char*;
+const char *FAMILY_CONNECTION_EVENT="ready"; constexpr int ClockReady=1;
 const char *NETWORK_PROV_EVENT="prov", *WIFI_EVENT="wifi", *IP_EVENT="ip";
 constexpr int NETWORK_PROV_WIFI_CRED_FAIL=1,WIFI_EVENT_STA_START=2,WIFI_EVENT_STA_DISCONNECTED=3,IP_EVENT_STA_GOT_IP=4,ESP_OK=0,pdPASS=1;
 #define pdMS_TO_TICKS(x) (x)
@@ -32,28 +35,38 @@ int esp_netif_sntp_start(){++sntp_starts;return ESP_OK;}
 int esp_netif_sntp_sync_wait(int ms){assert(ms==15000);++waits;if(on_wait)on_wait();return sync_result;}
 int esp_wifi_connect(){++connects;return ESP_OK;}
 int xTaskCreate(void (*fn)(void*),const char*,int,void*,int,void*){++queued;task=fn;return pdPASS;}
-void vTaskDelete(void*){}
+void vTaskDelete(void*){} void vTaskDelay(int ms){assert(ms==250);}
+std::vector<uint32_t> events; int post_result=ESP_OK;
+int esp_event_post(esp_event_base_t base,int event,const void* data,size_t size,int ms){assert(base==FAMILY_CONNECTION_EVENT&&event==ClockReady&&size==4&&ms==500);if(post_result!=ESP_OK)return post_result;events.push_back(*static_cast<const uint32_t*>(data));return ESP_OK;}
 struct Display {void ShowNotification(const char*){++notices;}};
 struct Board {static Board& GetInstance(){static Board b;return b;} Display* GetDisplay(){static Display d;return &d;}};
 '''
-        body=fake+'\n'+function(source,'bool SecureClock() {')+'\n'+function(source,'void ScheduleClock() {')+'\n'+function(source,'void TimeSynchronized(')+'\n'+function(source,'void Event(')+r'''
+        body=fake+'\n'+function(source,'bool SecureClock() {')+'\n'+function(source,'bool PostConnected(')+'\n'+function(source,'void ScheduleClock() {')+'\n'+function(source,'void TimeSynchronized(')+'\n'+function(source,'void Event(')+r'''
+void deliver(){auto pending=events;events.clear();for(auto generation:pending)Event(nullptr,FAMILY_CONNECTION_EVENT,ClockReady,&generation);}
 int main(){
  running=true; Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_FAIL,nullptr); assert(resets==1&&notices==1);
  running=false; Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_FAIL,nullptr); assert(resets==1);
- assert(SecureClock()); assert(SecureClock()); assert(waits==1); // sync semaphore is consumed once
+ assert(SecureClock()); assert(SecureClock()); assert(waits==1);
  clock_synced=false; activated=true; sync_result=-1; int accepted=0; callback=[&](bool c){if(c)++accepted;};
  Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr); Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr);
  assert(sntp_starts==2&&queued==1&&accepted==0); task(nullptr); assert(accepted==0&&!clock_worker);
- // Late real SNTP success on the SAME association must recover without GOT_IP.
- int before=waits; TimeSynchronized(nullptr); assert(queued==2); task(nullptr); assert(accepted==1&&clock_synced&&waits==before);
+ // Late SNTP on SAME association; worker may only queue, never notify directly.
+ int before=waits; TimeSynchronized(nullptr); assert(queued==2); task(nullptr); assert(accepted==0&&events.size()==1); deliver(); assert(accepted==1&&clock_synced&&waits==before);
  TimeSynchronized(nullptr); Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr); assert(queued==2&&accepted==1);
  Event(nullptr,WIFI_EVENT,WIFI_EVENT_STA_DISCONNECTED,nullptr); assert(!connected&&connects==1&&!connection_reported);
- TimeSynchronized(nullptr); assert(queued==2); // never connect while link is down
- Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr); assert(queued==3); task(nullptr); assert(accepted==2&&waits==before);
+ TimeSynchronized(nullptr); assert(queued==2);
+ Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr); assert(queued==3); task(nullptr); assert(events.size()==1&&accepted==1);
+ // Deterministic queued-ready vs disconnect race: stale generation must neither
+ // report Connected nor poison the next association's one-report flag.
+ Event(nullptr,WIFI_EVENT,WIFI_EVENT_STA_DISCONNECTED,nullptr); deliver(); assert(accepted==1&&!connection_reported);
+ Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr); assert(queued==4); task(nullptr); deliver(); assert(accepted==2&&waits==before);
  Event(nullptr,WIFI_EVENT,WIFI_EVENT_STA_DISCONNECTED,nullptr); clock_synced=false; sync_result=-1;
- Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr); assert(queued==4);
+ Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr); assert(queued==5);
  on_wait=[](){TimeSynchronized(nullptr);}; task(nullptr); on_wait=nullptr;
- assert(queued==5&&accepted==2); task(nullptr); assert(accepted==3); // sync at timeout cleanup cannot be lost
+ assert(queued==6&&accepted==2); task(nullptr); deliver(); assert(accepted==3);
+ Event(nullptr,WIFI_EVENT,WIFI_EVENT_STA_DISCONNECTED,nullptr); Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr);
+ post_result=-1; task(nullptr); assert(!connection_reported&&events.empty()&&accepted==3);
+ post_result=ESP_OK; task(nullptr); deliver(); assert(accepted==4); // queue failure stays retryable
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
