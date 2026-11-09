@@ -1,4 +1,5 @@
 #include "family_onboarding.h"
+#include "family_setup_state.h"
 #include "settings.h"
 #include "system_info.h"
 #include <esp_crt_bundle.h>
@@ -33,6 +34,9 @@ std::function<void(bool)> callback;
 SemaphoreHandle_t lock;
 std::string claim_id, challenge;
 std::vector<uint8_t> salt, verifier;
+std::vector<uint8_t> screen_code;
+bool screen_code_valid=false;
+SetupScreenState screen_state;
 network_prov_security2_params_t security{};
 std::atomic<bool> connected{false}, running{false}, worker_active{false}, clock_worker{false}, clock_synced{false}, connection_reported{false};
 std::atomic<uint32_t> network_generation{0};
@@ -41,6 +45,52 @@ bool initialized = false;
 bool manager_ready = false;
 bool endpoint_created = false;
 esp_timer_handle_t expiry_timer = nullptr;
+
+void RenderSetup() {
+    const char *title="", *detail="";
+    bool code=false;
+    switch(screen_state.phase) {
+    case SetupPhase::Hidden:
+        Board::GetInstance().GetDisplay()->SetOnboardingStatus(nullptr,nullptr,nullptr,0);return;
+    case SetupPhase::Waiting:
+        title="微信扫码添加设备";detail="请在小程序中完成登录和配网";code=true;break;
+    case SetupPhase::Connecting:
+        title="正在连接 Wi-Fi";detail="请保持设备通电，稍候片刻";break;
+    case SetupPhase::WifiError:
+        title="Wi-Fi 连接失败";detail="请在小程序中检查网络和密码后重试";code=true;break;
+    case SetupPhase::Clock:
+        title="正在同步时间";detail="已连上网络，正在准备安全连接";break;
+    case SetupPhase::ClockError:
+        title="时间同步失败";detail="请检查网络，按设备按钮重新配网";break;
+    case SetupPhase::Confirming:
+        title="正在确认家庭绑定";detail="请保持设备和手机联网";break;
+    case SetupPhase::Success:
+        title="添加成功";detail="设备已绑定家庭，即将进入机器人";break;
+    case SetupPhase::Expired:
+        title="配网已超时";detail="请按设备按钮，重新扫码配网";break;
+    case SetupPhase::CodeError:
+        title="设备码未准备好";detail="请联系设备管理员检查出厂配置";break;
+    case SetupPhase::StartError:
+        title="配网启动失败";detail="请重启设备后重试";break;
+    }
+    Board::GetInstance().GetDisplay()->SetOnboardingStatus(title,detail,
+        code && screen_code_valid && screen_code.size()==CodeSize?screen_code.data()+48:nullptr,
+        code && screen_code_valid && screen_code.size()==CodeSize?CodePixels:0);
+}
+uint32_t BeginSetup() {
+    xSemaphoreTake(lock,portMAX_DELAY);
+    const auto epoch=screen_state.Begin();RenderSetup();
+    xSemaphoreGive(lock);return epoch;
+}
+uint32_t CurrentSetup() {
+    xSemaphoreTake(lock,portMAX_DELAY);const auto epoch=screen_state.epoch;
+    xSemaphoreGive(lock);return epoch;
+}
+void ShowSetup(SetupPhase phase,uint32_t epoch=0) {
+    xSemaphoreTake(lock,portMAX_DELAY);
+    if(screen_state.Apply(epoch?epoch:screen_state.epoch,phase))RenderSetup();
+    xSemaphoreGive(lock);
+}
 
 bool LoadBlob(nvs_handle_t h, const char* key, std::vector<uint8_t>& value, size_t expected) {
     size_t size = 0;
@@ -152,19 +202,25 @@ void TimeSynchronized(struct timeval*) {
     ScheduleClock(); // No TLS or application work in the lwIP callback.
 }
 void Worker(void*) {
+    const auto epoch=CurrentSetup();
     bool clock_ready = false;
     while (running && esp_timer_get_time() < deadline) {
         if (connected) {
             if (!clock_ready) {
+                ShowSetup(SetupPhase::Clock,epoch);
                 clock_ready = SecureClock();
-                if (!clock_ready) break;
+                if (!clock_ready) {ShowSetup(SetupPhase::ClockError,epoch);break;}
             }
             if (!running || esp_timer_get_time() >= deadline) break;
             std::string id, proof;
             xSemaphoreTake(lock, portMAX_DELAY); id = claim_id; proof = challenge; xSemaphoreGive(lock);
+            ShowSetup(SetupPhase::Confirming,epoch);
             if (Activate(id, proof)) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
                 running = false; esp_timer_stop(expiry_timer); ClearClaim(); network_prov_mgr_stop_provisioning();
+                ShowSetup(SetupPhase::Success,epoch);
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                ShowSetup(SetupPhase::Hidden,epoch);
                 if (!PostConnected(network_generation.load())) ScheduleClock();
                 worker_active = false; vTaskDelete(nullptr); return;
             }
@@ -173,6 +229,7 @@ void Worker(void*) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     running = false; esp_timer_stop(expiry_timer); ClearClaim(); network_prov_mgr_stop_provisioning();
+    ShowSetup(SetupPhase::Expired,epoch);
     worker_active = false; vTaskDelete(nullptr);
 }
 void Event(void*, esp_event_base_t base, int32_t event, void* data) {
@@ -182,9 +239,12 @@ void Event(void*, esp_event_base_t base, int32_t event, void* data) {
             !connection_reported.exchange(true) && callback) callback(true);
         return;
     }
+    if (base == NETWORK_PROV_EVENT && event == NETWORK_PROV_WIFI_CRED_RECV && running)
+        ShowSetup(SetupPhase::Connecting);
     if (base == NETWORK_PROV_EVENT && event == NETWORK_PROV_WIFI_CRED_FAIL && running) {
         network_prov_mgr_reset_wifi_sm_state_on_failure();
         Board::GetInstance().GetDisplay()->ShowNotification("Wi-Fi 连接失败，请重新输入密码");
+        ShowSetup(SetupPhase::WifiError);
     }
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_START) esp_wifi_connect();
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_DISCONNECTED) {
@@ -194,6 +254,7 @@ void Event(void*, esp_event_base_t base, int32_t event, void* data) {
     if (base == IP_EVENT && event == IP_EVENT_STA_GOT_IP) {
         if (!clock_synced) esp_netif_sntp_start();
         connected = true;
+        if (running) ShowSetup(SetupPhase::Clock);
         ScheduleClock();
     }
 }
@@ -208,19 +269,20 @@ bool Activated() { return Settings("family_factory").GetInt("activated") == 1; }
 std::string Key() { return Settings("family_factory").GetString("key"); }
 void Configure() {
     if (!initialized || running || worker_active || Activated()) return;
+    BeginSetup();
     if (!manager_ready) {
         network_prov_mgr_config_t config{}; config.scheme = network_prov_scheme_ble;
         config.scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE;
         config.network_prov_wifi_conn_cfg.wifi_conn_attempts = 3;
-        if (network_prov_mgr_init(config) != ESP_OK) return;
+        if (network_prov_mgr_init(config) != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
         manager_ready = true;
     }
     ClearClaim();
     if (!endpoint_created) {
-        if (network_prov_mgr_endpoint_create("family-claim") != ESP_OK) return;
+        if (network_prov_mgr_endpoint_create("family-claim") != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
         endpoint_created = true;
     }
-    if (network_prov_mgr_disable_auto_stop(1000) != ESP_OK) return;
+    if (network_prov_mgr_disable_auto_stop(1000) != ESP_OK) {ShowSetup(SetupPhase::StartError);return;}
     security.salt = reinterpret_cast<const char*>(salt.data()); security.salt_len = salt.size();
     security.verifier = reinterpret_cast<const char*>(verifier.data()); security.verifier_len = verifier.size();
     auto mac = SystemInfo::GetMacAddress(); std::string name = "FAMILY_";
@@ -228,12 +290,13 @@ void Configure() {
     deadline = esp_timer_get_time() + WindowUs; running = true;
     if (network_prov_mgr_start_provisioning(NETWORK_PROV_SECURITY_2, &security, name.c_str(), nullptr) != ESP_OK ||
         network_prov_mgr_endpoint_register("family-claim", Claim, nullptr) != ESP_OK) {
-        running = false; network_prov_mgr_stop_provisioning(); return;
+        running = false; network_prov_mgr_stop_provisioning(); ShowSetup(SetupPhase::StartError);return;
     }
     esp_timer_start_once(expiry_timer, WindowUs);
     worker_active = true;
     if (xTaskCreate(Worker, "family_claim", 8192, nullptr, 4, nullptr) != pdPASS) {
         worker_active = false; esp_timer_stop(expiry_timer); running = false; network_prov_mgr_stop_provisioning();
+        ShowSetup(SetupPhase::StartError);
     }
 }
 void Start(std::function<void(bool)> connection) {
@@ -241,16 +304,24 @@ void Start(std::function<void(bool)> connection) {
     callback = std::move(connection);
     nvs_handle_t h; if (nvs_open("family_factory", NVS_READONLY, &h) != ESP_OK) return;
     const bool valid = LoadBlob(h, "salt", salt, 16) && LoadBlob(h, "verifier", verifier, 384);
+    bool screen_ready=true;
+#if CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16
+    if (!Activated()) screen_ready=LoadBlob(h,"screen_code",screen_code,CodeSize) &&
+        ValidCode(screen_code.data(),screen_code.size(),Settings("family_factory").GetString("device_id"));
+    screen_code_valid=screen_ready && screen_code.size()==CodeSize;
+    if (!screen_code_valid)screen_code.clear();
+#endif
     nvs_close(h); const auto key = Key();
     if (!valid || key.size() != 43 || Settings("family_factory").GetString("mac") != SystemInfo::GetMacAddress()) return;
     lock = xSemaphoreCreateMutex(); if (!lock) return;
+    if (!screen_ready) {BeginSetup();ShowSetup(SetupPhase::CodeError);return;}
     auto err = esp_netif_init(); if (err != ESP_OK) return;
     err = esp_event_loop_create_default(); if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return;
     if (!esp_netif_create_default_wifi_sta()) return;
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     if (esp_wifi_init(&config) != ESP_OK || esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) return;
     if (esp_event_handler_register(FAMILY_CONNECTION_EVENT, ClockReady, Event, nullptr) != ESP_OK ||
-        esp_event_handler_register(NETWORK_PROV_EVENT, NETWORK_PROV_WIFI_CRED_FAIL, Event, nullptr) != ESP_OK ||
+        esp_event_handler_register(NETWORK_PROV_EVENT, ESP_EVENT_ANY_ID, Event, nullptr) != ESP_OK ||
         esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, Event, nullptr) != ESP_OK ||
         esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, Event, nullptr) != ESP_OK) return;
     esp_timer_create_args_t timer{};
@@ -268,12 +339,19 @@ void Start(std::function<void(bool)> connection) {
         // A crash may happen after cloud confirmation but before the local NVS
         // receipt. Try authenticated bootstrap on saved Wi-Fi before the official
         // provisioning manager clears RAM credentials for its new session.
+        BeginSetup();ShowSetup(SetupPhase::Connecting);
         esp_wifi_start(); worker_active = true;
         if (xTaskCreate([](void*) {
+            const auto epoch=CurrentSetup();
             const auto until = esp_timer_get_time() + 20000000;
             while (!connected && esp_timer_get_time() < until) vTaskDelay(pdMS_TO_TICKS(250));
-            if (connected && SecureClock() && Activate("", "")) {
+            if (connected)ShowSetup(SetupPhase::Clock,epoch);
+            const bool ready=connected && SecureClock();
+            if (ready)ShowSetup(SetupPhase::Confirming,epoch);
+            if (ready && Activate("", "")) {
                 { Settings factory("family_factory", true); factory.SetInt("activated", 1); }
+                ShowSetup(SetupPhase::Success,epoch);vTaskDelay(pdMS_TO_TICKS(2000));
+                ShowSetup(SetupPhase::Hidden,epoch);
                 worker_active = false; if (!PostConnected(network_generation.load())) ScheduleClock();
             } else {
                 esp_wifi_disconnect(); esp_wifi_stop(); connected = false; worker_active = false;

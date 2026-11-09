@@ -31,7 +31,7 @@ Interface: 码工具generate新增可选output_format='screen'（默认image）�
 
 Files: firmware/overlays/onboarding/family_onboarding.cc、新屏幕位图解析/UI文件、firmware/tools/prepare_onboarding.py、实际C++/LVGL测试。
 
-Interface: Display新增默认无操作SetOnboardingStatus(title,detail,packed,size)，nullptr title清屏；仅微雪Display override。packed是校验后的280×280 1bit载荷。控制器持有码内存，显示owner拷贝/解包为RGB565，在LVGL锁内更新；任务结束不悬挂指针。状态从既有事件产生，不开放新的认证路径。
+Interface: Display新增默认无操作SetOnboardingStatus(title,detail,packed,size)，nullptr title清屏；仅微雪Display override。packed是校验后的280×280 1bit载荷。控制器持有码内存，显示owner拷贝为带固定黑白调色板的原生I1位图，在LVGL锁内更新；任务结束不悬挂指针。状态从既有事件产生，不开放新的认证路径。
 
 - [ ] 写解析/实际UI及控制器状态回归：损坏码/错设备拒绝；待扫码/连Wi-Fi/校时/确认/失败/超时/成功；IP不提前成功，过期/旧回调不覆盖终态。
 - [ ] 云端见RED后实现：持久码页面、中文状态、成功后恢复显示；补接准备工具，保持来源清单完整。

@@ -18,10 +18,14 @@ class NativeLifecycle(unittest.TestCase):
 #include <functional>
 #include <cstdint>
 #include <vector>
+#include "family_setup_state.h"
+using FamilyOnboarding::SetupPhase;
+std::vector<SetupPhase> screens;
+void ShowSetup(SetupPhase phase,uint32_t=0){screens.push_back(phase);}
 using esp_event_base_t=const char*;
 const char *FAMILY_CONNECTION_EVENT="ready"; constexpr int ClockReady=1;
 const char *NETWORK_PROV_EVENT="prov", *WIFI_EVENT="wifi", *IP_EVENT="ip";
-constexpr int NETWORK_PROV_WIFI_CRED_FAIL=1,WIFI_EVENT_STA_START=2,WIFI_EVENT_STA_DISCONNECTED=3,IP_EVENT_STA_GOT_IP=4,ESP_OK=0,pdPASS=1;
+constexpr int NETWORK_PROV_WIFI_CRED_FAIL=1,WIFI_EVENT_STA_START=2,WIFI_EVENT_STA_DISCONNECTED=3,IP_EVENT_STA_GOT_IP=4,NETWORK_PROV_WIFI_CRED_RECV=5,ESP_OK=0,pdPASS=1;
 #define pdMS_TO_TICKS(x) (x)
 #define ESP_LOGE(...) ((void)0)
 std::atomic<bool> running{false},connected{false},clock_worker{false},clock_synced{false},connection_reported{false};
@@ -44,7 +48,13 @@ struct Board {static Board& GetInstance(){static Board b;return b;} Display* Get
         body=fake+'\n'+function(source,'bool SecureClock() {')+'\n'+function(source,'bool PostConnected(')+'\n'+function(source,'void ScheduleClock() {')+'\n'+function(source,'void TimeSynchronized(')+'\n'+function(source,'void Event(')+r'''
 void deliver(){auto pending=events;events.clear();for(auto generation:pending)Event(nullptr,FAMILY_CONNECTION_EVENT,ClockReady,&generation);}
 int main(){
- running=true; Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_FAIL,nullptr); assert(resets==1&&notices==1);
+ running=true; Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_RECV,nullptr);
+ assert(screens.size()==1&&screens.back()==SetupPhase::Connecting);
+ Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_FAIL,nullptr); assert(resets==1&&notices==1);
+ assert(screens.back()==SetupPhase::WifiError);
+ Event(nullptr,IP_EVENT,IP_EVENT_STA_GOT_IP,nullptr);
+ assert(screens.back()==SetupPhase::Clock); // Getting IP never means successful binding.
+ connected=false;sntp_starts=0;
  running=false; Event(nullptr,NETWORK_PROV_EVENT,NETWORK_PROV_WIFI_CRED_FAIL,nullptr); assert(resets==1);
  assert(SecureClock()); assert(SecureClock()); assert(waits==1);
  clock_synced=false; activated=true; sync_result=-1; int accepted=0; callback=[&](bool c){if(c)++accepted;};
@@ -71,7 +81,7 @@ int main(){
 '''
         with tempfile.TemporaryDirectory() as tmp:
             tmp=Path(tmp);(tmp/'test.cc').write_text(body)
-            built=subprocess.run(['c++','-std=c++20','-Wall','-Wextra','-Werror',str(tmp/'test.cc'),'-o',str(tmp/'test')],capture_output=True,text=True)
+            built=subprocess.run(['c++','-std=c++20','-Wall','-Wextra','-Werror','-I',str(SOURCE.parent),str(tmp/'test.cc'),'-o',str(tmp/'test')],capture_output=True,text=True)
             self.assertEqual(built.returncode,0,built.stderr)
             ran=subprocess.run([str(tmp/'test')],capture_output=True,text=True)
             self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
