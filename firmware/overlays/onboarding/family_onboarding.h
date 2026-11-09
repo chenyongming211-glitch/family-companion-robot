@@ -8,6 +8,8 @@ bool Activated();
 std::string Key();
 void Start(std::function<void(bool)> connection);
 void Configure();
+// Existing heap telemetry replays the latest startup fact once, including early USB loss.
+void ReportConfigureStartup();
 constexpr const char* Bootstrap = "https://robot.songguoxue.com/api/device/bootstrap";
 constexpr const char* Voice = "wss://robot.songguoxue.com/xiaozhi/v1/";
 }

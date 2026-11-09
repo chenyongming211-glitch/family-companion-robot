@@ -47,13 +47,27 @@ bool manager_ready = false;
 bool endpoint_created = false;
 esp_timer_handle_t expiry_timer = nullptr;
 
+struct ConfigureStartupSnapshot {
+    const char* stage=nullptr;
+    int result=0;
+    unsigned internal=0,largest=0,free8=0;
+};
+ConfigureStartupSnapshot configure_startup;
+bool configure_startup_pending=false;
+portMUX_TYPE configure_startup_mux=portMUX_INITIALIZER_UNLOCKED;
+
 // Only fixed Configure stage literals and numeric allocator/API facts are logged.
 void LogConfigure(const char* stage,int result) {
     constexpr uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
-    ESP_LOGI("FamilySetup","configure stage=%s err=%d internal=%u largest=%u free8=%u",stage,result,
+    const ConfigureStartupSnapshot snapshot{stage,result,
         static_cast<unsigned>(heap_caps_get_free_size(caps)),
         static_cast<unsigned>(heap_caps_get_largest_free_block(caps)),
-        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)));
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT))};
+    portENTER_CRITICAL(&configure_startup_mux);
+    configure_startup=snapshot;configure_startup_pending=true;
+    portEXIT_CRITICAL(&configure_startup_mux);
+    ESP_LOGI("FamilySetup","configure stage=%s err=%d internal=%u largest=%u free8=%u",
+        snapshot.stage,snapshot.result,snapshot.internal,snapshot.largest,snapshot.free8);
 }
 
 void RenderSetup() {
@@ -272,6 +286,15 @@ void Event(void*, esp_event_base_t base, int32_t event, void* data) {
         ScheduleClock();
     }
 }
+}
+void ReportConfigureStartup() {
+    ConfigureStartupSnapshot snapshot;
+    portENTER_CRITICAL(&configure_startup_mux);
+    const bool report=configure_startup_pending;
+    if(report) {snapshot=configure_startup;configure_startup_pending=false;}
+    portEXIT_CRITICAL(&configure_startup_mux);
+    if(report) ESP_LOGI("FamilySetup","configure replay stage=%s err=%d internal=%u largest=%u free8=%u",
+        snapshot.stage,snapshot.result,snapshot.internal,snapshot.largest,snapshot.free8);
 }
 bool Present() {
     nvs_handle_t h; const auto err = nvs_open("family_factory", NVS_READONLY, &h);

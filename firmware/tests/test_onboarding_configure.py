@@ -8,6 +8,8 @@ SOURCE=Path(__file__).resolve().parents[1]/'overlays/onboarding/family_onboardin
 class ConfigureDiagnostics(unittest.TestCase):
     def test_each_failure_reports_exact_stage_and_keeps_cleanup(self):
         source=SOURCE.read_text()
+        snapshot=source[source.index('struct ConfigureStartupSnapshot'):source.index('// Only fixed Configure')] if 'struct ConfigureStartupSnapshot' in source else ''
+        replay=function(source,'void ReportConfigureStartup() {') if 'void ReportConfigureStartup() {' in source else 'void ReportConfigureStartup() {}'
         body=r'''
 #include <cassert>
 #include <string>
@@ -25,10 +27,15 @@ int expiry_timer=1,stops=0,timer_stops=0,fail_stage=0,calls=0,screen_errors=0;
 long long deadline;constexpr long long WindowUs=180000000;
 std::vector<std::pair<std::string,int>> logs;
 constexpr uint32_t MALLOC_CAP_INTERNAL=1,MALLOC_CAP_8BIT=2;
-size_t heap_caps_get_free_size(uint32_t caps){assert(caps==2||caps==3);return caps==3?100:1000;}
-size_t heap_caps_get_largest_free_block(uint32_t caps){assert(caps==3);return 50;}
+unsigned live_heap=100;int critical_depth=0;
+using portMUX_TYPE=int;
+#define portMUX_INITIALIZER_UNLOCKED 0
+void portENTER_CRITICAL(portMUX_TYPE*){assert(critical_depth++==0);}
+void portEXIT_CRITICAL(portMUX_TYPE*){assert(--critical_depth==0);}
+size_t heap_caps_get_free_size(uint32_t caps){assert(!critical_depth);assert(caps==2||caps==3);return caps==3?live_heap:1000;}
+size_t heap_caps_get_largest_free_block(uint32_t caps){assert(!critical_depth);assert(caps==3);return 50;}
 void LogInfo(const char* tag,const char* format,const char* stage,int result,unsigned internal,unsigned largest,unsigned free8){
- assert(std::string(tag)=="FamilySetup");assert(std::string(format)=="configure stage=%s err=%d internal=%u largest=%u free8=%u");
+ assert(!critical_depth);assert(std::string(tag)=="FamilySetup");assert(std::string(format)=="configure stage=%s err=%d internal=%u largest=%u free8=%u"||std::string(format)=="configure replay stage=%s err=%d internal=%u largest=%u free8=%u");
  assert(internal==100&&largest==50&&free8==1000);logs.emplace_back(stage,result);
 }
 #define ESP_LOGI LogInfo
@@ -46,8 +53,9 @@ long long esp_timer_get_time(){return 1;}
 void Worker(void*){}void Claim(){}
 int xTaskCreate(void(*)(void*),const char*,int,void*,int,void*){return result()? -1:pdPASS;}
 struct SystemInfo{static std::string GetMacAddress(){return "PRIVATE_MAC";}};
-'''+function(source,'void LogConfigure(')+'\n'+function(source,'void Configure() {')+r'''
+'''+snapshot+'\n'+function(source,'void LogConfigure(')+'\n'+replay+'\n'+function(source,'void Configure() {')+r'''
 int main(){
+ ReportConfigureStartup();assert(logs.empty());
  const char* failed[]={"manager_init","endpoint_create","auto_stop","provision_start","endpoint_register","worker_create"};
  for(int i=1;i<=6;++i){
   running=worker_active=manager_ready=endpoint_created=false;logs.clear();calls=stops=timer_stops=screen_errors=0;fail_stage=i;
@@ -60,6 +68,14 @@ int main(){
  assert(running&&worker_active&&screen_errors==0&&logs.back().first=="worker_create"&&logs.back().second==0);
  const std::vector<std::string> expected={"begin","screen","manager_init","endpoint_create","auto_stop","provision_start","endpoint_register","worker_create"};
  assert(logs.size()==expected.size());for(size_t i=0;i<logs.size();++i)assert(logs[i].first==expected[i]);
+ // Late console sees exactly the latest stage, with captured rather than live allocator facts.
+ logs.clear();live_heap=999;ReportConfigureStartup();
+ assert(logs.size()==1&&logs.back().first=="worker_create"&&logs.back().second==0);
+ logs.clear();ReportConfigureStartup();assert(logs.empty());
+ live_heap=100;LogConfigure("manager_init",123);LogConfigure("endpoint_create",456);
+ logs.clear();live_heap=999;ReportConfigureStartup();
+ assert(logs.size()==1&&logs.back().first=="endpoint_create"&&logs.back().second==456);
+ logs.clear();ReportConfigureStartup();assert(logs.empty());
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,3 +84,18 @@ int main(){
             self.assertEqual(result.returncode,0,result.stderr)
             result=subprocess.run([str(tmp/'test')],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_isolated_prepare_adds_replay_to_existing_heap_telemetry(self):
+        import importlib.util
+        root=SOURCE.parents[2]
+        spec=importlib.util.spec_from_file_location('prepare',root/'tools/prepare_onboarding.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        self.assertTrue(hasattr(module,'prepare_configure_replay'),'missing existing-telemetry replay hook')
+        with tempfile.TemporaryDirectory() as tmp:
+            tree=Path(tmp);(tree/'main').mkdir();path=tree/'main/system_info.cc'
+            original='#include "system_info.h"\nvoid SystemInfo::PrintHeapStats() {\n    ExistingHeapStats();\n}\n'
+            path.write_text(original);module.prepare_configure_replay(tree)
+            result=path.read_text()
+            self.assertIn('#include "family_onboarding.h"',result)
+            self.assertIn('void SystemInfo::PrintHeapStats() {\n    FamilyOnboarding::ReportConfigureStartup();',result)
+            self.assertIn('ExistingHeapStats();',result)

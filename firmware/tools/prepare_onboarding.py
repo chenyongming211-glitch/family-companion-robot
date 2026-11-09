@@ -9,6 +9,11 @@ def replace(path, old, new):
     text=path.read_text()
     if text.count(old)!=1: raise ValueError('source anchor mismatch: '+path.name)
     path.write_text(text.replace(old,new))
+def prepare_configure_replay(tree):
+    system_info=tree/'main/system_info.cc'
+    replace(system_info,'#include "system_info.h"','#include "system_info.h"\n#include "family_onboarding.h"')
+    replace(system_info,'void SystemInfo::PrintHeapStats() {',
+        'void SystemInfo::PrintHeapStats() {\n    FamilyOnboarding::ReportConfigureStartup();')
 def prepare_m5_screen(tree):
     # Only called on the isolated onboarding tree; stock prepare_experiment stays unchanged.
     board=tree/'main/boards/m5stack/stopwatch/m5stack_stopwatch.cc'
@@ -74,6 +79,7 @@ def main():
         '        family_setup_.Update(title,detail,packed,size);\n'
         '    }\n')
     prepare_m5_screen(tree)
+    prepare_configure_replay(tree)
     board=tree/'main/boards/common/wifi_board.cc'
     replace(board,'#include "wifi_board.h"','#include "wifi_board.h"\n#include "family_onboarding.h"')
     replace(board,'void WifiBoard::StartNetwork() {','void WifiBoard::StartNetwork() {\n    if (FamilyOnboarding::Present()) {\n        FamilyOnboarding::Start([this](bool connected) {\n            in_config_mode_ = !FamilyOnboarding::Activated();\n            if (network_event_callback_) network_event_callback_(connected ? NetworkEvent::Connected : NetworkEvent::Disconnected, "");\n        });\n        return;\n    }')
