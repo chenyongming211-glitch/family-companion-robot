@@ -33,6 +33,10 @@ export class Onboarding {
   private wifi?: WifiProvisioner;
   private connecting = false;
   private scanning = false;
+  private sessionGeneration = 0;
+  get sessionEpoch() {
+    return this.sessionGeneration;
+  }
   private deadline = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private emit: (view: View) => void;
@@ -53,8 +57,10 @@ export class Onboarding {
   }
   private failure(error: unknown, generation: number) {
     if (!this.valid(generation)) return;
-    if (error instanceof ClientError && error.code === "unauthorized")
+    if (error instanceof ClientError && error.code === "unauthorized") {
+      this.sessionGeneration++;
       this.view.families = [];
+    }
     this.code = "";
     this.password = "";
     this.wifi = undefined;
@@ -74,10 +80,18 @@ export class Onboarding {
     this.code = claimCode(value);
   }
   async login(username: string, password: string) {
+    const generation = this.view.state.generation;
+    const session = ++this.sessionGeneration;
+    this.api.clear();
+    this.view.families = [];
+    this.publish();
     await this.api.login(username, password);
-    this.view.families = (await this.api.families()).filter(
-      (f) => f.canAddDevices,
-    );
+    if (!this.valid(generation) || session !== this.sessionGeneration)
+      throw new ClientError("cancelled", "操作已取消");
+    const families = await this.api.families();
+    if (!this.valid(generation) || session !== this.sessionGeneration)
+      throw new ClientError("cancelled", "操作已取消");
+    this.view.families = families.filter((f) => f.canAddDevices);
     this.publish();
     if (!this.view.families.length)
       throw new ClientError("permission", "当前账号没有可添加设备的家庭");
@@ -288,24 +302,28 @@ export class Onboarding {
   }
   async cancel() {
     const task = this.task;
-    this.event({ type: "cancel" });
     this.task = undefined;
     this.code = "";
+    this.view.devices = [];
+    this.view.networks = [];
+    this.event({ type: "cancel" });
     if (this.timer) clearTimeout(this.timer);
     await this.release();
     if (task?.status === "waiting")
       await this.api.cancel(task.id).catch(() => {});
-    this.view.devices = [];
-    this.view.networks = [];
-    this.publish();
+  }
+  async suspend() {
+    this.api.invalidatePending();
+    this.view.serial = "";
+    this.view.model = "";
+    await this.cancel();
   }
   async leave() {
-    const cancelling = this.cancel();
+    this.sessionGeneration++;
     this.api.clear();
     this.view.families = [];
     this.view.serial = "";
     this.view.model = "";
-    await cancelling;
-    this.publish();
+    await this.cancel();
   }
 }

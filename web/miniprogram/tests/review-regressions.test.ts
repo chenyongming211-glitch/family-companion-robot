@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { verifyWxml } from "../verify-wxml.mjs";
+import { ClientError } from "../src/api.ts";
 import { Onboarding } from "../src/controller.ts";
 import { BleLink } from "../src/provisioning/ble.ts";
 import { initial, reduce } from "../src/state.ts";
@@ -162,6 +163,7 @@ for (const cleanup of ["onHide", "onUnload", "cancel"]) {
     assert.equal(p.data.scanned, false);
     assert.equal(p.controller.code, "");
     assert.equal(p.data.error, "new feedback");
+    p.onUnload();
   });
 }
 test("superseded scanner cannot replace a newer scan result", () => {
@@ -175,17 +177,94 @@ test("superseded scanner cannot replace a newer scan result", () => {
   assert.equal(p.controller.code, "b".repeat(32));
   assert.equal(p.data.error, "");
 });
-test("returning to page does not reactivate a scanner from before hide", () => {
+test("scanner result after onShow completes the same suspended operation", () => {
   const p = page();
   p.scan();
-  const old = scan;
+  const operation = scan;
   p.onHide();
-  p.onShow?.();
-  old.success({ result: "a".repeat(32) });
-  assert.equal(p.controller.code, "");
+  p.onShow();
+  operation.success({ result: "a".repeat(32) });
+  assert.equal(p.controller.code, "a".repeat(32));
+  assert.equal(p.data.scanned, true);
+});
+test("scanner queues a validated hidden result until onShow and preserves RAM family session", async () => {
+  const p = page();
+  p.controller.api.cookie = "management_family=synthetic";
+  p.controller.view.families = [
+    { id: "family", name: "test", canAddDevices: true },
+  ];
+  p.setData({
+    loggedIn: true,
+    password: "synthetic",
+    loginPassword: "synthetic",
+  });
   p.scan();
-  scan.success({ result: "b".repeat(32) });
-  assert.equal(p.controller.code, "b".repeat(32));
+  const operation = scan;
+  p.onHide();
+  operation.success({ result: "a".repeat(32) });
+  assert.equal(p.controller.code, "");
+  assert.equal(p.data.scanned, false);
+  assert.equal(p.data.password, "");
+  assert.equal(p.data.loginPassword, "");
+  assert.equal(p.controller.api.cookie, "management_family=synthetic");
+  assert.equal(p.controller.view.families.length, 1);
+  p.onShow();
+  assert.equal(p.controller.code, "a".repeat(32));
+  assert.equal(p.data.scanned, true);
+  await p.onUnload();
+});
+for (const invalidate of ["cancel", "onUnload"]) {
+  test(`queued scanner result is erased by ${invalidate}`, async () => {
+    const p = page();
+    p.scan();
+    const operation = scan;
+    p.onHide();
+    operation.success({ result: "a".repeat(32) });
+    const queued = p.scanOperation;
+    await p[invalidate]();
+    assert.equal(queued.code, undefined);
+    p.onShow();
+    assert.equal(p.controller.code, "");
+    assert.equal(p.data.scanned, false);
+    assert.equal(p.scanOperation, undefined);
+  });
+}
+test("changing account input invalidates a queued scanner result", () => {
+  const p = page();
+  p.scan();
+  p.onHide();
+  scan.success({ result: "a".repeat(32) });
+  p.input({
+    currentTarget: { dataset: { key: "username" } },
+    detail: { value: "new account" },
+  });
+  p.onShow();
+  assert.equal(p.controller.code, "");
+  assert.equal(p.scanOperation, undefined);
+});
+test("terminal session leave invalidates a queued scanner result", async () => {
+  const p = page();
+  p.scan();
+  p.onHide();
+  scan.success({ result: "a".repeat(32) });
+  await p.controller.leave();
+  p.onShow();
+  assert.equal(p.controller.code, "");
+  assert.equal(p.scanOperation, undefined);
+});
+test("scan deadline clears hidden queued code and rejects late success", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const p = page();
+  p.scan();
+  const operation = scan;
+  p.onHide();
+  operation.success({ result: "a".repeat(32) });
+  t.mock.timers.tick(60001);
+  p.onShow();
+  operation.success({ result: "a".repeat(32) });
+  assert.equal(p.controller.code, "");
+  assert.equal(p.scanOperation, undefined);
+  assert.match(p.data.error, /超时/);
 });
 test("actual WXML success claims are visible only after cloud confirmed state", async () => {
   const wxml = await readFile(
@@ -321,4 +400,75 @@ test("artifact verifier rejects literal and always-visible success conditions", 
       ),
     /must not claim success/,
   );
+});
+
+test("hidden pending login cannot restore cookie, families or feedback", async () => {
+  let finish: any;
+  (globalThis as any).wx.request = (options: any) => {
+    finish = options;
+  };
+  const p = page();
+  p.setData({ username: "synthetic", loginPassword: "synthetic" });
+  const logging = p.login();
+  p.onHide();
+  p.setData({ error: "new feedback" });
+  finish.success({
+    statusCode: 200,
+    data: { ok: true },
+    cookies: ["management_family=synthetic"],
+  });
+  await logging;
+  assert.equal(p.controller.api.cookie, "");
+  assert.equal(p.data.loggedIn, false);
+  assert.equal(p.controller.view.families.length, 0);
+  assert.equal(p.data.error, "new feedback");
+  p.onUnload();
+});
+test("expired family session invalidates a hidden queued scanner result", () => {
+  const p = page();
+  p.scan();
+  p.onHide();
+  scan.success({ result: "a".repeat(32) });
+  const error = new ClientError("unauthorized", "登录已过期");
+  p.controller.failure(error, p.controller.view.state.generation);
+  p.onShow();
+  assert.equal(p.controller.code, "");
+  assert.equal(p.scanOperation, undefined);
+  p.onUnload();
+});
+
+test("onShow enforces scan wall-clock expiry even if background timers paused", (t) => {
+  const p = page();
+  p.scan();
+  p.onHide();
+  scan.success({ result: "a".repeat(32) });
+  const future = Date.now() + 60001;
+  t.mock.method(Date, "now", () => future);
+  p.onShow();
+  assert.equal(p.controller.code, "");
+  assert.equal(p.scanOperation, undefined);
+  assert.match(p.data.error, /超时/);
+  p.onUnload();
+});
+
+test("hide between login acknowledgement and family lookup stops the continuation", async () => {
+  let requests = 0;
+  (globalThis as any).wx.request = (options: any) => {
+    requests++;
+    options.success({
+      statusCode: 200,
+      data:
+        requests === 1
+          ? { ok: true }
+          : [{ id: "family", name: "test", canAddDevices: true }],
+    });
+  };
+  const p = page();
+  p.setData({ username: "synthetic", loginPassword: "synthetic" });
+  const logging = p.login();
+  p.onHide();
+  await logging;
+  assert.equal(requests, 1);
+  assert.equal(p.controller.view.families.length, 0);
+  p.onUnload();
 });
