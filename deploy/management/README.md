@@ -2,9 +2,9 @@
 
 本模板仅供后续发布使用；添加模板不会安装、启动或重启任何服务。正式语音进程与设备固件不在本服务范围内。仅支持已确认的 ESP32-S3 设备。
 
-所有构建、命令与配置初始化在云端执行。发布目录采用 `/opt/family-robot-management/releases/<build>/`，包含 `management` 二进制及前端 **live** 构建 `dist-live/`；`current` 指向核验过的发布目录。不要把 mock 构建部署到真实入口。模板中的 `@RECORDS_ROOT@`、`@PROFILES_FILE@`、`@BUILD_ID@` 必须替换为部署时核验的路径/版本（无空格）；若无 profiles 参数，移除对应参数和 ReadOnlyPaths 项。只读源记录与资料路径必须位于 ProtectHome 可访问的系统路径，不移动或修改正式源数据以适应模板。
+所有构建、命令与配置初始化在云端执行。发布目录采用 `/opt/family-robot-management/releases/<build>/`，包含 `management` 二进制及前端 **live** 构建 `dist-live/`；`current` 指向核验过的发布目录。不要把 mock 构建部署到真实入口。模板中的 `@RECORDS_ROOT@`、`@PROFILES_DIR@`、`@BUILD_ID@` 必须替换为部署时核验的路径/版本（无空格）；若无 profiles 参数，移除对应参数和 BindReadOnlyPaths 中的资料映射。只读源记录与资料路径必须位于 ProtectHome 可访问的系统路径，不移动或修改正式源数据以适应模板。
 
-服务需要 root 读取既有 root/0700 记录目录；不得放宽源目录权限。systemd 限制写入管理服务自己的 `/var/lib/family-robot-management`，配置0600、父目录0700，审计0600；原记录、资料和配置设置为只读。仅监听 `127.0.0.1:18791`，客户端通过 SSH 转发访问，不直接暴露互联网，不开启跨域。Cookie 因此使用 HTTP、HttpOnly、SameSite=Strict；不要将此模板直接改成公网 HTTP。
+服务需要 root 读取既有 root/0700 记录目录；不得放宽源目录权限。模板将源记录目录和仅包含展示资料的 presentation 目录只读挂载到服务专属的 `/run/family-robot-management/` 视图，绕开源父目录其他属主的0700遍历限制；原数据不移动、不复制，能力集继续为空。资料源必须是经核验的窄范围 presentation 目录，不能绑定包含其他私密配置的上级目录；服务通过 `/run/family-robot-management/presentation/profiles.json` 读取资料，目录挂载确保源文件原子替换后能读到新版本。systemd 限制写入管理服务自己的 `/var/lib/family-robot-management`，配置0600、父目录0700，审计0600；原记录、资料和配置设置为只读。仅监听 `127.0.0.1:18791`，客户端通过 SSH 转发访问，不直接暴露互联网，不开启跨域。Cookie 因此使用 HTTP、HttpOnly、SameSite=Strict；不要将此模板直接改成公网 HTTP。
 
 显式初始化示例（占位符必须人工替换为核实设备 ID）：
 
