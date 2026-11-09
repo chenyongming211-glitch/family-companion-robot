@@ -19,12 +19,13 @@ const onboardingOrigin = "https://robot.songguoxue.com"
 const onboardingMiniProgramID = "wxb3f1745f8ed1fa1d"
 
 type FactoryDevice struct {
-	DeviceID    string `json:"device_id"`
-	MAC         string `json:"mac"`
-	Serial      string `json:"serial"`
-	Model       string `json:"model"`
-	KeyDigest   string `json:"key_digest"`
-	ClaimDigest string `json:"claim_digest"`
+	MigrationBindingID string `json:"migration_binding_id,omitempty"`
+	DeviceID           string `json:"device_id"`
+	MAC                string `json:"mac"`
+	Serial             string `json:"serial"`
+	Model              string `json:"model"`
+	KeyDigest          string `json:"key_digest"`
+	ClaimDigest        string `json:"claim_digest"`
 }
 type OnboardingClaim struct {
 	ID          string     `json:"id"`
@@ -69,6 +70,24 @@ func validateOnboarding(c Config) error {
 		if !device.MatchString(d.DeviceID) || !canonicalMAC.MatchString(d.MAC) || !ident.MatchString(d.Serial) || ids[d.DeviceID] || macs[d.MAC] || serials[d.Serial] || codes[d.ClaimDigest] || keys[d.KeyDigest] || !digest.MatchString(d.KeyDigest) || !digest.MatchString(d.ClaimDigest) || (d.Model != "微雪 ESP32-S3" && d.Model != "M5 ESP32-S3") {
 			return ErrInvalid
 		}
+		if d.MigrationBindingID != "" {
+			if !ident.MatchString(d.MigrationBindingID) {
+				return ErrInvalid
+			}
+			found := false
+			for _, b := range c.Bindings {
+				if b.ID == d.MigrationBindingID && b.DeviceID == d.DeviceID {
+					for _, old := range c.Devices {
+						if old.ID == d.DeviceID && old.Model == d.Model {
+							found = true
+						}
+					}
+				}
+			}
+			if !found {
+				return ErrInvalid
+			}
+		}
 		ids[d.DeviceID] = true
 		macs[d.MAC] = true
 		serials[d.Serial] = true
@@ -93,6 +112,14 @@ func validateOnboarding(c Config) error {
 		if !member {
 			return ErrInvalid
 		}
+		d, _ := factoryByID(c, t.DeviceID)
+		if d.MigrationBindingID != "" {
+			for _, b := range c.Bindings {
+				if b.ID == d.MigrationBindingID && b.FamilyID != t.FamilyID {
+					return ErrInvalid
+				}
+			}
+		}
 		switch t.Status {
 		case "waiting":
 			if active[t.DeviceID] || t.BindingFrom != nil {
@@ -112,7 +139,7 @@ func validateOnboarding(c Config) error {
 				}
 			}
 			for _, v := range c.Bindings {
-				if v.DeviceID == t.DeviceID && v.FamilyID == t.FamilyID && v.From.Equal(*t.BindingFrom) {
+				if v.DeviceID == t.DeviceID && v.FamilyID == t.FamilyID && v.From.Equal(*t.BindingFrom) && (d.MigrationBindingID == "" || v.ID == d.MigrationBindingID) {
 					foundBinding = true
 				}
 			}
@@ -129,7 +156,7 @@ func validateOnboarding(c Config) error {
 	}
 	for _, d := range c.FactoryDevices {
 		for _, old := range c.Devices {
-			if old.ID == d.DeviceID && !confirmed[d.DeviceID] {
+			if old.ID == d.DeviceID && !confirmed[d.DeviceID] && d.MigrationBindingID == "" {
 				return ErrInvalid
 			}
 		}
@@ -173,6 +200,20 @@ func (s ConfigStore) Transaction(fn func(*Config) error) error {
 // the private package. A save error aborts the transaction before config write.
 // Callers must preserve a saved bundle if the final config fsync is ambiguous.
 func ProvisionFactory(path, mac, serial, model string, saveBundle func(FactoryBundle) error) (FactoryBundle, error) {
+	return provisionFactory(path, "", "", mac, serial, model, saveBundle)
+}
+
+// ProvisionLegacyFactory adds only factory authentication for an existing device.
+// The private bundle must be durable before authority is committed. Legacy voice
+// credentials and identity files are verified by the trusted CLI and stay intact.
+func ProvisionLegacyFactory(path, deviceID, bindingID, mac, serial, model string, saveBundle func(FactoryBundle) error) (FactoryBundle, error) {
+	if !device.MatchString(deviceID) || !ident.MatchString(bindingID) || model != "微雪 ESP32-S3" || saveBundle == nil {
+		return FactoryBundle{}, ErrInvalid
+	}
+	return provisionFactory(path, deviceID, bindingID, mac, serial, model, saveBundle)
+}
+
+func provisionFactory(path, deviceID, bindingID, mac, serial, model string, saveBundle func(FactoryBundle) error) (FactoryBundle, error) {
 	var b FactoryBundle
 	mac = strings.ToLower(mac)
 	if !canonicalMAC.MatchString(mac) || !ident.MatchString(serial) || (model != "微雪 ESP32-S3" && model != "M5 ESP32-S3") {
@@ -190,20 +231,29 @@ func ProvisionFactory(path, mac, serial, model string, saveBundle func(FactoryBu
 	if _, e = rand.Read(key); e != nil {
 		return b, ErrSource
 	}
-	b = FactoryBundle{1, "dev_" + id, mac, serial, model, base64.RawURLEncoding.EncodeToString(key), code, onboardingOrigin + "/api/device/bootstrap", "wss://robot.songguoxue.com/xiaozhi/v1/"}
+	if deviceID == "" {
+		deviceID = "dev_" + id
+	}
+	b = FactoryBundle{1, deviceID, mac, serial, model, base64.RawURLEncoding.EncodeToString(key), code, onboardingOrigin + "/api/device/bootstrap", "wss://robot.songguoxue.com/xiaozhi/v1/"}
 	e = (ConfigStore{path}).Transaction(func(c *Config) error {
 		for _, d := range c.FactoryDevices {
-			if d.MAC == mac || d.Serial == serial {
+			if d.MAC == mac || d.Serial == serial || d.DeviceID == b.DeviceID {
+				return ErrInvalid
+			}
+		}
+		record := FactoryDevice{DeviceID: b.DeviceID, MAC: mac, Serial: serial, Model: model, KeyDigest: secretDigest(b.DeviceKey), ClaimDigest: secretDigest(code), MigrationBindingID: bindingID}
+		if bindingID != "" {
+			if _, ok := migrationBinding(*c, record, time.Now()); !ok {
 				return ErrInvalid
 			}
 		}
 		for _, d := range c.Devices {
-			if d.ID == b.DeviceID {
+			if d.ID == b.DeviceID && bindingID == "" {
 				return ErrInvalid
 			}
 		}
 
-		c.FactoryDevices = append(c.FactoryDevices, FactoryDevice{b.DeviceID, mac, serial, model, secretDigest(b.DeviceKey), secretDigest(code)})
+		c.FactoryDevices = append(c.FactoryDevices, record)
 		if saveBundle != nil {
 			return saveBundle(b)
 		}

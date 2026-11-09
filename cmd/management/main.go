@@ -34,6 +34,8 @@ func run(args []string, out io.Writer) error {
 	switch args[0] {
 	case "init":
 		return initialize(args[1:], out)
+	case "migrate-legacy":
+		return supplyFactory(args[1:], out, true)
 	case "provision":
 		return provision(args[1:], out)
 	case "grant-device-add":

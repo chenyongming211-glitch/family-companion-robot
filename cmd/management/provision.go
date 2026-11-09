@@ -1,18 +1,25 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"familyrobot/internal/management"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 )
 
 func provision(args []string, out io.Writer) error {
+	return supplyFactory(args, out, false)
+}
+func supplyFactory(args []string, out io.Writer, migration bool) error {
 	f := flags("provision")
+	var deviceID, bindingID, identities *string
+	if migration {
+		deviceID = f.String("device-id", "", "existing device ID")
+		bindingID = f.String("binding-id", "", "original active binding ID")
+		identities = f.String("identities", "", "read-only private voice identities")
+	}
 	config := f.String("config", "", "existing private config")
 	mac := f.String("mac", "", "canonical MAC")
 	serial := f.String("serial", "", "unique serial")
@@ -22,7 +29,14 @@ func provision(args []string, out io.Writer) error {
 	if f.Parse(args) != nil || f.NArg() != 0 || *config == "" || *output == "" || *guard == "" {
 		return management.ErrInvalid
 	}
-	if e := checkLegacyMAC(*guard, *mac); e != nil {
+	if migration {
+		if *deviceID == "" || *bindingID == "" || *identities == "" {
+			return management.ErrInvalid
+		}
+		if e := checkLegacyMigration(*guard, *identities, *deviceID, *mac); e != nil {
+			return e
+		}
+	} else if e := checkLegacyMAC(*guard, *mac); e != nil {
 		return e
 	}
 	// Reserve the private bundle first: a failed transaction never exposes secrets.
@@ -62,14 +76,19 @@ func provision(args []string, out io.Writer) error {
 		}
 		_ = root.Remove(filepath.Base(*output))
 	}()
-	_, e = management.ProvisionFactory(*config, *mac, *serial, *model, func(bundle management.FactoryBundle) error {
+	save := func(bundle management.FactoryBundle) error {
 		b = bundle
 		if e := persistFactoryBundle(file, dir, bundle); e != nil {
 			return e
 		}
 		saved = true
 		return nil
-	})
+	}
+	if migration {
+		_, e = management.ProvisionLegacyFactory(*config, *deviceID, *bindingID, *mac, *serial, *model, save)
+	} else {
+		_, e = management.ProvisionFactory(*config, *mac, *serial, *model, save)
+	}
 	if e != nil {
 		return e
 	}
@@ -111,59 +130,22 @@ func grantDeviceAdd(args []string, out io.Writer) error {
 // An explicit empty registry supports new deployments without silently skipping
 // the ownership guard on deployments that already have legacy devices.
 func checkLegacyMAC(path, mac string) error {
-	st, e := os.Lstat(path)
-	if e != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Size() > 1<<20 {
-		return management.ErrInvalid
-	}
-	file, e := os.Open(path)
+	registry, e := readLegacyRegistry(path)
 	if e != nil {
-		return management.ErrSource
-	}
-	defer file.Close()
-	opened, e := file.Stat()
-	if e != nil || !os.SameFile(st, opened) {
-		return management.ErrInvalid
-	}
-	raw, e := io.ReadAll(io.LimitReader(file, (1<<20)+1))
-	if e != nil || len(raw) > 1<<20 {
-		return management.ErrInvalid
-	}
-	var registry struct {
-		Version int `json:"schema_version"`
-		Devices []struct {
-			MAC   string `json:"mac"`
-			Token string `json:"token"`
-		} `json:"devices"`
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&registry) != nil || registry.Version != 1 || len(registry.Devices) > 64 || uniqueRegistryKeys(json.NewDecoder(bytes.NewReader(raw)), 0) != nil {
-		return management.ErrInvalid
-	}
-	var extra any
-	if dec.Decode(&extra) != io.EOF {
-		return management.ErrInvalid
+		return e
 	}
 	candidate, e := net.ParseMAC(mac)
 	if e != nil || len(candidate) != 6 {
 		return management.ErrInvalid
 	}
-	seen := map[string]bool{}
-	tokens := map[string]bool{}
-	tokenValid := regexp.MustCompile(`^[^\x00\r\n \t]{32,512}$`)
 	for _, d := range registry.Devices {
-		m, e := net.ParseMAC(d.MAC)
-		if e != nil || len(m) != 6 || seen[m.String()] || tokens[d.Token] || !tokenValid.MatchString(d.Token) {
+		if d.MAC == candidate.String() {
 			return management.ErrInvalid
 		}
-		if m.String() == candidate.String() {
-			return management.ErrInvalid
-		}
-		seen[m.String()] = true
-		tokens[d.Token] = true
 	}
 	return nil
 }
+
 func uniqueRegistryKeys(d *json.Decoder, depth int) error {
 	if depth > 5 {
 		return management.ErrInvalid

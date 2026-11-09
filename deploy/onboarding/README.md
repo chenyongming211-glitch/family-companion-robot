@@ -55,3 +55,21 @@ management provision --config PRIVATE_CONFIG --device-auth PRIVATE_LEGACY_REGIST
 本批云端私有备份为 `/var/backups/family-robot/onboarding-20261109-r1`。先恢复原 Caddy 阻断新认领，再恢复原管理发布链接/单元和语音覆盖配置/旧二进制，daemon-reload 并核对健康。保留旧 binary 与原 drop-in。备份时无真实新工厂设备；以后如已产生新绑定，须保留最新权威配置，不能恢复早期 JSON 丢失绑定。仅确认本批没有业务写入时才可还原配置快照。不要清除源记录、记忆、NVS、证书或 DNS。
 
 管理r2来源兼容补丁的单独回退与保全证据在 `/var/backups/family-robot/management-wechat-20261109-r2`；它未改私有配置、Caddy或语音进程。回退该补丁只需恢复此前管理链接/单元，不恢复旧业务配置。
+
+## 当前微雪的原绑定迁移
+
+已有 legacy 身份的微雪必须使用迁移命令，普通 `provision` 仍拒绝旧注册表中的 MAC。先部署支持 `migration_binding_id` 的管理候选，再仅在云端、完成可回退完整 Flash 备份后执行；参数中的设备 ID 和绑定 ID 必须来自当前管理配置，MAC、旧认证摘要和只读 voiceidentity 身份必须一致：
+
+```sh
+management migrate-legacy --config PRIVATE_CONFIG \
+  --device-id EXISTING_DEVICE_ID --binding-id ORIGINAL_ACTIVE_BINDING_ID \
+  --mac VERIFIED_MAC --serial UNIQUE_SERIAL --model '微雪 ESP32-S3' \
+  --device-auth PRIVATE_LEGACY_REGISTRY --identities PRIVATE_VOICE_IDENTITIES \
+  --output NEW_PRIVATE_BUNDLE
+```
+
+旧注册表和身份文件要求普通私有文件（0600），拒绝符号链接、超限、重复 JSON 字段或未知字段。输出目录须为 0700，新私有包为 0600 且不能覆盖。命令仅输出状态；包仍为原有九字段，新密钥与认领码不能打印、复制到 Mac 或入 Git。新包持久化后才原子追加工厂认证；重复迁移、错误 ID/绑定/型号、未生效或已结束的原绑定均失败，不撤旧认证、不修改原身份文件或家庭权限。配置提交结果不明时保留包并人工核对，勿反复供应。
+
+迁移不自动绑定。小程序扫码只允许原家庭中同时有添加设备权限和原设备访问权的账号。取消/过期后必须重新认领，确认及重试会再次核对当前权限和原绑定；独立设备确认前，新密钥不准入语音。确认后复用原设备资料、设备 ID、绑定 ID 和原绑定起点，不增加设备、绑定或正文权限。原有记录路径和绑定前访问限制保持。准备完成后撤销目标旧认证、安装与完整读回及手机扫码/BLE 验收须按迁移计划另行执行，CLI 成功不代表设备或手机验收通过。
+
+回退旧管理二进制前须处理其不认识的迁移字段；在锁定事务中仅移除本次新增工厂/认领数据并保留并发变化，不整份覆盖管理配置。原设备、原绑定及历史记录继续保留。

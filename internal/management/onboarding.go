@@ -47,6 +47,30 @@ func factoryByID(c Config, id string) (FactoryDevice, bool) {
 	}
 	return FactoryDevice{}, false
 }
+
+// Migration authority is checked against the original binding on every attempt.
+// Historical ended bindings remain valid config, but cannot authorize migration.
+func migrationBinding(c Config, d FactoryDevice, now time.Time) (Binding, bool) {
+	for _, old := range c.Devices {
+		if old.ID != d.DeviceID || old.Model != d.Model {
+			continue
+		}
+		for _, b := range c.Bindings {
+			if b.ID == d.MigrationBindingID && b.DeviceID == d.DeviceID && !now.Before(b.From) && (b.Until == nil || now.Before(*b.Until)) {
+				return b, true
+			}
+		}
+	}
+	return Binding{}, false
+}
+func canConfirmMigration(c Config, d FactoryDevice, actor, family string, now time.Time) bool {
+	b, ok := migrationBinding(c, d, now)
+	if !ok || b.FamilyID != family || !canAdd(c, actor, family) {
+		return false
+	}
+	authorized, e := c.Authorize(actor, "family", d.DeviceID, now, false)
+	return e == nil && authorized.ID == b.ID
+}
 func claimDTO(c Config, t OnboardingClaim, challenge bool, now time.Time) any {
 	d, _ := factoryByID(c, t.DeviceID)
 	status := t.Status
@@ -102,6 +126,9 @@ func (s *Server) familyOnboarding(w http.ResponseWriter, r *http.Request, a Acco
 				return ErrNotFound
 			}
 			now := s.now().UTC()
+			if d.MigrationBindingID != "" && !canConfirmMigration(*c, d, a.ID, in.FamilyID, now) {
+				return ErrForbidden
+			}
 			count := 0
 			for i := range c.OnboardingClaims {
 				t := &c.OnboardingClaims[i]
@@ -123,7 +150,7 @@ func (s *Server) familyOnboarding(w http.ResponseWriter, r *http.Request, a Acco
 				}
 			}
 			for _, b := range c.Bindings {
-				if b.DeviceID == d.DeviceID {
+				if b.DeviceID == d.DeviceID && d.MigrationBindingID == "" {
 					return errConflict
 				}
 			}
@@ -213,7 +240,7 @@ func activated(c Config, d FactoryDevice, now time.Time) bool {
 			continue
 		}
 		for _, b := range c.Bindings {
-			if b.DeviceID == d.DeviceID && b.FamilyID == t.FamilyID && b.From.Equal(*t.BindingFrom) && !now.Before(b.From) && (b.Until == nil || now.Before(*b.Until)) {
+			if b.DeviceID == d.DeviceID && (d.MigrationBindingID == "" || b.ID == d.MigrationBindingID) && b.FamilyID == t.FamilyID && b.From.Equal(*t.BindingFrom) && !now.Before(b.From) && (b.Until == nil || now.Before(*b.Until)) {
 				return true
 			}
 		}
@@ -306,7 +333,7 @@ func (s *Server) deviceEndpoint(w http.ResponseWriter, r *http.Request, c Config
 			if t.DeviceID != current.DeviceID || subtle.ConstantTimeCompare([]byte(t.Challenge), []byte(in.Challenge)) != 1 {
 				return errAuthentication
 			}
-			if !canAdd(*c, t.ActorID, t.FamilyID) {
+			if !canAdd(*c, t.ActorID, t.FamilyID) || (current.MigrationBindingID != "" && !canConfirmMigration(*c, current, t.ActorID, t.FamilyID, s.now())) {
 				return ErrForbidden
 			}
 			if t.Status == "confirmed" {
@@ -321,6 +348,16 @@ func (s *Server) deviceEndpoint(w http.ResponseWriter, r *http.Request, c Config
 			}
 			if t.Status != "waiting" {
 				return errConflict
+			}
+			if current.MigrationBindingID != "" {
+				original, ok := migrationBinding(*c, current, s.now())
+				if !ok {
+					return errConflict
+				}
+				t.Status = "confirmed"
+				t.BindingFrom = &original.From
+				result = claimDTO(*c, *t, false, s.now())
+				return nil
 			}
 			for _, b := range c.Bindings {
 				if b.DeviceID == current.DeviceID {
