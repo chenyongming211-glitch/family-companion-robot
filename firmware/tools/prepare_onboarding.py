@@ -29,9 +29,9 @@ def main():
         subprocess.run(['git','apply',str(path)],cwd=tree,check=True)
     for name in ['protocomm_ble_framing.h','protocomm_ble_framed_transport.inc']:
         shutil.copyfile(FIRMWARE/'overlays/onboarding'/name,components/'protocomm/src/transports'/name)
-    for name in ['family_onboarding.h','family_onboarding.cc','family_setup_state.h','family_setup_view.h','family_setup_view.cc']:
+    for name in ['family_onboarding.h','family_onboarding.cc','family_setup_state.h','family_setup_view.h','family_setup_view.cc','family_setup_font.h','family_setup_font.c']:
         shutil.copyfile(FIRMWARE/'overlays/onboarding'/name,tree/'main'/name)
-    replace(tree/'main/CMakeLists.txt','            "ota.cc"','            "ota.cc"\n            "family_onboarding.cc"\n            "family_setup_view.cc"')
+    replace(tree/'main/CMakeLists.txt','            "ota.cc"','            "ota.cc"\n            "family_onboarding.cc"\n            "family_setup_view.cc"\n            "family_setup_font.c"')
     replace(tree/'main/CMakeLists.txt','                    PRIV_REQUIRES','                    PRIV_REQUIRES\n                        network_provisioning\n                        esp_http_client\n                        esp_wifi')
     replace(tree/'main/idf_component.yml', 'dependencies:\n', 'dependencies:\n  espressif/esp_jpeg: ==1.3.1\n  espressif/iot_usbh_cdc: ==3.1.0\n')
     replace(tree/'main/display/display.h','    virtual void SetStatus(const char* status);',
@@ -39,7 +39,7 @@ def main():
         '    virtual void SetOnboardingStatus(const char*,const char*,const uint8_t*,size_t) {}')
     screen_board=tree/'main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc'
     replace(screen_board,'#include "display/lcd_display.h"',
-        '#include "display/lcd_display.h"\n#include "family_setup_view.h"\n#include "display/lvgl_display/lvgl_font.h"')
+        '#include "display/lcd_display.h"\n#include "family_setup_view.h"\n#include "family_setup_font.h"\n#include "display/lvgl_display/lvgl_font.h"')
     replace(screen_board,'class CustomLcdDisplay : public SpiLcdDisplay {',
         'class CustomLcdDisplay : public SpiLcdDisplay {\n'
         '    FamilyOnboarding::SetupView family_setup_;\n'
@@ -49,7 +49,7 @@ def main():
         '        SetFaceScreenOn(title==nullptr);\n'
         '#endif\n'
         '        DisplayLockGuard lock(this);if(!lock || !IsSetupUICalled())return;\n'
-        '        family_setup_.Initialize(current_theme_->GetTextFont()->font(),width_,height_);\n'
+        '        family_setup_.Initialize(&family_setup_font,width_,height_);\n'
         '        family_setup_.Update(title,detail,packed,size);\n'
         '    }\n')
     board=tree/'main/boards/common/wifi_board.cc'

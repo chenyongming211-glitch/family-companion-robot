@@ -53,11 +53,11 @@ void RenderSetup() {
     case SetupPhase::Hidden:
         Board::GetInstance().GetDisplay()->SetOnboardingStatus(nullptr,nullptr,nullptr,0);return;
     case SetupPhase::Waiting:
-        title="微信扫码添加设备";detail="请在小程序中完成登录和配网";code=true;break;
+        title="微信扫码添加设备";detail="扫码后按提示配网";code=true;break;
     case SetupPhase::Connecting:
         title="正在连接 Wi-Fi";detail="请保持设备通电，稍候片刻";break;
     case SetupPhase::WifiError:
-        title="Wi-Fi 连接失败";detail="请在小程序中检查网络和密码后重试";code=true;break;
+        title="Wi-Fi 连接失败";detail="检查网络密码重试";code=true;break;
     case SetupPhase::Clock:
         title="正在同步时间";detail="已连上网络，正在准备安全连接";break;
     case SetupPhase::ClockError:

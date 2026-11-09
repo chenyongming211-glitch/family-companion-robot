@@ -9,6 +9,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ScreenChecks(unittest.TestCase):
+    def test_embedded_font_covers_every_offline_status(self):
+        import re
+        path = ROOT / 'overlays/onboarding/family_setup_font.c'
+        self.assertTrue(path.is_file(), 'missing offline Chinese font')
+        glyphs = {int(n) for n in re.findall(r'^\{(\d+),', path.read_text(), re.MULTILINE)}
+        source = (ROOT / 'overlays/onboarding/family_onboarding.cc').read_text()
+        for label in re.findall(r'(?:title|detail)="([^"]*)"', source):
+            self.assertTrue(set(map(ord,label)) <= glyphs, label)
+
     def test_render_never_exposes_unvalidated_bitmap(self):
         from test_onboarding_lifecycle import function
         source = (ROOT / 'overlays/onboarding/family_onboarding.cc').read_text()

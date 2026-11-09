@@ -1,5 +1,6 @@
 #include "family_setup_view.h"
 #include "family_setup_state.h"
+#include <src/misc/cache/instance/lv_image_cache.h>
 #include <cstring>
 
 namespace FamilyOnboarding {
@@ -40,7 +41,7 @@ bool SetupView::Update(const char* title,const char* detail,const uint8_t* packe
     const bool code=packed!=nullptr;
     lv_label_set_text(title_,title);lv_label_set_text(detail_,detail?detail:"");
     lv_obj_set_size(title_,330,48);lv_obj_set_pos(title_,(width_-330)/2,code?44:160);
-    lv_obj_set_size(detail_,320,64);lv_obj_set_pos(detail_,(width_-320)/2,code?410:236);
+    lv_obj_set_size(detail_,320,code?64:128);lv_obj_set_pos(detail_,(width_-320)/2,code?410:236);
     if(code) {
         // Native indexed image keeps the exact 1-bit code and uses ~10KiB;
         // palette0=opaque white, palette1=opaque black. Rows align to four bytes.
