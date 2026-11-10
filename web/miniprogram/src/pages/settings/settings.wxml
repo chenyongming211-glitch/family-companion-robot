@@ -1,0 +1,36 @@
+<view class="family-page">
+  <view class="family-heading">
+    设备设置
+  </view>
+  <view class="family-error" wx:if="{{error}}">
+    {{error}}
+  </view>
+  <view wx:if="{{loading}}">
+    正在读取…
+  </view>
+  <view wx:if="{{settings}}" class="family-card">
+    <view class="family-label">
+      家庭展示昵称
+    </view>
+    <input value="{{name}}" data-field="name" bindinput="input" disabled="{{!settings.canEdit || saving}}" maxlength="12"/>
+    <view class="family-label">
+      摆放位置
+    </view>
+    <input value="{{location}}" data-field="location" bindinput="input" disabled="{{!settings.canEdit || saving}}" maxlength="24"/>
+    <view wx:if="{{!settings.canEdit}}">
+      当前成员只可查看，请联系家庭管理成员修改
+    </view>
+    <button wx:if="{{settings.canEdit}}" bindtap="save" disabled="{{saving || loading}}">
+      {{saving ? '正在保存…' : '保存云端展示设置'}}
+    </button>
+  </view>
+  <view class="family-card family-muted">
+    昵称仅用于家庭列表展示。音量、亮度未上报；本页不提供硬件参数下发。
+  </view>
+  <view>
+    {{notice}}
+  </view>
+  <button bindtap="refresh" disabled="{{loading || saving}}">
+    重新读取
+  </button>
+</view>

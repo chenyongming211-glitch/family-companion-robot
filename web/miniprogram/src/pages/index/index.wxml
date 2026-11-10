@@ -41,3 +41,5 @@
  <button class="cancel-button" wx:if="{{phase!=='idle' && phase!=='success'}}" bindtap="cancel">取消本次添加</button>
 </view>
 </view>
+
+<button wx:if="{{phase === 'success' &amp;&amp; deviceId}}" bindtap="openDevice">进入设备详情</button>

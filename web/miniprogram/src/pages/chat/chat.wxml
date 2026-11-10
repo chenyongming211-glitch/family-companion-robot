@@ -1,0 +1,56 @@
+<view class="family-page">
+  <view class="family-heading">
+    聊天详情
+  </view>
+  <view class="family-error" wx:if="{{error}}">
+    {{error}}
+  </view>
+  <view wx:if="{{loading}}">
+    正在读取…
+  </view>
+  <block wx:if="{{chat}}">
+    <view class="family-card">
+      <view class="family-title">
+        {{chat.title}}
+      </view>
+      <view>
+        {{chat.date}} {{chat.time}} · {{chat.status}}
+      </view>
+    </view>
+    <view wx:if="{{!chat.bodyAvailable}}">
+      当前账号没有正文权限
+    </view>
+    <view wx:for="{{chat.turns}}" wx:key="id" class="family-card">
+      <view class="family-label">
+        用户转写
+      </view>
+      <text user-select>
+        {{item.user || '无转写'}}
+      </text>
+      <view class="family-label">
+        已播文本
+      </view>
+      <text user-select>
+        {{item.played || '无已播文本证据'}}
+      </text>
+      <view class="family-label">
+        生成稿（不代表已播）
+      </view>
+      <text user-select>
+        {{item.generated || '无生成稿'}}
+      </text>
+      <view class="family-muted">
+        播放：{{item.playback}} · {{item.saved ? '已保存' : '未保存'}}
+      </view>
+      <view wx:if="{{!item.exactStopKnown}}" class="family-muted">
+        停止位置边界不确定
+      </view>
+      <view class="family-muted">
+        {{item.boundary}}
+      </view>
+    </view>
+  </block>
+  <button bindtap="refresh" disabled="{{loading}}">
+    重新读取
+  </button>
+</view>

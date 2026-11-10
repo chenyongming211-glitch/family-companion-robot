@@ -1,0 +1,59 @@
+<view class="family-page">
+  <view class="family-heading">
+    我的家庭
+  </view>
+  <view class="family-error" wx:if="{{error}}">
+    {{error}}
+  </view>
+  <view wx:if="{{loading}}">
+    正在读取…
+  </view>
+  <view class="family-card" wx:if="{{!loggedIn}}">
+    <input placeholder="家庭账号" value="{{username}}" data-field="username" bindinput="input"/>
+    <input placeholder="密码" password value="{{password}}" data-field="password" bindinput="input"/>
+    <button bindtap="login" disabled="{{loading}}">
+      登录
+    </button>
+  </view>
+  <block wx:else>
+    <picker range="{{familyNames}}" value="{{familyIndex}}" bindchange="chooseFamily">
+      <view class="family-card">
+        {{familyIndex >= 0 ? familyNames[familyIndex] : '请选择家庭'}} · 切换
+      </view>
+    </picker>
+    <view class="family-card" wx:for="{{devices}}" wx:key="id" data-id="{{item.id}}" bindtap="openDevice">
+      <view class="family-device-header">
+        <view class="family-device-icon">
+          <view class="family-device-eyes">
+          </view>
+        </view>
+        <view>
+          <view class="family-title">
+            {{item.name}}
+          </view>
+          <view class="family-muted">
+            家庭机器人
+          </view>
+        </view>
+      </view>
+      <view>
+        {{item.location || '未设置位置'}} · {{item.model}}
+      </view>
+      <view class="family-muted">
+        最后连接 {{item.lastSeen || '未上报'}}（不代表当前在线）
+      </view>
+    </view>
+    <view wx:if="{{familyIndex >= 0 &amp;&amp; !devices.length}}">
+      这个家庭暂无授权设备
+    </view>
+    <button bindtap="add">
+      添加设备
+    </button>
+    <button bindtap="refresh" disabled="{{loading}}">
+      刷新
+    </button>
+    <button bindtap="logout">
+      退出登录
+    </button>
+  </block>
+</view>

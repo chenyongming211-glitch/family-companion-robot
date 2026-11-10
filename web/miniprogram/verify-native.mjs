@@ -45,15 +45,26 @@ assert.ok(
 );
 runNativeEntry(main);
 assert.equal(typeof page.onLoad, "function");
+const onboardingPage = page;
+let sharedApi;
 for (const route of config.pages) {
+  runNativeEntry(await readFile("dist/" + route + ".js", "utf8"));
   for (const ext of ["js", "json", "wxml"])
     await access("dist/" + route + "." + ext);
+  if (route !== "pages/index/index") {
+    const instance = {...page, data:{...page.data}, setData(value) { Object.assign(this.data,value); }};
+    instance.onLoad({device:"dev_"+"a".repeat(32),chat:"chat_"+"b".repeat(64)});
+    if (sharedApi) assert.equal(instance.api, sharedApi, "separate native page bundles must share App Api");
+    sharedApi = instance.api;
+    instance.onUnload();
+  }
   const wxml = await readFile("dist/" + route + ".wxml", "utf8");
   for (const match of wxml.matchAll(
     /bind(?:tap|input|change)="([a-zA-Z0-9_]+)"/g,
   ))
     assert.equal(typeof page[match[1]], "function", match[1]);
 }
+page = onboardingPage;
 verifyWxml(await readFile("dist/pages/index/index.wxml", "utf8"), page.data);
 // The entry points are independent native bundles. Verify their bridge through
 // the native App instance, rather than a shared source-module test cache.

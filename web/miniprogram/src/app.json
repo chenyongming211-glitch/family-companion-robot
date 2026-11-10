@@ -1,1 +1,1 @@
-{"pages":["pages/index/index"],"window":{"navigationBarTitleText":"添加家庭机器人","navigationBarBackgroundColor":"#F4F6FF","navigationBarTextStyle":"black"},"style":"v2"}
+{"pages": ["pages/home/home", "pages/device/device", "pages/chats/chats", "pages/chat/chat", "pages/settings/settings", "pages/index/index"], "window": {"navigationBarTitleText": "添加家庭机器人", "navigationBarBackgroundColor": "#F4F6FF", "navigationBarTextStyle": "black"}, "style": "v2"}

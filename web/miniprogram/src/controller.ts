@@ -18,6 +18,10 @@ export type View = {
 export class Onboarding {
   private api: Api;
   private platform: any;
+  private shared = false;
+  private ownLogin = false;
+  private sessionUnsubscribe?: () => void;
+  private unsubscribe?: () => void;
   private view: View = {
     state: { ...initial },
     families: [],
@@ -42,9 +46,11 @@ export class Onboarding {
   private deadline = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private emit: (view: View) => void;
-  constructor(platform: any, emit: (view: View) => void) {
+  constructor(platform: any, emit: (view: View) => void, api?: Api) {
     this.platform = platform;
-    this.api = new Api(platform, (error) => {
+    this.shared = !!api;
+    this.api = api || new Api(platform);
+    this.unsubscribe = this.api.onUnauthorized((error) => {
       this.sessionGeneration++;
       this.view.families = [];
       this.view.state = {
@@ -55,6 +61,13 @@ export class Onboarding {
       this.failure(error, this.view.state.generation);
     });
     this.emit = emit;
+    if (api) this.sessionUnsubscribe = api.onChange(() => {
+      if (this.ownLogin) return;
+      this.sessionGeneration++;
+      this.view.families = [];
+      void this.cancel();
+      this.publish();
+    });
   }
   private publish() {
     this.emit({ ...this.view, state: { ...this.view.state } });
@@ -89,10 +102,11 @@ export class Onboarding {
   async login(username: string, password: string) {
     const generation = this.view.state.generation;
     const session = ++this.sessionGeneration;
+    this.ownLogin = true;
     this.api.clear();
     this.view.families = [];
     this.publish();
-    await this.api.login(username, password);
+    try { await this.api.login(username, password); } finally { this.ownLogin = false; }
     if (!this.valid(generation) || session !== this.sessionGeneration)
       throw new ClientError("cancelled", "操作已取消");
     const families = await this.api.families();
@@ -102,6 +116,11 @@ export class Onboarding {
     this.publish();
     if (!this.view.families.length)
       throw new ClientError("permission", "当前账号没有可添加设备的家庭");
+  }
+  async restore() {
+    if (!this.api.authenticated || this.view.families.length) return;
+    const session = this.sessionGeneration;
+    try { const families = await this.api.families(); if (session !== this.sessionGeneration) return; this.view.families = families.filter(f => f.canAddDevices); this.publish(); } catch {}
   }
   async start(familyId: string, name: string) {
     if (["connecting", "wifi", "applying", "waiting_cloud"].includes(this.view.state.phase)) return;
@@ -337,7 +356,10 @@ export class Onboarding {
   }
   async leave() {
     this.sessionGeneration++;
-    this.api.clear();
+    if (!this.shared) this.api.clear();
+    else this.api.invalidatePending();
+    this.unsubscribe?.();
+    this.sessionUnsubscribe?.();
     this.view.families = [];
     this.view.serial = "";
     this.view.model = "";

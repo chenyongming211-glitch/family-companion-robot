@@ -1,0 +1,43 @@
+<view class="family-page">
+  <view class="family-heading">
+    设备详情
+  </view>
+  <view class="family-error" wx:if="{{error}}">
+    {{error}}
+  </view>
+  <view wx:if="{{loading}}">
+    正在读取…
+  </view>
+  <view wx:if="{{device}}" class="family-card">
+    <view class="family-title">
+      {{device.name}}
+    </view>
+    <view>
+      {{device.location || '未设置位置'}} · {{device.model}}
+    </view>
+    <view>
+      最后连接 {{device.lastSeen || '未上报'}}
+    </view>
+    <view class="family-muted">
+      最后连接时间不代表当前在线
+    </view>
+    <view>
+      音量：{{device.volume === null ? '未上报' : device.volume}}
+    </view>
+    <view>
+      亮度：{{device.brightness === null ? '未上报' : device.brightness}}
+    </view>
+    <button bindtap="chats">
+      聊天记录
+    </button>
+    <button bindtap="settings">
+      设备设置
+    </button>
+  </view>
+  <button bindtap="refresh" disabled="{{loading}}">
+    重新读取
+  </button>
+  <button bindtap="home">
+    返回家庭首页
+  </button>
+</view>

@@ -72,3 +72,18 @@ picker{margin-top:16rpx;padding:26rpx 24rpx;min-height:96rpx;border:2rpx solid #
 .art-spark{position:absolute;background:#b3ffdf;width:10rpx;height:10rpx;border-radius:3rpx;transform:rotate(25deg)}
 .spark-one{left:9rpx;top:29rpx}
 .spark-two{right:5rpx;bottom:5rpx;background:#d3c5ff;width:7rpx;height:7rpx}
+.family-page {padding:32rpx; color:#272c50; background:linear-gradient(160deg,#f1f4ff,#f9f7ff); min-height:100vh; box-sizing:border-box; overflow-wrap:anywhere;}
+.family-heading {font-size:44rpx; font-weight:650; margin:20rpx 0 32rpx;}
+.family-card {padding:28rpx; margin:20rpx 0; border-radius:24rpx; background:rgba(255,255,255,.84); line-height:1.8; border:1rpx solid #e6e8f5;}
+.family-title {font-size:34rpx; font-weight:600;}
+.family-label {margin-top:24rpx; color:#555cab; font-weight:600;}
+.family-muted {color:#74788f; font-size:26rpx; margin-top:12rpx;}
+.family-error {color:#a13d59; padding:20rpx 0;}
+.family-page input {background:#f3f4fb; padding:20rpx; margin:16rpx 0; border-radius:16rpx;}
+.family-page button {margin-top:22rpx; background:#6863d6; color:white; border-radius:18rpx; font-size:29rpx;}
+.family-page text {white-space:pre-wrap; word-break:break-all;}
+
+.family-device-header { display:flex; align-items:center; gap:24rpx; margin-bottom:18rpx; }
+.family-device-header .family-muted { margin-top:0; }
+.family-device-icon { width:76rpx; height:70rpx; border-radius:24rpx; background:#e9e6ff; border:2rpx solid #d6d2fa; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.family-device-eyes { width:36rpx; height:8rpx; border-left:8rpx solid #7368cc; border-right:8rpx solid #7368cc; box-sizing:border-box; }

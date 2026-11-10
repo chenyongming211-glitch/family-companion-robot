@@ -226,8 +226,9 @@ test("prelogin code survives initial username input but cancel during login cann
 });
 test("confirmed task bypasses Bluetooth and preserves server identity",async()=>{
  const p=page();p.controller.view.families=[{id:"home"}];p.controller.setCode(code);
+ const originalStart=p.controller.api.start;
  p.controller.api.start=async()=>({status:"confirmed",device_id:"dev_"+"1".repeat(32)});
- await p.controller.start("home","");assert.equal(p.controller.view.state.phase,"success");assert.equal(p.controller.link,undefined);p.onUnload();
+ await p.controller.start("home","");assert.equal(p.controller.view.state.phase,"success");assert.equal(p.controller.link,undefined);p.controller.api.start=originalStart;p.onUnload();
 });
 test("prelogin scanned code has an active absolute expiry timer",()=>{
  const p=page();p.scan();scanner.success({result:code});

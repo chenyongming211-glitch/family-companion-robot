@@ -19,25 +19,28 @@ export class ClientError extends Error {
 }
 export class Api {
   private cookie = "";
+  get authenticated() { return !!this.cookie; }
   private epoch = 0;
   private platform: any;
-  private unauthorized?: (error: ClientError) => void;
+  private listeners = new Set<(error: ClientError) => void>();
+  private changes = new Set<() => void>();
+  onUnauthorized(fn: (error: ClientError) => void) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  onChange(fn: () => void) { this.changes.add(fn); return () => this.changes.delete(fn); }
   constructor(platform: any, unauthorized?: (error: ClientError) => void) {
     this.platform = platform;
-    this.unauthorized = unauthorized;
+    if (unauthorized) this.listeners.add(unauthorized);
   }
   clear() {
     this.cookie = "";
     this.epoch++;
+    for (const fn of this.changes) fn();
   }
   invalidatePending() {
     this.epoch++;
   }
   async request<T>(path: string, method = "GET", data?: unknown): Promise<T> {
     if (
-      !/^\/(session|login|logout|families|onboarding(?:\/[A-Za-z0-9_-]+)?)$/.test(
-        path,
-      )
+      !(/^\/(session|login|logout|families|onboarding(?:\/[A-Za-z0-9_-]+)?)$/.test(path) || /^\/devices(?:\/dev_[a-f0-9]{32})?$/.test(path) || /^\/device-settings\/dev_[a-f0-9]{32}$/.test(path) || /^\/chats\?device=dev_[a-f0-9]{32}&offset=(?:0|[1-9][0-9]{0,4})&limit=20$/.test(path) || /^\/chats\/chat_[a-f0-9]{64}\?device=dev_[a-f0-9]{32}$/.test(path))
     )
       throw new ClientError("invalid_path", "请求地址无效");
     const epoch = this.epoch;
@@ -66,15 +69,13 @@ export class Api {
           }
           if (r.statusCode === 401) {
             this.clear();
-            this.unauthorized?.(
-              new ClientError("unauthorized", "登录已过期，请重新登录"),
-            );
+            for (const fn of this.listeners) fn(new ClientError("unauthorized", "登录已过期，请重新登录"));
           }
           if (r.statusCode < 200 || r.statusCode >= 300) {
             const message: Record<number, string> = {
               400: "输入无效，请检查后重试",
               401: "登录已过期，请重新登录",
-              403: "当前家庭没有添加设备权限",
+              403: "当前账号没有此操作权限",
               404:
                 path === "/onboarding" && method === "POST"
                   ? "设备码尚未登记或已失效，请联系管理员"
@@ -82,7 +83,7 @@ export class Api {
                       (method === "GET" || method === "DELETE")
                     ? "添加任务不存在，请重新扫码"
                     : "服务入口不存在，请联系管理员",
-              409: "设备正在添加或已被绑定",
+              409: path.startsWith("/device-settings/") ? "设置已变化，请刷新后再保存" : "设备正在添加或已被绑定",
               410: "认领已过期，请重新扫码",
               429: "操作过于频繁，请稍后重试",
               503: "服务暂不可用，请稍后重试",
@@ -91,7 +92,7 @@ export class Api {
               new ClientError(
                 r.statusCode === 401
                   ? "unauthorized"
-                  : String(r.data?.code || "request_failed"),
+                  : r.statusCode === 409 ? "conflict" : String(r.data?.code || "request_failed"),
                 path === "/login" &&
                   r.statusCode === 401 &&
                   r.data?.code === "invalid_login"

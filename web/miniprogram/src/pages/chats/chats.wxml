@@ -1,0 +1,31 @@
+<view class="family-page">
+  <view class="family-heading">
+    聊天记录
+  </view>
+  <view class="family-error" wx:if="{{error}}">
+    {{error}}
+  </view>
+  <view wx:if="{{loading}}">
+    正在读取…
+  </view>
+  <view class="family-card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="openChat">
+    <view class="family-title">
+      {{item.title || '聊天'}}
+    </view>
+    <view>
+      {{item.date}} {{item.time}} · {{item.status}}
+    </view>
+  </view>
+  <view wx:if="{{pending}}">
+    部分记录正在更新，请稍后刷新
+  </view>
+  <view wx:if="{{!loading &amp;&amp; !error &amp;&amp; !items.length}}">
+    暂无可读取的聊天记录
+  </view>
+  <button wx:if="{{hasMore}}" bindtap="more" disabled="{{loading}}">
+    加载更多
+  </button>
+  <button bindtap="refresh" disabled="{{loading}}">
+    刷新记录
+  </button>
+</view>

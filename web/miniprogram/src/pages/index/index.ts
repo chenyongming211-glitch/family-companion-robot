@@ -1,3 +1,4 @@
+import { familySession } from "../../family.ts";
 import { Onboarding } from "../../controller.ts";
 import { setCleanup, setLaunch } from "../../lifecycle.ts";
 import { launchClaim, scannedClaim } from "../../api.ts";
@@ -67,7 +68,7 @@ Page({
         serial: view.serial,
         model: view.model,
       });
-    });
+    }, familySession(wx));
     const cleanup = (terminal = false) => {
       this.readyCode = "";
       if (this.scanTimer && !this.scanOperation) clearTimeout(this.scanTimer);
@@ -95,6 +96,11 @@ Page({
   },
   onShow(this: any) {
     this.active = true;
+    void this.controller?.restore().then(() => {
+      if (!this.active || this.loginContinuing) return;
+      if (this.data.families.length === 1) this.setData({ familyIndex: 0 });
+      this.continueScan();
+    });
     this.applyScan();
     if (this.scanNotice) {
       this.setData({ error: this.scanNotice });
@@ -108,6 +114,9 @@ Page({
     this.cleanup?.(true);
     setCleanup(undefined);
     setLaunch(undefined);
+  },
+  openDevice(this: any) {
+    if (/^dev_[a-f0-9]{32}$/.test(this.data.deviceId)) wx.navigateTo({url: "/pages/device/device?device=" + this.data.deviceId});
   },
   input(this: any, e: any) {
     const key = e.currentTarget.dataset.key;
