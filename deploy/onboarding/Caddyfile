@@ -64,6 +64,20 @@ robot.songguoxue.com {
 	handle @family_settings {
 		import onboarding_backend
 	}
+	@family_runtime {
+		method GET PUT
+		path_regexp family_runtime ^/api/family/device-runtime/dev_[a-f0-9]{32}$
+	}
+	handle @family_runtime {
+		import onboarding_backend
+	}
+	@device_state {
+		method POST
+		path /api/device/state
+	}
+	handle @device_state {
+		import onboarding_backend
+	}
 	@claim path_regexp claim ^/api/family/onboarding/claim_[a-f0-9]{32}$
 	handle @claim {
 		import onboarding_backend

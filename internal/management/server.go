@@ -24,6 +24,8 @@ type Options struct {
 	Now                                                    func() time.Time
 }
 type Server struct {
+	runtimeMu  sync.Mutex
+	runtimes   map[string]*runtimeState
 	cfg        Config
 	opts       Options
 	reader     Reader
@@ -123,6 +125,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sourceError(w, ErrForbidden)
 		return
 	}
+	if r.URL.Path == "/api/device/state" {
+		s.deviceState(w, r, c)
+		return
+	}
 	if s.deviceEndpoint(w, r, c) {
 		return
 	}
@@ -155,6 +161,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if resource == "onboarding" && scope == "family" {
 		s.familyOnboarding(w, r, a, parts)
+		return
+	}
+	if resource == "device-runtime" && scope == "family" {
+		s.deviceRuntime(w, r, a, parts)
 		return
 	}
 	if resource == "device-settings" && scope == "family" {

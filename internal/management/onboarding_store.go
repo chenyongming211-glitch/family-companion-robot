@@ -289,6 +289,13 @@ func (s *Server) publicRequest(r *http.Request) bool {
 // operation's authorization remain required; the Referer never grants identity.
 func wechatOnboardingRequest(r *http.Request) bool {
 	allowed := r.Method == "POST" && (r.URL.Path == "/api/family/login" || r.URL.Path == "/api/family/logout" || r.URL.Path == "/api/family/onboarding")
+	if r.Method == "PUT" {
+		for _, prefix := range []string{"/api/family/device-runtime/", "/api/family/device-settings/"} {
+			if strings.HasPrefix(r.URL.Path, prefix) && device.MatchString(strings.TrimPrefix(r.URL.Path, prefix)) && r.URL.RawQuery == "" {
+				allowed = true
+			}
+		}
+	}
 	const cancelPrefix = "/api/family/onboarding/claim_"
 	if r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, cancelPrefix) {
 		allowed = claimCode.MatchString(strings.TrimPrefix(r.URL.Path, cancelPrefix))
