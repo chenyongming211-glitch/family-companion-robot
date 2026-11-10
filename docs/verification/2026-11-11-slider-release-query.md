@@ -1,5 +1,7 @@
 # 松手调节交付与语音意图跟进
 
+后续上下文/反话控制已由8bf101d发布，当前服务与现场边界见[最新验证](2026-11-11-contextual-device-control.md)；下文fa7/c252为本批当时记录。
+
 本批始于2026-11-10，跟进至11日。用户明确要求音量/亮度松手提交、整10小圆刻度和具体提示，并报告语音无法获取当前状态。规格/计划见[设计](../superpowers/specs/2026-11-10-slider-release-query-design.md)、[计划](../superpowers/plans/2026-11-10-slider-release-query.md)。
 
 ## 已交付小程序

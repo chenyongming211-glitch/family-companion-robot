@@ -6,7 +6,7 @@
 
 - [家庭小程序](web/miniprogram/README.md)：设备→聊天→详情→设置已接真实授权数据；新增鉴权心跳在线状态与音量、亮度控制，支持待机下发，以设备实际读回回执确认。服务发布、微雪固件升级与现场边界见[本批验证](docs/verification/2026-11-10-device-live-control.md)。
 
-- 设置滑块现可松手按整10档提交，并显示小圆刻度；语音状态查询“多大”漏识别已修复发布。上下文/反话的模型语义控制仍在设计讨论，见[交付与边界](docs/verification/2026-11-11-slider-release-query.md)。
+- 设置滑块现可松手按整10档提交，并显示小圆刻度；语音状态查询“多大”漏识别已修复发布。语义控制已移除正向关键词门槛，模型结合最近已播上下文理解，Go读取新值、执行并核验；明确上下文小幅调节，歧义追问。见[滑块交付](docs/verification/2026-11-11-slider-release-query.md)及[语义发布/现场边界](docs/verification/2026-11-11-contextual-device-control.md)。
 
 - 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
 - 当前固件硬件仅支持ESP32-S3（微雪、M5）。2026-11-08起停止ESP32-C3开发、构建与验收；旧源码和证据保留，见[停止支持记录](docs/development-archive/2026-11-08-c3-retirement/README.md)。
