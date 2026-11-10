@@ -439,3 +439,16 @@ func TestSemanticNewerPlayedTopicOverridesOlderVerifiedAnchor(t *testing.T) {
 		}
 	}
 }
+func TestSemanticProviderSeesChronologyWhenDialogueSupersedesControl(t *testing.T) {
+	srv := semanticProvider(t, `{"intent":"none","target":"current"}`, "", func(input map[string]any) {
+		if input["current_turn"] != float64(3) || input["newer_played_context"] != true || input["ambiguous_field_context"] != false {
+			t.Error("planner lacks chronology needed to honor newer played topic", input)
+		}
+	})
+	defer srv.Close()
+	n := NewNative(Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http")}, t.TempDir())
+	_, e := n.RunControlPlan(context.Background(), ControlInput{CurrentRequest: "聊个天", Turn: 3, PlayedContext: `{"recent_turns":[{"id":2,"user":"聊音量","assistant_spoken_prefix":"我们在聊音量"}]}`, VerifiedControls: []ControlRecord{{1, time.Now(), []ControlOperation{{"volume", "absolute", ""}, {"brightness", "absolute", ""}}}}}, plannerTools(), nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+}
