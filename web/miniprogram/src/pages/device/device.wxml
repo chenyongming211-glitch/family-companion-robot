@@ -24,6 +24,9 @@
     <button bindtap="chats">
       聊天记录
     </button>
+    <button bindtap="memories">
+      近期记忆
+    </button>
     <button bindtap="settings">
       设备设置
     </button>

@@ -67,6 +67,62 @@ for (const route of config.pages) {
     assert.equal(typeof page[match[1]], "function", match[1]);
 }
 assert.deepEqual(bindingFailures, [], "every native page must have valid WXML binding expressions");
+// Exercise the memory page through its independent native bundle with synthetic
+// fixtures. This checks App RAM sharing, actual handlers, bindings and cleanup.
+assert.ok(config.pages.includes("pages/memories/memories"));
+runNativeEntry(await readFile("dist/pages/memories/memories.js", "utf8"));
+const memoryPage = { ...page, data: { ...page.data }, setData(value) { Object.assign(this.data, value); } };
+const memoryDevice = "dev_" + "a".repeat(32), memoryChat = "chat_" + "b".repeat(64);
+const memoryCalls = [], memoryModals = [], memoryUrls = [];
+context.wx.request = (o) => {
+  memoryCalls.push(o);
+  const path = o.url.split("/api/family")[1];
+  const data = path === "/login" ? {} : path.startsWith("/devices/") ? { id: memoryDevice } :
+    path.startsWith("/device-settings/") ? { deviceId: memoryDevice, name: "fixture", location: "", version: "c".repeat(64), canEdit: true } :
+    path.startsWith("/memory-clear/") ? { deviceId: memoryDevice, status: "confirmed" } :
+    [{ id: "mem-" + "d".repeat(32) + "-1", deviceId: memoryDevice, date: "2026-11-11T01:02:03Z", text: "fixture", user: "fixture user", assistant: "fixture spoken", chatId: memoryChat }];
+  o.success({ statusCode: 200, data, cookies: path === "/login" ? ["management_family=synthetic-native"] : [] });
+};
+context.wx.showModal = (o) => memoryModals.push(o);
+context.wx.navigateTo = (o) => memoryUrls.push(o.url);
+memoryPage.onLoad({ device: memoryDevice });
+assert.equal(memoryPage.api, sharedApi);
+await memoryPage.api.login("synthetic", "synthetic");
+await memoryPage.onShow();
+assert.equal(memoryPage.data.items[0].assistant, "fixture spoken");
+assert.equal(memoryPage.data.canClear, true);
+const item = memoryPage.data.items[0];
+memoryPage.openMemorySource({ currentTarget: { dataset: { index: 0, id: item.id, epoch: item.epoch } } });
+assert.equal(memoryUrls[0], "/pages/chat/chat?device=" + memoryDevice + "&chat=" + memoryChat);
+const hiddenClear = memoryPage.clearMemories();
+void memoryPage.clearMemories();
+assert.equal(memoryModals.length, 1);
+memoryPage.onHide();
+assert.equal(memoryPage.data.items.length, 0);
+assert.equal(memoryPage.data.canClear, false);
+assert.equal(memoryPage.data.notice, "");
+memoryModals[0].success({ confirm: true });
+await hiddenClear;
+assert.equal(memoryCalls.filter(o => o.method === "POST" && o.url.includes("/memory-clear/")).length, 0);
+await memoryPage.onShow();
+const confirmedClear = memoryPage.clearMemories();
+memoryModals[1].success({ confirm: true });
+await confirmedClear;
+const nativePosts = memoryCalls.filter(o => o.method === "POST" && o.url.includes("/memory-clear/"));
+assert.equal(nativePosts.length, 1);
+assert.equal(JSON.stringify(nativePosts[0].data), '{"confirm":true}');
+assert.match(memoryPage.data.notice, /已清除近期记忆/);
+assert.equal(memoryPage.data.items.length, 1, "a fresh conversation may add memory after a confirmed clear");
+const memoryWxml = await readFile("dist/pages/memories/memories.wxml", "utf8");
+const clearButton = /<button\b([^>]*bindtap="clearMemories"[^>]*)>/.exec(memoryWxml);
+assert.ok(clearButton);
+const clearCondition = /wx:if="{{([^}]+)}}"/.exec(clearButton[1]);
+assert.ok(clearCondition);
+for (const canClear of [false, true]) assert.equal(!!vm.runInNewContext(clearCondition[1], { canClear }), canClear);
+assert.match(clearButton[1], /disabled="{{[^}]*clearing[^}]*}}"/);
+const nativeStyle = await readFile("dist/app.wxss", "utf8");
+for (const name of ["memory-source", "memory-clear", "family-notice"]) assert.ok(nativeStyle.includes("." + name));
+memoryPage.onUnload();
 page = onboardingPage;
 verifyWxml(await readFile("dist/pages/index/index.wxml", "utf8"), page.data);
 // The entry points are independent native bundles. Verify their bridge through
@@ -124,5 +180,5 @@ assert.deepEqual(secure.encrypt(bytes(vector.plain)), bytes(vector.encrypted));
 assert.deepEqual(secure.decrypt(bytes(vector.cipher_reply)), bytes(vector.reply));
 secure.destroy();
 console.log(
-  "native artifact: independent App/page scene and cleanup bridge, routes, WXML handlers and phase-bound success visibility, BigInt-free initial bundle and deferred pure-JS Security2 module verified",
+  "native artifact: independent App/page scene and cleanup bridge, routes, memory source/confirmed clear/privacy lifecycle, WXML handlers and phase-bound success visibility, BigInt-free initial bundle and deferred pure-JS Security2 module verified",
 );

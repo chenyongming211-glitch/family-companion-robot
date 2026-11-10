@@ -20,6 +20,7 @@ export class ClientError extends Error {
 export class Api {
   private cookie = "";
   get authenticated() { return !!this.cookie; }
+  get sessionVersion() { return this.epoch; }
   private epoch = 0;
   private platform: any;
   private listeners = new Set<(error: ClientError) => void>();
@@ -40,7 +41,7 @@ export class Api {
   }
   async request<T>(path: string, method = "GET", data?: unknown): Promise<T> {
     if (
-      !(/^\/(session|login|logout|families|onboarding(?:\/[A-Za-z0-9_-]+)?)$/.test(path) || /^\/devices(?:\/dev_[a-f0-9]{32})?$/.test(path) || /^\/(?:device-settings|device-runtime)\/dev_[a-f0-9]{32}$/.test(path) || /^\/chats\?device=dev_[a-f0-9]{32}&offset=(?:0|[1-9][0-9]{0,4})&limit=20$/.test(path) || /^\/chats\/chat_[a-f0-9]{64}\?device=dev_[a-f0-9]{32}$/.test(path))
+      !(/^\/(session|login|logout|families|onboarding(?:\/[A-Za-z0-9_-]+)?)$/.test(path) || /^\/devices(?:\/dev_[a-f0-9]{32})?$/.test(path) || /^\/(?:device-settings|device-runtime)\/dev_[a-f0-9]{32}$/.test(path) || (method === "GET" && /^\/memories\?device=dev_[a-f0-9]{32}$/.test(path)) || (method === "POST" && /^\/memory-clear\/dev_[a-f0-9]{32}$/.test(path)) || /^\/chats\?device=dev_[a-f0-9]{32}&offset=(?:0|[1-9][0-9]{0,4})&limit=20$/.test(path) || /^\/chats\/chat_[a-f0-9]{64}\?device=dev_[a-f0-9]{32}$/.test(path))
     )
       throw new ClientError("invalid_path", "请求地址无效");
     const epoch = this.epoch;
@@ -65,7 +66,16 @@ export class Api {
           if (typeof raw === "string") cookies.push(raw);
           for (const c of cookies) {
             const m = /^management_family=([^;]*)/.exec(c);
-            if (m) this.cookie = m[1] ? "management_family=" + m[1] : "";
+            if (m) {
+              const cookie = m[1] ? "management_family=" + m[1] : "";
+              if (cookie !== this.cookie) {
+                this.cookie = cookie;
+                if (path !== "/login") {
+                  this.epoch++;
+                  for (const fn of this.changes) fn();
+                }
+              }
+            }
           }
           if (r.statusCode === 401) {
             this.clear();
@@ -92,12 +102,16 @@ export class Api {
               new ClientError(
                 r.statusCode === 401
                   ? "unauthorized"
-                  : r.statusCode === 409 ? "conflict" : String(r.data?.code || "request_failed"),
+                  : r.statusCode === 409 && !path.startsWith("/memory-clear/") ? "conflict" : String(r.data?.code || "request_failed"),
                 path === "/login" &&
                   r.statusCode === 401 &&
                   r.data?.code === "invalid_login"
                   ? "账号或密码不正确"
-                  : message[r.statusCode] || "请求失败，请稍后重试",
+                  : path.startsWith("/memory-clear/") && r.statusCode === 409 && r.data?.code === "memory_busy"
+                    ? "机器人正在对话，请结束后再清除"
+                    : path.startsWith("/memory-clear/") && (r.statusCode >= 500 || r.statusCode === 409)
+                      ? "结果未确认，请刷新查看"
+                      : message[r.statusCode] || "请求失败，请稍后重试",
               ),
             );
             return;

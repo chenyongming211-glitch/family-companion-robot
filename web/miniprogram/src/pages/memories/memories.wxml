@@ -1,0 +1,20 @@
+<view class="family-page">
+  <view class="family-heading">近期记忆</view>
+  <view class="family-muted">最近7天，最多24轮对话摘录</view>
+  <view class="family-muted">清除记忆后，聊天记录仍会保留</view>
+  <view class="family-error" wx:if="{{error}}">{{error}}</view>
+  <view class="family-notice" wx:if="{{notice}}">{{notice}}</view>
+  <view wx:if="{{loading}}">正在读取…</view>
+  <view class="family-card" wx:for="{{items}}" wx:key="id">
+    <view class="family-muted">{{item.timeLabel}}</view>
+    <view class="family-label">用户转写</view>
+    <text>{{item.user || '本轮无用户转写'}}</text>
+    <view class="family-label">机器人已播摘录</view>
+    <text>{{item.assistant || '本轮无已播摘录'}}</text>
+    <view class="family-muted" wx:if="{{item.boundary}}">{{item.boundary}}</view>
+    <button class="memory-source" bindtap="openMemorySource" data-index="{{index}}" data-id="{{item.id}}" data-epoch="{{item.epoch}}">{{item.chatId ? '查看来源聊天' : '来源暂不可用'}}</button>
+  </view>
+  <view class="family-muted" wx:if="{{!loading && !error && !items.length}}">暂无近期记忆</view>
+  <button bindtap="refresh" disabled="{{loading || clearing}}">刷新记忆</button>
+  <button class="memory-clear" wx:if="{{canClear}}" bindtap="clearMemories" disabled="{{loading || clearing}}">{{clearing ? '正在确认清除…' : '清除近期记忆'}}</button>
+</view>

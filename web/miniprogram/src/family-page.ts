@@ -1,7 +1,7 @@
 import { validateRuntime, runtimeView, commandOutcome, level, sliderLevel } from "./runtime.ts";
 import { Api, ClientError } from "./api.ts";
 import { familySession, deviceID, chatID } from "./family.ts";
-type Kind = "home" | "device" | "chats" | "chat" | "settings";
+type Kind = "home" | "device" | "chats" | "chat" | "settings" | "memories";
 function localTime(value: unknown): string {
   if (typeof value !== "string" || !value) return "未上报";
   const date = new Date(value);
@@ -76,6 +76,9 @@ export function familyPage(kind: Kind): any {
     data: {
       loading: false,
       saving: false,
+      canClear: false,
+      memoryRead: false,
+      clearing: false,
       error: "",
       notice: "",
       username: "",
@@ -130,6 +133,9 @@ export function familyPage(kind: Kind): any {
       this.setData({
         loading: false,
         saving: false,
+        canClear: false,
+        memoryRead: false,
+        clearing: false,
         runtime: null, controlling: false, controlNotice: "", devices: [], notice: "", error: "",
         device: null,
         items: [],
@@ -244,6 +250,8 @@ export function familyPage(kind: Kind): any {
               chat: chatView(c.bodyAvailable ? c : { ...c, turns: [] }),
               loggedIn: true,
             });
+        } else if (kind === "memories") {
+          await this.readMemories(epoch);
         } else if (kind === "settings") {
           await this.readSettings(epoch);
         } else {
@@ -257,6 +265,8 @@ export function familyPage(kind: Kind): any {
             chat: null,
             items: [],
             settings: null,
+            canClear: false,
+            memoryRead: false,
           });
       } finally {
         if (this.active && epoch === this.epoch) {
@@ -404,6 +414,86 @@ export function familyPage(kind: Kind): any {
           this.setData({ loading: false });
       }
     },
+    async readMemories(this: any, epoch: number) {
+      const deviceId = this.deviceId;
+      const current = () => this.active && epoch === this.epoch && deviceId === this.deviceId;
+      const d: any = await this.api.request("/devices/" + deviceId);
+      if (!d || d.id !== deviceId) invalid();
+      if (!current()) return;
+      const items: any = await this.api.request("/memories?device=" + deviceId);
+      if (!Array.isArray(items) || items.length > 24) invalid();
+      const seen = new Set<string>();
+      for (const item of items) {
+        if (!item || item.deviceId !== deviceId || typeof item.id !== "string" ||
+          !/^mem-[a-f0-9]{32}-[1-9][0-9]{0,18}$/.test(item.id) || seen.has(item.id) ||
+          typeof item.text !== "string" || typeof item.date !== "string" ||
+          !Number.isFinite(new Date(item.date).getTime()) ||
+          (item.user !== undefined && typeof item.user !== "string") ||
+          (item.assistant !== undefined && typeof item.assistant !== "string")) invalid();
+        seen.add(item.id);
+      }
+      if (!current()) return;
+      this.setData({
+        items: items.map((item: any) => ({
+          id: item.id, deviceId, epoch,
+          user: item.user || "", assistant: item.assistant || "",
+          text: item.text, timeLabel: localTime(item.date),
+          boundary: displayBoundary(item.boundary),
+          chatId: typeof item.chatId === "string" && /^chat_[a-f0-9]{64}$/.test(item.chatId) ? item.chatId : "",
+        })),
+        loggedIn: true, memoryRead: true, canClear: false,
+      });
+      try {
+        const settings = await this.readSettings(epoch);
+        if (current()) this.setData({ canClear: settings.canEdit && this.api.authenticated });
+      } catch (e: any) {
+        if (current()) this.setData({ canClear: false, settings: null, error: "无法确认管理权限，暂不能清除记忆" });
+      }
+    },
+    async clearMemories(this: any) {
+      if (kind !== "memories" || !this.active || this.data.loading || this.data.clearing ||
+        !this.data.canClear || !this.data.settings?.canEdit || !this.data.memoryRead || !this.api.authenticated) return;
+      const epoch = this.epoch, deviceId = this.deviceId, session = this.api.sessionVersion;
+      const current = () => this.active && epoch === this.epoch && deviceId === this.deviceId &&
+        this.api.authenticated && session === this.api.sessionVersion;
+      this.setData({ clearing: true, notice: "", error: "" });
+      try {
+        const confirmed = await new Promise<boolean>((resolve) => wx.showModal({
+          title: "清除近期记忆？",
+          content: "将清除机器人用于续聊的近期记忆。清除后，聊天记录仍会保留。",
+          confirmText: "清除记忆", confirmColor: "#a13d59",
+          success: (result: any) => resolve(result.confirm === true), fail: () => resolve(false),
+        }));
+        if (!confirmed || !current() || !this.data.canClear || !this.data.settings?.canEdit || !this.data.memoryRead) return;
+        const result: any = await this.api.request("/memory-clear/" + deviceId, "POST", { confirm: true });
+        if (!current()) return;
+        if (!result || result.deviceId !== deviceId || result.status !== "confirmed")
+          throw new ClientError("memory_clear_unconfirmed", "结果未确认，请刷新查看");
+        this.setData({ notice: "已清除近期记忆，聊天记录仍会保留", items: [], canClear: false, memoryRead: false });
+        try { await this.readMemories(epoch); }
+        catch (e: any) {
+          if (current()) this.setData({ items: [], canClear: false, memoryRead: false, error: "记忆已清除，列表读取失败，请刷新查看" });
+        }
+      } catch (e: any) {
+        if (current()) this.setData({
+          error: e.code === "memory_busy" ? "机器人正在对话，请结束后再清除" :
+            ["network_error", "invalid_response", "memory_clear_unconfirmed"].includes(e.code) ? "结果未确认，请刷新查看" : e.message,
+          canClear: false,
+        });
+      } finally {
+        if (current()) this.setData({ clearing: false });
+      }
+    },
+    openMemorySource(this: any, e: any) {
+      const data = e.currentTarget.dataset, index = Number(data.index), item = this.data.items[index];
+      if (kind !== "memories" || !this.active || !this.api.authenticated || !this.data.memoryRead ||
+        !Number.isInteger(index) || !item || item.id !== data.id || item.deviceId !== this.deviceId ||
+        Number(data.epoch) !== this.epoch || item.epoch !== this.epoch) return;
+      if (!item.chatId) { this.setData({ notice: "来源暂不可用，仍可查看近期记忆摘录" }); return; }
+      try {
+        wx.navigateTo({ url: "/pages/chat/chat?device=" + deviceID(this.deviceId) + "&chat=" + chatID(item.chatId) });
+      } catch {}
+    },
     async readSettings(this: any, epoch: number) {
       const s: any = await this.api.request(
         "/device-settings/" + this.deviceId,
@@ -505,6 +595,10 @@ export function familyPage(kind: Kind): any {
             chatID(e.currentTarget.dataset.id),
         });
       } catch {}
+    },
+    memories(this: any) {
+      if (this.active && this.data.device?.id === this.deviceId)
+        wx.navigateTo({ url: "/pages/memories/memories?device=" + deviceID(this.deviceId) });
     },
     chats(this: any) {
       wx.navigateTo({ url: "/pages/chats/chats?device=" + this.deviceId });

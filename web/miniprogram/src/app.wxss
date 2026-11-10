@@ -95,3 +95,8 @@ picker{margin-top:16rpx;padding:26rpx 24rpx;min-height:96rpx;border:2rpx solid #
 .runtime-scale-start {left:0;}
 .runtime-scale-mid {left:50%; transform:translateX(-50%);}
 .runtime-scale-end {right:0;}
+
+.family-notice {color:#4d58a0; padding:20rpx 0; line-height:1.7;}
+.family-page .memory-source {background:#eeedfa; color:#5750a8; font-weight:500;}
+.family-page .memory-clear {background:rgba(161,61,89,.08); color:#a13d59; font-weight:500;}
+.family-page button[disabled] {background:#e4e7f3; color:#79809b;}

@@ -1,6 +1,6 @@
 import {build} from 'esbuild';
 import {cp,mkdir,rm} from 'node:fs/promises';
-const pages=['home','device','chats','chat','settings','index'];
+const pages=['home','device','chats','chat','memories','settings','index'];
 await rm('dist',{recursive:true,force:true});await mkdir('dist/pages/index',{recursive:true});
 // Native CommonJS keeps literal require() visible to WeChat's dependency scan.
 await build({entryPoints:['src/app.ts',...pages.map(p=>'src/pages/'+p+'/'+p+'.ts')],outdir:'dist',outbase:'src',bundle:true,platform:'browser',format:'cjs',external:['../../provisioning/security2.js'],target:'es2018',legalComments:'none',logLevel:'info'});
