@@ -72,7 +72,6 @@ void Worker(void*) {
     const auto authorization="Bearer "+FamilyOnboarding::Key();
     esp_http_client_set_header(http,"Authorization",authorization.c_str());
     esp_http_client_set_header(http,"Device-Id",SystemInfo::GetMacAddress().c_str());
-    esp_http_client_set_header(http,"Content-Type","application/json");
     esp_http_client_set_method(http,HTTP_METHOD_POST);
     while(true) {
         if(!online||!FamilyOnboarding::Activated()){esp_http_client_close(http);vTaskDelay(pdMS_TO_TICKS(1000));continue;}
@@ -82,6 +81,8 @@ void Worker(void*) {
         bool valid=false;
         if(!body.empty()) {
             response.body.clear();response.overflow=false;
+            // Clearing the previous POST pointer also deletes Content-Type.
+            esp_http_client_set_header(http,"Content-Type","application/json");
             esp_http_client_set_post_field(http,body.c_str(),body.size());
             const auto result=esp_http_client_perform(http);
             const auto status=esp_http_client_get_status_code(http);
