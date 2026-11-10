@@ -1,10 +1,12 @@
 package management
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -196,6 +198,52 @@ func (s ConfigStore) Transaction(fn func(*Config) error) error {
 	return WritePrivateConfig(s.Path, c)
 }
 
+// WithSnapshot reads without rewriting config. Cancellation bounds lock
+// acquisition and callback admission only; fn always finishes before unlock.
+func (s ConfigStore) WithSnapshot(ctx context.Context, fn func(Config) error) error {
+	if s.Path == "" || fn == nil {
+		return ErrSource
+	}
+	fd, e := syscall.Open(s.Path+".lock", syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+	if e != nil {
+		return ErrSource
+	}
+	f := os.NewFile(uintptr(fd), s.Path+".lock")
+	defer f.Close()
+	st, e := f.Stat()
+	if e != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 {
+		return ErrSource
+	}
+	for {
+		if e = ctx.Err(); e != nil {
+			return e
+		}
+		e = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		if e == nil {
+			break
+		}
+		if !errors.Is(e, syscall.EWOULDBLOCK) && !errors.Is(e, syscall.EAGAIN) {
+			return ErrSource
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	defer syscall.Flock(fd, syscall.LOCK_UN)
+	c, e := LoadConfig(s.Path)
+	if e != nil {
+		return ErrSource
+	}
+	if e = ctx.Err(); e != nil {
+		return e
+	}
+	return fn(c)
+}
+
 // ProvisionFactory commits authority only after saveBundle has durably saved
 // the private package. A save error aborts the transaction before config write.
 // Callers must preserve a saved bundle if the final config fsync is ambiguous.
@@ -295,6 +343,9 @@ func wechatOnboardingRequest(r *http.Request) bool {
 				allowed = true
 			}
 		}
+	}
+	if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/family/memory-clear/") && device.MatchString(strings.TrimPrefix(r.URL.Path, "/api/family/memory-clear/")) && r.URL.RawQuery == "" {
+		allowed = true
 	}
 	const cancelPrefix = "/api/family/onboarding/claim_"
 	if r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, cancelPrefix) {

@@ -115,6 +115,25 @@ func (r Reader) ListMemories(accountID, scope, deviceID string) ([]MemoryDTO, er
 		}
 		eligible[s.info.SessionID] = s
 	}
+	// Provenance is an optional authorized projection. Failure to read archived
+	// events only disables links; permission errors still fail closed.
+	type memoryLink struct{ chatID, turnID string }
+	links := map[string]memoryLink{}
+	chats, _, _, projectionErr := r.chats(accountID, scope, &deviceID)
+	if errors.Is(projectionErr, ErrForbidden) || errors.Is(projectionErr, ErrInvalid) {
+		return nil, projectionErr
+	}
+	if projectionErr == nil {
+		for _, chat := range chats {
+			if chat.Scope.DeviceID != deviceID || chat.Scope.FamilyID != binding.FamilyID || chat.Scope.BindingID != binding.ID || chat.Scope.BindingVersion != binding.Version {
+				continue
+			}
+			for _, ref := range chat.Turns {
+				id := ref.SourceID + ":" + strconv.FormatInt(ref.TurnID, 10)
+				links[id] = memoryLink{chat.ID, id}
+			}
+		}
+	}
 	out := []MemoryDTO{}
 	for _, turn := range snapshot.Data.Turns {
 		s, ok := eligible[turn.SessionID]
@@ -128,7 +147,8 @@ func (r Reader) ListMemories(accountID, scope, deviceID string) ([]MemoryDTO, er
 		if text == "" {
 			text = *turn.Assistant
 		}
-		out = append(out, MemoryDTO{ID: memoryTurnID(turn), DeviceID: deviceID, ConversationID: s.id, Text: text, Date: turn.At.Format(time.RFC3339Nano), User: *turn.User, Assistant: *turn.Assistant, TextSource: *turn.Source, Boundary: *turn.Boundary})
+		link := links[turn.SessionID+":"+strconv.FormatInt(turn.TurnID, 10)]
+		out = append(out, MemoryDTO{ChatID: link.chatID, TurnID: link.turnID, ID: memoryTurnID(turn), DeviceID: deviceID, ConversationID: s.id, Text: text, Date: turn.At.Format(time.RFC3339Nano), User: *turn.User, Assistant: *turn.Assistant, TextSource: *turn.Source, Boundary: *turn.Boundary})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, _ := time.Parse(time.RFC3339Nano, out[i].Date)

@@ -21,6 +21,8 @@ import (
 )
 
 type Server struct {
+	clearing          map[string]bool
+	clearWG           sync.WaitGroup
 	stopping          bool
 	mu                sync.Mutex
 	tickets           map[string]ticketBinding
@@ -134,7 +136,7 @@ func ownerKey(owner Ownership) string {
 
 // Caller holds s.mu. No network operation is performed under this lock.
 func (s *Server) reserveLocked(key string) *sessionLease {
-	if s.stopping || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
+	if s.stopping || s.clearing[key] || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
 		return nil
 	}
 	lease := &sessionLease{key: key, done: make(chan struct{})}
@@ -173,6 +175,8 @@ func (s *Server) CloseActive(ctx context.Context) error {
 	for _, conn := range conns {
 		conn.Close()
 	}
+	// Wait for destructive writes even if the shutdown deadline expires.
+	s.clearWG.Wait()
 	for _, lease := range leases {
 		select {
 		case <-lease.done:
@@ -290,7 +294,7 @@ func (s *Server) issueTicket(owner Ownership) (string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := ownerKey(owner)
-	if s.stopping || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
+	if s.stopping || s.clearing[key] || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
 		return "", http.StatusConflict
 	}
 	now := time.Now()

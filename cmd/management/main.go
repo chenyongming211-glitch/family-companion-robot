@@ -146,6 +146,7 @@ func serve(args []string) error {
 	profiles := f.String("profiles", "", "optional profiles file")
 	static := f.String("static", "", "live static dist")
 	audit := f.String("audit", "", "private audit file")
+	memorySocket := f.String("memory-control-socket", "", "optional private voice memory control Unix socket")
 	publicOrigin := f.String("public-origin", "", "explicit public HTTPS origin")
 	build := f.String("build", "unknown", "build identifier")
 	if f.Parse(args) != nil || f.NArg() != 0 || !validListen(*listen) || *config == "" || *records == "" || *static == "" || *audit == "" {
@@ -165,7 +166,7 @@ func serve(args []string) error {
 	if e != nil {
 		return e
 	}
-	handler, e := management.NewServer(c, management.Options{RecordsPath: *records, ProfilesPath: *profiles, StaticDir: *static, AuditPath: *audit, Build: *build, ConfigPath: *config, PublicOrigin: *publicOrigin})
+	handler, e := management.NewServer(c, management.Options{RecordsPath: *records, ProfilesPath: *profiles, StaticDir: *static, AuditPath: *audit, Build: *build, ConfigPath: *config, PublicOrigin: *publicOrigin, MemoryControlSocket: *memorySocket})
 	if e != nil {
 		return e
 	}

@@ -20,7 +20,7 @@ import (
 
 type Options struct {
 	RecordsPath, ProfilesPath, StaticDir, AuditPath, Build string
-	ConfigPath, PublicOrigin                               string
+	ConfigPath, PublicOrigin, MemoryControlSocket          string
 	Now                                                    func() time.Time
 }
 type Server struct {
@@ -115,7 +115,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	c, e := s.snapshot()
 	if e != nil {
-		sourceError(w, ErrSource)
+		if familyMemoryClearRequest(r) {
+			memoryClearError(w, ErrSource)
+		} else {
+			sourceError(w, ErrSource)
+		}
 		return
 	}
 	r = r.WithContext(context.WithValue(r.Context(), configContextKey{}, c))
@@ -169,6 +173,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if resource == "device-settings" && scope == "family" {
 		s.deviceSettings(w, r, a, parts)
+		return
+	}
+	if resource == "memory-clear" && scope == "family" {
+		s.familyMemoryClear(w, r, a, parts)
 		return
 	}
 	if r.Method != "GET" {

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"familyrobot/internal/management"
 	"familyrobot/internal/realtimelive"
 	"familyrobot/internal/realtimestate"
 	"flag"
@@ -32,7 +33,12 @@ func main() {
 	expressions := flag.Bool("expressions", false, "enable silent expression selection for negotiated face_expression_v1 devices")
 	diagnosticDevice := flag.String("diagnostics-device", "", "optional authenticated device ID for one diagnostic session")
 	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
+	memorySocket := flag.String("memory-control-socket", "", "optional root-private memory control Unix socket")
+	managementConfig := flag.String("management-config", "", "private management config required for memory control")
 	flag.Parse()
+	if (*memorySocket == "") != (*managementConfig == "") {
+		log.Fatal("memory_control_config_invalid")
+	}
 	if *maxSessions < 1 || *maxSessions > 8 {
 		log.Fatal("invalid_max_sessions")
 	}
@@ -77,10 +83,27 @@ func main() {
 		}
 		servers = append(servers, &http.Server{Addr: *deviceListen, Handler: app.DeviceHandler(dc), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384})
 	}
+	var memoryListener net.Listener
+	if *memorySocket != "" {
+		if _, err := management.LoadConfig(*managementConfig); err != nil {
+			log.Fatal("memory_control_config_invalid")
+		}
+		var err error
+		memoryListener, err = realtimelive.ListenMemoryControl(*memorySocket)
+		if err != nil {
+			log.Fatal("memory_control_listen_failed")
+		}
+		defer memoryListener.Close()
+		servers = append(servers, &http.Server{Handler: app.MemoryControlHandler(management.NewMemoryClearGuard(*managementConfig)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 8192})
+	}
 	// Bind every requested listener before accepting either client kind. A
 	// failed device bind must not leave a partially configured running process.
 	listeners := make([]net.Listener, 0, len(servers))
-	for _, srv := range servers {
+	for i, srv := range servers {
+		if memoryListener != nil && i == len(servers)-1 {
+			listeners = append(listeners, memoryListener)
+			continue
+		}
 		listener, err := net.Listen("tcp", srv.Addr)
 		if err != nil {
 			log.Fatal("listen_failed")

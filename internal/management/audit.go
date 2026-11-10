@@ -47,7 +47,20 @@ func appendAudit(path string, entry auditEntry) error {
 	if _, e = f.Write(append(raw, '\n')); e != nil {
 		return ErrSource
 	}
-	return f.Sync()
+	if e = f.Sync(); e != nil {
+		return ErrSource
+	}
+	if before == nil {
+		dir, e := parent.Open(".")
+		if e != nil {
+			return ErrSource
+		}
+		defer dir.Close()
+		if e = dir.Sync(); e != nil {
+			return ErrSource
+		}
+	}
+	return nil
 }
 func (s *Server) audit(a, scope, device, record string) error {
 	return s.auditAction(a, scope, "read_conversation", device, record)

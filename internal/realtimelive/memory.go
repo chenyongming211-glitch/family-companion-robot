@@ -254,19 +254,8 @@ func (s *Session) clearMemory(rt *liveTurn) error {
 	}
 	s.mu.Unlock()
 	m.base = nil
-	err := s.saveMemoryLocked(memoryData{Turns: []memoryTurn{}})
-	if err != nil {
+	if err := clearStoredMemory(rt.ctx, m.store, s.rec.owner.DeviceID); err != nil {
 		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	v, err := m.store.Load(ctx, s.rec.owner.DeviceID)
-	if err != nil {
-		return err
-	}
-	var data memoryData
-	if json.Unmarshal(v.Data, &data) != nil || len(data.Turns) != 0 {
-		return errors.New("memory_clear_unverified")
 	}
 	m.loaded = true
 	return nil
@@ -401,4 +390,46 @@ func waitTurnTranscript(rt *liveTurn) error {
 		}
 	})
 	return rt.ctx.Err()
+}
+
+// Store writes are FIFO. Once admitted, a clear must wait for its actual durable
+// receipt even after cancellation, so authorization and admission gates remain
+// held until no delayed destructive write is possible.
+type memorySnapshotStore interface {
+	Save(string, recordstore.Snapshot) (<-chan error, error)
+	Load(context.Context, string) (recordstore.Snapshot, error)
+}
+
+func clearStoredMemory(ctx context.Context, store memorySnapshotStore, device string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(memoryData{Turns: []memoryTurn{}})
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	receipt, err := store.Save(device, recordstore.Snapshot{Version: 1, UpdatedAt: time.Now().UTC(), Data: raw})
+	if err != nil {
+		return err
+	}
+	if err, ok := <-receipt; !ok || err != nil {
+		if err != nil {
+			return err
+		}
+		return errors.New("memory_receipt_missing")
+	}
+	verify, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	snapshot, err := store.Load(verify, device)
+	if err != nil {
+		return err
+	}
+	var data memoryData
+	if snapshot.Version != 1 || json.Unmarshal(snapshot.Data, &data) != nil || data.Turns == nil || len(data.Turns) != 0 {
+		return errors.New("memory_clear_unverified")
+	}
+	return nil
 }

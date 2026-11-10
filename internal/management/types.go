@@ -74,6 +74,8 @@ type Reader struct {
 }
 
 type MemoryDTO struct {
+	ChatID         string `json:"chatId,omitempty"`
+	TurnID         string `json:"turnId,omitempty"`
 	ID             string `json:"id"`
 	DeviceID       string `json:"deviceId"`
 	ConversationID string `json:"conversationId"`
