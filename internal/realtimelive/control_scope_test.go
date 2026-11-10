@@ -30,7 +30,8 @@ func TestControlScopeOrdinaryRequestsNeverStartPlanner(t *testing.T) {
 		"他说，音量调到20", "请模仿我说，音量调到20", "如果天气不好，音量设20",
 		"把音量设20，不要改音量", "音量不要动，音量设20",
 		"你现在有多少种屏幕表情？请告诉我数量，再举三个例子。", "先停一下，请告诉我你有多少种屏幕表情。",
-		"把屏幕大一点", "把音量调暗一点",
+		"把屏幕大一点", "把屏幕调大一点", "把屏幕调小一点", "把屏幕上的字调大一点", "把音量调暗一点",
+		"他说把屏幕亮度调大一点", "‘把屏幕亮度调大一点’是什么意思", "不要把屏幕亮度调大一点",
 		"妈妈说，音量调到20。", "小恐龙说，小声一点。", "爸爸说：亮度设30。", "有人说 ，音量调到20。",
 		"妈妈告诉我，音量调到20。", "爸爸告诉我：亮度设30。", "有人告诉我 ，音量调到20。",
 		"妈妈说\u3000，音量调到20。", "妈妈告诉我\u00a0，音量调到20。",
@@ -58,6 +59,8 @@ func TestControlScopePlannerAuthorizationAndStop(t *testing.T) {
 	status := call{"device_get_status", `{}`}
 	volume := call{"device_set_volume", `{"volume":20}`}
 	brightness := call{"device_set_brightness", `{"brightness":30}`}
+	brightnessUp := call{"device_set_brightness", `{"brightness":40}`}
+	brightnessDown := call{"device_set_brightness", `{"brightness":20}`}
 	for _, tc := range []struct {
 		name, request string
 		batches       [][]call
@@ -92,6 +95,15 @@ func TestControlScopePlannerAuthorizationAndStop(t *testing.T) {
 		{"two_fields_two_rounds", "把音量设20，亮度设30", [][]call{{volume}, {brightness}}, []string{"device_get_status", "device_set_volume", "device_set_brightness"}, []string{"device_set_volume", "device_set_brightness"}, 2, false, false, false},
 		{"new_id_repeat_rejects_entire_batch", "把音量设20，亮度设30", [][]call{{volume}, {brightness, volume}}, []string{"device_get_status", "device_set_volume", "device_set_brightness"}, []string{"device_set_volume"}, 2, true, false, false},
 		{"relative_reads_first", "把音量再小一点", [][]call{{status}, {volume}}, []string{"device_get_status", "device_set_volume"}, []string{"device_get_status", "device_set_volume"}, 2, false, false, false},
+		{"relative_brightness_larger", "把屏幕亮度调大一点", [][]call{{status}, {brightnessUp}}, []string{"device_get_status", "device_set_brightness"}, []string{"device_get_status", "device_set_brightness"}, 2, false, false, false},
+		{"relative_brightness_smaller", "把屏幕亮度调小一点", [][]call{{status}, {brightnessDown}}, []string{"device_get_status", "device_set_brightness"}, []string{"device_get_status", "device_set_brightness"}, 2, false, false, false},
+		{"relative_brightness_larger_alias", "把亮度大一点", [][]call{{status}, {brightnessUp}}, []string{"device_get_status", "device_set_brightness"}, []string{"device_get_status", "device_set_brightness"}, 2, false, false, false},
+		{"relative_brightness_smaller_alias", "把亮度小一点", [][]call{{status}, {brightnessDown}}, []string{"device_get_status", "device_set_brightness"}, []string{"device_get_status", "device_set_brightness"}, 2, false, false, false},
+		{"relative_brightness_english_target", "把brightness调大一点", [][]call{{status}, {brightnessUp}}, []string{"device_get_status", "device_set_brightness"}, []string{"device_get_status", "device_set_brightness"}, 2, false, false, false},
+		{"relative_brightness_cannot_write_first", "把屏幕亮度调大一点", [][]call{{brightnessUp}}, []string{"device_get_status", "device_set_brightness"}, nil, 1, true, false, false},
+		{"relative_brightness_batch_cannot_read_then_write", "把屏幕亮度调小一点", [][]call{{status, brightnessDown}}, []string{"device_get_status", "device_set_brightness"}, nil, 1, true, false, false},
+		{"relative_brightness_cannot_write_volume", "把屏幕亮度调大一点", [][]call{{status}, {volume}}, []string{"device_get_status", "device_set_brightness"}, []string{"device_get_status"}, 2, true, false, false},
+		{"relative_brightness_size_requires_relevant_read", "把屏幕亮度调小一点", [][]call{{status}, {brightnessDown}}, []string{"device_get_status", "device_set_brightness"}, []string{"device_get_status"}, 2, true, true, false},
 		{"direct_speak_quieter", "说话小声一点", [][]call{{status}, {volume}}, []string{"device_get_status", "device_set_volume"}, []string{"device_get_status", "device_set_volume"}, 2, false, false, false},
 		{"relative_cannot_write_first", "把音量再小一点", [][]call{{volume}}, []string{"device_get_status", "device_set_volume"}, nil, 1, true, false, false},
 		{"relative_batch_cannot_read_then_write", "把音量再小一点", [][]call{{status, volume}}, []string{"device_get_status", "device_set_volume"}, nil, 1, true, false, false},
@@ -169,10 +181,16 @@ func TestControlScopePlannerAuthorizationAndStop(t *testing.T) {
 				if tc.partialStatus {
 					return `{"ok":true,"verified":true,"volume":50}`, nil
 				}
-				if tc.name == "joint_fields_enumeration" {
-					return `{"ok":true,"verified":true,"volume":30,"brightness":30}`, nil
+				if name == "device_get_status" {
+					return `{"ok":true,"verified":true,"volume":20,"brightness":30}`, nil
 				}
-				return `{"ok":true,"verified":true,"volume":20,"brightness":30}`, nil
+				var result map[string]any
+				if err := json.Unmarshal([]byte(args), &result); err != nil {
+					t.Fatalf("invalid planned write arguments: %v", err)
+				}
+				result["ok"], result["verified"] = true, true
+				encoded, err := json.Marshal(result)
+				return string(encoded), err
 			})
 			n.Close()
 			if connections.Load() > 0 {

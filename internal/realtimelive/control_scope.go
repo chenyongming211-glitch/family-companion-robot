@@ -106,6 +106,8 @@ func currentControlScope(text string) controlScope {
 		brightnessAbsolute := jointAbsolute || controlFieldAbsolute(clause, brightnessNames, volumeNames)
 		volumeRelative := containsControlPhrase(clause, []string{"小一点", "大一点", "调小", "调大", "调低", "调高", "小声", "大声", "太吵", "增加", "降低", "减少", "提高", "quieter", "louder", "tooloud", "turndown", "turnup", "volumedown", "volumeup"})
 		brightnessRelative := containsControlPhrase(clause, []string{"亮一点", "暗一点", "调亮", "调暗", "调低", "调高", "变亮", "变暗", "太暗", "太亮", "增加", "降低", "减少", "提高", "dimmer", "brighter", "toodark", "turndown", "turnup"})
+		// Size words can refer to screen or font dimensions; require the brightness field.
+		brightnessRelative = brightnessRelative || (containsControlPhrase(clause, brightnessNames) && containsControlPhrase(clause, []string{"小一点", "大一点", "调小", "调大"}))
 		mute := containsControlPhrase(clause, []string{"静音", "mute"})
 		screenOff := containsControlPhrase(clause, []string{"息屏", "关闭屏幕", "关掉屏幕"})
 		if (volume && (volumeAbsolute || volumeRelative)) || mute {
