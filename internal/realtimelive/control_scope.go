@@ -58,7 +58,7 @@ func currentControlScope(text string) controlScope {
 		}
 		volume := containsControlPhrase(clause, []string{"音量", "声音", "volume", "speaker", "sound", "小声一点", "小声点", "大声一点", "大声点", "太吵", "静音", "quieter", "louder", "tooloud", "mute"})
 		brightness := containsControlPhrase(clause, []string{"亮度", "屏幕", "brightness", "screen", "亮一点", "暗一点", "息屏", "brighter", "dimmer", "toodark"})
-		query := containsControlPhrase(clause, []string{"查询", "查看", "查一下", "查设备", "查当前", "读取", "多少", "几", "设备状态", "当前状态", "屏幕状态", "devicestatus", "currentstatus", "whatis", "whats", "check", "read", "show"})
+		query := containsControlPhrase(clause, []string{"查询", "查看", "查一下", "查设备", "查当前", "读取", "多少", "多大", "几", "设备状态", "当前状态", "屏幕状态", "devicestatus", "currentstatus", "whatis", "whats", "check", "read", "show"})
 		negated := controlClauseNegated(clause) || containsControlPhrase(clause, []string{"不要", "不许", "禁止", "请勿", "别", "勿", "不能", "dont", "donot", "never", "保持", "不变", "不动"})
 		if negated {
 			// Explicitly excluding a different target does not revoke a later
