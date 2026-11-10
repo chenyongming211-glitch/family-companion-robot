@@ -87,3 +87,11 @@ picker{margin-top:16rpx;padding:26rpx 24rpx;min-height:96rpx;border:2rpx solid #
 .family-device-header .family-muted { margin-top:0; }
 .family-device-icon { width:76rpx; height:70rpx; border-radius:24rpx; background:#e9e6ff; border:2rpx solid #d6d2fa; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .family-device-eyes { width:36rpx; height:8rpx; border-left:8rpx solid #7368cc; border-right:8rpx solid #7368cc; box-sizing:border-box; }
+.runtime-slider {margin:12rpx 0 28rpx;}
+.runtime-slider slider {margin:0 24rpx;}
+.runtime-ticks {position:relative; height:48rpx; margin:0 24rpx; pointer-events:none;}
+.runtime-tick {position:absolute; top:4rpx; width:8rpx; height:8rpx; border-radius:50%; background:#979bc0; transform:translateX(-50%);}
+.runtime-scale {position:absolute; top:14rpx; color:#74788f; font-size:22rpx;}
+.runtime-scale-start {left:0;}
+.runtime-scale-mid {left:50%; transform:translateX(-50%);}
+.runtime-scale-end {right:0;}

@@ -2,6 +2,7 @@ import { ClientError } from './api.ts';
 export type Field = 'volume' | 'brightness';
 export type Runtime = {deviceId:string;connection:'online'|'offline'|'unknown';seenAt:string;boot:string;volume:number|null;brightness:number|null;canControl:boolean;command:any};
 export const level = (v:unknown):v is number => typeof v==='number' && Number.isInteger(v) && v>=0 && v<=100;
+export const sliderLevel = (v:unknown):number|null => level(v) ? Math.round(v/10)*10 : null;
 const date = (v:unknown) => typeof v==='string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(v) && Number.isFinite(Date.parse(v));
 export function validateRuntime(v:any,id:string):Runtime {
  const bad=()=>{throw new ClientError('invalid_response','设备状态响应无效，请重新读取');};

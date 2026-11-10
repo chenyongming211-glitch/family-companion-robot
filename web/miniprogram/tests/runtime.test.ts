@@ -81,3 +81,79 @@ test('old telemetry cannot overwrite confirmed command and refresh does not star
  old({...dto(),connection:'offline',volume:null,brightness:null});await telemetry;
  assert.equal(p.data.runtime.volume,40);assert.equal(p.data.runtime.connection,'online');assert.match(p.data.controlNotice,/已生效/);
 });
+
+const sliderEvent=(field:string,value:unknown)=>({currentTarget:{dataset:{field}},detail:{value}});
+const receipt=(field:string,value:number,status='confirmed')=>({...dto(),brightness:30,[field]:status==='confirmed'?value:20,command:{id:'cmd_'+'e'.repeat(32),field,value,status,actual:status==='confirmed'?value:null,expiresAt:'2026-11-10T12:00:45Z'}});
+test('changing previews whole tens without requesting; release submits once and names the control',async()=>{
+ for(const [field,label] of [['volume','音量'],['brightness','亮度']]) {
+  const p=page();p.data.runtime={...dto(),brightness:30};const calls:any[]=[];
+  p.api={request:async(path:string,method:string,body:any)=>{calls.push({path,method,body});return receipt(field,70);}};
+  for(const value of [41,58,67]) p.runtimeInput(sliderEvent(field,value));
+  assert.equal(p.data[field+'Draft'],70);assert.equal(calls.length,0);
+  await p.runtimeCommit(sliderEvent(field,67));
+  const puts=calls.filter(c=>c.method==='PUT');assert.equal(puts.length,1);assert.deepEqual(puts[0].body,{field,value:70,boot:dto().boot});
+  assert.match(p.data.controlNotice,new RegExp(label+'.*已生效.*70'));
+  await p.runtimeCommit(sliderEvent(field,70));assert.equal(calls.filter(c=>c.method==='PUT').length,1);
+ }
+});
+test('release uses its own value even without changing and covers both endpoints',async()=>{
+ for(const [raw,value] of [[0,0],[64,60],[65,70],[100,100]]) {
+  const p=page();let body:any;p.api={request:async(_path:string,method:string,b:any)=>{if(method==='PUT')body=b;return receipt('volume',value);}};
+  await p.runtimeCommit(sliderEvent('volume',raw));assert.equal(body.value,value);
+ }
+});
+test('raw invalid slider events cannot change drafts or submit stale values',async()=>{
+ for(const raw of [undefined,null,'', '40',true,{},NaN,Infinity,-1,101,2.5]) {
+  const p=page();let calls=0;p.api={request:async()=>{calls++;return dto();}};
+  p.runtimeInput(sliderEvent('volume',raw));assert.equal(p.data.volumeDraft,50);
+  await p.runtimeCommit(sliderEvent('volume',raw));assert.equal(calls,0);assert.equal(p.data.volumeDraft,50);
+ }
+ const p=page();let calls=0;p.api={request:async()=>{calls++;}};
+ await p.runtimeCommit(sliderEvent('other',40));assert.equal(calls,0);
+});
+test('hidden logged-out busy offline and forbidden slider input cannot submit or alter drafts',async()=>{
+ const patches=[(p:any)=>p.active=false,(p:any)=>p.data.loggedIn=false,(p:any)=>p.data.controlling=true,(p:any)=>p.data.loading=true,(p:any)=>p.data.runtime=null,(p:any)=>p.data.runtime.canControl=false,(p:any)=>p.data.runtime.connection='offline',(p:any)=>p.data.runtime.connection='unknown',(p:any)=>p.data.runtime.volume=null];
+ for(const patch of patches) {
+  const p=page();patch(p);let calls=0;p.api={request:async()=>{calls++;return dto();}};
+  p.runtimeInput(sliderEvent('volume',40));await p.runtimeCommit(sliderEvent('volume',40));
+  assert.equal(calls,0);assert.equal(p.data.volumeDraft,50);
+ }
+});
+test('same current value is a no-op with a named notice',async()=>{
+ const p=page();let calls=0;p.api={request:async()=>{calls++;return dto();}};
+ await p.runtimeCommit(sliderEvent('volume',20));assert.equal(calls,0);assert.match(p.data.controlNotice,/音量.*20.*无需/);
+});
+test('duplicate release while submitting sends once and waits for matching receipt',async()=>{
+ const p=page();let finish:any;let puts=0;
+ p.api={request:async(_path:string,method:string)=>{if(method==='PUT'){puts++;return new Promise(r=>finish=r);}return receipt('volume',40,'sent');}};
+ const work=p.runtimeCommit(sliderEvent('volume',40));
+ await p.runtimeCommit(sliderEvent('volume',50));assert.equal(puts,1);assert.equal(p.data.volumeDraft,40);
+ finish(receipt('volume',40,'queued'));await work;
+ assert.equal(p.data.controlling,true);assert.match(p.data.controlNotice,/音量.*等待设备回执/);assert.doesNotMatch(p.data.controlNotice,/已生效/);
+ p.api.request=async()=>receipt('volume',40);await p.observeCommand(p.epoch);
+ assert.equal(p.data.controlling,false);assert.match(p.data.controlNotice,/音量.*已生效/);p.stopRuntime();
+});
+test('initial submission names the control and target before the PUT receipt',async()=>{
+ for(const [field,label] of [['volume','音量'],['brightness','亮度']]) {
+  const p=page();p.data.runtime={...dto(),brightness:30};let finish:any;
+  p.api={request:async(_path:string,method:string)=>method==='PUT'?new Promise(r=>finish=r):receipt(field,70)};
+  const work=p.runtimeCommit(sliderEvent(field,67));
+  assert.equal(p.data.controlNotice,'正在设置'+label+'为 70，等待设备回执');
+  finish(receipt(field,70));await work;
+ }
+});
+import { readFileSync } from 'node:fs';
+test('actual settings WXML commits release only, with eleven non-interactive circle ticks per slider',()=>{
+ const wxml=readFileSync(new URL('../src/pages/settings/settings.wxml',import.meta.url),'utf8');
+ const css=readFileSync(new URL('../src/app.wxss',import.meta.url),'utf8');
+ const sliders=wxml.match(/<slider\b[^>]*\/>/g)||[];assert.equal(sliders.length,2);
+ for(const slider of sliders) {
+  for(const attribute of ['min="0"','max="100"','step="10"','bindchanging="runtimeInput"','bindchange="runtimeCommit"']) assert.ok(slider.includes(attribute),attribute);
+ }
+ assert.doesNotMatch(wxml, /bindtap="control"|设置音量<|设置亮度</);
+ assert.deepEqual(page().data.runtimeTicks,[0,10,20,30,40,50,60,70,80,90,100]);
+ assert.equal((wxml.match(/wx:for="{{runtimeTicks}}"/g)||[]).length,2);
+ assert.match(css,/\.runtime-ticks\s*\{[^}]*pointer-events\s*:\s*none/);
+ assert.match(css,/\.runtime-tick\s*\{[^}]*border-radius\s*:\s*50%/);
+ assert.match(wxml,/松手.*设置/);
+});

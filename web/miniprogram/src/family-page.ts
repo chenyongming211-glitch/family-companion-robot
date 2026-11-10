@@ -1,4 +1,4 @@
-import { validateRuntime, runtimeView, commandOutcome, level } from "./runtime.ts";
+import { validateRuntime, runtimeView, commandOutcome, level, sliderLevel } from "./runtime.ts";
 import { Api, ClientError } from "./api.ts";
 import { familySession, deviceID, chatID } from "./family.ts";
 type Kind = "home" | "device" | "chats" | "chat" | "settings";
@@ -94,6 +94,7 @@ export function familyPage(kind: Kind): any {
       location: "",
       settings: null,
       runtime: null, volumeDraft: 50, brightnessDraft: 50, controlling: false, controlNotice: "",
+      runtimeTicks: [0,10,20,30,40,50,60,70,80,90,100],
     },
     epoch: 0,
     active: false,
@@ -297,16 +298,28 @@ export function familyPage(kind: Kind): any {
         }
       } finally { if(epoch===this.epoch) this.runtimeReading=false; }
     },
+    canControl(this:any,field:string) {
+      const r=this.data.runtime;
+      return kind==='settings' && this.active && this.data.loggedIn && !this.data.loading && !this.data.controlling && ['volume','brightness'].includes(field) && r && r.canControl && r.connection==='online' && level(r[field]);
+    },
     runtimeInput(this:any,e:any) {
-      const field=e.currentTarget.dataset.field, value=Number(e.detail.value);
-      if(['volume','brightness'].includes(field) && level(value)) this.setData({[field+'Draft']:value});
+      const field=e.currentTarget.dataset.field, value=sliderLevel(e.detail.value);
+      if(this.canControl(field) && value!==null) this.setData({[field+'Draft']:value});
+    },
+    async runtimeCommit(this:any,e:any) {
+      const field=e.currentTarget.dataset.field, value=sliderLevel(e.detail.value);
+      if(!this.canControl(field) || value===null) return;
+      this.setData({[field+'Draft']:value});
+      await this.control(e);
     },
     async control(this:any,e:any) {
       const field=e.currentTarget.dataset.field, r=this.data.runtime, value=this.data[field+'Draft'];
-      if(this.data.controlling || !['volume','brightness'].includes(field) || !level(value) || !r || !r.canControl || r.connection!=='online' || r[field]===null) return;
+      if(!this.canControl(field) || !level(value)) return;
+      const label=field==='volume' ? '音量' : '亮度';
+      if(r[field]===value) { this.setData({controlNotice:label+'当前已是 '+value+'，无需设置'}); return; }
       const epoch=this.epoch;
       this.runtimeGeneration=(this.runtimeGeneration || 0)+1;
-      this.setData({controlling:true,controlNotice:'正在提交，等待设备回执',error:''});
+      this.setData({controlling:true,controlNotice:'正在设置'+label+'为 '+value+'，等待设备回执',error:''});
       try {
         const result=validateRuntime(await this.api.request('/device-runtime/'+this.deviceId,'PUT',{field,value,boot:r.boot}),this.deviceId);
         if(!this.active || epoch!==this.epoch) return;
@@ -318,29 +331,30 @@ export function familyPage(kind: Kind): any {
           this.pendingCommand=null;
           this.runtimeGeneration=(this.runtimeGeneration || 0)+1;
           clearTimeout(this.commandTimer); this.commandTimer=undefined; this.commandDeadlineTimer=undefined;
-          this.setData({controlling:false,controlNotice:'结果未确认，请刷新状态'});
+          this.setData({controlling:false,controlNotice:label+'：结果未确认，请刷新状态'});
           void this.refreshRuntime();
         },50000);
         this.commandDeadlineTimer?.unref?.();
         this.setData({runtime:runtimeView(result)});
         await this.observeCommand(epoch);
       } catch(e:any) {
-        if(this.active && epoch===this.epoch) { this.setData({controlling:false,controlNotice:e.code==='network_error' ? '提交结果未确认，请刷新状态；请勿重复提交' : e.message}); await this.refreshRuntime(); }
+        if(this.active && epoch===this.epoch) { this.setData({controlling:false,controlNotice:label+'：'+(e.code==='network_error' ? '提交结果未确认，请刷新状态；请勿重复提交' : e.message)}); await this.refreshRuntime(); }
       }
     },
     async observeCommand(this:any,epoch:number) {
       if(!this.active || epoch!==this.epoch || !this.pendingCommand) return;
       const p=this.pendingCommand, generation=this.runtimeGeneration=(this.runtimeGeneration || 0)+1;
+      const label=p.field==='volume' ? '音量' : '亮度';
       try {
         const r=validateRuntime(await this.api.request('/device-runtime/'+this.deviceId),this.deviceId);
         if(!this.active || epoch!==this.epoch || p!==this.pendingCommand || generation!==this.runtimeGeneration) return;
         const message=Date.now() >= this.commandDeadline ? '结果未确认，请刷新状态' : commandOutcome(r.command,p);
         const waiting=message==='等待设备回执' && Date.now()<this.commandDeadline;
-        this.setData({runtime:runtimeView(r),controlNotice:waiting ? message : message==='等待设备回执' ? '结果未确认，请刷新状态' : message,controlling:waiting});
+        this.setData({runtime:runtimeView(r),controlNotice:label+'：'+(waiting ? message : message==='等待设备回执' ? '结果未确认，请刷新状态' : message),controlling:waiting});
         if(waiting) { this.commandTimer=setTimeout(()=>this.observeCommand(epoch),2000); this.commandTimer?.unref?.(); }
         else { this.pendingCommand=null; clearTimeout(this.commandDeadlineTimer); this.commandDeadlineTimer=undefined; }
       } catch(e:any) {
-        if(this.active && epoch===this.epoch && p===this.pendingCommand && generation===this.runtimeGeneration) { this.pendingCommand=null; clearTimeout(this.commandDeadlineTimer); this.commandDeadlineTimer=undefined; this.setData({controlling:false,controlNotice:'结果未确认，请刷新状态',runtime:null}); }
+        if(this.active && epoch===this.epoch && p===this.pendingCommand && generation===this.runtimeGeneration) { this.pendingCommand=null; clearTimeout(this.commandDeadlineTimer); this.commandDeadlineTimer=undefined; this.setData({controlling:false,controlNotice:label+'：结果未确认，请刷新状态',runtime:null}); }
       }
     },
     chooseFamily(this: any, e: any) {

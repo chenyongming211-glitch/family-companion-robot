@@ -27,12 +27,23 @@
   <view class="family-card">
     <view>{{runtime ? runtime.connectionLabel : '状态未确认'}} · 上报时间 {{runtime ? runtime.seenLabel : '未读取'}}</view>
     <view class="family-muted">当前值来自设备上报；收到匹配回执才显示生效。</view>
+    <view class="family-muted">每格 10，松手即设置；等待回执期间请稍候。</view>
     <view>音量实际值：{{runtime && runtime.volume !== null ? runtime.volume : '未上报'}} · 待设置 {{volumeDraft}}</view>
-    <slider min="0" max="100" step="1" value="{{volumeDraft}}" data-field="volume" bindchange="runtimeInput" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.volume === null}}"/>
-    <button data-field="volume" bindtap="control" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.volume === null}}">设置音量</button>
+    <view class="runtime-slider">
+      <slider min="0" max="100" step="10" value="{{volumeDraft}}" data-field="volume" bindchanging="runtimeInput" bindchange="runtimeCommit" disabled="{{loading || controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.volume === null}}"/>
+      <view class="runtime-ticks">
+        <view wx:for="{{runtimeTicks}}" wx:key="*this" class="runtime-tick" style="left:{{item}}%"></view>
+        <text class="runtime-scale runtime-scale-start">0</text><text class="runtime-scale runtime-scale-mid">50</text><text class="runtime-scale runtime-scale-end">100</text>
+      </view>
+    </view>
     <view>亮度实际值：{{runtime && runtime.brightness !== null ? runtime.brightness : '未上报'}} · 待设置 {{brightnessDraft}}</view>
-    <slider min="0" max="100" step="1" value="{{brightnessDraft}}" data-field="brightness" bindchange="runtimeInput" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.brightness === null}}"/>
-    <button data-field="brightness" bindtap="control" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.brightness === null}}">设置亮度</button>
+    <view class="runtime-slider">
+      <slider min="0" max="100" step="10" value="{{brightnessDraft}}" data-field="brightness" bindchanging="runtimeInput" bindchange="runtimeCommit" disabled="{{loading || controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.brightness === null}}"/>
+      <view class="runtime-ticks">
+        <view wx:for="{{runtimeTicks}}" wx:key="*this" class="runtime-tick" style="left:{{item}}%"></view>
+        <text class="runtime-scale runtime-scale-start">0</text><text class="runtime-scale runtime-scale-mid">50</text><text class="runtime-scale runtime-scale-end">100</text>
+      </view>
+    </view>
     <view>{{controlNotice}}</view>
   </view>
   <view>
