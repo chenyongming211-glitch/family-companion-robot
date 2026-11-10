@@ -31,7 +31,10 @@ test("hidden chat page clears all body and rejects a late result", async () => {
 function native(kind: string, responder: (o: any) => void, query: any = {}) {
   const app: any = {};
   (globalThis as any).getApp = () => app;
-  (globalThis as any).wx = { request: responder };
+  (globalThis as any).wx = { request: (o:any) => {
+    if(o.url.includes('/device-runtime/')) return o.success({statusCode:200,data:{deviceId:o.url.split('/').pop(),connection:'unknown',seenAt:'',boot:'',volume:null,brightness:null,canControl:false,command:null}});
+    return responder(o);
+  } };
   const p: any = familyPage(kind as any);
   p.data = { ...p.data };
   p.setData = (v: any) => Object.assign(p.data, v);

@@ -16,17 +16,11 @@
       {{device.location || '未设置位置'}} · {{device.model}}
     </view>
     <view>
-      最后连接 {{device.lastSeen || '未上报'}}
+      {{runtime ? runtime.connectionLabel : '状态未确认'}}
     </view>
-    <view class="family-muted">
-      最后连接时间不代表当前在线
-    </view>
-    <view>
-      音量：{{device.volume === null ? '未上报' : device.volume}}
-    </view>
-    <view>
-      亮度：{{device.brightness === null ? '未上报' : device.brightness}}
-    </view>
+    <view class="family-muted">上报时间 {{runtime ? runtime.seenLabel : '未读取'}}</view>
+    <view>音量：{{runtime && runtime.volume !== null ? runtime.volume : '未上报'}}</view>
+    <view>亮度：{{runtime && runtime.brightness !== null ? runtime.brightness : '未上报'}}</view>
     <button bindtap="chats">
       聊天记录
     </button>

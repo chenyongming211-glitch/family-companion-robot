@@ -1,3 +1,4 @@
+import { validateRuntime, runtimeView, commandOutcome, level } from "./runtime.ts";
 import { Api, ClientError } from "./api.ts";
 import { familySession, deviceID, chatID } from "./family.ts";
 type Kind = "home" | "device" | "chats" | "chat" | "settings";
@@ -92,6 +93,7 @@ export function familyPage(kind: Kind): any {
       name: "",
       location: "",
       settings: null,
+      runtime: null, volumeDraft: 50, brightnessDraft: 50, controlling: false, controlNotice: "",
     },
     epoch: 0,
     active: false,
@@ -122,10 +124,12 @@ export function familyPage(kind: Kind): any {
       );
     },
     clearPrivate(this: any) {
+      this.stopRuntime();
       this.epoch++;
       this.setData({
         loading: false,
         saving: false,
+        runtime: null, controlling: false, controlNotice: "", devices: [], notice: "", error: "",
         device: null,
         items: [],
         chat: null,
@@ -254,8 +258,89 @@ export function familyPage(kind: Kind): any {
             settings: null,
           });
       } finally {
-        if (this.active && epoch === this.epoch)
+        if (this.active && epoch === this.epoch) {
           this.setData({ loading: false });
+          if (["home", "device", "settings"].includes(kind) && this.data.loggedIn) { await this.refreshRuntime(); this.scheduleRuntime(); }
+        }
+      }
+    },
+    stopRuntime(this:any) {
+      clearTimeout(this.runtimeTimer); clearTimeout(this.commandTimer); clearTimeout(this.commandDeadlineTimer);
+      this.runtimeGeneration=(this.runtimeGeneration || 0)+1;
+      this.runtimeTimer = undefined; this.commandTimer = undefined; this.commandDeadlineTimer = undefined;
+      this.pendingCommand = null; this.runtimeReading = false;
+    },
+    scheduleRuntime(this:any) {
+      clearTimeout(this.runtimeTimer);
+      if (this.active && this.data.loggedIn) this.runtimeTimer = setTimeout(async()=>{ await this.refreshRuntime(); this.scheduleRuntime(); },10000);
+      this.runtimeTimer?.unref?.();
+    },
+    async refreshRuntime(this:any) {
+      if (!this.active || !this.data.loggedIn || this.runtimeReading || this.data.controlling) return;
+      const epoch=this.epoch, generation=this.runtimeGeneration=(this.runtimeGeneration || 0)+1; this.runtimeReading=true;
+      try {
+        if(kind==='home') {
+          const devices=await Promise.all((this.allDevices || []).map(async(d:any)=>({...d,runtime:runtimeView(validateRuntime(await this.api.request('/device-runtime/'+d.id),d.id))})));
+          if(this.active && epoch===this.epoch && generation===this.runtimeGeneration) {
+            this.allDevices=devices;
+            const f=this.data.families[this.data.familyIndex];
+            this.setData({devices:f ? devices.filter((d:any)=>d.familyId===f.id):[]});
+          }
+        } else {
+          const r=validateRuntime(await this.api.request('/device-runtime/'+this.deviceId),this.deviceId);
+          if(this.active && epoch===this.epoch && generation===this.runtimeGeneration) this.setData({runtime:runtimeView(r)});
+        }
+      } catch(e:any) {
+        if(this.active && epoch===this.epoch && generation===this.runtimeGeneration) {
+          this.setData({runtime:null,error:e.message});
+          if(kind==='home') { this.allDevices=(this.allDevices||[]).map((d:any)=>({...d,runtime:null})); const f=this.data.families[this.data.familyIndex]; this.setData({devices:f ? this.allDevices.filter((d:any)=>d.familyId===f.id):[]}); }
+        }
+      } finally { if(epoch===this.epoch) this.runtimeReading=false; }
+    },
+    runtimeInput(this:any,e:any) {
+      const field=e.currentTarget.dataset.field, value=Number(e.detail.value);
+      if(['volume','brightness'].includes(field) && level(value)) this.setData({[field+'Draft']:value});
+    },
+    async control(this:any,e:any) {
+      const field=e.currentTarget.dataset.field, r=this.data.runtime, value=this.data[field+'Draft'];
+      if(this.data.controlling || !['volume','brightness'].includes(field) || !level(value) || !r || !r.canControl || r.connection!=='online' || r[field]===null) return;
+      const epoch=this.epoch;
+      this.runtimeGeneration=(this.runtimeGeneration || 0)+1;
+      this.setData({controlling:true,controlNotice:'正在提交，等待设备回执',error:''});
+      try {
+        const result=validateRuntime(await this.api.request('/device-runtime/'+this.deviceId,'PUT',{field,value,boot:r.boot}),this.deviceId);
+        if(!this.active || epoch!==this.epoch) return;
+        const c=result.command;
+        if(!c || c.field!==field || c.value!==value) throw new Error('结果未确认，请刷新状态');
+        this.pendingCommand={id:c.id,field,value}; this.commandDeadline=Date.now()+50000;
+        this.commandDeadlineTimer=setTimeout(()=>{
+          if(!this.active || epoch!==this.epoch || !this.pendingCommand) return;
+          this.pendingCommand=null;
+          this.runtimeGeneration=(this.runtimeGeneration || 0)+1;
+          clearTimeout(this.commandTimer); this.commandTimer=undefined; this.commandDeadlineTimer=undefined;
+          this.setData({controlling:false,controlNotice:'结果未确认，请刷新状态'});
+          void this.refreshRuntime();
+        },50000);
+        this.commandDeadlineTimer?.unref?.();
+        this.setData({runtime:runtimeView(result)});
+        await this.observeCommand(epoch);
+      } catch(e:any) {
+        if(this.active && epoch===this.epoch) { this.setData({controlling:false,controlNotice:e.code==='network_error' ? '提交结果未确认，请刷新状态；请勿重复提交' : e.message}); await this.refreshRuntime(); }
+      }
+    },
+    async observeCommand(this:any,epoch:number) {
+      if(!this.active || epoch!==this.epoch || !this.pendingCommand) return;
+      const p=this.pendingCommand, generation=this.runtimeGeneration=(this.runtimeGeneration || 0)+1;
+      try {
+        const r=validateRuntime(await this.api.request('/device-runtime/'+this.deviceId),this.deviceId);
+        if(!this.active || epoch!==this.epoch || p!==this.pendingCommand || generation!==this.runtimeGeneration) return;
+        const message=Date.now() >= this.commandDeadline ? '结果未确认，请刷新状态' : commandOutcome(r.command,p);
+        const waiting=message==='等待设备回执' && Date.now()<this.commandDeadline;
+        this.setData({runtime:runtimeView(r),controlNotice:waiting ? message : message==='等待设备回执' ? '结果未确认，请刷新状态' : message,controlling:waiting});
+        if(waiting) { this.commandTimer=setTimeout(()=>this.observeCommand(epoch),2000); this.commandTimer?.unref?.(); }
+        else { this.pendingCommand=null; clearTimeout(this.commandDeadlineTimer); this.commandDeadlineTimer=undefined; }
+      } catch(e:any) {
+        if(this.active && epoch===this.epoch && p===this.pendingCommand && generation===this.runtimeGeneration) { this.pendingCommand=null; clearTimeout(this.commandDeadlineTimer); this.commandDeadlineTimer=undefined; this.setData({controlling:false,controlNotice:'结果未确认，请刷新状态',runtime:null}); }
       }
     },
     chooseFamily(this: any, e: any) {

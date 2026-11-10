@@ -40,7 +40,7 @@ export class Api {
   }
   async request<T>(path: string, method = "GET", data?: unknown): Promise<T> {
     if (
-      !(/^\/(session|login|logout|families|onboarding(?:\/[A-Za-z0-9_-]+)?)$/.test(path) || /^\/devices(?:\/dev_[a-f0-9]{32})?$/.test(path) || /^\/device-settings\/dev_[a-f0-9]{32}$/.test(path) || /^\/chats\?device=dev_[a-f0-9]{32}&offset=(?:0|[1-9][0-9]{0,4})&limit=20$/.test(path) || /^\/chats\/chat_[a-f0-9]{64}\?device=dev_[a-f0-9]{32}$/.test(path))
+      !(/^\/(session|login|logout|families|onboarding(?:\/[A-Za-z0-9_-]+)?)$/.test(path) || /^\/devices(?:\/dev_[a-f0-9]{32})?$/.test(path) || /^\/(?:device-settings|device-runtime)\/dev_[a-f0-9]{32}$/.test(path) || /^\/chats\?device=dev_[a-f0-9]{32}&offset=(?:0|[1-9][0-9]{0,4})&limit=20$/.test(path) || /^\/chats\/chat_[a-f0-9]{64}\?device=dev_[a-f0-9]{32}$/.test(path))
     )
       throw new ClientError("invalid_path", "请求地址无效");
     const epoch = this.epoch;
@@ -83,7 +83,7 @@ export class Api {
                       (method === "GET" || method === "DELETE")
                     ? "添加任务不存在，请重新扫码"
                     : "服务入口不存在，请联系管理员",
-              409: path.startsWith("/device-settings/") ? "设置已变化，请刷新后再保存" : "设备正在添加或已被绑定",
+              409: path.startsWith("/device-runtime/") ? ({runtime_busy:"设备仍有待处理命令，请等待回执",runtime_offline:"设备已离线，请刷新状态",runtime_boot_changed:"设备已重启，请刷新状态"} as Record<string,string>)[String(r.data?.code)] || "设备状态已变化，请刷新后再操作" : path.startsWith("/device-settings/") ? "设置已变化，请刷新后再保存" : "设备正在添加或已被绑定",
               410: "认领已过期，请重新扫码",
               429: "操作过于频繁，请稍后重试",
               503: "服务暂不可用，请稍后重试",

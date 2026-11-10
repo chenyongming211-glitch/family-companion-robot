@@ -40,7 +40,7 @@
         {{item.location || '未设置位置'}} · {{item.model}}
       </view>
       <view class="family-muted">
-        最后连接 {{item.lastSeen || '未上报'}}（不代表当前在线）
+        {{item.runtime ? item.runtime.connectionLabel : '状态未确认'}} · 上报时间 {{item.runtime ? item.runtime.seenLabel : '未读取'}}
       </view>
     </view>
     <view wx:if="{{familyIndex >= 0 && !devices.length}}">

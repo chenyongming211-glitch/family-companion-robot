@@ -24,8 +24,16 @@
       {{saving ? '正在保存…' : '保存云端展示设置'}}
     </button>
   </view>
-  <view class="family-card family-muted">
-    昵称仅用于家庭列表展示。音量、亮度未上报；本页不提供硬件参数下发。
+  <view class="family-card">
+    <view>{{runtime ? runtime.connectionLabel : '状态未确认'}} · 上报时间 {{runtime ? runtime.seenLabel : '未读取'}}</view>
+    <view class="family-muted">当前值来自设备上报；收到匹配回执才显示生效。</view>
+    <view>音量实际值：{{runtime && runtime.volume !== null ? runtime.volume : '未上报'}} · 待设置 {{volumeDraft}}</view>
+    <slider min="0" max="100" step="1" value="{{volumeDraft}}" data-field="volume" bindchange="runtimeInput" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.volume === null}}"/>
+    <button data-field="volume" bindtap="control" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.volume === null}}">设置音量</button>
+    <view>亮度实际值：{{runtime && runtime.brightness !== null ? runtime.brightness : '未上报'}} · 待设置 {{brightnessDraft}}</view>
+    <slider min="0" max="100" step="1" value="{{brightnessDraft}}" data-field="brightness" bindchange="runtimeInput" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.brightness === null}}"/>
+    <button data-field="brightness" bindtap="control" disabled="{{controlling || !runtime || !runtime.canControl || runtime.connection !== 'online' || runtime.brightness === null}}">设置亮度</button>
+    <view>{{controlNotice}}</view>
   </view>
   <view>
     {{notice}}
