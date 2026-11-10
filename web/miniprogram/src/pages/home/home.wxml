@@ -43,7 +43,7 @@
         最后连接 {{item.lastSeen || '未上报'}}（不代表当前在线）
       </view>
     </view>
-    <view wx:if="{{familyIndex >= 0 &amp;&amp; !devices.length}}">
+    <view wx:if="{{familyIndex >= 0 && !devices.length}}">
       这个家庭暂无授权设备
     </view>
     <button bindtap="add">

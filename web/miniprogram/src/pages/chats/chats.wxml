@@ -19,7 +19,7 @@
   <view wx:if="{{pending}}">
     部分记录正在更新，请稍后刷新
   </view>
-  <view wx:if="{{!loading &amp;&amp; !error &amp;&amp; !items.length}}">
+  <view wx:if="{{!loading && !error && !items.length}}">
     暂无可读取的聊天记录
   </view>
   <button wx:if="{{hasMore}}" bindtap="more" disabled="{{loading}}">

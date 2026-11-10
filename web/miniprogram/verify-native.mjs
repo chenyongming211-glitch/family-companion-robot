@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, access } from "node:fs/promises";
 import vm from "node:vm";
-import { verifyWxml } from "./verify-wxml.mjs";
+import { verifyWxml, verifyBindings } from "./verify-wxml.mjs";
 const config = JSON.parse(await readFile("dist/app.json", "utf8"));
 let page, app;
 const context = {
@@ -47,6 +47,7 @@ runNativeEntry(main);
 assert.equal(typeof page.onLoad, "function");
 const onboardingPage = page;
 let sharedApi;
+const bindingFailures = [];
 for (const route of config.pages) {
   runNativeEntry(await readFile("dist/" + route + ".js", "utf8"));
   for (const ext of ["js", "json", "wxml"])
@@ -59,11 +60,13 @@ for (const route of config.pages) {
     instance.onUnload();
   }
   const wxml = await readFile("dist/" + route + ".wxml", "utf8");
+  try { verifyBindings(wxml); } catch (error) { bindingFailures.push(`${route}: ${error.message}`); }
   for (const match of wxml.matchAll(
     /bind(?:tap|input|change)="([a-zA-Z0-9_]+)"/g,
   ))
     assert.equal(typeof page[match[1]], "function", match[1]);
 }
+assert.deepEqual(bindingFailures, [], "every native page must have valid WXML binding expressions");
 page = onboardingPage;
 verifyWxml(await readFile("dist/pages/index/index.wxml", "utf8"), page.data);
 // The entry points are independent native bundles. Verify their bridge through

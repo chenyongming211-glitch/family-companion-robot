@@ -42,4 +42,4 @@
 </view>
 </view>
 
-<button wx:if="{{phase === 'success' &amp;&amp; deviceId}}" bindtap="openDevice">进入设备详情</button>
+<button wx:if="{{phase === 'success' && deviceId}}" bindtap="openDevice">进入设备详情</button>
