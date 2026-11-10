@@ -1,0 +1,18 @@
+diff --git a/main/application.cc b/main/application.cc
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -69,5 +69,14 @@ bool Application::SetDeviceState(DeviceState state) {
+         audio_service_.SetExperimentUplink(false);
+     }
++    if (state == kDeviceStateConnecting &&
++        Board::GetInstance().GetAudioCodec()->ManagedCapture()) {
++        // A queued open can run before STATE_CHANGED is handled. Revoke capture
++        // synchronously before TLS/network work can stall its consumer. Keep
++        // physical DMA running and preserve the frozen wake batch across Pause;
++        // listening resumes through the existing fresh-capture AEC handshake.
++        audio_service_.EnableVoiceProcessing(false);
++        audio_service_.EnableWakeWordDetection(false);
++    }
+     return true;
+ }
+ 

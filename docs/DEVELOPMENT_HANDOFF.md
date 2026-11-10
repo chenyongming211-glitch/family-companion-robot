@@ -1,6 +1,6 @@
 # 换电脑开发交接
 
-**当前M5已注册，公共播放/内存策略已发布并实刷，试听待回执（2026-11-10）：** 用户确认M5注册完成、能对话但有爆音；唯一confirmed及family-home/version1/01:22:26起点、owner-user正文权限保持。微雪原binding-home-1/10:05起点及权限保持，原配置投影与315旧来源摘要均无变化。用户要求“所有通用S3功能共用同一实现”，已按明确要求记录记忆，并以4c8773e把规则提交推送至AGENTS.md；硬件差异仅留显示/引脚/codec/DMA适配。
+**当前M5已注册，播放无爆音但真人插话失败（2026-11-10）：** 用户最新两次反馈无爆音、仍不能打断，覆盖此前“试听待回执”。09:01会话的上行缺失时长与播放时长吻合；随后新启动周期现场复现抓到连接阶段M5采音队列Overflow、关闭AEC及降级，具体阻塞原因仍在追查，不能据此标记全双工通过，见[插话故障记录](verification/2026-11-10-m5-barge-in.md)。唯一confirmed及family-home/version1/01:22:26起点、owner-user正文权限保持。微雪原binding-home-1/10:05起点及权限保持，原配置投影与315旧来源摘要均无变化。用户要求“所有通用S3功能共用同一实现”，已按明确要求记录记忆，并以4c8773e把规则提交推送至AGENTS.md；硬件差异仅留显示/引脚/codec/DMA适配。
 
 Go c6f6f13已推main并发布：从实际136文件来源只移入精确7文件补丁，根代理重构全部来源核对、race/vet/build与独立审查通过。当前`/opt/family-robot-livekit-runtime/releases/s3-common-playback-20261110-r1/realtime-output-live`，SHA df5386e590e9c0d1de790bd77519da001e2bfa8afa8f2f6b720a5b9e5ba17c65、PID3256763；已鉴权机器人统一600ms，原生客户端仍300ms，旧单设备选择器已从有效环境移除。health标签development（未设ldflag），以路径/SHA/来源清单为准，未整包部署main研究功能。11保护文件、其他服务PID/语音二进制及原记录保持，ready/memory_ready、容量2、诊断false。
 

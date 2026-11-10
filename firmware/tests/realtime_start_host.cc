@@ -8,7 +8,7 @@
 
 enum AecMode {kAecOff, kAecOnDeviceSide, kAecOnServerSide};
 enum ListeningMode {kListeningModeAutoStop, kListeningModeRealtime, kListeningModeManualStop};
-enum DeviceState {kDeviceStateIdle, kDeviceStateListening, kDeviceStateSpeaking};
+enum DeviceState {kDeviceStateIdle, kDeviceStateListening, kDeviceStateSpeaking, kDeviceStateConnecting};
 static int64_t now_us = 1000;
 static int64_t esp_timer_get_time() { return now_us; }
 struct Codec {
