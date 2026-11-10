@@ -408,3 +408,34 @@ func TestSemanticMalformedLaterReceiptPreservesEarlierVerification(t *testing.T)
 		t.Fatal("earlier receipt overwritten or malformed receipt unbounded", r, e)
 	}
 }
+func TestSemanticSchemaCannotNudgeExplicitValuesIntoBounds(t *testing.T) {
+	p := object(object(controlPlanTool()["function"])["parameters"])
+	a := object(object(p["properties"])["volume"])
+	for _, key := range []string{"value", "step"} {
+		property := object(object(a["properties"])[key])
+		if property["minimum"] != nil || property["maximum"] != nil {
+			t.Fatal("semantic schema should preserve out-of-range original; Go rejects it before execution", key, property)
+		}
+	}
+}
+func TestSemanticNewerPlayedTopicOverridesOlderVerifiedAnchor(t *testing.T) {
+	for _, ops := range [][]ControlOperation{{{"volume", "absolute", ""}, {"brightness", "absolute", ""}}, {{"brightness", "absolute", ""}}} {
+		srv := semanticProvider(t, `{"intent":"adjust","target":"current","volume":{"mode":"relative","basis":"explicit","reference":"context","direction":"up"}}`, "", nil)
+		n := NewNative(Config{URL: "ws" + strings.TrimPrefix(srv.URL, "http")}, t.TempDir())
+		calls := 0
+		r, e := n.RunControlPlan(context.Background(), ControlInput{CurrentRequest: "再大一点", PlayedContext: `{"recent_turns":[{"id":2,"user":"现在声音听起来还是有点小","assistant_spoken_prefix":"我们正在说机器人音量。"}]}`, Turn: 3, VerifiedControls: []ControlRecord{{1, time.Now(), ops}}}, plannerTools(), func(_ context.Context, id, name, args string) (string, error) {
+			calls++
+			if name == "device_get_status" {
+				return `{"ok":true,"verified":true,"volume":20}`, nil
+			}
+			if args != `{"volume":30}` {
+				t.Error(args)
+			}
+			return `{"ok":true,"verified":true,"volume":30}`, nil
+		})
+		srv.Close()
+		if e != nil || r.Outcome != "completed" || calls != 2 {
+			t.Fatal("newer actually played topic was blocked by older device record", r, e, calls)
+		}
+	}
+}
