@@ -388,7 +388,7 @@ func TestMemoryAndControlsShareTranscriptWaitBudget(t *testing.T) {
 func TestMemoryCannotOverflowExistingControlContextBudget(t *testing.T) {
 	data, _ := json.Marshal(map[string]any{"recent_turns": []any{map[string]any{"user": strings.Repeat("a", 55000)}}, "prior_session_memory": map[string]any{"summary_mode": "extractive", "recent_turns": strings.Repeat("b", 15000)}})
 	got := controlHistory(string(data))
-	if len(got) > 65536 || !strings.Contains(got, strings.Repeat("a", 55000)) || strings.Contains(got, "prior_session_memory") {
+	if len(got) > 16384 || strings.Contains(got, strings.Repeat("a", 55000)) || strings.Contains(got, "prior_session_memory") {
 		t.Fatal("restored memory broke control planner budget", len(got))
 	}
 	if got := controlHistory(`{"recent_turns":[]}`); got != `{"recent_turns":[]}` {

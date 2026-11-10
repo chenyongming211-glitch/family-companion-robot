@@ -249,6 +249,9 @@ func (s *Session) clearMemory(rt *liveTurn) error {
 	// must never repopulate the local context after a deletion was submitted.
 	s.mu.Lock()
 	s.memoryFloor = max(s.memoryFloor, rt.turn.ID+1)
+	if s.controls != nil {
+		s.controls.recent = nil
+	}
 	s.mu.Unlock()
 	m.base = nil
 	err := s.saveMemoryLocked(memoryData{Turns: []memoryTurn{}})

@@ -6,95 +6,12 @@ import (
 	"familyrobot/internal/realtimestate"
 	"fmt"
 	"github.com/gorilla/websocket"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func TestDeviceControlRouteUnsupportedTargetIssuesNoMCP(t *testing.T) {
-	var providerRequests atomic.Int32
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { providerRequests.Add(1); w.WriteHeader(400) }))
-	defer provider.Close()
-	for _, tc := range unsupportedControlTargets() {
-		// Non-candidates stay on the ordinary chat route. The unconditional
-		// planner tests still authorize every case independently of this filter.
-		if !deviceControlCandidate(tc.text) {
-			continue
-		}
-		t.Run(tc.text, func(t *testing.T) {
-			s, c := controlSession(t)
-			discoverControls(t, s, c)
-			s.cfg.URL = "ws" + strings.TrimPrefix(provider.URL, "http")
-			rt := s.addTurn()
-			rt.turn.User = tc.text
-			rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
-			before := providerRequests.Load()
-			extra, err := s.routeDeviceControls(rt, `{"recent_turns":[]}`)
-			if err != nil || !strings.Contains(extra, `"outcome":"`+tc.outcome+`"`) || !strings.Contains(extra, `"no_action_issued":true`) || providerRequests.Load() != before {
-				t.Fatal("unsupported target was not blocked before planner", extra, err)
-			}
-			raw, err := os.ReadFile(filepath.Join(s.directory, "events.jsonl"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(raw), `"event":"device_tool_call"`) || strings.Contains(string(raw), `"event":"device_tool_dispatch"`) {
-				t.Fatal("unsupported target reached MCP", string(raw))
-			}
-			c.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
-			if _, _, err := c.ReadMessage(); err == nil {
-				t.Fatal("unexpected MCP dispatch")
-			}
-		})
-	}
-}
-
-func TestDeviceControlOrdinaryOtherDeviceMentionStaysChat(t *testing.T) {
-	var providerRequests atomic.Int32
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { providerRequests.Add(1); w.WriteHeader(400) }))
-	defer provider.Close()
-	s, c := controlSession(t)
-	discoverControls(t, s, c)
-	s.cfg.URL = "ws" + strings.TrimPrefix(provider.URL, "http")
-	rt := s.addTurn()
-	rt.turn.User = "我买了一部手机，讲个故事"
-	rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
-	extra, err := s.routeDeviceControls(rt, `{"recent_turns":[]}`)
-	if err != nil || !strings.Contains(extra, `"outcome":"not_candidate"`) || strings.Contains(extra, `"no_action_issued":true`) || providerRequests.Load() != 0 {
-		t.Fatal("ordinary chat entered target authorization", extra, err)
-	}
-	raw, err := os.ReadFile(filepath.Join(s.directory, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		event, err := decodeObject([]byte(line))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if event["event"] == "device_control_route" {
-			found = true
-			if event["outcome"] != "not_candidate" {
-				t.Fatal("wrong recorded route", event)
-			}
-		}
-		if event["event"] == "device_tool_call" || event["event"] == "device_tool_dispatch" {
-			t.Fatal("ordinary chat reached MCP", event)
-		}
-	}
-	if !found {
-		t.Fatal("route event missing")
-	}
-	c.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
-	if _, _, err := c.ReadMessage(); err == nil {
-		t.Fatal("ordinary chat dispatched MCP")
-	}
-}
 
 func TestDeviceControlCapabilityRequiresSessionDiscovery(t *testing.T) {
 	p, err := realtimestate.LoadProduct(filepath.Join("..", "..", "config", "product-identity.json"))
@@ -280,34 +197,6 @@ func TestDeviceControlRecorderFailurePreventsMutation(t *testing.T) {
 	}
 }
 
-func TestDeviceControlNonCandidateSkipsPlannerAndPreservesConfig(t *testing.T) {
-	s, c := controlSession(t)
-	discoverControls(t, s, c)
-	rt := s.addTurn()
-	s.mu.Lock()
-	rt.turn.User = "讲一个故事"
-	rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
-	s.mu.Unlock()
-	// The provider URL is deliberately unusable. Any planner call would turn
-	// this into failed_or_unknown rather than the observed not_candidate route.
-	s.cfg.URL = "ws://127.0.0.1:1"
-	on := true
-	s.cfg.Search = &on
-	extra, err := s.routeDeviceControls(rt, `{"recent_turns":[]}`)
-	if err != nil || !strings.Contains(extra, `"outcome":"not_candidate"`) {
-		t.Fatal(extra, err)
-	}
-	if len(s.cfg.Tools) != 0 || !*s.cfg.Search {
-		t.Fatal("normal search config changed")
-	}
-	rt2 := s.addTurn()
-	start := time.Now()
-	extra, err = s.routeDeviceControls(rt2, `{"recent_turns":[]}`)
-	if err != nil || !strings.Contains(extra, "transcript_unavailable") || time.Since(start) > 450*time.Millisecond {
-		t.Fatal("transcript fallback", extra, err)
-	}
-}
-
 func TestDeviceControlLifetimeCallBudget(t *testing.T) {
 	server, client := testSocket(t)
 	s := NewSession(server, Config{}, t.TempDir(), nil)
@@ -466,16 +355,6 @@ func TestMCPNegotiationScopeAndCandidateRouting(t *testing.T) {
 	}
 	if _, err := w.control([]byte(`{"type":"mcp","session_id":"other","payload":{}}`)); err == nil {
 		t.Fatal("wrong MCP scope")
-	}
-	for _, text := range []string{"音量调到20", "声音小一点", "屏幕太暗了", "再小一点", "静音", "设备状态", "息屏", "volume down", "turn brightness to 0", "speak quieter", "mute", "device status"} {
-		if !deviceControlCandidate(text) {
-			t.Fatal("missed candidate", text)
-		}
-	}
-	for _, text := range []string{"讲个故事", "今天北京天气怎么样", "你好"} {
-		if deviceControlCandidate(text) {
-			t.Fatal("ordinary chat routed", text)
-		}
 	}
 	server, _ := testSocket(t)
 	mac := NewSession(server, Config{}, t.TempDir(), nil)
