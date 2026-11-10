@@ -448,13 +448,12 @@ func executeControlPlan(ctx context.Context, p *ControlPlan, execute func(contex
 		if e = ctx.Err(); e != nil {
 			return nil, e
 		}
-		if len(raw) <= 1024 && json.Valid([]byte(raw)) {
-			result.Receipts = append(result.Receipts, ControlReceipt{name, json.RawMessage(args), json.RawMessage(raw)})
-		}
 		values, validationErr := controlValues(raw, required)
-		if validationErr != nil && len(result.Receipts) > 0 {
-			result.Receipts[len(result.Receipts)-1].Output = json.RawMessage(controlFailure(validationErr.Error()))
+		output := json.RawMessage(raw)
+		if validationErr != nil {
+			output = json.RawMessage(controlFailure(validationErr.Error()))
 		}
+		result.Receipts = append(result.Receipts, ControlReceipt{name, json.RawMessage(args), output})
 		return values, validationErr
 	}
 	fresh := map[string]int{}

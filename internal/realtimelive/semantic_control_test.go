@@ -397,3 +397,14 @@ func TestSemanticAmbiguousContextPlanClarifiesBeforeHardware(t *testing.T) {
 		t.Fatal(r, e)
 	}
 }
+func TestSemanticMalformedLaterReceiptPreservesEarlierVerification(t *testing.T) {
+	r, e := runSemantic(t, `{"intent":"adjust","target":"current","volume":{"mode":"absolute","basis":"explicit","reference":"current","value":20},"brightness":{"mode":"absolute","basis":"explicit","reference":"current","value":30}}`, "", func(_ context.Context, id, name, args string) (string, error) {
+		if name == "device_set_brightness" {
+			return "not json", nil
+		}
+		return `{"ok":true,"verified":true,"volume":20}`, nil
+	})
+	if e == nil || len(r.Receipts) != 2 || !verifiedControlOutput(string(r.Receipts[0].Output)) || verifiedControlOutput(string(r.Receipts[1].Output)) {
+		t.Fatal("earlier receipt overwritten or malformed receipt unbounded", r, e)
+	}
+}
