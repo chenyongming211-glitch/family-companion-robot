@@ -63,6 +63,12 @@ func (r Reader) ListDevices(accountID, scope string) ([]DeviceDTO, error) {
 				return nil, ErrSource
 			}
 		}
+		for _, configured := range r.Config.Devices {
+			if configured.ID == d.ID && configured.DisplayName != "" {
+				d.Name = configured.DisplayName
+				break
+			}
+		}
 		for _, s := range ss {
 			if s.info.DeviceID == d.ID {
 				d.LastSeen = s.info.StartedAt.Format(time.RFC3339)

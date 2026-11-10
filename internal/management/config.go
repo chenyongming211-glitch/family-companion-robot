@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"familyrobot/internal/deviceprofile"
 	"familyrobot/internal/voiceidentity"
 	"io"
 	"os"
@@ -55,10 +56,11 @@ type FamilyConfig struct {
 	Name string `json:"name"`
 }
 type DeviceConfig struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Model    string `json:"model"`
-	Location string `json:"location"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Model       string `json:"model"`
+	Location    string `json:"location"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 type Binding struct {
 	ID       string     `json:"id"`
@@ -92,6 +94,12 @@ func ValidateConfig(c Config) error {
 	for _, d := range c.Devices {
 		if !device.MatchString(d.ID) || devices[d.ID] || len(d.Name) > 256 || len(d.Location) > 256 || (d.Model != "微雪 ESP32-S3" && d.Model != "M5 ESP32-S3") {
 			return ErrInvalid
+		}
+		if d.DisplayName != "" {
+			name, err := deviceprofile.NormalizeName(d.DisplayName)
+			if err != nil || name != d.DisplayName {
+				return ErrInvalid
+			}
 		}
 		devices[d.ID] = true
 	}

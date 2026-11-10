@@ -157,6 +157,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.familyOnboarding(w, r, a, parts)
 		return
 	}
+	if resource == "device-settings" && scope == "family" {
+		s.deviceSettings(w, r, a, parts)
+		return
+	}
 	if r.Method != "GET" {
 		apiError(w, 405, "method_not_allowed", "请求方法不支持")
 		return

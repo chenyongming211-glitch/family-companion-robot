@@ -1,4 +1,4 @@
-# Only the required family-onboarding and authenticated device routes are public.
+# Only the required authenticated family and device routes are public.
 {
 	servers {
 		protocols h1 h2
@@ -48,6 +48,20 @@ robot.songguoxue.com {
 		path /api/family/login /api/family/logout /api/family/session /api/family/families /api/family/onboarding
 	}
 	handle @family {
+		import onboarding_backend
+	}
+	@family_reads {
+		method GET
+		path_regexp family_reads ^/api/family/(devices(/dev_[a-f0-9]{32})?|chats(/chat_[a-f0-9]{64})?)$
+	}
+	handle @family_reads {
+		import onboarding_backend
+	}
+	@family_settings {
+		method GET PUT
+		path_regexp family_settings ^/api/family/device-settings/dev_[a-f0-9]{32}$
+	}
+	handle @family_settings {
 		import onboarding_backend
 	}
 	@claim path_regexp claim ^/api/family/onboarding/claim_[a-f0-9]{32}$
