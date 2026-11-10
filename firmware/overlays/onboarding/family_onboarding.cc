@@ -1,4 +1,5 @@
 #include "family_onboarding.h"
+#include "family_control_state.h"
 #include "family_setup_state.h"
 #include "settings.h"
 #include "system_info.h"
@@ -300,7 +301,7 @@ void Event(void*, esp_event_base_t base, int32_t event, void* data) {
     if (base == FAMILY_CONNECTION_EVENT && event == ClockReady) {
         const auto generation = *static_cast<const uint32_t*>(data);
         if (VoiceResourcesReady() && generation == network_generation && connected && Activated() && clock_synced &&
-            !connection_reported.exchange(true) && callback) callback(true);
+            !connection_reported.exchange(true) && callback) { callback(true); FamilyControl::Connected(true); }
         return;
     }
     if (base == NETWORK_PROV_EVENT && event == NETWORK_PROV_WIFI_CRED_RECV && running)
@@ -312,6 +313,7 @@ void Event(void*, esp_event_base_t base, int32_t event, void* data) {
     }
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_START) esp_wifi_connect();
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_DISCONNECTED) {
+        FamilyControl::Connected(false);
         connected = false; ++network_generation; connection_reported = false;
         if (Activated()) { if (callback) callback(false); esp_wifi_connect(); }
     }

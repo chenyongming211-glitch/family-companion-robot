@@ -31,6 +31,7 @@ constexpr int NETWORK_PROV_WIFI_CRED_FAIL=1,WIFI_EVENT_STA_START=2,WIFI_EVENT_ST
 std::atomic<bool> running{false},connected{false},clock_worker{false},clock_synced{false},connection_reported{false};
 std::atomic<unsigned> network_generation{0};
 std::function<void(bool)> callback;
+namespace FamilyControl {int reports=0;bool live=false;void Connected(bool value){++reports;live=value;}}
 bool resources_ready=true;bool VoiceResourcesReady(){return resources_ready;}
 bool activated=false; int resets=0,notices=0,sntp_starts=0,waits=0,sync_result=ESP_OK,connects=0,queued=0;
 void (*task)(void*)=nullptr; std::function<void()> on_wait;

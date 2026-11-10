@@ -68,9 +68,9 @@ def main():
         subprocess.run(['git','apply',str(path)],cwd=tree,check=True)
     for name in ['protocomm_ble_framing.h','protocomm_ble_framed_transport.inc']:
         shutil.copyfile(FIRMWARE/'overlays/onboarding'/name,components/'protocomm/src/transports'/name)
-    for name in ['family_onboarding.h','family_onboarding.cc','family_setup_state.h','family_setup_view.h','family_setup_view.cc','family_setup_font.h','family_setup_font.c']:
+    for name in ['family_onboarding.h','family_onboarding.cc','family_control.cc','family_control_state.h','family_control_protocol.h','family_setup_state.h','family_setup_view.h','family_setup_view.cc','family_setup_font.h','family_setup_font.c']:
         shutil.copyfile(FIRMWARE/'overlays/onboarding'/name,tree/'main'/name)
-    replace(tree/'main/CMakeLists.txt','            "ota.cc"','            "ota.cc"\n            "family_onboarding.cc"\n            "family_setup_view.cc"\n            "family_setup_font.c"')
+    replace(tree/'main/CMakeLists.txt','            "ota.cc"','            "ota.cc"\n            "family_onboarding.cc"\n            "family_control.cc"\n            "family_setup_view.cc"\n            "family_setup_font.c"')
     replace(tree/'main/CMakeLists.txt','                    PRIV_REQUIRES','                    PRIV_REQUIRES\n                        network_provisioning\n                        esp_http_client\n                        esp_wifi\n                        bt')
     replace(tree/'main/idf_component.yml', 'dependencies:\n', 'dependencies:\n  espressif/esp_jpeg: ==1.3.1\n  espressif/iot_usbh_cdc: ==3.1.0\n')
     replace(tree/'main/display/display.h','    virtual void SetStatus(const char* status);',
