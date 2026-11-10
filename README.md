@@ -12,6 +12,7 @@
 - 当前固件硬件仅支持ESP32-S3（微雪、M5）。2026-11-08起停止ESP32-C3开发、构建与验收；旧源码和证据保留，见[停止支持记录](docs/development-archive/2026-11-08-c3-retirement/README.md)。
 - 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
 - 当前小智设备入口18041复用同一Go核心，按设备独立鉴权、会话和记录。新增[设备语音控制](docs/superpowers/specs/2026-10-27-realtime-device-controls-design.md)：发现设备实际支持的状态查询、音量和屏幕亮度工具，设置后回读核实；无声工具会话与保留联网搜索的语音会话分离。发布和实机边界见[验证记录](docs/verification/2026-10-27-realtime-device-controls.md)，Mac不提供实体设备控制。
+- 新增[小程序近期记忆管理](docs/verification/2026-11-11-miniprogram-memory.md)：设备详情→近期记忆，查看最近7天/最多24轮摘录并跳转来源聊天；管理员一次确认后由服务端清除续聊上下文并核验，聊天档案保留。云端验证及发布完成，手机实际操作待验。
 - 新增[同设备跨会话记忆第一期](docs/superpowers/specs/2026-10-28-device-session-memory-design.md)：按鉴权设备恢复最近7天、最多24轮的有界原话与摘录，仅保留有播放证据的助手内容；说“清除聊天记忆”可清除可恢复上下文，原始文字日志仍留存。Mac与小智共用实现，各设备独立，未合并个人身份或全部档案检索。验证与发布状态见[本轮记录](docs/verification/2026-10-28-device-session-memory.md)。
 - 屏幕改用[CHICK-01参数化表情](docs/superpowers/specs/2026-11-08-chick-face-design.md)，小光球方案已取消。L0系统状态配中文文字，情绪和微动画不加标签；当前接入与实机边界见[验证记录](docs/verification/2026-11-08-chick-face.md)。
 - [表情编排候选](docs/verification/2026-11-08-expression-orchestration.md)已接通按设备名称、模型选择、回复绑定和实际DMA生命周期；云端验证及微雪安装完成，现场视觉/口型/插话/听感仍待确认。

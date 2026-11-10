@@ -25,26 +25,28 @@
 **Files:** internal/realtimelive/memory.go、server.go及新memory_control.go/tests；internal/management/memories.go/types.go/server.go、onboarding_store.go及新memory_clear.go/tests；cmd/realtime-output-live/main.go、cmd/management/main.go及必要命令测试。
 **Interfaces:** MemoryDTO新增ChatID/TurnID string omitempty；public GET/POST契约如上；Options新增MemoryControlSocket；ConfigStore.WithSnapshot(ctx context.Context,fn func(Config)error)error；realtime定义MemoryClearClaim及Guard函数，cmd注入management授权实现，Unix固定私有RPC。
 
-- [ ] RED云端测试：成员/无正文/旧绑定/撤销管理员/无confirm/非法键/Origin/审计失败均不调用RPC；exactsession+turn来源映射、重连业务聊天、多家庭、无映射仍显示记忆。
-- [ ] RED云端测试：已有lease/握手/收尾busy，clear门禁阻止两入口；同设备双clear忙、其他设备可用；前序迟到Save后清空；Save/Load失败和取消未知不成功；RPC延迟跨重绑定/客户端截止不能清新归属，配置锁必须持到实际receipt；shutdown等待。
-- [ ] 实现核心：begin gate -> WithSnapshot fresh权限/绑定 -> Save空数组 -> 等实际receipt -> 独立2s Load空 -> release config/gate；重用Voice原clear写入核验，保留floor/base/control清除。
-- [ ] 实现固定Unix listener/client，根私有目录/类型/权限/陈旧与活跃socket检查，期限只影响准入，连接无重试/重定向/代理；命令flags可选且未配置不可变更；publicVoice mux无该路由。
-- [ ] 云端相关完整race、vet、两命令build，检查源摘要；提交main，报告RED/GREEN、完整结果、来源增删及边界。独立规格/质量审查。
+- [x] RED云端测试：成员/无正文/旧绑定/撤销管理员/无confirm/非法键/Origin/审计失败均不调用RPC；exactsession+turn来源映射、重连业务聊天、多家庭、无映射仍显示记忆。
+- [x] RED云端测试：已有lease/握手/收尾busy，clear门禁阻止两入口；同设备双clear忙、其他设备可用；前序迟到Save后清空；Save/Load失败和取消未知不成功；RPC延迟跨重绑定/客户端截止不能清新归属，配置锁必须持到实际receipt；shutdown等待。
+- [x] 实现核心：begin gate -> WithSnapshot fresh权限/绑定 -> Save空数组 -> 等实际receipt -> 独立2s Load空 -> release config/gate；重用Voice原clear写入核验，保留floor/base/control清除。
+- [x] 实现固定Unix listener/client，根私有目录/类型/权限/陈旧与活跃socket检查，期限只影响准入，连接无重试/重定向/代理；命令flags可选且未配置不可变更；publicVoice mux无该路由。
+- [x] 云端相关完整race、vet、两命令build，检查源摘要；提交main，报告RED/GREEN、完整结果、来源增删及边界。独立规格/质量审查。
 
 ### Task 2: 小程序近期记忆页面
 
 **Files:** web/miniprogram/src/{api.ts,family-page.ts,app.json,app.wxss}、新pages/memories/*、device/device.wxml、build.mjs/verify-native.mjs及tests/memories.test.ts和必要现有测试。
 **Consumes:** GET数组{deviceId,id,conversationId,text,date,user?,assistant?,chatId?,turnId?}；device-settings.CanEdit；POST仅{confirm:true}，confirmed匹配deviceId。GET /devices/{id}验证授权设备。
 
-- [ ] 云端RED：登录后列表/空/来源/权限/两家庭；确认取消无POST，只有管理员+正文读取成功可清；双击/隐藏/401/切账号/迟到modal和请求不误清或泄漏；busy/未知不报完成、无自动重试，错误设备/畸形回执拒绝。
-- [ ] Api仅白名单新增memories?device及memory-clear/device，复用固定源和RAM；familyPage新增memories（避免影响原设置/配网），设备详情提供入口；清除单次确认、匹配回执、真实重读，不要求回读列表永远为空。
-- [ ] 来源有合法chatId时去现有聊天详情且带当前device，来源缺失提示暂不可用；不猜conversationId，不遍历聊天分页。
-- [ ] 云端npm test/typecheck/build/native验证，现有148回归保持；复制仅构建产物给root，提交main，仅拥有前端文件。独立规格/质量审查。
+- [x] 云端RED：登录后列表/空/来源/权限/两家庭；确认取消无POST，只有管理员+正文读取成功可清；双击/隐藏/401/切账号/迟到modal和请求不误清或泄漏；busy/未知不报完成、无自动重试，错误设备/畸形回执拒绝。
+- [x] Api仅白名单新增memories?device及memory-clear/device，复用固定源和RAM；familyPage新增memories（避免影响原设置/配网），设备详情提供入口；清除单次确认、匹配回执、真实重读，不要求回读列表永远为空。
+- [x] 来源有合法chatId时去现有聊天详情且带当前device，来源缺失提示暂不可用；不猜conversationId，不遍历聊天分页。
+- [x] 云端npm test/typecheck/build/native验证，现有148回归保持；复制仅构建产物给root，提交main，仅拥有前端文件。独立规格/质量审查。
 
 ### Task 3: 最小来源发布与原生预览
 
-- [ ] 冻结实际voice135源及真实management来源，保留公开fixture；只移入允许改动与新依赖模块，来源/测试/产物SHA逐项核对，勿把main其他研究整包部署。
-- [ ] 新Unix私有运行目录，原argv仅追加明确的socket/config flags；两服务其余argv/env/配置保持，先Voice后管理，失败按兼容关系回退。复用既有AdmissionGate保护空闲切换；Caddy仅加新家庭精确GET/POST路由，私有RPC不公开。
-- [ ] 测试实际权限/GET只读元数据、未登录401/越权/非法路径，所有既有配置/档案/真实memory摘要保持，绝不对生产真实设备发清除测试；合成全链路验证两服务清除与聊天保留。
-- [ ] 云端构建小程序dist，Mac官方CLI编译预览，现有项目更新并给可扫描入口；不把手机未操作写PASS。
-- [ ] 最终整体审查、验证/README/交接及任务清单更新，main推送核对远端/工作区。原真实内容不因开发删除。
+- [x] 冻结实际voice135源及真实management来源，保留公开fixture；只移入允许改动与新依赖模块，来源/测试/产物SHA逐项核对，勿把main其他研究整包部署。
+- [x] 新Unix私有运行目录，原argv仅追加明确的socket/config flags；两服务其余argv/env/配置保持，先Voice后管理，失败按兼容关系回退。复用既有AdmissionGate保护空闲切换；Caddy仅加新家庭精确GET/POST路由，私有RPC不公开。
+- [x] 测试实际权限/GET只读元数据、未登录401/越权/非法路径，所有既有配置/档案/真实memory摘要保持，绝不对生产真实设备发清除测试；合成全链路验证两服务清除与聊天保留。
+- [x] 云端构建小程序dist，Mac官方CLI编译预览，现有项目更新并给可扫描入口；不把手机未操作写PASS。
+- [x] 最终整体审查、验证/README/交接及任务清单更新，main推送核对远端/工作区。原真实内容不因开发删除。
+
+交付状态：后端/前端已提交并推main，云端测试、最终来源/运维审查、正式发布及官方CLI预览完成；手机体验与真实管理员清除尚未现场验收。未清除真实记忆作测试。详见[验证记录](../../verification/2026-11-11-miniprogram-memory.md)。
