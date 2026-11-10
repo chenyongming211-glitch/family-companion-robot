@@ -15,6 +15,19 @@ Mac is for code/Git and a separately authorized test client.
 
 Supported product firmware is **ESP32-S3 only**: Waveshare 2.16 and M5 StopWatch variants. ESP32-C3 development, builds and acceptance gates were retired by the user on 2026-11-08.
 
+The onboarding overlay also provides a shared standby control worker for both S3
+boards. After activation, networking, clock synchronization and audio readiness,
+one bounded HTTPS worker reports actual volume/brightness to the authenticated
+management endpoint every five seconds. It reuses one TLS client, validates the
+certificate, disables redirects and caps responses at 2048 bytes. Hardware reads
+and changes run on the application thread; only a matching actual readback emits
+an applied receipt. Boot identity, sequence numbers, command deduplication and
+deadlines prevent stale commands or delayed work from claiming success. It does
+not require a voice session. See the [protocol/design](../docs/superpowers/specs/2026-11-10-device-live-control-design.md)
+and [release evidence](../docs/verification/2026-11-10-device-live-control.md).
+The returned M5 physical unit remains on official stock firmware; shared source
+and native build verification do not authorize another physical update.
+
 From the repository root on the cloud, with Python 3.12 or later:
 
 ```sh

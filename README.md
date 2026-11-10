@@ -4,6 +4,8 @@
 
 - [管理平台前端](web/management/README.md)：Vue 3两端31页mock已按三批实现，云端18项行为测试/类型检查/构建和浏览器93项布局复核通过，等待用户UI评审；尚未接管理后端。见[验证记录](docs/verification/2026-11-09-management-frontend.md)。
 
+- [家庭小程序](web/miniprogram/README.md)：设备→聊天→详情→设置已接真实授权数据；新增鉴权心跳在线状态与音量、亮度控制，支持待机下发，以设备实际读回回执确认。服务发布、微雪固件升级与现场边界见[本批验证](docs/verification/2026-11-10-device-live-control.md)。
+
 - 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
 - 当前固件硬件仅支持ESP32-S3（微雪、M5）。2026-11-08起停止ESP32-C3开发、构建与验收；旧源码和证据保留，见[停止支持记录](docs/development-archive/2026-11-08-c3-retirement/README.md)。
 - 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
