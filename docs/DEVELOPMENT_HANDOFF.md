@@ -1,5 +1,11 @@
 # 换电脑开发交接
 
+**网页UI两轮优化已发布（2026-11-11最新）：** 用户明确UI UX Pro Max在先、unslop在后；dc9a4db设计、28a9688 UI/UX、a7e4173最终去AI味。统一灰白/陶橙、18px本地Lucide图标与层级；家庭桌面1200px双列、1024及以下单列/手机底栏；真实在线数、未知不染绿；技术徽章/欢迎标语删除，目录降辅助入口，当前账号可见。真实API/权限/隐私失效/整10滑块/回执/清除规则保持，无新业务、小程序或固件改动。
+
+云端最终52/52、类型/构建及35输入与Mac/提交字节一致，source manifest d53b73e7、dist map274c7d95；JS main-BoApjjpn.js/3e28c127、CSS main-zwbTY0Pc.css/dd444106。独立审查2处对比问题修正后规格/质量PASS；实际hover4.827及sidebar键盘focus5.406。两端8组375/768/1024/1440无横溢/主要目标44px、手机正文16；暗色偏好保持明确浅色/reduced0s。真实两端同home hash重登、微雪1台、控制读20/20且22点、5轮聊天/24记忆/详情/来源5轮、内部50行审计通过，未输出正文/Cookie/密码或实际控制/清除。TaskSpace10完成keep两结果页，原空间7未操作。
+
+仅原子更新当前admin-audit/web并删除4个无引用旧真实资产，当前4文件；release父目录新web-uiux-unslop.json为最新pins，real-only-frontend.json已是此前快照。两轮发布/最终清理保护均通过：管理1401849/b49、Voice1161080/eab及argv/env、config/records/.memory/权限/RW/socket/锁、Caddy/当前防火墙摘要/原audit前缀保持，无服务重启/新服务/刷机/USB/实际调节或清除；18791/原SSH保留。原中断审计事务与防火墙差异及固件CI DNS故障仍独立未关闭，禁止把本批写成它们已解决。云端来源/日志/证明在/home/ubuntu/web-uiux-unslop-20261111。只优化网页，下一批网页昵称/位置写入仍待开发。见[完整验证](verification/2026-11-11-web-uiux-unslop.md)；下方旧UI描述/pins是此前阶段。
+
 **管理只保留真实入口、M5已退役（2026-11-11最新）：** 用户明确删除完整mock和所有演示副本，当前仅支持微雪ESP32-S3 2.16。4995d80/8a3d13a删除产品mock/seed/模式切换/模拟表单与专用页面；172892a删除原型8文件。真实App登录卸载事件回归修复后52项、类型/默认构建及旧mock环境变量忽略检查通过，source33/manifest文件691fa7c3，dist4/map35e6c381，JS main-8hZxc4FT.js/e378df70；任务及最终审查PASS。网页昵称/位置写入尚未开发，下一批复用小程序既有接口，不重做UI。
 
 实际静态已原地发布到当前admin-audit/web，现仅4文件，新release父目录real-only-frontend.json记录pins；旧前端缓存10处378文件、原型4套32文件、旧静态63文件共473份精确删除，无mock归档副本，相关完整scratch review diff已清除。旧18790 Python1780489停止，本机只取消18790转发；SSH85103/18791和两真实HTML SHA/no-store正常。两个物理node_modules及Node工具链保留，不能顺手删除旧缓存父目录。旧release二进制/证明仍留，但其旧UI已删，不可按旧静态pins回退；原审计helper/baseline不覆盖本批授权更新。

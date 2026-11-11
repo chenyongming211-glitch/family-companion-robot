@@ -4,6 +4,8 @@
 
 - [管理平台](web/management/README.md)：Vue 3内部后台与家庭网页仅使用真实API，产品mock、样例数据、演示路由与构建开关已删除。支持真实账号、设备、聊天、近期记忆、在线状态、音量/亮度、清除及回执，内部另有操作审计；未接入的写操作不提供模拟表单。网页设备昵称/位置保存是下一项待开发功能。旧审计发布事务的防火墙摘要差异仍未收口，详见[原审计限制](docs/verification/2026-11-11-admin-audit.md)。
 
+- 网页已按 **UI UX Pro Max → unslop** 优化：桌面家庭端展开、手机保留底栏，统一扁平图标/文字/状态；真实操作规则不变，见[网页验证](docs/verification/2026-11-11-web-uiux-unslop.md)。
+
 - [家庭小程序](web/miniprogram/README.md)：设备→聊天→详情→设置已接真实授权数据；新增鉴权心跳在线状态与音量、亮度控制，支持待机下发，以设备实际读回回执确认。服务发布、微雪固件升级与现场边界见[本批验证](docs/verification/2026-11-10-device-live-control.md)。
 
 - 设置滑块现可松手按整10档提交，并显示小圆刻度；语音状态查询“多大”漏识别已修复发布。语义控制已移除正向关键词门槛，模型结合最近已播上下文理解，Go读取新值、执行并核验；明确上下文小幅调节，歧义追问。见[滑块交付](docs/verification/2026-11-11-slider-release-query.md)及[语义发布/现场边界](docs/verification/2026-11-11-contextual-device-control.md)。
