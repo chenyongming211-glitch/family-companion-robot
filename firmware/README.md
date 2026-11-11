@@ -36,6 +36,27 @@ and [release evidence](../docs/verification/2026-11-10-device-live-control.md).
 The returned M5 physical unit remains on official stock firmware; shared source
 and native build verification do not authorize another physical update.
 
+The factory S3 preparation also adds bounded `ConnectionTrace` observations for
+button/wake handling, application state, transport creation, combined DNS/TCP/TLS
+connect, HTTP upgrade, server hello, listening and disconnect. The optional
+`X-Robot-Connection-Id` is `c1-<16 lowercase hex boot digits>-<8 hex counter digits>`;
+the Go device entry uses the same value only for logging. It is never an identity
+or authorization token. A reused socket keeps its ID; the actual protocol open
+boundary consumes each prepared ID at most once, including disconnect races.
+The forwarding adapter leaves the locked vendor implementation and all business
+bytes/results unchanged. Logs contain fixed stages, numeric codes, elapsed time,
+state and current heap sizes, without credentials, headers, URL/query or bodies.
+These observations do not add retries, an automatic reboot or a claimed fix for
+the reported connecting-state hang.
+
+`firmware/tests/test_connection_trace.py` includes forwarding/privacy checks,
+verbatim instrumented application regressions and fault tests against the pinned
+SDK WebSocket source. On the cloud, set `CONNECTION_NETWORK_COMPONENT` to the
+verified `78__esp-ml307` component directory to run that SDK fixture rather than
+skip it. Driver/RTOS faults and a simulated 24-hour clock advance do not establish
+physical Wi-Fi outage recovery or real long-duration device acceptance. See the
+[diagnostic design](../docs/superpowers/specs/2026-11-12-connection-diagnostics-design.md).
+
 From the repository root on the cloud, with Python 3.12 or later:
 
 ```sh
