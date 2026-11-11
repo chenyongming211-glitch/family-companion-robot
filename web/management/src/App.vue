@@ -14,6 +14,7 @@ import { onSensitiveInvalidated } from "./sensitive-session.ts";
 import CorePages from "./pages/CorePages.vue";
 import DataPages from "./pages/DataPages.vue";
 import AuditPage from "./pages/AuditPage.vue";
+import UiIcon from "./components/UiIcon.vue";
 const scope: Scope = location.pathname.endsWith("family.html")
   ? "family"
   : "admin";
@@ -133,6 +134,15 @@ async function logout() {
     accountBusy.value = false;
   }
 }
+function navIcon(page: string) {
+  const icons: Record<string, string> = {
+    overview: "layout-dashboard", home: "house", devices: "bot", device: "bot",
+    conversations: "messages-square", families: "users", family: "users",
+    accounts: "contact", memories: "notebook-pen", audit: "clipboard-list",
+    configuration: "settings-2", settings: "settings-2",
+  };
+  return icons[page] ?? "house";
+}
 function active(page: string) {
   return (
     route.value.page === page ||
@@ -158,7 +168,7 @@ function directoryLink(page: string) {
 }
 </script>
 <template>
-  <div :class="['app', scope]">
+  <div :class="['app', scope, { 'is-guest': !account }]">
     <a class="skip-link" href="#main-content" @click.prevent="focusMain"
       >跳到主要内容</a
     >
@@ -175,7 +185,7 @@ function directoryLink(page: string) {
           :class="{ active: active(item[0]) }"
           :aria-current="active(item[0]) ? 'page' : undefined"
           :href="linkTo(scope, item[0], navQuery(item[0]))"
-          >{{ item[1] }}</a
+          ><UiIcon :name="navIcon(item[0])" /><span>{{ item[1] }}</span></a
         >
       </nav>
       <a class="switch" :href="linkTo('family', 'home')">打开家庭端 ↗</a>
@@ -253,8 +263,7 @@ function directoryLink(page: string) {
         :class="{ active: active(item[0]) }"
         :aria-current="active(item[0]) ? 'page' : undefined"
         :href="linkTo(scope, item[0], navQuery(item[0]))"
-        ><span class="nav-dot">{{ item[1].slice(0, 1) }}</span
-        >{{ item[1] }}</a
+        ><UiIcon :name="navIcon(item[0])" /><span>{{ item[1] }}</span></a
       >
     </nav>
   </div>

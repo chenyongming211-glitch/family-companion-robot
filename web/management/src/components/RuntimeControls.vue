@@ -45,7 +45,7 @@ function disabled(field: RuntimeField) {
   <section class="panel runtime-controls" aria-label="真实设备状态与控制">
     <div class="section-head">
       <h2>设备状态与控制</h2>
-      <span class="badge">{{ state.runtime?.connection === 'online' ? '在线' : state.runtime?.connection === 'offline' ? '离线' : '尚未上报' }}</span>
+      <span class="badge" :data-status="state.runtime?.connection">{{ state.runtime?.connection === 'online' ? '在线' : state.runtime?.connection === 'offline' ? '离线' : '尚未上报' }}</span>
     </div>
     <p>只在设备回执核实后显示生效；拖动预览，松手提交。</p>
     <p v-if="state.runtime?.seenAt" class="muted">
@@ -75,10 +75,10 @@ function disabled(field: RuntimeField) {
   </section>
 </template>
 <style scoped>
-.runtime-controls { margin-top: 20px; }
-.runtime-field { margin-top: 18px; }
+.runtime-controls { margin-top: 24px; }
+.runtime-field { margin-top: 24px; }
 .runtime-field label { display: block; }
-.runtime-ticks { display: flex; justify-content: space-between; padding: 0 5px; font-size: 14px; color: #82908b; }
-.runtime-field input { width: 100%; padding: 0; min-height: 32px; }
+.runtime-ticks { display: flex; justify-content: space-between; padding: 0 8px; font-size: 14px; color: var(--text-muted); }
+.runtime-field input { width: 100%; padding: 0; min-height: 44px; }
 .runtime-field input:disabled { opacity: .45; }
 </style>

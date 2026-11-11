@@ -1,17 +1,4 @@
-.data-detail {
-  margin: 20px 0;
-  padding: 18px;
-  background: #f6f8f6;
-  border-radius: 12px;
-  overflow-wrap: anywhere;
-}
-.memory-refresh {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.data-danger {
-  margin-top: 20px;
-  background: #fff;
-  color: #a33838;
-  border: 1px solid #d6aaaa;
-}
+.data-detail { margin: 24px 0; padding: 20px; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; overflow-wrap: anywhere; max-width: 75ch; }
+.memory-refresh { flex-shrink: 0; white-space: nowrap; }
+.data-danger { margin-top: 24px; color: var(--negative); background: var(--surface); border: 1px solid #c58e89; }
+.data-danger:hover:not(:disabled) { background: #fbefed; color: var(--negative); }

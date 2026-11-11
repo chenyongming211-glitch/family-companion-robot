@@ -113,19 +113,20 @@ onBeforeUnmount(() => {
 </template>
 <style scoped>
 .audit-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
-.audit-filters label { display: grid; gap: 7px; min-width: 150px; flex: 1; }
-.audit-filters input, .audit-filters select { min-height: 44px; width: 100%; padding: 8px; border: 1px solid #dce0e5; border-radius: 6px; background: white; color: inherit; }
+.audit-filters label { display: grid; gap: 8px; min-width: 150px; flex: 1; }
+.audit-filters input, .audit-filters select { min-height: 44px; width: 100%; padding: 8px; border: 1px solid #c3c8c0; border-radius: 8px; background: var(--surface); color: inherit; }
 .audit-list { list-style: none; padding: 0; margin: 0; }
-.audit-entry { padding: 20px 0; border-bottom: 1px solid #e5e7eb; overflow-wrap: anywhere; }
+.audit-entry { padding: 20px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .audit-entry:first-child { padding-top: 4px; }
 .audit-entry-heading, .audit-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.audit-result { flex: none; padding: 5px 10px; border-radius: 5px; background: #f0f2f5; font-size: 12px; }
+.audit-result { flex: none; padding: 4px 8px; border-radius: 4px; background: var(--raised); font-size: 12px; }
 .audit-result.confirmed { background: #e5f2e9; color: #245d37; }
 .audit-result.failed { background: #fcebea; color: #9c302a; }
 .audit-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
-.audit-facts dt { color: #6f7784; font-size: 12px; margin-bottom: 6px; }
-.audit-facts dd { margin: 0; }
-.audit-facts a { color: #a44716; text-decoration: underline; text-underline-offset: 3px; }
+.audit-facts dt { color: var(--text-muted); font-size: 12px; margin-bottom: 8px; }
+.audit-facts > div { display: block; padding: 0; border: 0; }
+.audit-facts dd { margin: 0; text-align: left; }
+.audit-facts a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .audit-outcome { margin-bottom: 0; }
 .audit-pagination { padding-top: 20px; font-size: 13px; }
 @media (max-width: 600px) { .audit-filters label { min-width: 100%; } .audit-filters button { flex: 1; } .audit-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .audit-pagination { flex-wrap: wrap; } .audit-pagination span { order: -1; flex-basis: 100%; text-align: center; } }

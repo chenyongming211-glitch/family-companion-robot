@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from "../components/UiIcon.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Scope, PageRoute, Device, Conversation } from "../types.ts";
 import { api } from "../api.ts";
@@ -286,9 +287,9 @@ function chatLink(c: Conversation) {
           ><small>当前加载的聊天</small>
         </div>
         <div class="panel">
-          <span>服务状态</span
-          ><strong class="status">真实数据</strong
-          ><small>管理服务已接入</small>
+          <span>在线设备</span
+          ><strong>{{ devices.filter((d) => d.connection === "online").length }}</strong
+          ><small>以最近上报状态为准</small>
         </div>
       </div>
       <div class="columns">
@@ -314,7 +315,7 @@ function chatLink(c: Conversation) {
             ><span
               ><b>{{ d.name }}</b
               ><small>{{ d.location }} · {{ d.model }}</small></span
-            ><span class="badge">{{ connectionLabel(d.connection) }}</span></a
+            ><span class="badge" :data-status="d.connection">{{ connectionLabel(d.connection) }}</span></a
           >
         </section>
         <section class="panel">
