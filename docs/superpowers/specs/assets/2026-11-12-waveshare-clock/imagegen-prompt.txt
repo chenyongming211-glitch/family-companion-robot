@@ -1,0 +1,26 @@
+Use case: ui-mockup.
+Create ONE polished high-fidelity Chinese industrial UI concept comparison board for adding a clock to an existing Waveshare ESP32-S3 2.16-inch family companion robot screen. This is a SCREEN DESIGN prototype, not a hardware redesign or an app. Design for a 480 x 480 square AMOLED screen. Show ONLY front-on square screen canvases in a clean presentation board, no invented robot body or enclosure, no phones, no hands, no perspective.
+Board composition: landscape approximately 1800 x 1120, warm light ivory background #F3F0EB, generous whitespace, neat editorial typography, restrained professional presentation. Three equally sized, perfectly square display mockups aligned in one main row, each approximately 480x480. Flat deep charcoal screen background #14181F, gently rounded screen corners. Warm cream #FFD8A8 and muted warm gray text, subtle coral cheeks. No gradients, no glowing neon, no 3D decoration, no glossy glass, no weather, no alarms, no music, no buttons, no fictional metrics.
+Top board title, exact Simplified Chinese: "微雪 · 时间显示原型".
+Small subtitle: "480 × 480 AMOLED".
+Above the three screens put these exact labels OUTSIDE the screens:
+Left: "A  表情优先"
+Center: "B  桌面时钟" and a tiny understated orange-outline "推荐" pill
+Right: "C  经典表盘".
+All three show the SAME example time 10:10 and the SAME date "11月12日  周四", with minimal tiny Wi-Fi and battery glyphs at top corners only.
+Existing character visual invariant: it is an abstract friendly FACE drawn directly on the dark screen: two vertical warm cream rounded-rectangle eyes, a very small curved smile, subtle soft coral cheek patches. No head outline, no beak, no wings, no body, no animal illustration, no extra ornaments. Keep this face consistent with an embedded parametric emoticon renderer.
+Left screen A: time "10:10" centered at the top in modest 44px monospaced/tabular rounded sans. Date beneath in restrained small warm gray. The existing friendly abstract face dominates the middle of the screen with two large vertical pill eyes and cheeks. Small Chinese status "待机中" centered near bottom. It should feel like the existing companion robot with a discreet added clock.
+Center screen B recommended: large beautifully spaced tabular warm cream "10:10" horizontally centered in upper-middle, approximately 112px in the 480px canvas. Date below with 22px warm gray. A SMALLER version of the SAME friendly face sits in the lower half with wide negative space around it. Status "待机中" centered near bottom. Clear hierarchy, highly readable from a small distance, cozy and calm. Time and face never overlap.
+Right screen C: a refined minimal analog clock with 12 restrained cream tick marks, no second hand, no numbers, no ornate face; hands correctly show 10:10. Below the dial a small exact digital "10:10" and date. Add the same tiny face below that, and bottom status "待机中". Balanced and understated.
+Below each screen OUTSIDE it, put concise gray captions exactly:
+A: "表情更突出"
+B: "远看清楚，保留陪伴感"
+C: "经典、安静".
+Bottom area of board: a restrained horizontal flow of THREE SMALLER square screen thumbnails showing recommended B state transitions. Label above them: "推荐的状态切换".
+Thumbnail 1 labeled OUTSIDE "待机": the B large time with small face.
+A simple thin arrow between thumbnails.
+Thumbnail 2 labeled OUTSIDE "对话": large face, small top time "10:10", bottom caption INSIDE "正在聆听".
+A thin arrow to thumbnail 3.
+Thumbnail 3 labeled OUTSIDE "夜间低亮": large dim warm amber "10:10", tiny dim date, no face and no status text. Depict a DIM static appearance, no animation effects.
+Small board footer: "界面概念图 · 非实机截图".
+All text must be crisp and correctly written in Simplified Chinese. Make the center B design visually the strongest. No other text, no watermark.
