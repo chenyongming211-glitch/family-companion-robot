@@ -2,14 +2,14 @@
 
 当前产品主线为**Go原生Realtime**，以已经验证的语音核心为基础，后续逐项适配旧Go业务模块。默认入口云端18040，Mac只作客户端；后端依赖、运行测试和部署均在云端。先读[开发交接](docs/DEVELOPMENT_HANDOFF.md)与[代码生命周期清单](docs/CODE_LIFECYCLE.md)。
 
-- [管理平台](web/management/README.md)：Vue 3两端31页mock已实现并接入真实账号、设备与聊天。内部后台支持在线状态、音量/亮度、近期记忆清除和回执；新增真实操作审计，按设备/日期/类型查询，缺少回执的旧记录保持未知。审计管理版本已切换且功能核验通过，防火墙摘要差异使发布全保护验收尚未收口；详见[审计验证与限制](docs/verification/2026-11-11-admin-audit.md)。
+- [管理平台](web/management/README.md)：Vue 3内部后台与家庭网页仅使用真实API，产品mock、样例数据、演示路由与构建开关已删除。支持真实账号、设备、聊天、近期记忆、在线状态、音量/亮度、清除及回执，内部另有操作审计；未接入的写操作不提供模拟表单。网页设备昵称/位置保存是下一项待开发功能。旧审计发布事务的防火墙摘要差异仍未收口，详见[原审计限制](docs/verification/2026-11-11-admin-audit.md)。
 
 - [家庭小程序](web/miniprogram/README.md)：设备→聊天→详情→设置已接真实授权数据；新增鉴权心跳在线状态与音量、亮度控制，支持待机下发，以设备实际读回回执确认。服务发布、微雪固件升级与现场边界见[本批验证](docs/verification/2026-11-10-device-live-control.md)。
 
 - 设置滑块现可松手按整10档提交，并显示小圆刻度；语音状态查询“多大”漏识别已修复发布。语义控制已移除正向关键词门槛，模型结合最近已播上下文理解，Go读取新值、执行并核验；明确上下文小幅调节，歧义追问。见[滑块交付](docs/verification/2026-11-11-slider-release-query.md)及[语义发布/现场边界](docs/verification/2026-11-11-contextual-device-control.md)。
 
 - 当前Go入口：`cmd/realtime-output-live`、`internal/realtimelive`、`internal/realtimeaudio`、`internal/realtimestate`。
-- 当前固件硬件仅支持ESP32-S3（微雪、M5）。2026-11-08起停止ESP32-C3开发、构建与验收；旧源码和证据保留，见[停止支持记录](docs/development-archive/2026-11-08-c3-retirement/README.md)。
+- 当前固件硬件仅支持**微雪ESP32-S3 2.16**。M5已退货，2026-11-11起退出产品支持、供应与构建门槛；ESP32-C3已于2026-11-08退役。必要共用实现和历史固件证据保留，不因此继续支持旧板型，见[固件说明](firmware/README.md)。
 - 当前[Mac原生客户端](tools/realtime-output-live/README.md)：`./tools/realtime-output-live/open.command`，蓝色Go18040为默认。
 - 当前小智设备入口18041复用同一Go核心，按设备独立鉴权、会话和记录。新增[设备语音控制](docs/superpowers/specs/2026-10-27-realtime-device-controls-design.md)：发现设备实际支持的状态查询、音量和屏幕亮度工具，设置后回读核实；无声工具会话与保留联网搜索的语音会话分离。发布和实机边界见[验证记录](docs/verification/2026-10-27-realtime-device-controls.md)，Mac不提供实体设备控制。
 - 新增[小程序近期记忆管理](docs/verification/2026-11-11-miniprogram-memory.md)：设备详情→近期记忆，查看最近7天/最多24轮摘录并跳转来源聊天；管理员一次确认后由服务端清除续聊上下文并核验，聊天档案保留。云端验证及发布完成，手机实际操作待验。

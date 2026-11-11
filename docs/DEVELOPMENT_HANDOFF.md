@@ -1,5 +1,13 @@
 # 换电脑开发交接
 
+**管理只保留真实入口、M5已退役（2026-11-11最新）：** 用户明确删除完整mock和所有演示副本，当前仅支持微雪ESP32-S3 2.16。4995d80/8a3d13a删除产品mock/seed/模式切换/模拟表单与专用页面；172892a删除原型8文件。真实App登录卸载事件回归修复后52项、类型/默认构建及旧mock环境变量忽略检查通过，source33/manifest文件691fa7c3，dist4/map35e6c381，JS main-8hZxc4FT.js/e378df70；任务及最终审查PASS。网页昵称/位置写入尚未开发，下一批复用小程序既有接口，不重做UI。
+
+实际静态已原地发布到当前admin-audit/web，现仅4文件，新release父目录real-only-frontend.json记录pins；旧前端缓存10处378文件、原型4套32文件、旧静态63文件共473份精确删除，无mock归档副本，相关完整scratch review diff已清除。旧18790 Python1780489停止，本机只取消18790转发；SSH85103/18791和两真实HTML SHA/no-store正常。两个物理node_modules及Node工具链保留，不能顺手删除旧缓存父目录。旧release二进制/证明仍留，但其旧UI已删，不可按旧静态pins回退；原审计helper/baseline不覆盖本批授权更新。
+
+M5唯一当前Binding.Until于2026-11-11T14:52:19.143176542Z结束，事务与读回证明仅该字段变化；当前所有账号/作用域拒绝M5，历史档案仍保留，微雪绑定、账号、凭据、偏好保持20/20。管理1401849/b49与Voice1161080/eab等进程/argv/env、原记录/.memory/审计前缀/权限/RW/socket/锁、Caddy字节元数据及本批前后防火墙摘要均保持，无重启/刷机/USB/真实控制或清除。ready/memory_ready true，收尾active0。**原中断审计事务和951e原防火墙与c34c现摘要差异仍未解决**，本批没有重新设基线，也不声明strict原事务验收PASS。
+
+真实浏览器TaskSpace9两端各自退出并同home hash重新登录、当前微雪1台/在线、20/20控制读取、6聊天/首项5轮、24记忆/详情/来源聊天及内部50行审计全部通过；未输出正文/Cookie/密码，完成keep[]关闭，原用户空间7未操作。2079ac0/aa26b17收敛活动Wave产品和实际上游Wave原版构建、新供应/CLI/NVS仅微雪；历史M5读取及必要S3共用实现保留。云端host151(149通过2原有可选skip)＋最后Wave负例文件19通过/156仅收集，management专项race15/18＋CLI10/30、vet/build通过，大管理全包取消不计PASS。实际aa26b17已SSH443推main（HTTPS OAuth缺workflow scope），两项实际Actions首轮均DNS/apt失败、未进入编译，同SHA第二次仍DNS/apt exit100，prepare/host/native构建及产物证据都未运行，不计native PASS；CI网络恢复后仍需重验两个目标。最终CI状态见[本批验证](verification/2026-11-11-real-only-waveshare.md)。无新固件安装或实机验收。云端来源/工具/证明在/home/ubuntu/real-only-waveshare-20261111；本批清理与下一步见[计划](superpowers/plans/2026-11-11-real-only-waveshare.md)。下方旧mock/M5支持/旧static保留与旧pins均是此前阶段，不能据此恢复演示或退役设备。
+
 **两端网页登录卡住已修复，真实登录通过（2026-11-11最新）：** 用户截图“页面内容已清理”对应匿名session401也触发全局失效，App隐藏内容/组件代次变化使登录组件加载中止。934842c只在已有登录身份变成401时失效清理，匿名检查返回null；真实登录不再预填旧owner。过期/权限401/身份变化/隐藏/退出/迟到正文清理保留。云端RED3与默认账号RED2后完整65项、类型/mock/live构建、规格/质量PASS；40输入source0370e181、web4map e5ba1c02、新JS main-DOvG8u1B.js/065b89e0。真实浏览器两端均沿用原账号成功登录管理总览/家庭首页，切回前台恢复通过；TaskSpace7保留两页给用户，没有保存密码/Cookie/正文或清浏览器状态。
 
 此次只添加新哈希JS、原子替换当前admin-audit/web两HTML；旧JS/CSS保持，当前必需4文件、目录实际5文件，HTTP SHA/no-store通过。来源934842c及overlay manifest见release的frontend-login-fix.json，原4文件manifest是此前历史，旧审计helper的静态pins不能用来覆盖这次授权更新。管理1401849/Voice1161080等进程/argv/env、配置/资料/记录/.memory/旧static/current、Caddy内容元数据及原audit前缀保持，本次前后防火墙摘要相同，无服务重启或规则修改。**原审计中断事务及原始防火墙摘要差异仍待处理**，不能因本次修复宣称原事务已完成。私有HTML备份仅云端`/var/backups/family-robot/management-login-20261111`，来源/测试`/home/ubuntu/management-login-20261111`；见[登录修复验证](verification/2026-11-11-management-login.md)。下方旧JS为此前快照。

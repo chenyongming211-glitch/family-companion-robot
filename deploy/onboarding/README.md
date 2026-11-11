@@ -28,7 +28,7 @@
 依赖、测试、构建、私有材料与发布均在云端。Mac 只处理代码/Git，可接收无凭据的小程序构建包作为测试客户端。证书、工厂包、二维码、NVS 和固件产物不进 Git，也不下载到 Mac。
 
 1. 核对 DNS、有效证书、实际 systemd ExecStart/drop-in 及当前健康。备份管理配置/发布链接、单元/覆盖配置、Caddy，记录语音环境、产品/设备身份、档案与源记录/记忆摘要。发布前确认语音 ready、memory_ready 且 active_sessions=0。
-2. 管理服务发布新二进制并保留既有 dist-live。加入 `--public-origin https://robot.songguoxue.com`，移除配置文件本身的只读 bind，以支持同目录原子替换；记录/档案挂载仍只读，capabilities 仍为空。只给现有 owner 自有家庭添加 can_add_devices，逐字段核对其余配置不变，不在真实配置创建测试工厂设备。
+2. 管理服务发布新二进制并保留既有真实静态资源。加入 `--public-origin https://robot.songguoxue.com`，移除配置文件本身的只读 bind，以支持同目录原子替换；记录/档案挂载仍只读，capabilities 仍为空。只给现有家庭管理员添加 can_add_devices，逐字段核对其余配置不变，不在真实配置创建测试工厂设备。2026-11-11起新供应仅微雪 ESP32-S3，M5/C3已退役；前端默认构建为真实`dist/`。
 3. 语音候选以实际部署源清单为基线，只接入 onboarding_auth.go、设备入口和可选 CLI 参数，并执行完整回归、vet/build。不能将含其他实验的整个 main 替换正式语音。保留表达式、档案、模型、记忆与所有原参数，新增 `--onboarding-auth http://127.0.0.1:18791/api/internal/device-auth`。已有 MAC 仍只认原密钥，错误旧密钥不走工厂 fallback。
 4. 对 Caddy 候选执行 fmt/validate，目标服务就绪后 reload 原服务；保留自动证书续期，不关闭证书校验。
 5. 外部检查 TLS/跳转、公开未登录状态及私有路径 404；完整登录/认领/独立激活/重启/WS 准入使用隔离合成配置。正式数据只核对健康和保护摘要，不用真实设备或模型做自动探针。
