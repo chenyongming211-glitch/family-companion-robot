@@ -9,7 +9,7 @@ import * as control from '../src/runtime-control.ts';
 import * as sensitive from '../src/sensitive-session.ts';
 const tick=()=>new Promise(r=>setImmediate(r));
 const deferred=()=>{let resolve!:(x:any)=>void;const promise=new Promise<any>(r=>resolve=r);return {promise,resolve};};
-async function page(){
+async function page(clock?: {after:(fn:()=>void)=>unknown;cancel:(id:unknown)=>void}){
  const keys=['location','document','window','confirm'] as const;const previous=keys.map(k=>[k,Object.getOwnPropertyDescriptor(globalThis,k)] as const);
  Object.defineProperty(globalThis,'location',{configurable:true,value:{hash:'#/memories?device=d'}});
  Object.defineProperty(globalThis,'document',{configurable:true,value:{visibilityState:'visible'}});
@@ -20,7 +20,7 @@ async function page(){
  const api={getAccount:async()=>({email:'owner'}),listDevices:async()=>[{id:'d'}],listMemories:async()=>{reads++;if(denied)throw new Error('正文未授权');return [memory];},getMemory:async()=>memory,getDeviceRuntime:async()=>({deviceId:'d',canControl:true}),clearMemories:async()=>{writes++;await receipt();}};
  const source=readFileSync(new URL('../src/pages/DataPages.vue',import.meta.url),'utf8');const {descriptor}=parse(source);const script=compileScript(descriptor,{id:'memory-fixture'});const code=ts.transpileModule(script.content,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
  const realRequire=createRequire(import.meta.url),module={exports:{} as any};
- new Function('require','module','exports',code)((name:string)=>name==='vue'?vue:name==='../api.ts'?{api,liveMode:true}:name==='../runtime-control.ts'?control:name==='../sensitive-session.ts'?sensitive:name==='../navigation.ts'?{linkTo:(_scope:any,_page:any,query:any)=>JSON.stringify(query)}:name.endsWith('.css')?{}:realRequire(name),module,module.exports);
+ new Function('require','module','exports',code)((name:string)=>name==='vue'?vue:name==='../api.ts'?{api,liveMode:true}:name==='../runtime-control.ts'?(clock?{...control,createMemoryClearController:(api:any,state:any,onCleared:any)=>control.createMemoryClearController(api,state,onCleared,clock)}:control):name==='../sensitive-session.ts'?sensitive:name==='../navigation.ts'?{linkTo:(_scope:any,_page:any,query:any)=>JSON.stringify(query)}:name.endsWith('.css')?{}:realRequire(name),module,module.exports);
  const component=module.exports.default;component.render=()=>null;
  const renderer=vue.createRenderer<any,any>({createElement:()=>({}),insert:()=>{},remove:()=>{},createText:()=>({}),createComment:()=>({}),setText:()=>{},setElementText:()=>{},parentNode:()=>null,nextSibling:()=>null,patchProp:()=>{}});
  const props=vue.reactive({scope:'admin',route:{page:'memories',device:'d',memory:'m',family:'',chat:''}});const app=renderer.createApp({setup:()=>()=>vue.h(component,props)});app.mount({});await tick();const state=(app as any)._instance.subTree.component.setupState;
@@ -37,4 +37,22 @@ test('mounted memory page cancellation and repeated click send zero/one POST and
 });
 test('revoked body permission during clear removes cached memory and the clear button',async()=>{
  const p=await page();try{p.receipt(async()=>{throw Object.assign(new Error('正文未授权'),{code:'forbidden'});});await p.state.clear();assert.equal(p.state.memories.length,0);assert.equal(p.state.canClear,false);assert.match(p.state.clearState.feedback,/未授权/);}finally{p.close();}
+});
+
+test('same-view refresh cannot release a held clear POST guard or cancel its deadline', async () => {
+ let expire=()=>{},cancels=0,confirms=0;
+ const p=await page({after:fn=>{expire=fn;return 1;},cancel:()=>{cancels++;}});
+ const wait=deferred();let first:Promise<void>|undefined,second:Promise<void>|undefined;
+ try {
+  p.receipt(()=>wait.promise);p.ask(()=>{confirms++;return true;});
+  first=p.state.clear();await tick();assert.equal(p.writes(),1);
+  const beforeReads=p.reads();await p.state.load();
+  second=p.state.clear();await tick();
+  assert.equal(p.writes(),1,'manual refresh must not permit a second POST');
+  assert.equal(confirms,1,'manual refresh must not permit a second confirmation');
+  assert.equal(p.reads(),beforeReads,'same-view refresh is guarded while clearing');
+  assert.equal(p.state.clearState.pending,true);assert.equal(cancels,0,'original deadline remains scheduled');
+  expire();await first;assert.equal(p.state.clearState.pending,false);assert.match(p.state.clearState.feedback,/未知/);
+  wait.resolve(undefined);await second;await tick();assert.doesNotMatch(p.state.clearState.feedback,/已清除/);assert.equal(p.reads(),beforeReads);
+ } finally {wait.resolve(undefined);await first;await second;p.close();}
 });

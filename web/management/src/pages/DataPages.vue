@@ -73,6 +73,7 @@ function changed() {
   window.dispatchEvent(new Event("demo-storage-changed"));
 }
 async function load() {
+  if (clearState.pending) return;
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   const token = ++request,
     page = props.route.page,
@@ -169,7 +170,12 @@ async function load() {
     if (token === request) loading.value = false;
   }
 }
-watch(() => props.route, load, { immediate: true });
+watch(() => props.route, () => {
+  // Actual navigation invalidates the old view; a same-view refresh cannot
+  // release a clear that may still execute on the server.
+  memoryClear.invalidate();
+  void load();
+}, { immediate: true });
 function switchDevice(event: Event) {
   location.href = linkTo(
     props.scope,
@@ -706,7 +712,7 @@ function memoryDate(date: string) {
       <section v-else class="panel">
         <div v-if="liveMode" class="section-head">
           <p>片段可能截断，完整内容请查看来源聊天。长期人物记忆尚未接入。</p>
-          <button class="memory-refresh" @click="load">刷新记忆</button>
+          <button class="memory-refresh" :disabled="clearState.pending" @click="load">刷新记忆</button>
         </div>
         <label for="memory-device">选择设备</label
         ><select
