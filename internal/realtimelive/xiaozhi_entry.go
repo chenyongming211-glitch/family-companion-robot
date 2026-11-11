@@ -90,56 +90,64 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		trace := s.traceConnection(r)
+		trace.stage(connectionEntry, 0)
+		reject := func(stage connectionStage, status int) {
+			trace.stage(stage, status)
+			w.WriteHeader(status)
+		}
 		if configErr != nil || s.initErr != nil {
-			w.WriteHeader(503)
+			reject(connectionAuth, 503)
 			return
 		}
 		if r.Header.Get("Origin") != "" {
-			w.WriteHeader(403)
+			reject(connectionAuth, 403)
 			return
 		}
 		mac, err := net.ParseMAC(r.Header.Get("Device-Id"))
 		if err != nil || len(mac) != 6 {
-			w.WriteHeader(403)
+			reject(connectionAuth, 403)
 			return
 		}
 		entry, registered := cfg.registry.Lookup(mac.String())
 		if !registered && authority == nil {
-			w.WriteHeader(403)
+			reject(connectionAuth, 403)
 			return
 		}
 		var device voiceidentity.Device
 		if registered {
 			if _, ok := cfg.registry.Authenticate(mac.String(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); !ok || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-				w.WriteHeader(401)
+				reject(connectionAuth, 401)
 				return
 			}
 		} else {
 			token, ok := validFactoryBearer(r.Header.Get("Authorization"))
 			if !ok {
-				w.WriteHeader(401)
+				reject(connectionAuth, 401)
 				return
 			}
 			var status int
 			device, status = authority.authenticate(r.Context(), mac.String(), token)
 			if status != 0 {
-				w.WriteHeader(status)
+				reject(connectionAuth, status)
 				return
 			}
 		}
+		trace.stage(connectionAuth, http.StatusOK)
 		version := r.Header.Get("Protocol-Version")
 		if version == "" {
 			version = "1"
 		}
 		if version != "1" && version != "2" && version != "3" {
-			w.WriteHeader(400)
+			reject(connectionVersion, 400)
 			return
 		}
+		trace.stage(connectionVersion, http.StatusOK)
 		if registered {
 			var err error
 			device, err = s.devices.BindXiaozhi(mac.String(), entry.Token)
 			if err != nil {
-				w.WriteHeader(503)
+				reject(connectionAdmission, 503)
 				return
 			}
 		}
@@ -147,33 +155,55 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		lease := s.reserveLocked(device.ID)
 		s.mu.Unlock()
 		if lease == nil {
-			w.WriteHeader(409)
+			reject(connectionAdmission, 409)
 			return
 		}
+		trace.stage(connectionAdmission, http.StatusOK)
 		defer s.releaseLease(lease)
-		ws, err := (&websocket.Upgrader{HandshakeTimeout: 5 * time.Second, ReadBufferSize: 8192, WriteBufferSize: 8192, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}).Upgrade(w, r, nil)
+		upgradeStatus := 0
+		upgrader := websocket.Upgrader{HandshakeTimeout: 5 * time.Second, ReadBufferSize: 8192, WriteBufferSize: 8192, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
+		if trace != nil {
+			// Preserve gorilla v1.5.3's default rejection headers/body exactly.
+			upgrader.Error = func(w http.ResponseWriter, r *http.Request, status int, _ error) {
+				upgradeStatus = status
+				w.Header().Set("Sec-Websocket-Version", "13")
+				http.Error(w, http.StatusText(status), status)
+			}
+		}
+		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
+			trace.stage(connectionUpgrade, upgradeStatus)
 			return
 		}
+		trace.stage(connectionUpgrade, http.StatusSwitchingProtocols)
 		defer ws.Close()
 		if !s.attachLease(lease, ws) {
+			trace.stage(connectionDisconnect, websocket.CloseGoingAway)
 			return
 		}
 		ws.SetReadLimit(16384)
 		ws.SetReadDeadline(time.Now().Add(8 * time.Second))
 		kind, b, err := ws.ReadMessage()
-		if err != nil || kind != websocket.TextMessage {
+		if err != nil {
+			trace.stage(connectionHello, connectionReadStatus(err))
+			return
+		}
+		if kind != websocket.TextMessage {
+			trace.stage(connectionHello, websocket.CloseUnsupportedData)
 			return
 		}
 		hello, err := protocol.ParseRealtimeHello(b, int(version[0]-'0'))
 		if err != nil {
+			trace.stage(connectionHello, websocket.ClosePolicyViolation)
 			ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, err.Error()), time.Now().Add(time.Second))
 			return
 		}
 		if !hello.Features["playback_progress_v1"] || !hello.Features["playback_drain_v1"] {
+			trace.stage(connectionHello, websocket.ClosePolicyViolation)
 			ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "playback_drain_required"), time.Now().Add(time.Second))
 			return
 		}
+		trace.stage(connectionHello, http.StatusOK)
 		owner := Ownership{DeviceID: device.ID, ClientType: "xiaozhi"}
 		// Firmware version is advisory. The authenticated binding, never
 		// Client-Id or a hello-supplied identity, determines the record owner.
@@ -182,6 +212,7 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		}
 		dir, err := s.sessionDirectory(owner)
 		if err != nil {
+			trace.stage(connectionSession, http.StatusInternalServerError)
 			return
 		}
 		session := s.newSession(ws, dir)
@@ -194,7 +225,10 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		s.attachDiagnostics(session)
 		session.enableDeviceControls()
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
+		trace.session(session.rec.owner.SessionID)
+		trace.stage(connectionSession, http.StatusOK)
 		s.runDevice(session)
+		trace.stage(connectionDisconnect, 0)
 	})
 	return http.MaxBytesHandler(mux, 16384)
 }

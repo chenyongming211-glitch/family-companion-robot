@@ -21,6 +21,7 @@ import (
 )
 
 type Server struct {
+	connectionLog     *log.Logger // Set before serving; correlation logs only.
 	clearing          map[string]bool
 	clearWG           sync.WaitGroup
 	stopping          bool
