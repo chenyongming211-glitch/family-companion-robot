@@ -11,6 +11,7 @@ import {
   readRoute,
 } from "./navigation.ts";
 import { api, liveMode } from "./api.ts";
+import { onSensitiveInvalidated } from "./sensitive-session.ts";
 import CorePages from "./pages/CorePages.vue";
 import DataPages from "./pages/DataPages.vue";
 import OperationsPages from "./pages/OperationsPages.vue";
@@ -28,6 +29,15 @@ const resetMessage = ref(""),
   storageMode = ref(api.storageMode),
   reloadKey = ref(0);
 let authVersion = 0;
+const pageVisible = ref(document.visibilityState === "visible");
+let unsubscribeSensitive = () => {};
+function foreground() {
+  pageVisible.value = document.visibilityState === "visible";
+  if (pageVisible.value) {
+    reloadKey.value++;
+    void refreshAccount();
+  }
+}
 const implemented =
   scope === "admin"
     ? [
@@ -106,6 +116,7 @@ async function refreshAccount() {
     const current = await api.getAccount(scope);
     if (version === authVersion) {
       account.value = current;
+      pageVisible.value = document.visibilityState === "visible";
       sessionError.value = "";
       if (current) sessionNotice.value = "";
     }
@@ -127,9 +138,11 @@ function expired() {
   authVersion++;
   account.value = null;
   sessionReady.value = true;
+  pageVisible.value = document.visibilityState === "visible";
   sessionNotice.value = "登录已过期，请重新登录。";
 }
 function update() {
+  pageVisible.value = document.visibilityState === "visible";
   route.value = readRoute(scope);
   void refreshAccount();
 }
@@ -137,6 +150,11 @@ function restorePage(event: PageTransitionEvent) {
   if (event.persisted) location.reload();
 }
 onMounted(() => {
+  unsubscribeSensitive = onSensitiveInvalidated(() => {
+    pageVisible.value = false;
+    reloadKey.value++;
+  });
+  document.addEventListener("visibilitychange", foreground);
   window.addEventListener("hashchange", update);
   window.addEventListener("pageshow", restorePage);
   window.addEventListener("demo-storage-changed", refreshDemo);
@@ -144,6 +162,8 @@ onMounted(() => {
   void refreshAccount();
 });
 onUnmounted(() => {
+  unsubscribeSensitive();
+  document.removeEventListener("visibilitychange", foreground);
   authVersion++;
   window.removeEventListener("hashchange", update);
   window.removeEventListener("pageshow", restorePage);
@@ -160,6 +180,7 @@ async function logout() {
   try {
     await api.logout(scope);
     account.value = null;
+    pageVisible.value = true;
     sessionNotice.value = "";
     location.href = linkTo(scope, "login");
   } catch (error) {
@@ -240,7 +261,7 @@ async function reset() {
         <div>
           <strong>{{ scope === "admin" ? "管理工作台" : "伴伴" }}</strong
           ><span class="demo">{{
-            liveMode ? "真实数据 · 只读接入" : "前端演示 · 虚构数据"
+            liveMode ? "真实数据 · 设备回执确认" : "前端演示 · 虚构数据"
           }}</span>
         </div>
         <div class="top-actions">
@@ -298,6 +319,7 @@ async function reset() {
             >返回首页</a
           >
         </section>
+        <section v-else-if="liveMode && !pageVisible" class="panel" role="status">页面内容已清理，请重新进入页面读取。</section>
         <component
           v-else
           :is="pageComponent"

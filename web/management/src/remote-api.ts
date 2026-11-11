@@ -1,7 +1,10 @@
+import { invalidateSensitive, sessionGeneration } from "./sensitive-session.ts";
 import type { MockApi } from "./mock-api.ts";
 import { ApiError } from "./mock-api.ts";
 import type {
   Account,
+  DeviceRuntime,
+  ControlInput,
   Conversation,
   Device,
   Family,
@@ -22,13 +25,35 @@ export type RecordPage = {
   pendingSources?: boolean;
 };
 
+
+function checkedRuntime(id: string, value: DeviceRuntime): DeviceRuntime {
+  const percent = (number: unknown) => typeof number === "number" &&
+    Number.isInteger(number) && number >= 0 && number <= 100;
+  const optionalPercent = (number: unknown) => number === null || percent(number);
+  const c = value?.command;
+  if (!value || value.deviceId !== id ||
+      !["unknown", "offline", "online"].includes(value.connection) ||
+      typeof value.seenAt !== "string" || typeof value.boot !== "string" ||
+      (value.connection === "online" && (!value.boot || !value.seenAt || Number.isNaN(Date.parse(value.seenAt)))) ||
+      typeof value.canControl !== "boolean" ||
+      !optionalPercent(value.volume) || !optionalPercent(value.brightness) ||
+      !(c === null || (c && typeof c.id === "string" && c.id &&
+        ["volume", "brightness"].includes(c.field) && percent(c.value) &&
+        ["queued", "sent", "confirmed", "failed", "expired", "unknown"].includes(c.status) &&
+        optionalPercent(c.actual))))
+    throw new ApiError("invalid_runtime", "设备状态响应未核实，请刷新后再操作。");
+  return value;
+}
+
 export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
+  const accounts = new Map<Scope, string>();
   async function request<T>(
     scope: Scope,
     resource: string,
     init: RequestInit = {},
     anonymous = false,
   ): Promise<T> {
+    const generation = sessionGeneration();
     let response: Response;
     try {
       response = await fetcher(`/api/${scope}/${resource}`, {
@@ -43,6 +68,11 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     } catch {
       throw new ApiError("network_error", "管理服务连接失败，请重试。");
     }
+    if (generation !== sessionGeneration()) throw new ApiError("stale_response", "页面已离开或账号已变化，请重新读取。");
+    if (response.status === 401 && !anonymous) {
+      invalidateSensitive();
+      if (typeof window !== "undefined") window.dispatchEvent(new Event("management-session-expired"));
+    }
     let data: unknown;
     try {
       data = await response.json();
@@ -52,13 +82,8 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
         `管理服务响应异常（HTTP ${response.status}）。`,
       );
     }
+    if (response.ok && generation !== sessionGeneration()) throw new ApiError("stale_response", "页面已离开或账号已变化，请重新读取。");
     if (!response.ok) {
-      if (
-        response.status === 401 &&
-        !anonymous &&
-        typeof window !== "undefined"
-      )
-        window.dispatchEvent(new Event("management-session-expired"));
       const error = data as { code?: string; message?: string };
       throw new ApiError(
         typeof error?.code === "string" ? error.code : "request_failed",
@@ -123,7 +148,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
       >("admin", "accounts");
     },
     async login(scope: Scope, username: string, password: string) {
-      return request<Account>(
+      const account = await request<Account>(
         scope,
         "login",
         {
@@ -132,16 +157,29 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
         },
         true,
       );
+      invalidateSensitive();
+      accounts.set(scope, JSON.stringify(account));
+      return account;
     },
     async logout(scope: Scope) {
+      invalidateSensitive();
+      accounts.delete(scope);
       await request(scope, "logout", { method: "POST", body: "{}" });
     },
     async getAccount(scope: Scope) {
       try {
-        return await request<Account>(scope, "session", {}, true);
+        const account = await request<Account>(scope, "session", {}, true);
+        const identity = JSON.stringify(account);
+        if (accounts.has(scope) && accounts.get(scope) !== identity) invalidateSensitive();
+        accounts.set(scope, identity);
+        return account;
       } catch (error) {
-        if (error instanceof ApiError && error.code === "unauthenticated")
+        if (error instanceof ApiError && error.code === "unauthenticated") {
+          const hadAccount=accounts.has(scope);
+          invalidateSensitive(); accounts.delete(scope);
+          if(hadAccount && typeof window!=="undefined")window.dispatchEvent(new Event("management-session-expired"));
           return null;
+        }
         throw error;
       }
     },
@@ -170,7 +208,16 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
         `memories/${encodeURIComponent(id)}?${params}`,
       );
     },
-    clearMemories: unsupported,
+    async getDeviceRuntime(id: string, scope: Scope = "admin") {
+      return checkedRuntime(id, await request<DeviceRuntime>(scope, `device-runtime/${encodeURIComponent(id)}`));
+    },
+    async controlDevice(id: string, value: ControlInput, scope: Scope = "admin") {
+      return checkedRuntime(id, await request<DeviceRuntime>(scope, `device-runtime/${encodeURIComponent(id)}`, {method:"PUT",body:JSON.stringify({field:value.field,value:value.value,boot:value.boot})}));
+    },
+    async clearMemories(id: string, scope: Scope = "admin") {
+      const receipt = await request<{deviceId:string;status:string}>(scope, `memory-clear/${encodeURIComponent(id)}`, {method:"POST",body:JSON.stringify({confirm:true})});
+      if (receipt?.deviceId !== id || receipt.status !== "confirmed") throw new ApiError("memory_clear_unconfirmed", "清除结果未核实，请刷新近期记忆。");
+    },
     getPrivacy: unsupported,
     updatePrivacy: unsupported,
     getDailySummaries: unsupported,

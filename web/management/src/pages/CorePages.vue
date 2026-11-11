@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Scope, PageRoute, Device, Conversation } from "../types.ts";
 import { api, liveMode } from "../api.ts";
+import RuntimeControls from "../components/RuntimeControls.vue";
+import { onSensitiveInvalidated } from "../sensitive-session.ts";
 import { linkTo } from "../navigation.ts";
 const props = defineProps<{ scope: Scope; route: PageRoute }>();
 const emit = defineEmits<{ storageChanged: [] }>();
@@ -46,13 +48,25 @@ function endingBasis(conversation: Conversation) {
 }
 let request = 0;
 let inFlight = false;
+let unsubscribeSensitive = () => {};
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 onMounted(() => {
+  unsubscribeSensitive = onSensitiveInvalidated(() => {
+    request++;
+    inFlight = false;
+    device.value = null;
+    chat.value = null;
+    devices.value = [];
+    chats.value = [];
+    feedback.value = "";
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = undefined;
+  });
   if (liveMode)
     refreshTimer = setInterval(() => {
       if (
         document.visibilityState === "visible" &&
-        ["conversations", "conversation"].includes(props.route.page) &&
+        ["conversations", "conversation", "devices", "overview", "home"].includes(props.route.page) &&
         !inFlight &&
         !saving.value
       )
@@ -60,6 +74,7 @@ onMounted(() => {
     }, 5000);
 });
 onBeforeUnmount(() => {
+  unsubscribeSensitive();
   request++;
   if (refreshTimer) clearInterval(refreshTimer);
 });
@@ -100,6 +115,14 @@ async function load(silent = false) {
   feedback.value = "";
   try {
     const ds = await api.listDevices(scope);
+    if (liveMode && ["overview", "home", "devices"].includes(selected.page)) {
+      await Promise.all(ds.map(async d => {
+        const runtime = await api.getDeviceRuntime(d.id, scope);
+        if (runtime.deviceId !== d.id) throw new Error("设备状态不匹配");
+        d.connection = runtime.connection;
+        d.lastSeen = runtime.seenAt;
+      }));
+    }
     const selectedDevice =
       selected.device ||
       (!hasDevice && liveMode ? (ds[0]?.id ?? "") : selected.device);
@@ -112,8 +135,17 @@ async function load(silent = false) {
     if (
       ["device", "settings", "configuration"].includes(page) &&
       (selectedDevice || hasDevice)
-    )
+    ) {
       d = await api.getDevice(selectedDevice, scope);
+      if (liveMode) {
+        const runtime = await api.getDeviceRuntime(selectedDevice, scope);
+        if (runtime.deviceId !== d.id) throw new Error("设备状态不匹配");
+        d.connection = runtime.connection;
+        d.lastSeen = runtime.seenAt;
+        d.volume = runtime.volume;
+        d.brightness = runtime.brightness;
+      }
+    }
     if (["overview", "home", "conversations"].includes(page)) {
       const filter = {
         scope,
@@ -172,11 +204,7 @@ function changePage(step: number) {
   void load();
 }
 function connectionLabel(value: string) {
-  return value === "unknown"
-    ? "未上报"
-    : value === "latest_connection"
-      ? "最近有连接"
-      : value;
+  return { unknown: "未上报", online: "在线", offline: "离线", latest_connection: "最近有连接" }[value] ?? value;
 }
 function lastSeen(value: string) {
   if (!value) return "未上报";
@@ -348,7 +376,7 @@ async function deleteChat() {
         <div class="panel">
           <span>服务状态</span
           ><strong class="status">{{
-            liveMode ? "真实只读" : "演示模式"
+            liveMode ? "真实数据" : "演示模式"
           }}</strong
           ><small>{{ liveMode ? "管理服务已接入" : "未连接真实服务" }}</small>
         </div>
@@ -448,7 +476,7 @@ async function deleteChat() {
           <h1>{{ device.name }}</h1>
           <p>{{ device.location }} · {{ device.model }}</p>
         </div>
-        <span class="badge">{{ connectionLabel(device.connection) }}</span>
+        <span v-if="!liveMode" class="badge">{{ connectionLabel(device.connection) }}</span>
       </div>
       <div class="columns">
         <section class="panel">
@@ -464,13 +492,13 @@ async function deleteChat() {
               <dt>最近上报</dt>
               <dd>{{ lastSeen(device.lastSeen) }}</dd>
             </div>
-            <div>
+            <div v-if="!liveMode">
               <dt>音量</dt>
               <dd>
                 {{ device.volume === null ? "未上报" : device.volume + "%" }}
               </dd>
             </div>
-            <div>
+            <div v-if="!liveMode">
               <dt>屏幕亮度</dt>
               <dd>
                 {{
@@ -514,7 +542,8 @@ async function deleteChat() {
             </option>
           </select>
         </section>
-      </div></template
+      </div>
+      <RuntimeControls v-if="liveMode" :key="device.id" :device-id="device.id" :scope="scope" /></template
     >
     <template v-else-if="route.page === 'conversations'"
       ><div class="heading">
@@ -721,37 +750,22 @@ async function deleteChat() {
           <p>
             {{
               liveMode
-                ? "当前显示只读资料，网页设置下发尚未接入。"
+                ? "调整设备音量和亮度，等待设备真实回执。"
                 : "只修改当前浏览器中的示例数据。"
             }}
           </p>
         </div>
       </div>
-      <section v-if="liveMode" class="panel form">
-        <h2>只读设备资料</h2>
-        <dl>
-          <div>
-            <dt>名称</dt>
-            <dd>{{ device.name }}</dd>
-          </div>
-          <div>
-            <dt>音量</dt>
-            <dd>
-              {{ device.volume === null ? "未上报" : device.volume + "%" }}
-            </dd>
-          </div>
-          <div>
-            <dt>亮度</dt>
-            <dd>
-              {{
-                device.brightness === null ? "未上报" : device.brightness + "%"
-              }}
-            </dd>
-          </div>
-        </dl>
-        <p>网页修改名称、音量和亮度将在后续接入；这里不会下发设备操作。</p>
-        <a class="button" :href="linkTo(scope, 'family')">查看家庭与访问范围</a>
-      </section>
+      <div v-if="liveMode">
+        <section class="panel form">
+          <label for="settings-device">选择设备</label>
+          <select id="settings-device" :value="device.id" @change="switchSettingsDevice">
+            <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }} · {{ d.location }}</option>
+          </select>
+          <p>{{ device.name }} · {{ device.model }}</p>
+        </section>
+        <RuntimeControls :key="device.id" :device-id="device.id" :scope="scope" />
+      </div>
       <form v-else class="panel form" @submit.prevent="save">
         <label for="settings-device">选择设备</label
         ><select

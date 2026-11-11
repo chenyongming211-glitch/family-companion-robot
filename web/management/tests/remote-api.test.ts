@@ -27,7 +27,7 @@ test("live lists use business chats while source conversation links remain compa
   assert.equal(page.pendingSources, true);
 });
 
-test("live memory reads carry scope and selected device, while clear remains unsupported", async () => {
+test("live memory reads carry scope and selected device, with selected scope", async () => {
   const seen: string[] = [];
   const api = createRemoteApi((async (input: string | URL | Request) => {
     seen.push(String(input));
@@ -39,7 +39,6 @@ test("live memory reads carry scope and selected device, while clear remains uns
     "/api/family/memories?device=dev_fixture",
     "/api/admin/memories/mem-fixture-1?device=dev_fixture",
   ]);
-  await assert.rejects(api.clearMemories("dev_fixture", "family"), /尚未接入/);
   assert.equal(seen.length, 2);
 });
 
@@ -162,4 +161,47 @@ test("a rejected login stays a form error; expired protected reads notify the pa
     if (previous) Object.defineProperty(globalThis, "window", previous);
     else Reflect.deleteProperty(globalThis, "window");
   }
+});
+
+test('runtime and clear use exact scoped paths and shape, and reject mismatched clear receipts', async()=>{
+ const seen:any[]=[];let result:any={deviceId:'dev/x',status:'confirmed'};
+ const api=createRemoteApi((async(url:any,init:any)=>{seen.push({url,init});return new Response(JSON.stringify(String(url).includes('device-runtime')?{deviceId:'dev/x',connection:'unknown',seenAt:'',boot:'',volume:null,brightness:null,canControl:false,command:null}:result));}) as typeof fetch);
+ await api.getDeviceRuntime('dev/x','admin');await api.controlDevice('dev/x',{field:'volume',value:60,boot:'boot'},'family');await api.clearMemories('dev/x','admin');
+ assert.deepEqual(seen.map(x=>x.url),['/api/admin/device-runtime/dev%2Fx','/api/family/device-runtime/dev%2Fx','/api/admin/memory-clear/dev%2Fx']);
+ assert.equal(seen[1].init.method,'PUT');assert.deepEqual(JSON.parse(seen[1].init.body),{field:'volume',value:60,boot:'boot'});assert.deepEqual(JSON.parse(seen[2].init.body),{confirm:true});
+ for(const bad of [{deviceId:'other',status:'confirmed'},{deviceId:'dev/x',status:'unknown'},{},null]){result=bad;await assert.rejects(api.clearMemories('dev/x','admin'),/核实/);}
+});
+
+test('401 in another scope invalidates a delayed sensitive response even with malformed JSON', async()=>{
+ let resolve!:(x:Response)=>void;
+ const pending=new Promise<Response>(r=>resolve=r);
+ const api=createRemoteApi((async()=>pending) as typeof fetch);
+ const result=api.getMemory('m','family','d');
+ const other=createRemoteApi((async()=>new Response('broken',{status:401})) as typeof fetch);
+ await assert.rejects(other.listDevices('admin'));
+ resolve(new Response(JSON.stringify({text:'sensitive'})));
+ await assert.rejects(result,/页面已离开|账号已变化/);
+});
+test('logout invalidates pending reads across API instances before network completes',async()=>{
+ let resolve!:(x:Response)=>void;const pending=new Promise<Response>(r=>resolve=r);
+ const a=createRemoteApi((async()=>pending) as typeof fetch);
+ const read=a.listMemories({deviceId:'d',scope:'family'});
+ const b=createRemoteApi((async()=>new Response('{}')) as typeof fetch);await b.logout('admin');
+ resolve(new Response('[]'));await assert.rejects(read,/页面已离开|账号已变化/);
+});
+test('changed account invalidates a read started under previous identity',async()=>{
+ let identity='first',resolve!:(x:Response)=>void;
+ const api=createRemoteApi((async(url:any)=>String(url).endsWith('/session')?new Response(JSON.stringify({email:identity,role:'member',scope:'admin'})):new Promise<Response>(r=>resolve=r)) as typeof fetch);
+ await api.getAccount('admin');const read=api.listDevices('admin');identity='second';await api.getAccount('admin');resolve(new Response('[]'));await assert.rejects(read,/账号已变化/);
+});
+
+
+test('malformed runtime DTOs cannot become trusted status or control receipts',async()=>{
+ const good={deviceId:'d',connection:'online',seenAt:'2026-11-11T00:00:00Z',boot:'b',volume:null,brightness:30,canControl:true,command:null};
+ let result:any=good;
+ const api=createRemoteApi((async()=>new Response(JSON.stringify(result))) as typeof fetch);
+ assert.equal((await api.getDeviceRuntime('d','admin')).volume,null);
+ for(const bad of [null,{}, {...good,deviceId:'other'},{...good,volume:101},{...good,volume:undefined},{...good,canControl:'yes'},{...good,command:{id:1,field:'volume',value:20,status:'confirmed',actual:20}}]){
+  result=bad;await assert.rejects(api.getDeviceRuntime('d','admin'),/核实/);await assert.rejects(api.controlDevice('d',{field:'volume',value:20,boot:'b'},'admin'),/核实/);
+ }
 });

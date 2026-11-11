@@ -60,6 +60,8 @@ export type Memory = {
   id: string;
   deviceId: string;
   conversationId: string;
+  chatId?: string;
+  turnId?: string;
   text: string;
   date: string;
   user?: string;
@@ -118,4 +120,12 @@ export type Snapshot = {
   privacy: Record<string, Privacy>;
   accounts: Partial<Record<Scope, Account>>;
   audit: AuditEvent[];
+};
+
+export type RuntimeField = "volume" | "brightness";
+export type ControlInput = { field: RuntimeField; value: number; boot: string };
+export type DeviceRuntime = {
+  deviceId: string; connection: string; seenAt: string; boot: string;
+  volume: number | null; brightness: number | null; canControl: boolean;
+  command: {id:string;field:RuntimeField;value:number;status:string;actual:number|null;expiresAt?:string} | null;
 };

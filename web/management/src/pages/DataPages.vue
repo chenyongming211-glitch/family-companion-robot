@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import type {
   Scope,
   PageRoute,
@@ -13,6 +13,8 @@ import type {
 import { api, liveMode } from "../api.ts";
 import { linkTo } from "../navigation.ts";
 import "../data-pages.css";
+import { createMemoryClearController } from "../runtime-control.ts";
+import { onSensitiveInvalidated } from "../sensitive-session.ts";
 const props = defineProps<{ scope: Scope; route: PageRoute }>();
 const devices = ref<Device[]>([]),
   families = ref<Family[]>([]),
@@ -41,7 +43,27 @@ const email = ref(""),
   model = ref("微雪 ESP32-S3"),
   joinCode = ref("");
 let request = 0;
+const clearState=reactive({pending:false,feedback:""});
+const canClear=ref(false);
+const memoryClear=createMemoryClearController(api,clearState,async(isCurrent)=>{
+  const token=request,id=selectedMemoryDeviceId.value;
+  memories.value=[];memory.value=null;
+  try {
+    const items=await api.listMemories({deviceId:id,scope:props.scope});
+    if(token===request && isCurrent())memories.value=items;
+  } catch(e) {
+    if(token===request)canClear.value=false;
+    throw e;
+  }
+});
+let unsubscribeSensitive=()=>{};
+onMounted(()=>{unsubscribeSensitive=onSensitiveInvalidated(()=>{
+  request++; memoryClear.invalidate(); canClear.value=false;
+  memories.value=[]; memory.value=null; secret.value=""; account.value=null;
+  devices.value=[];families.value=[];family.value=null;accounts.value=[];daily.value=[];
+});});
 onBeforeUnmount(() => {
+  unsubscribeSensitive();memoryClear.invalidate();
   request++;
 });
 function message(e: unknown) {
@@ -58,6 +80,7 @@ async function load() {
     deviceId = props.route.device,
     familyId = props.route.family,
     memoryId = props.route.memory;
+  memoryClear.invalidate();canClear.value=false;
   loading.value = true;
   error.value = "";
   feedback.value = "";
@@ -77,6 +100,7 @@ async function load() {
       ms: Memory[] = [],
       m: Memory | null = null,
       p: Privacy | null = null;
+    let authorizedClear=false;
     let ac: typeof accounts.value = [],
       days: typeof daily.value = [];
     if (page === "families") fs = await api.listFamilies(scope);
@@ -100,7 +124,13 @@ async function load() {
       ["memories", "memory"].includes(page) &&
       (!liveMode || memoryDevice || params.has("device"))
     )
+    {
       ms = await api.listMemories({ deviceId: memoryDevice, scope });
+      if(liveMode){
+        const runtime=await api.getDeviceRuntime(memoryDevice,scope);
+        authorizedClear=runtime.deviceId===memoryDevice && runtime.canControl;
+      }
+    }
     if (
       page === "memory" ||
       (page === "memories" && scope === "admin" && params.has("memory"))
@@ -117,6 +147,8 @@ async function load() {
     if (token !== request) return;
     devices.value = ds;
     selectedMemoryDeviceId.value = memoryDevice;
+    canClear.value=authorizedClear;
+    memoryClear.authorize(memoryDevice,scope,authorizedClear);
     account.value = a;
     families.value = fs;
     family.value = f;
@@ -132,7 +164,7 @@ async function load() {
         : "family@example.test";
     secret.value = "";
   } catch (e) {
-    if (token === request) error.value = message(e);
+    if (token === request) {memories.value=[];memory.value=null;canClear.value=false;memoryClear.invalidate();error.value = message(e);}
   } finally {
     if (token === request) loading.value = false;
   }
@@ -161,12 +193,11 @@ async function perform(action: () => Promise<void>) {
 }
 async function login() {
   const scope = props.scope,
-    token = request,
     e = email.value,
     s = secret.value;
   await perform(async () => {
     await api.login(scope, e, s);
-    if (token === request)
+    if (props.route.page === "login" && props.scope === scope && document.visibilityState === "visible")
       location.href = linkTo(scope, scope === "admin" ? "overview" : "home");
   });
 }
@@ -256,7 +287,12 @@ async function savePrivacy() {
   });
 }
 async function clear() {
-  if (liveMode) return;
+  if (liveMode) {
+    await memoryClear.clear(()=>confirm("清除这台设备的近期记忆？聊天记录会保留，新对话可产生新记忆。"));
+    canClear.value=memoryClear.canClear();
+    if(!canClear.value){memories.value=[];memory.value=null;}
+    return;
+  }
   const id = props.route.device,
     scope = props.scope,
     token = request;
@@ -279,7 +315,8 @@ function memoryLink(m: Memory) {
 function chatLink(m: Memory) {
   return linkTo(props.scope, "conversation", {
     device: m.deviceId,
-    chat: m.conversationId,
+    chat: m.chatId || m.conversationId,
+    ...(m.turnId ? {turn:m.turnId} : {}),
   });
 }
 function memoryDate(date: string) {
@@ -681,6 +718,8 @@ function memoryDate(date: string) {
             {{ d.name }} · {{ d.location }}
           </option>
         </select>
+        <button v-if="liveMode && canClear" class="data-danger" :disabled="clearState.pending" @click="clear">{{clearState.pending?'正在确认清除…':'清除本设备近期记忆'}}</button>
+        <p v-if="liveMode" role="status">{{clearState.feedback}}</p>
         <div v-if="memory" class="data-detail">
           <h2>记忆详情</h2>
           <template v-if="liveMode"

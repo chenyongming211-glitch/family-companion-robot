@@ -5,6 +5,8 @@ import type {
   Privacy,
   Member,
   Account,
+  DeviceRuntime,
+  ControlInput,
 } from "./types.ts";
 import {
   initialData,
@@ -285,6 +287,13 @@ export function createMockApi(storage?: DemoStorage) {
     },
     async getDevice(id: string, scope: Scope = "admin") {
       return clone(findDevice(id, scope));
+    },
+    async getDeviceRuntime(id: string, scope: Scope = "admin"): Promise<DeviceRuntime> {
+      const d = findDevice(id, scope);
+      return {deviceId:id, connection:d.connection, seenAt:d.lastSeen, boot:"demo", volume:d.volume,brightness:d.brightness,canControl:false,command:null};
+    },
+    async controlDevice(_id:string, _value:ControlInput, _scope:Scope="admin"):Promise<DeviceRuntime> {
+      return fail("demo_only", "请使用演示设置，不会控制真实设备。");
     },
     async updateDevice(
       id: string,

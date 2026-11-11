@@ -1,0 +1,35 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import * as vue from 'vue';
+import {parse,compileScript,compileTemplate} from '@vue/compiler-sfc';
+import ts from 'typescript';
+import * as controller from '../src/runtime-control.ts';
+import * as sensitive from '../src/sensitive-session.ts';
+const source=readFileSync(new URL('../src/components/RuntimeControls.vue',import.meta.url),'utf8');
+const tick=()=>new Promise(r=>setImmediate(r));
+test('actual Vue control component stops on hide/unmount, switches device and isolates late results',async()=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
+ const doc=new EventTarget() as EventTarget & {visibilityState:string};doc.visibilityState='visible';Object.defineProperty(globalThis,'document',{configurable:true,value:doc});
+ let resolve!:(x:any)=>void;let calls=0;const seen:string[]=[];
+ const runtime=(id:string)=>({deviceId:id,connection:'online',boot:'b',seenAt:'',volume:30,brightness:null,canControl:true,command:null});
+ const api={getDeviceRuntime:async(id:string)=>{seen.push(id);calls++;if(calls===1)return runtime(id);return new Promise(r=>resolve=r);},controlDevice:async()=>{throw new Error('no write');}};
+ const {descriptor}=parse(source);const script=compileScript(descriptor,{id:'fixture'});
+ const code=ts.transpileModule(script.content,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+ const realRequire=createRequire(import.meta.url),module={exports:{} as any};
+ new Function('require','module','exports',code)((name:string)=>name==='vue'?vue:name==='../api.ts'?{api}:name==='../runtime-control.ts'?controller:name==='../sensitive-session.ts'?sensitive:realRequire(name),module,module.exports);
+ const component=module.exports.default;component.render=()=>null;
+ const renderer=vue.createRenderer<any,any>({createElement:()=>({}),insert:()=>{},remove:()=>{},createText:()=>({}),createComment:()=>({}),setText:()=>{},setElementText:()=>{},parentNode:()=>null,nextSibling:()=>null,patchProp:()=>{}});
+ const props=vue.reactive({deviceId:'d',scope:'admin'});const app=renderer.createApp({setup:()=>()=>vue.h(component,props)});app.mount({});await tick();
+ const instance=(app as any)._instance.subTree.component;assert.equal(instance.setupState.state.volume,30);
+ props.deviceId='other';await vue.nextTick();await tick();assert.equal(instance.setupState.state.runtime,null);
+ doc.visibilityState='hidden';doc.dispatchEvent(new Event('visibilitychange'));resolve(runtime('other'));await tick();assert.equal(instance.setupState.state.runtime,null);
+ sensitive.invalidateSensitive();assert.equal(instance.setupState.state.volume,null);
+ app.unmount();const before=calls;doc.visibilityState='visible';doc.dispatchEvent(new Event('visibilitychange'));await tick();assert.equal(calls,before);
+ if(previous)Object.defineProperty(globalThis,'document',previous);else Reflect.deleteProperty(globalThis,'document');
+});
+test('native range bindings use preview/input and exactly one change handler with eleven circles',()=>{
+ const {descriptor}=parse(source);const output=compileTemplate({source:descriptor.template!.content,filename:'RuntimeControls.vue',id:'fixture'});assert.deepEqual(output.errors,[]);
+ assert.match(source,/step="10"/);assert.match(source,/@input="control.preview/);assert.match(source,/@change="control.submit/);assert.match(source,/v-for="n in 11"/);assert.doesNotMatch(source,/@pointerup|@touchend|@keyup/);
+});

@@ -45,6 +45,7 @@ async function page() {
     onBeforeUnmount: () => {},
   };
   const run = new Function(
+    "onSensitiveInvalidated",
     "api",
     "liveMode",
     "pageProps",
@@ -55,6 +56,7 @@ async function page() {
     `const { ref, computed, watch, onMounted, onBeforeUnmount } = vue; const defineProps = () => pageProps; const defineEmits = () => () => {}; const linkTo = () => ''; ${code}; return { load, chat, chats, devices, error, loading };`,
   );
   const state = run(
+    () => () => {},
     api,
     true,
     {
