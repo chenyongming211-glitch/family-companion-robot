@@ -232,7 +232,7 @@ func TestConnectionTraceReadStatus(t *testing.T) {
 		{&websocket.CloseError{Code: 1000, Text: "secret"}, 1000},
 		{&websocket.CloseError{Code: 1006, Text: "secret"}, 1006},
 		{os.ErrDeadlineExceeded, 408}, {errors.New("secret"), 0},
-		{websocket.ErrReadLimit, 1009}, {fmt.Errorf("wrapped: %w", websocket.ErrReadLimit), 1009},
+		{websocket.ErrReadLimit, 0}, {fmt.Errorf("wrapped: %w", websocket.ErrReadLimit), 0},
 	} {
 		if got := connectionReadStatus(tc.err); got != tc.want {
 			t.Fatalf("status=%d want=%d", got, tc.want)
@@ -386,7 +386,7 @@ func TestConnectionTraceOversizedHelloObservedCloseAndRetry(t *testing.T) {
 	waitActive(t, s, 0)
 	out := logs.String()
 	assertTraceLines(t, out)
-	if !strings.Contains(out, "stage=hello status=1009") || strings.Contains(out, "status=1011") {
+	if !strings.Contains(out, "stage=hello status=0") || strings.Contains(out, "status=1009") || strings.Contains(out, "status=1011") {
 		t.Fatalf("size-limit trace mismatch: %s", out)
 	}
 	retry, _, err := traceDial(h.URL, "c1-0123456789abcdef-00000002")
@@ -455,3 +455,45 @@ func TestConnectionTraceAttachRefusalDoesNotInventClose(t *testing.T) {
 type traceWriterFunc func([]byte) (int, error)
 
 func (f traceWriterFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestConnectionTraceMalformedLengthDoesNotInventClose(t *testing.T) {
+	s := NewServer(Config{}, nil, t.TempDir(), "trace")
+	logs := &traceBuffer{}
+	s.connectionLog = log.New(logs, "", 0)
+	entered := make(chan *Session, 1)
+	s.runDevice = func(session *Session) { defer session.cancel(); entered <- session; session.ws.ReadMessage() }
+	h := httptest.NewServer(s.DeviceHandler(DeviceConfig{Token: testDeviceToken, AllowedDevice: testDeviceMAC}))
+	defer h.Close()
+	c, _, err := traceDial(h.URL, "c1-0123456789abcdef-00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	// FIN text, masked64-bit payload length with forbidden high bit. Gorilla
+	// rejects this via setReadRemaining/ErrReadLimit before sending close1009.
+	frame := []byte{0x81, 0xff, 0x80, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4}
+	if _, err := c.UnderlyingConn().Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	_, _, readErr := c.ReadMessage()
+	if !websocket.IsCloseError(readErr, websocket.CloseAbnormalClosure) {
+		t.Fatal("malformed length transport behavior changed")
+	}
+	c.Close()
+	waitActive(t, s, 0)
+	out := logs.String()
+	assertTraceLines(t, out)
+	if !strings.Contains(out, "stage=hello status=0") || strings.Contains(out, "status=1009") {
+		t.Fatalf("invented malformed-length close: %s", out)
+	}
+	retry, _, err := traceDial(h.URL, "c1-0123456789abcdef-00000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retry.Close()
+	deviceHello(t, retry)
+	nextSession(t, entered)
+	retry.Close()
+	waitActive(t, s, 0)
+}
