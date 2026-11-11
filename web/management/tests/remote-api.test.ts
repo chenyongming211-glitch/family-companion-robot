@@ -205,3 +205,11 @@ test('malformed runtime DTOs cannot become trusted status or control receipts',a
   result=bad;await assert.rejects(api.getDeviceRuntime('d','admin'),/核实/);await assert.rejects(api.controlDevice('d',{field:'volume',value:20,boot:'b'},'admin'),/核实/);
  }
 });
+
+test('audit page uses only the admin endpoint and exact filter parameters with no mock fallback', async () => {
+  const seen:Array<{url:string;init?:RequestInit}>=[];
+  const api=createRemoteApi((async(input:string|URL|Request,init?:RequestInit)=>{seen.push({url:String(input),init});return new Response(JSON.stringify({items:[],hasMore:false,pending:true}));}) as typeof fetch);
+  const page=await api.listAuditPage({device:'dev_'+'a'.repeat(32),from:'2026-11-01T00:00:00Z',to:'2026-11-12T00:00:00Z',action:'access',offset:50,limit:50});
+  const url=new URL(seen[0]!.url,'http://fixture');assert.equal(url.pathname,'/api/admin/audit');
+  assert.deepEqual([...url.searchParams.keys()].sort(),['action','device','from','limit','offset','to']);assert.equal(url.searchParams.get('offset'),'50');assert.equal(url.searchParams.get('action'),'access');assert.equal(page.pending,true);assert.equal(seen[0]!.init?.cache,'no-store');
+});

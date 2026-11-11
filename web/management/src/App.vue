@@ -15,6 +15,7 @@ import { onSensitiveInvalidated } from "./sensitive-session.ts";
 import CorePages from "./pages/CorePages.vue";
 import DataPages from "./pages/DataPages.vue";
 import OperationsPages from "./pages/OperationsPages.vue";
+import AuditPage from "./pages/AuditPage.vue";
 const scope: Scope = location.pathname.endsWith("family.html")
   ? "family"
   : "admin";
@@ -47,6 +48,7 @@ const implemented =
         "conversations",
         "conversation",
         "configuration",
+        "audit",
         "families",
         "family",
         "accounts",
@@ -100,7 +102,9 @@ const dataRoutes = [
   "memory",
 ];
 const pageComponent = computed(() =>
-  dataRoutes.includes(displayedRoute.value.page)
+  liveMode && scope === "admin" && displayedRoute.value.page === "audit"
+    ? AuditPage
+    : dataRoutes.includes(displayedRoute.value.page)
     ? DataPages
     : operationsRoutes.includes(route.value.page)
       ? OperationsPages

@@ -129,3 +129,30 @@ export type DeviceRuntime = {
   volume: number | null; brightness: number | null; canControl: boolean;
   command: {id:string;field:RuntimeField;value:number;status:string;actual:number|null;expiresAt?:string} | null;
 };
+
+export type AuditAction = "access" | "device_control" | "memory_clear" | "settings";
+export type AuditItem = {
+  id: string;
+  time: string;
+  actor: string;
+  deviceId: string;
+  target: string;
+  action: AuditAction;
+  description: string;
+  status: "recorded" | "requested" | "confirmed" | "failed" | "unknown";
+  result: string;
+  scope: Scope;
+  canOpenDevice: boolean;
+  field?: string;
+  value?: number;
+  actual?: number;
+};
+export type AuditFilter = {
+  device?: string;
+  from?: string;
+  to?: string;
+  action?: AuditAction;
+  offset?: number;
+  limit?: number;
+};
+export type AuditPage = { items: AuditItem[]; hasMore: boolean; pending: boolean };

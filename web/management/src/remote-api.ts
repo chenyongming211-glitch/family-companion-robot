@@ -3,6 +3,8 @@ import type { MockApi } from "./mock-api.ts";
 import { ApiError } from "./mock-api.ts";
 import type {
   Account,
+  AuditFilter,
+  AuditPage,
   DeviceRuntime,
   ControlInput,
   Conversation,
@@ -225,10 +227,21 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     listExpressions: unsupported,
     listTasks: unsupported,
     listFirmware: unsupported,
+    async listAuditPage(filter: AuditFilter = {}) {
+      const params = new URLSearchParams({
+        offset: String(filter.offset ?? 0),
+        limit: String(filter.limit ?? 50),
+      });
+      for (const key of ["device", "from", "to", "action"] as const) {
+        if (filter[key]) params.set(key, filter[key]);
+      }
+      return request<AuditPage>("admin", `audit?${params}`);
+    },
     listAudit: unsupported,
     getOperations: unsupported,
   } satisfies Omit<MockApi, "storageMode" | "mode"> & {
     storageMode: "server";
     mode: "live";
+    listAuditPage(filter?: AuditFilter): Promise<AuditPage>;
   };
 }
