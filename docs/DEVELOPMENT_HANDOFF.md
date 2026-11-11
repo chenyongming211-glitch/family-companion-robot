@@ -1,5 +1,9 @@
 # 换电脑开发交接
 
+**两端网页登录卡住已修复，真实登录通过（2026-11-11最新）：** 用户截图“页面内容已清理”对应匿名session401也触发全局失效，App隐藏内容/组件代次变化使登录组件加载中止。934842c只在已有登录身份变成401时失效清理，匿名检查返回null；真实登录不再预填旧owner。过期/权限401/身份变化/隐藏/退出/迟到正文清理保留。云端RED3与默认账号RED2后完整65项、类型/mock/live构建、规格/质量PASS；40输入source0370e181、web4map e5ba1c02、新JS main-DOvG8u1B.js/065b89e0。真实浏览器两端均沿用原账号成功登录管理总览/家庭首页，切回前台恢复通过；TaskSpace7保留两页给用户，没有保存密码/Cookie/正文或清浏览器状态。
+
+此次只添加新哈希JS、原子替换当前admin-audit/web两HTML；旧JS/CSS保持，当前必需4文件、目录实际5文件，HTTP SHA/no-store通过。来源934842c及overlay manifest见release的frontend-login-fix.json，原4文件manifest是此前历史，旧审计helper的静态pins不能用来覆盖这次授权更新。管理1401849/Voice1161080等进程/argv/env、配置/资料/记录/.memory/旧static/current、Caddy内容元数据及原audit前缀保持，本次前后防火墙摘要相同，无服务重启或规则修改。**原审计中断事务及原始防火墙摘要差异仍待处理**，不能因本次修复宣称原事务已完成。私有HTML备份仅云端`/var/backups/family-robot/management-login-20261111`，来源/测试`/home/ubuntu/management-login-20261111`；见[登录修复验证](verification/2026-11-11-management-login.md)。下方旧JS为此前快照。
+
 **内部后台操作审计已切换，发布全保护验收未收口（2026-11-11最新）：** 内部“审计”已接真实平台日志、设备/本地日期/类型过滤、分页和安全设备跳转。访问仅表示已记录，旧请求无回执显示未知；语音/按键操作尚无管理日志来源。新schema1绑定锚点，Reader原权限快照和最新快照共同核对；跨家庭无法确定来源的新访问/旧六键访问保守不输出，原日志保持。后端716d5c8/c8b515f/bd3e4db、Vue043b267/75512e4已推main，无新依赖/服务/Voice/固件改动。
 
 最终main Go专项25顶层/53含子用例、vet/build/194输入一致通过；完整116/326是最后两项保护前版本，不冒充最终全包成绩。实际178仅7文件增量得180，反向恢复全部基线；canonical source c8c2edcd，候选相关72顶层/217含子用例、零失败/跳过、vet/build和源码不变通过。Vue61项、类型/mock/live构建、Asia/Shanghai7项及375/1440合成浏览器/隐私负例通过。测试空间/合成服务/新增18795转发关闭，原18791保留。
