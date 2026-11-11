@@ -177,6 +177,22 @@ func parseAuditSnapshot(raw []byte) ([]auditEntry, bool, error) {
 		if d.Decode(&entry) != nil || entry.UTC.IsZero() {
 			return nil, false, ErrSource
 		}
+		var extra any
+		if d.Decode(&extra) != io.EOF {
+			return nil, false, ErrSource
+		}
+		// Only an exact original six-key object can use legacy time attribution.
+		// Presence of even an empty modern field requires a complete modern anchor.
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(line, &fields) != nil {
+			return nil, false, ErrSource
+		}
+		entry.legacy = len(fields) == 6
+		for _, key := range []string{"utc", "actorID", "scope", "action", "deviceID", "recordID"} {
+			if _, ok := fields[key]; !ok {
+				entry.legacy = false
+			}
+		}
 		entries = append(entries, entry)
 	}
 	return entries, pending, nil
@@ -212,7 +228,17 @@ func auditAnchor(c Config, viewer string, e auditEntry) (Binding, bool) {
 	if err != nil {
 		return b, false
 	}
-	if e.OperationID != "" && (e.FamilyID == "" || e.BindingID == "" || e.BindingVersion < 1) {
+	// Old access rows carry access time but no resource binding. After a
+	// cross-family transfer that time cannot prove which household's history
+	// was read, regardless of the event actor's current grants or existence.
+	if class, _ := auditClass(e.Action); e.legacy && class == "access" {
+		for _, other := range c.Bindings {
+			if other.DeviceID == e.DeviceID && other.FamilyID != b.FamilyID && !e.UTC.Before(other.From) {
+				return b, false
+			}
+		}
+	}
+	if !e.legacy && ((e.SchemaVersion != 0 && e.SchemaVersion != 1) || e.FamilyID == "" || e.BindingID == "" || e.BindingVersion < 1) {
 		return b, false
 	}
 	if (e.FamilyID != "" && e.FamilyID != b.FamilyID) || (e.BindingID != "" && e.BindingID != b.ID) || (e.BindingVersion != 0 && e.BindingVersion != b.Version) {

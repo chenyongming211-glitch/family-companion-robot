@@ -9,6 +9,7 @@ import (
 )
 
 type auditEntry struct {
+	SchemaVersion  int       `json:"schemaVersion,omitempty"`
 	UTC            time.Time `json:"utc"`
 	ActorID        string    `json:"actorID"`
 	Scope          string    `json:"scope"`
@@ -24,6 +25,7 @@ type auditEntry struct {
 	Value          *int      `json:"value,omitempty"`
 	Actual         *int      `json:"actual,omitempty"`
 	Reason         string    `json:"reason,omitempty"`
+	legacy         bool
 }
 
 func appendAudit(path string, entry auditEntry) error {
@@ -75,7 +77,7 @@ func (s *Server) audit(a, scope, device, record string) error {
 	return s.auditAction(a, scope, "read_conversation", device, record)
 }
 func (s *Server) auditAction(a, scope, action, device, record string) error {
-	entry := auditEntry{UTC: s.now().UTC(), ActorID: a, Scope: scope, Action: action, DeviceID: device, RecordID: record}
+	entry := auditEntry{SchemaVersion: 1, UTC: s.now().UTC(), ActorID: a, Scope: scope, Action: action, DeviceID: device, RecordID: record}
 	// Capture the binding at the access/request time. This helper is never used
 	// while holding runtimeMu; runtime commands already carry their own anchor.
 	if device != "" {
@@ -83,7 +85,7 @@ func (s *Server) auditAction(a, scope, action, device, record string) error {
 		if e != nil {
 			return e
 		}
-		if b, e := c.Authorize(a, scope, device, entry.UTC, false); e == nil {
+		if b, e := c.Authorize(a, scope, device, entry.UTC, false); e == nil && auditAccessAnchorSafe(c, a, scope, action, device, entry.UTC, b) {
 			entry.FamilyID = b.FamilyID
 			entry.BindingID = b.ID
 			entry.BindingVersion = b.Version
@@ -91,13 +93,32 @@ func (s *Server) auditAction(a, scope, action, device, record string) error {
 	}
 	return s.auditRecord(entry)
 }
+
+// Historical record readers may authorize an older family era. Without the
+// resource binding at this append boundary, a current grant cannot distinguish
+// that access from another family era the same actor can also read. Keep the
+// private event, but omit its anchor rather than guess its household.
+func auditAccessAnchorSafe(c Config, actor, scope, action, device string, at time.Time, current Binding) bool {
+	if action != "read_conversation" && action != "read_chat" && action != "list_chats" {
+		return true
+	}
+	for _, b := range c.Bindings {
+		if b.DeviceID != device || b.FamilyID == current.FamilyID || at.Before(b.From) {
+			continue
+		}
+		if allowed, e := c.Authorize(actor, scope, device, b.From, false); e == nil && allowed.FamilyID != current.FamilyID {
+			return false
+		}
+	}
+	return true
+}
 func (s *Server) auditRecord(entry auditEntry) error {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
 	return s.auditWrite(s.opts.AuditPath, entry)
 }
 func (s *Server) operationAudit(actor, scope, action, id, op string, b Binding, field string, value *int) auditEntry {
-	return auditEntry{UTC: s.now().UTC(), ActorID: actor, Scope: scope, Action: action, DeviceID: id, OperationID: op, FamilyID: b.FamilyID, BindingID: b.ID, BindingVersion: b.Version, Field: field, Value: value}
+	return auditEntry{SchemaVersion: 1, UTC: s.now().UTC(), ActorID: actor, Scope: scope, Action: action, DeviceID: id, OperationID: op, FamilyID: b.FamilyID, BindingID: b.ID, BindingVersion: b.Version, Field: field, Value: value}
 }
 
 // terminalAudit is an attempt, not a durable guarantee. The private flag is set

@@ -1,9 +1,11 @@
 package management
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -579,5 +581,187 @@ func TestAuditRemovedActorStillVisibleAndPrivateOwner(t *testing.T) {
 		if w = request(s, "GET", "/api/admin/audit", "", admin); w.Code != 503 {
 			t.Fatal("non-root owner", w.Code, w.Body)
 		}
+	}
+}
+
+func TestAuditHistoricalReadDoesNotLeakAcrossTransfer(t *testing.T) {
+	for _, dualGrant := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dual-grant-%v", dualGrant), func(t *testing.T) {
+			s, now := httpFixture(t)
+			id := s.cfg.Devices[0].ID
+			record := "20261109T010000Z-0123456789abcdef0123456789abcdef"
+			httpRecord(t, s, record, id, *now, "")
+			cut := now.Add(time.Minute)
+			s.cfg.Bindings[0].Until = &cut
+			s.cfg.Bindings = append(s.cfg.Bindings, Binding{ID: "transferred-b", Version: 2, FamilyID: "home-b", DeviceID: id, From: cut})
+			s.cfg.Accounts[1].InternalAdmin = true
+			s.cfg.Accounts[1].Memberships[0].Devices = append(s.cfg.Accounts[1].Memberships[0].Devices, DeviceGrant{DeviceID: id, CanReadBody: true})
+			if dualGrant {
+				s.cfg.Accounts[0].Memberships = append(s.cfg.Accounts[0].Memberships, Membership{FamilyID: "home-b", Devices: []DeviceGrant{{DeviceID: id, CanReadBody: true}}})
+			}
+			*now = now.Add(2 * time.Minute)
+			a := login(t, s, "family", "alice")
+			if w := request(s, "GET", "/api/family/conversations/"+record, "", a); w.Code != 200 {
+				t.Fatalf("historical read must retain success: %d %s", w.Code, w.Body)
+			}
+			rows := auditRows(t, s)
+			if len(rows) != 1 {
+				t.Fatal(rows)
+			}
+			for _, viewer := range []string{"alice", "bob", "observer"} {
+				w := request(s, "GET", "/api/admin/audit", "", login(t, s, "admin", viewer))
+				var p AuditPage
+				json.Unmarshal(w.Body.Bytes(), &p)
+				if w.Code != 200 || len(p.Items) != 0 {
+					t.Errorf("uncertain historical access exposed to %s: %d %s", viewer, w.Code, w.Body)
+				}
+			}
+			// Actual old six-field data stays attributed by its stored timestamp,
+			// independent of the device's current family.
+			legacy := auditEntry{UTC: cut.Add(-time.Minute), ActorID: "alice", Scope: "family", Action: "read_conversation", DeviceID: id, RecordID: record}
+			if err := s.auditRecord(legacy); err != nil {
+				t.Fatal(err)
+			}
+			for _, viewer := range []string{"alice", "bob"} {
+				w := request(s, "GET", "/api/admin/audit", "", login(t, s, "admin", viewer))
+				var p AuditPage
+				json.Unmarshal(w.Body.Bytes(), &p)
+				want := 0
+				if viewer == "alice" {
+					want = 1
+				}
+				if w.Code != 200 || len(p.Items) != want {
+					t.Fatalf("legacy event-time owner %s: %d %s", viewer, w.Code, w.Body)
+				}
+			}
+			// A single-current-family actor's ordinary read still gets a safe,
+			// complete modern anchor even on a device transferred from another family.
+			currentRecord := "20261109T010200Z-abcdef0123456789abcdef0123456789"
+			httpRecord(t, s, currentRecord, id, *now, "")
+			if w := request(s, "GET", "/api/family/conversations/"+currentRecord, "", login(t, s, "family", "bob")); w.Code != 200 {
+				t.Fatal(w.Code, w.Body)
+			}
+			rows = auditRows(t, s)
+			last := rows[len(rows)-1]
+			if last["schemaVersion"] != float64(1) || last["familyID"] != "home-b" || last["bindingID"] != "transferred-b" || last["bindingVersion"] != float64(2) {
+				t.Fatalf("normal modern access lacks anchor: %#v", last)
+			}
+			w := request(s, "GET", "/api/admin/audit", "", login(t, s, "admin", "bob"))
+			var p AuditPage
+			json.Unmarshal(w.Body.Bytes(), &p)
+			if w.Code != 200 || len(p.Items) != 1 || p.Items[0].Status != "recorded" {
+				t.Fatal("ordinary current access excluded", w.Code, w.Body)
+			}
+		})
+	}
+}
+
+func TestAuditOnlyExactSixFieldLegacyMayInferBinding(t *testing.T) {
+	s, now := httpFixture(t)
+	admin := login(t, s, "admin", "alice")
+	id := s.cfg.Devices[0].ID
+	for _, action := range []string{"read_chat", "device_control_requested", "clear_memory_requested", "update_device_settings_requested"} {
+		for _, extra := range []map[string]any{nil, {"schemaVersion": 1}, {"schemaVersion": 0}, {"operationID": ""}, {"familyID": "home-a"}, {"bindingID": ""}, {"bindingVersion": 0}, {"field": "volume"}, {"value": 0}, {"actual": 0}, {"outcome": ""}, {"reason": ""}} {
+			row := map[string]any{"utc": now.UTC().Format(time.RFC3339Nano), "actorID": "alice", "scope": "admin", "action": action, "deviceID": id, "recordID": "private-old-record"}
+			for k, v := range extra {
+				row[k] = v
+			}
+			raw, _ := json.Marshal(row)
+			os.WriteFile(s.opts.AuditPath, append(raw, '\n'), 0600)
+			w := request(s, "GET", "/api/admin/audit", "", admin)
+			var p AuditPage
+			json.Unmarshal(w.Body.Bytes(), &p)
+			want := 0
+			if extra == nil {
+				want = 1
+			}
+			if w.Code != 200 || len(p.Items) != want {
+				t.Errorf("partial modern row masquerades as legacy (%v): %d %s", extra, w.Code, w.Body)
+			}
+		}
+
+	}
+}
+
+func TestAuditCompletedLineRequiresDecoderEOF(t *testing.T) {
+	s, now := httpFixture(t)
+	admin := login(t, s, "admin", "alice")
+	row := auditEntry{UTC: *now, ActorID: "alice", Scope: "admin", Action: "read_chat", DeviceID: s.cfg.Devices[0].ID, RecordID: "private-old-record"}
+	raw, _ := json.Marshal(row)
+	for _, extra := range []string{" junk", " {}", " []", " null", " true", " 42"} {
+		os.WriteFile(s.opts.AuditPath, append(append(append([]byte{}, raw...), []byte(extra)...), '\n'), 0600)
+		if w := request(s, "GET", "/api/admin/audit", "", admin); w.Code != 503 {
+			t.Errorf("trailing completed content accepted %q: %d %s", extra, w.Code, w.Body)
+		}
+	}
+	os.WriteFile(s.opts.AuditPath, append(append([]byte{}, raw...), []byte(" \t\r\n")...), 0600)
+	if w := request(s, "GET", "/api/admin/audit", "", admin); w.Code != 200 {
+		t.Fatal("trailing JSON whitespace rejected", w.Code, w.Body)
+	}
+	os.WriteFile(s.opts.AuditPath, append(append(append([]byte{}, raw...), '\n'), []byte(`{"uncompleted":`)...), 0600)
+	w := request(s, "GET", "/api/admin/audit", "", admin)
+	var p AuditPage
+	json.Unmarshal(w.Body.Bytes(), &p)
+	if w.Code != 200 || !p.Pending || len(p.Items) != 1 {
+		t.Fatal("bounded incomplete tail", w.Code, w.Body)
+	}
+}
+
+func TestAuditLegacyAccessAfterTransferIsUnattributed(t *testing.T) {
+	s, now := httpFixture(t)
+	id := s.cfg.Devices[0].ID
+	old := s.cfg.Bindings[0]
+	cut := now.Add(-time.Minute)
+	s.cfg.Accounts[1].InternalAdmin = true
+	s.cfg.Accounts[1].Memberships[0].Devices = append(s.cfg.Accounts[1].Memberships[0].Devices, DeviceGrant{DeviceID: id, CanReadBody: true})
+	cookies := map[string]*http.Cookie{"alice": login(t, s, "admin", "alice"), "bob": login(t, s, "admin", "bob")}
+	check := func(action, actor string, at time.Time, alice, bob int) {
+		t.Helper()
+		row := auditEntry{UTC: at, ActorID: actor, Scope: "family", Action: action, DeviceID: id, RecordID: "private-historical-record"}
+		raw, _ := json.Marshal(row)
+		raw = append(raw, '\n')
+		os.WriteFile(s.opts.AuditPath, raw, 0600)
+		for _, viewer := range []string{"alice", "bob"} {
+			w := request(s, "GET", "/api/admin/audit", "", cookies[viewer])
+			var p AuditPage
+			json.Unmarshal(w.Body.Bytes(), &p)
+			want := alice
+			if viewer == "bob" {
+				want = bob
+			}
+			if w.Code != 200 || len(p.Items) != want {
+				t.Errorf("legacy %s actor=%s viewer=%s at=%s: %d %s", action, actor, viewer, at, w.Code, w.Body)
+			}
+			if want == 1 && action != "read_chat" && action != "read_conversation" && action != "list_chats" && action != "read_memories" && action != "read_memory" && len(p.Items) == 1 && p.Items[0].Status != "unknown" {
+				t.Errorf("legacy write fabricated outcome: %s", w.Body)
+			}
+		}
+		after, _ := os.ReadFile(s.opts.AuditPath)
+		if !bytes.Equal(raw, after) {
+			t.Fatal("legacy log rewritten")
+		}
+	}
+	access := []string{"read_conversation", "read_chat", "list_chats", "read_memories", "read_memory"}
+	// Single-family access before any transfer remains visible.
+	for _, action := range access {
+		check(action, "former-staff", *now, 1, 0)
+	}
+	old.Until = &cut
+	s.cfg.Bindings[0] = old
+	s.cfg.Bindings = append(s.cfg.Bindings, Binding{ID: "same-family-rebind", Version: 2, FamilyID: "home-a", DeviceID: id, From: cut})
+	for _, action := range access {
+		check(action, "former-staff", *now, 1, 0)
+	}
+	s.cfg.Bindings[len(s.cfg.Bindings)-1].FamilyID = "home-b"
+	// Current or removed actor grants cannot disambiguate the old six fields.
+	for _, action := range access {
+		for _, actor := range []string{"alice", "bob", "former-staff"} {
+			check(action, actor, *now, 0, 0)
+		}
+		check(action, "former-staff", cut.Add(-time.Minute), 1, 0)
+	}
+	// Existing legacy write requests retain event-UTC ownership and unknown result.
+	for _, action := range []string{"device_control_requested", "clear_memory_requested", "update_device_settings_requested"} {
+		check(action, "former-staff", *now, 0, 1)
 	}
 }
