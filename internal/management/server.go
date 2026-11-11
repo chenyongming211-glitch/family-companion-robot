@@ -224,7 +224,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				var c ConversationDTO
 				c, e = reader.ReadConversation(a.ID, scope, id, f.DeviceID)
 				if e == nil {
-					e = s.audit(a.ID, scope, c.DeviceID, c.ID)
+					e = s.auditReadAction(reader.Config, a.ID, scope, "read_conversation", c.DeviceID, c.ID)
 				}
 				result = c
 			}
@@ -246,7 +246,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				result, device = c, c.DeviceID
 			}
 			if e == nil {
-				e = s.auditAction(a.ID, scope, action, device, id)
+				e = s.auditReadAction(reader.Config, a.ID, scope, action, device, id)
 			}
 		}
 	case "memories":
@@ -266,7 +266,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if id != "" {
 					action = "read_memory"
 				}
-				e = s.auditAction(a.ID, scope, action, *f.DeviceID, id)
+				e = s.auditReadAction(reader.Config, a.ID, scope, action, *f.DeviceID, id)
 			}
 		}
 	case "families":

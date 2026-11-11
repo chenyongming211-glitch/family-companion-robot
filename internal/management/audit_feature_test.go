@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -763,5 +764,77 @@ func TestAuditLegacyAccessAfterTransferIsUnattributed(t *testing.T) {
 	// Existing legacy write requests retain event-UTC ownership and unknown result.
 	for _, action := range []string{"device_control_requested", "clear_memory_requested", "update_device_settings_requested"} {
 		check(action, "former-staff", *now, 0, 1)
+	}
+}
+
+func TestAuditCaptureRetainsReaderAuthoritySnapshot(t *testing.T) {
+	for _, kind := range []string{"revoke-old-grant", "transfer-and-replace-grant"} {
+		t.Run(kind, func(t *testing.T) {
+			s, cookie, id, path := settingsFixture(t)
+			at := s.now()
+			cut := at.Add(-time.Minute)
+			record := "20261109T005800Z-0123456789abcdef0123456789abcdef"
+			if err := (ConfigStore{path}).Transaction(func(c *Config) error {
+				c.Accounts[1].InternalAdmin = true
+				c.Accounts[1].Memberships[0].Devices = append(c.Accounts[1].Memberships[0].Devices, DeviceGrant{DeviceID: id, CanReadBody: true})
+				if kind == "revoke-old-grant" {
+					c.Bindings[0].Until = &cut
+					c.Bindings = append(c.Bindings, Binding{ID: "capture-b", Version: 2, FamilyID: "home-b", DeviceID: id, From: cut})
+					c.Accounts[0].Memberships = append(c.Accounts[0].Memberships, Membership{FamilyID: "home-b", Devices: []DeviceGrant{{DeviceID: id, CanReadBody: true}}})
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			httpRecord(t, s, record, id, at.Add(-2*time.Minute), "")
+			bob := login(t, s, "admin", "bob")
+			reached, resume := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			// The existing clock hook pauses at the audit capture boundary, after the
+			// real Reader returned using its immutable initial configuration.
+			s.now = func() time.Time {
+				buf := make([]byte, 1<<16)
+				n := runtime.Stack(buf, false)
+				stack := string(buf[:n])
+				if strings.Contains(stack, "management.(*Server).auditAction(") || strings.Contains(stack, "management.(*Server).auditCapture(") {
+					once.Do(func() { close(reached); <-resume })
+				}
+				return at
+			}
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() { done <- request(s, "GET", "/api/family/conversations/"+record, "", cookie) }()
+			select {
+			case <-reached:
+			case <-time.After(2 * time.Second):
+				close(resume)
+				t.Fatal("read did not reach audit capture")
+			}
+			if err := (ConfigStore{path}).Transaction(func(c *Config) error {
+				if kind == "transfer-and-replace-grant" {
+					c.Bindings[0].Until = &cut
+					c.Bindings = append(c.Bindings, Binding{ID: "capture-b", Version: 2, FamilyID: "home-b", DeviceID: id, From: cut})
+				}
+				c.Accounts[0].Memberships = []Membership{{FamilyID: "home-b", Devices: []DeviceGrant{{DeviceID: id, CanReadBody: true}}}}
+				return nil
+			}); err != nil {
+				close(resume)
+				t.Fatal(err)
+			}
+			close(resume)
+			w := <-done
+			if w.Code != 200 {
+				t.Fatalf("original read contract changed: %d %s", w.Code, w.Body)
+			}
+			rows := auditRows(t, s)
+			if len(rows) != 1 || rows[0]["familyID"] != nil || rows[0]["schemaVersion"] != float64(1) {
+				t.Errorf("reader's old resource misanchored after grant change: %#v", rows)
+			}
+			w = request(s, "GET", "/api/admin/audit", "", bob)
+			var page AuditPage
+			json.Unmarshal(w.Body.Bytes(), &page)
+			if w.Code != 200 || len(page.Items) != 0 {
+				t.Errorf("old reader snapshot leaked to new family: %d %s", w.Code, w.Body)
+			}
+		})
 	}
 }

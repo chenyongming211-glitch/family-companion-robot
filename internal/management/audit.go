@@ -77,6 +77,15 @@ func (s *Server) audit(a, scope, device, record string) error {
 	return s.auditAction(a, scope, "read_conversation", device, record)
 }
 func (s *Server) auditAction(a, scope, action, device, record string) error {
+	return s.auditCapture(nil, a, scope, action, device, record)
+}
+
+// Readers pass their exact immutable configuration rather than reacquiring a
+// replacement after the resource has already been read.
+func (s *Server) auditReadAction(readConfig Config, a, scope, action, device, record string) error {
+	return s.auditCapture(&readConfig, a, scope, action, device, record)
+}
+func (s *Server) auditCapture(readConfig *Config, a, scope, action, device, record string) error {
 	entry := auditEntry{SchemaVersion: 1, UTC: s.now().UTC(), ActorID: a, Scope: scope, Action: action, DeviceID: device, RecordID: record}
 	// Capture the binding at the access/request time. This helper is never used
 	// while holding runtimeMu; runtime commands already carry their own anchor.
@@ -85,7 +94,13 @@ func (s *Server) auditAction(a, scope, action, device, record string) error {
 		if e != nil {
 			return e
 		}
-		if b, e := c.Authorize(a, scope, device, entry.UTC, false); e == nil && auditAccessAnchorSafe(c, a, scope, action, device, entry.UTC, b) {
+		b, e := c.Authorize(a, scope, device, entry.UTC, false)
+		safe := e == nil && auditAccessAnchorSafe(c, a, scope, action, device, entry.UTC, b)
+		if safe && readConfig != nil {
+			initial, e := readConfig.Authorize(a, scope, device, entry.UTC, false)
+			safe = e == nil && initial.ID == b.ID && initial.Version == b.Version && initial.FamilyID == b.FamilyID && initial.From.Equal(b.From) && auditAccessAnchorSafe(*readConfig, a, scope, action, device, entry.UTC, b)
+		}
+		if safe {
 			entry.FamilyID = b.FamilyID
 			entry.BindingID = b.ID
 			entry.BindingVersion = b.Version
