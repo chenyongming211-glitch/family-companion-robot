@@ -29,15 +29,16 @@ class WaveshareIntegrationTests(unittest.TestCase):
                           'std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue(']:
             self.assertIn('codec_->ManagedCapture()', defaults.method(service, signature))
 
-    def test_ci_maps_four_isolated_targets_to_the_correct_board(self):
+    def test_ci_maps_only_supported_waveshare_product_and_stock(self):
         workflow = (defaults.FIRMWARE.parent/'.github/workflows/firmware-experiment.yml').read_text()
-        for variant, board in [('m5stack-stopwatch', 'm5stack/stopwatch'),
-                ('m5stack-stopwatch-software-aec', 'm5stack/stopwatch'),
-                ('m5stack-stopwatch-xiaoman', 'm5stack/stopwatch'),
-                ('esp32-s3-touch-amoled-2.16-xiaoman', 'waveshare/esp32-s3-touch-amoled-2.16')]:
-            self.assertIn(f'- variant: {variant}\n            board: {board}', workflow)
+        self.assertIn('- variant: esp32-s3-touch-amoled-2.16-xiaoman\n            board: waveshare/esp32-s3-touch-amoled-2.16', workflow)
+        self.assertEqual(workflow.count('- variant:'), 1)
+        self.assertNotIn('stopwatch', workflow.lower())
         self.assertIn('scripts/build.py "$BOARD" --name "$VARIANT"', workflow)
-        self.assertNotIn('esptool', workflow)
+        baseline = (defaults.FIRMWARE.parent/'.github/workflows/firmware-baseline.yml').read_text()
+        self.assertIn('scripts/build.py waveshare/esp32-s3-touch-amoled-2.16 --name esp32-s3-touch-amoled-2.16 ', baseline)
+        self.assertNotIn('stopwatch', baseline.lower())
+        self.assertNotIn('esptool', workflow+baseline)
 
     def test_dedicated_variant_and_shared_view_are_connected(self):
         board = self.source/'main/boards/waveshare/esp32-s3-touch-amoled-2.16'

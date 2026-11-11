@@ -23,10 +23,13 @@ func supplyFactory(args []string, out io.Writer, migration bool) error {
 	config := f.String("config", "", "existing private config")
 	mac := f.String("mac", "", "canonical MAC")
 	serial := f.String("serial", "", "unique serial")
-	model := f.String("model", "", "S3 model")
+	model := f.String("model", "", "supported model: 微雪 ESP32-S3")
 	output := f.String("output", "", "new private factory bundle")
 	guard := f.String("device-auth", "", "required private legacy device registry")
 	if f.Parse(args) != nil || f.NArg() != 0 || *config == "" || *output == "" || *guard == "" {
+		return management.ErrInvalid
+	}
+	if *model != "微雪 ESP32-S3" {
 		return management.ErrInvalid
 	}
 	if migration {

@@ -17,6 +17,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import tarfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -764,14 +765,60 @@ def bundle_baseline(firmware, tree, output, source_sha, idf_commit):
     if (re.findall(r'^CONFIG_IDF_TARGET=(\S+)\s*$', config, re.M) != ['"esp32s3"']
             or any(value != 'n' for value in re.findall(r'^CONFIG_XMINI_C3_PCM=(\S+)\s*$', config, re.M))):
         raise ValueError('stock baseline target/PCM configuration mismatch')
+    effective = {}
+    for line in config.splitlines():
+        if line.startswith('CONFIG_') and '=' in line:
+            key, value = line.split('=', 1)
+        elif line.startswith('# CONFIG_') and line.endswith(' is not set'):
+            key, value = line[2:-len(' is not set')], 'n'
+        else:
+            continue
+        if key in effective and effective[key] != value:
+            raise ValueError('stock baseline conflicting SDK config key: '+key)
+        effective[key] = value
+    board = 'waveshare/esp32-s3-touch-amoled-2.16'
+    variant = 'esp32-s3-touch-amoled-2.16'
+    if (effective.get('CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16') != 'y'
+            or effective.get('CONFIG_BOARD_TYPE_M5STACK_STOPWATCH', 'n') != 'n'
+            or effective.get('CONFIG_USE_DEVICE_AEC') != 'y'):
+        raise ValueError('stock baseline board/AEC configuration mismatch')
+    # Compare the actual board inputs with the checksum-locked original archive,
+    # independent of the patched product tree and its historical M5 overlays.
+    archive = firmware/'.cache'/(lock['commit']+'.tar.gz')
+    if hashlib.sha256(read_regular(archive)).hexdigest() != lock['archive_sha256']:
+        raise ValueError('stock source archive checksum mismatch')
+    board_source = 'main/boards/'+board+'/esp32-s3-touch-amoled-2.16.cc'
+    compiled = compiled_paths(tree/'build/compile_commands.json')
+    originals = {'main/boards/'+board+'/config.json', board_source}
+    for path in compiled:
+        try:
+            relative = path.relative_to(tree.resolve()).as_posix()
+        except ValueError:
+            continue
+        if relative.startswith('main/'):
+            originals.add(relative)
+    source_inputs = {}
+    with tarfile.open(archive) as upstream:
+        for relative in sorted(originals):
+            member = upstream.getmember(lock['archive_root']+'/'+relative)
+            if not member.isfile():
+                raise ValueError('stock source archive board is not regular')
+            original = upstream.extractfile(member).read()
+            if read_regular(tree/relative) != original:
+                raise ValueError('stock source input differs from locked upstream')
+            source_inputs[relative] = hashlib.sha256(original).hexdigest()
+    if (compiled.count((tree/board_source).resolve()) != 1
+            or any('/main/boards/' in p.as_posix() and '/main/boards/common/' not in p.as_posix()
+                   and '/main/boards/'+board+'/' not in p.as_posix() for p in compiled)):
+        raise ValueError('stock compiled board input mismatch')
     # Required even though config-only unit fixtures may omit compiler output.
     c3_build.regular(tree/'build/compile_commands.json')
     native = verify_no_pcm(tree)
     flash = verify_flash_images(tree)
-    releases = list((tree/'releases').glob('*_m5stack-stopwatch.zip'))
-    if len(releases) != 1:
+    releases = list((tree/'releases').glob('*.zip'))
+    if len(releases) != 1 or not re.fullmatch(r'v[^/]+_waveshare-esp32-s3-touch-amoled-2\.16\.zip', releases[0].name):
         raise ValueError('expected one stock canonical release ZIP')
-    required = ['dependencies.lock', 'sdkconfig', *BUILD_FILES, *NATIVE_NETWORK_FILES,
+    required = ['dependencies.lock', 'sdkconfig', *source_inputs, *BUILD_FILES, *NATIVE_NETWORK_FILES,
                 releases[0].relative_to(tree).as_posix()]
     for relative in required:
         c3_build.regular(tree/relative)
@@ -793,7 +840,9 @@ def bundle_baseline(firmware, tree, output, source_sha, idf_commit):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(read_regular(source))
     (output/'build-evidence.json').write_text(json.dumps(dict(source_sha=source_sha, idf_commit=idf_commit,
-        variant='stock-m5stack-stopwatch', native_network_inputs=native,
+        variant='stock-'+variant, board=board, effective_config=effective,
+        stock_source_inputs=source_inputs, upstream_commit=lock['commit'], archive_sha256=lock['archive_sha256'],
+        native_network_inputs=native,
         flash_inputs=flash,
         dependencies_sha256=digest(tree/'dependencies.lock'), acoustic_acceptance='pending'), indent=2)+'\n')
     (output/'SHA256SUMS').write_text(''.join(digest(path)+'  '+path.relative_to(output).as_posix()+'\n'
@@ -804,7 +853,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tree', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--variant', choices=VARIANTS)
+    parser.add_argument('--variant', choices=(WAVESHARE_VARIANT,))
     parser.add_argument('--baseline', action='store_true', help='unpatched stock S3 evidence')
     parser.add_argument('--source-sha', required=True)
     parser.add_argument('--idf-commit', required=True)

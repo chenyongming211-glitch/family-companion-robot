@@ -25,7 +25,7 @@ def main():
     if set(bundle)!=expected or bundle['schema_version']!=1: raise ValueError('invalid bundle schema')
     for key,pattern in [('device_id',r'dev_[0-9a-f]{32}'),('mac',r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'),('serial',r'[A-Za-z0-9_.-]{1,64}'),('device_key',r'[A-Za-z0-9_-]{43}'),('claim_code',r'[0-9a-f]{32}')]:
         if not isinstance(bundle[key],str) or not re.fullmatch(pattern,bundle[key]): raise ValueError('invalid identity field')
-    if bundle['model'] not in ['微雪 ESP32-S3','M5 ESP32-S3'] or bundle['bootstrap_url']!='https://robot.songguoxue.com/api/device/bootstrap' or bundle['voice_url']!='wss://robot.songguoxue.com/xiaozhi/v1/': raise ValueError('unsupported target')
+    if bundle['model'] != '微雪 ESP32-S3' or bundle['bootstrap_url']!='https://robot.songguoxue.com/api/device/bootstrap' or bundle['voice_url']!='wss://robot.songguoxue.com/xiaozhi/v1/': raise ValueError('unsupported target')
     screen_code=None
     if a.screen_code is not None:
         sys.path.insert(0,str(FIRMWARE.parent/'tools'))
@@ -67,7 +67,7 @@ def main():
             for key in ['salt','verifier']:writer.writerow([key,'file','binary',str(directory/(key+'.bin'))])
             if screen_code is not None:writer.writerow(['screen_code','file','binary',str(directory/'screen.bin')])
         # Captured diagnostics may contain paths; never relay output or bundle values.
-        subprocess.run([sys.executable,str(generator),'generate',str(directory/'factory.csv'),str(directory/'factory.bin'),'0x6000' if bundle['model']=='微雪 ESP32-S3' or screen_code is not None else '0x4000'],check=True,capture_output=True)
+        subprocess.run([sys.executable,str(generator),'generate',str(directory/'factory.csv'),str(directory/'factory.bin'),'0x6000'],check=True,capture_output=True)
         fd=os.open(a.output,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
         with os.fdopen(fd,'wb') as f:f.write((directory/'factory.bin').read_bytes());f.flush();os.fsync(f.fileno())
     print('Private ESP32-S3 factory NVS candidate created; not flashed.')

@@ -18,6 +18,38 @@ class WaveshareEvidenceTests(unittest.TestCase):
     config = existing.EvidenceTests.config
     xiaoman_assets = existing.EvidenceTests.xiaoman_assets
 
+    test_s3_ignores_optional_c3_dependency_override_and_keeps_old_pin = existing.EvidenceTests.test_s3_ignores_optional_c3_dependency_override_and_keeps_old_pin
+    test_native_style_identical_sdk_config_repeats_are_accepted = existing.EvidenceTests.test_native_style_identical_sdk_config_repeats_are_accepted
+    test_conflicting_critical_sdk_config_repeats_are_rejected = existing.EvidenceTests.test_conflicting_critical_sdk_config_repeats_are_rejected
+    test_bytecode_created_after_prepare_does_not_change_source_provenance = existing.EvidenceTests.test_bytecode_created_after_prepare_does_not_change_source_provenance
+
+    def test_unsafe_or_missing_common_effective_config_is_rejected(self):
+        config = self.tree/'sdkconfig'; original = config.read_text()
+        # The retired software-AEC calibration offset is unused by Wave hardware AEC.
+        for changed in [original.replace('# CONFIG_I2S_ISR_IRAM_SAFE is not set', 'CONFIG_I2S_ISR_IRAM_SAFE=y'),
+                        original.replace('CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y', ''),
+                        original.replace('# CONFIG_USE_AUDIO_DEBUGGER is not set', 'CONFIG_USE_AUDIO_DEBUGGER=y')]:
+            config.write_text(changed)
+            with self.subTest(config=changed), self.assertRaises(ValueError): self.verify()
+
+    def test_supported_s3_rejects_pcm_config_and_generated_trailer(self):
+        config = self.tree/'sdkconfig'; original = config.read_text()
+        config.write_text(original+'CONFIG_XMINI_C3_PCM=y\n')
+        with self.assertRaisesRegex(ValueError, 'CONFIG_XMINI_C3_PCM'): self.verify()
+        config.write_text(original)
+        (self.tree/'build/family_c3_pcm').mkdir()
+        with self.assertRaisesRegex(ValueError, 'non-PCM'): self.verify()
+
+    def test_lock_sdk_and_source_provenance_rejections(self):
+        with self.assertRaises(ValueError):
+            self.module.verify(self.firmware, self.tree, VARIANT, '0'*40)
+        original = (self.tree/'dependencies.lock').read_bytes()
+        (self.tree/'dependencies.lock').write_bytes(original+b'\n')
+        with self.assertRaises(ValueError): self.verify()
+        (self.tree/'dependencies.lock').write_bytes(original)
+        (self.firmware/'overlays/a.h').write_bytes(b'changed after prepare')
+        with self.assertRaises(ValueError): self.verify()
+
     def setUp(self):
         existing.EvidenceTests.setUp(self)
         self.asset = self.xiaoman_assets()
@@ -122,6 +154,13 @@ class WaveshareEvidenceTests(unittest.TestCase):
         self.assertEqual((output/'releases'/name).read_bytes(), b'synthetic release ZIP fixture')
         evidence = json.loads((output/'build-evidence.json').read_text())
         self.assertEqual(evidence['variant'], VARIANT)  # wire identity is unchanged
+        self.assertEqual((output/'third_party/xiaozhi-LICENSE').read_bytes(), self.license_bytes)
+        self.assertEqual((output/'THIRD_PARTY_NOTICES.txt').read_bytes(), self.notices_bytes)
+        hashes = (output/'SHA256SUMS').read_text().splitlines()
+        self.assertEqual(len(hashes), len([p for p in output.rglob('*') if p.is_file()])-1)
+        for row in hashes:
+            digest, name = row.split('  ', 1)
+            self.assertEqual(digest, self.digest(output/name))
 
     def test_bundle_rejects_wrong_or_missing_manufacturer_release_name(self):
         for name in ['v2.5.2_'+VARIANT+'.zip', 'v2.5.2_other-'+VARIANT+'.zip',

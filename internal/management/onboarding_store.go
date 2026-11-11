@@ -264,7 +264,7 @@ func ProvisionLegacyFactory(path, deviceID, bindingID, mac, serial, model string
 func provisionFactory(path, deviceID, bindingID, mac, serial, model string, saveBundle func(FactoryBundle) error) (FactoryBundle, error) {
 	var b FactoryBundle
 	mac = strings.ToLower(mac)
-	if !canonicalMAC.MatchString(mac) || !ident.MatchString(serial) || (model != "微雪 ESP32-S3" && model != "M5 ESP32-S3") {
+	if !canonicalMAC.MatchString(mac) || !ident.MatchString(serial) || model != "微雪 ESP32-S3" {
 		return b, ErrInvalid
 	}
 	id, e := randomHex(16)

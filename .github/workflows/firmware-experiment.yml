@@ -1,4 +1,4 @@
-name: StopWatch software AEC experiment
+name: Waveshare product firmware
 on:
   push:
     branches: [main]
@@ -14,15 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - variant: m5stack-stopwatch
-            board: m5stack/stopwatch
-            target: esp32s3
-          - variant: m5stack-stopwatch-software-aec
-            board: m5stack/stopwatch
-            target: esp32s3
-          - variant: m5stack-stopwatch-xiaoman
-            board: m5stack/stopwatch
-            target: esp32s3
           - variant: esp32-s3-touch-amoled-2.16-xiaoman
             board: waveshare/esp32-s3-touch-amoled-2.16
             target: esp32s3
@@ -73,7 +64,7 @@ jobs:
           sha256sum --check SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: stopwatch-patched-${{ matrix.variant }}-${{ github.sha }}
+          name: waveshare-product-${{ matrix.variant }}-${{ github.sha }}
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: true

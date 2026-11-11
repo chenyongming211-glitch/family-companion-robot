@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"familyrobot/internal/management"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ func provisionConfig(t *testing.T) (string, string) {
 func TestProvisionRequiresExplicitLegacyGuardAndPrivateExclusiveBundle(t *testing.T) {
 	p, legacy := provisionConfig(t)
 	output := filepath.Join(filepath.Dir(p), "bundle.json")
-	args := []string{"provision", "--config", p, "--mac", "02:00:00:00:00:01", "--serial", "UNIT1", "--model", "M5 ESP32-S3", "--output", output}
+	args := []string{"provision", "--config", p, "--mac", "02:00:00:00:00:01", "--serial", "UNIT1", "--model", "微雪 ESP32-S3", "--output", output}
 	var out bytes.Buffer
 	if e := run(args, &out); e == nil {
 		t.Fatal("missing legacy MAC guard accepted")
@@ -83,7 +84,7 @@ func TestProvisionRejectsLegacyMACMalformedRegistryAndSymlink(t *testing.T) {
 				t.Fatal(e)
 			}
 			var out bytes.Buffer
-			if e := run([]string{"provision", "--config", p, "--device-auth", legacy, "--mac", "02:00:00:00:00:01", "--serial", "UNIT1", "--model", "M5 ESP32-S3", "--output", filepath.Join(filepath.Dir(p), "bundle.json")}, &out); e == nil {
+			if e := run([]string{"provision", "--config", p, "--device-auth", legacy, "--mac", "02:00:00:00:00:01", "--serial", "UNIT1", "--model", "微雪 ESP32-S3", "--output", filepath.Join(filepath.Dir(p), "bundle.json")}, &out); e == nil {
 				t.Fatal("legacy guard bypass")
 			}
 			c, e := management.LoadConfig(p)
@@ -131,7 +132,7 @@ func TestProvisionAcceptsValidUnrelatedLegacyRegistry(t *testing.T) {
 		t.Fatal(e)
 	}
 	var out bytes.Buffer
-	if e := run([]string{"provision", "--config", p, "--device-auth", legacy, "--mac", "02:00:00:00:00:81", "--serial", "UNIT81", "--model", "M5 ESP32-S3", "--output", filepath.Join(filepath.Dir(p), "bundle.json")}, &out); e != nil {
+	if e := run([]string{"provision", "--config", p, "--device-auth", legacy, "--mac", "02:00:00:00:00:81", "--serial", "UNIT81", "--model", "微雪 ESP32-S3", "--output", filepath.Join(filepath.Dir(p), "bundle.json")}, &out); e != nil {
 		t.Fatal("unrelated valid legacy registry rejected", e)
 	}
 }
@@ -144,7 +145,7 @@ func TestProvisionOutputOpenAndWriteFailuresNeverRegisterIdentity(t *testing.T) 
 		t.Fatal(e)
 	}
 	var out bytes.Buffer
-	if e := run([]string{"provision", "--config", p, "--device-auth", legacy, "--mac", "02:00:00:00:00:91", "--serial", "UNIT91", "--model", "M5 ESP32-S3", "--output", output}, &out); e == nil {
+	if e := run([]string{"provision", "--config", p, "--device-auth", legacy, "--mac", "02:00:00:00:00:91", "--serial", "UNIT91", "--model", "微雪 ESP32-S3", "--output", output}, &out); e == nil {
 		t.Fatal("output open accepted")
 	}
 	c, e := management.LoadConfig(p)
@@ -158,12 +159,36 @@ func TestProvisionOutputOpenAndWriteFailuresNeverRegisterIdentity(t *testing.T) 
 	if e = broken.Close(); e != nil {
 		t.Fatal(e)
 	}
-	_, e = management.ProvisionFactory(p, "02:00:00:00:00:92", "UNIT92", "M5 ESP32-S3", func(b management.FactoryBundle) error { return persistFactoryBundle(broken, dir, b) })
+	_, e = management.ProvisionFactory(p, "02:00:00:00:00:92", "UNIT92", "微雪 ESP32-S3", func(b management.FactoryBundle) error { return persistFactoryBundle(broken, dir, b) })
 	if e == nil {
 		t.Fatal("output write failure accepted")
 	}
 	c, e = management.LoadConfig(p)
 	if e != nil || len(c.FactoryDevices) != 0 {
 		t.Fatal("identity committed after failed output write", e)
+	}
+}
+
+func TestProvisionRetiredModelRejectedBeforeBundleReservation(t *testing.T) {
+	p, legacy := provisionConfig(t)
+	before, _ := os.ReadFile(p)
+	output := filepath.Join(filepath.Dir(p), "bundle.json")
+	if e := os.WriteFile(output, []byte("existing private file"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	var out bytes.Buffer
+	for _, model := range []string{"M5 ESP32-S3", "ESP32-C3"} {
+		e := run([]string{"provision", "--config", p, "--device-auth", legacy, "--mac", "02:00:00:00:00:99", "--serial", "UNIT99", "--model", model, "--output", output}, &out)
+		if !errors.Is(e, management.ErrInvalid) {
+			t.Fatalf("retired model must reject before existing bundle open: %v", e)
+		}
+		got, _ := os.ReadFile(p)
+		if !bytes.Equal(before, got) {
+			t.Fatal("retired model changed config")
+		}
+		got, _ = os.ReadFile(output)
+		if string(got) != "existing private file" {
+			t.Fatal("retired model changed bundle")
+		}
 	}
 }

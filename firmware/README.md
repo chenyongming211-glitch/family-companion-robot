@@ -3,7 +3,8 @@
 This directory pins the unmodified Xiaozhi ESP32 v2.5.2 source at
 `49b4380b3faa0ceadd28a3e78aaf0f311c46c57e`, ESP-IDF v6.1 at
 `fff9895c82d744c7237be8847347bdd1b07c6643`, and ESP-SR 2.4.7 for the
-`m5stack/stopwatch` board directory and `m5stack-stopwatch` variant (`esp32s3`). The source URL, archive SHA256,
+`waveshare/esp32-s3-touch-amoled-2.16` board directory and stock
+`esp32-s3-touch-amoled-2.16` variant (`esp32s3`). The source URL, archive SHA256,
 archive root and SDK identity are recorded in `upstream.lock.json`.
 
 The patched source also has a dedicated Waveshare 2.16 Xiaoman target. The boards
@@ -13,10 +14,17 @@ Waveshare binaries and partition layouts are not interchangeable. Runtime
 dependencies, host tests and target builds run on the cloud host/Actions; the
 Mac is for code/Git and a separately authorized test client.
 
-Supported product firmware is **ESP32-S3 only**: Waveshare 2.16 and M5 StopWatch variants. ESP32-C3 development, builds and acceptance gates were retired by the user on 2026-11-08.
+Supported product firmware is **Waveshare ESP32-S3 2.16 only**. M5 was retired on
+2026-11-11 after the device was returned; ESP32-C3 was retired on 2026-11-08.
+Their sources, parser compatibility and historical evidence remain for provenance,
+but neither target is a current build, provisioning or release gate. Shared S3
+implementation still lives in some historically named M5 paths; do not fork it.
+`run_host_tests.py` keeps Waveshare and common security/lifecycle/audio/allocator
+checks while excluding retired board tests. New factory issuance and NVS creation
+accept only `微雪 ESP32-S3`; historical M5 configuration remains readable.
 
-The onboarding overlay also provides a shared standby control worker for both S3
-boards. After activation, networking, clock synchronization and audio readiness,
+The onboarding overlay also provides a common S3 standby control worker used by
+Waveshare and retained in historical M5 source. After activation, networking, clock synchronization and audio readiness,
 one bounded HTTPS worker reports actual volume/brightness to the authenticated
 management endpoint every five seconds. It reuses one TLS client, validates the
 certificate, disables redirects and caps responses at 2048 bytes. Hardware reads
@@ -61,7 +69,7 @@ root (the SDK checkout must match the exact pinned commit):
   idf.py --version
   cd firmware/.cache/stock
   python3 -m unittest discover -s scripts/tests -v
-  python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch --language zh-CN --zip
+  python3 scripts/build.py waveshare/esp32-s3-touch-amoled-2.16 --name esp32-s3-touch-amoled-2.16 --language zh-CN --zip
   sha256sum build/xiaozhi.bin build/merged-binary.bin > build/SHA256SUMS
 )
 ```
@@ -72,10 +80,10 @@ commit generated binaries, local credentials or vendor output. Future source
 changes will be maintained as tracked patches/overlays against the lock, rather
 than edits to untracked vendor output.
 
-The repository's **Actions → StopWatch stock firmware** workflow runs on
+The repository's **Actions → Waveshare stock firmware** workflow runs on
 `main` firmware changes and supports **Run workflow**. Open a
 successful run matching the exact Git commit and download the
-`stopwatch-stock-<github.sha>` artifact within its seven-day retention period.
+`waveshare-stock-<github.sha>` artifact within its seven-day retention period.
 It contains the source lock, resolved dependency lock, SDK configuration, app and
 merged binaries, generated assets, bootloader, partition table, flasher arguments
 and binary checksums. These records are needed to inspect the flash layout and
@@ -87,12 +95,12 @@ endpoint. The separate experimental source below implements software reference, 
 and opt-in realtime gating. Its target build and physical acoustic acceptance
 remain separate from stock CI.
 
-### Xiaoman wake-word candidate
+### Historical M5 Xiaoman wake-word candidate (retired)
 
 The independent `m5stack-stopwatch-xiaoman` variant retains the software-AEC
 hardware path and selects the Chinese MultiNet7 model. Its acoustic command is
-`xiao man`; the detected-word text is `小满`. The two previous variants remain
-available. Build this candidate on the cloud host in the exact locked SDK:
+`xiao man`; the detected-word text is `小满`. The commands below describe historical reproduction only; these variants are
+not current product builds or release gates:
 
 ```sh
 python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch-xiaoman --language zh-CN --zip
@@ -154,7 +162,7 @@ This target preserves the ES8311 DAC, ES7210 hardware MR input, 24k input/output
 panel, touch, PMU and charging settings. `SoftwareReference()` stays false; the
 separate `ManagedCapture()` capability enables current-generation AFE readiness,
 MultiNet/wake-audio caching and uplink quarantine without constructing a software
-reference. The original three M5 variants keep their selection and AEC policies.
+reference. The original three M5 configurations are retained as historical source only.
 Only this target selects `CONFIG_WAVESHARE_XIAOMAN_REALTIME`; its wake configuration
 is the same `xiao man` / `小满`, `mn7_cn`, threshold 20 and wake-data upload.
 
@@ -283,13 +291,13 @@ The host C++ behavior harness runs through Python test discovery; it does not
 establish device timing, acoustic performance or natural barge-in acceptance.
 
 
-## Completed-DMA AEC experiment
+## Historical M5 completed-DMA AEC experiment (retired)
 
 `0001-stopwatch-software-aec.patch` changes locked upstream files; overlays add
 owned files. The unique `m5stack-stopwatch-software-aec` release variant retains
 the StopWatch pins, physical mono ES8311 open, flash/partition selection and one
-board factory. The original `m5stack-stopwatch` variant/config remains available.
-In an exact locked ESP-IDF environment, the canonical experimental build is:
+board factory. These M5 configurations are historical only, outside active CI
+and supply. The following command documents historical reproduction:
 
 ```sh
 cd firmware/.cache/experiment
@@ -534,30 +542,26 @@ permissions, rejection, segmentation, disk bounds, timeout and stopping.
 
 ## Experimental target CI and field gate
 
-**Actions → StopWatch software AEC experiment** builds four isolated matrix jobs
-in the official `espressif/idf:v6.1` container, asserts the exact locked SDK
-commit, and runs host tests plus the canonical source preparation/build. All
-jobs prepare the same tracked patch/overlay inputs in a fresh tree:
+**Actions → Waveshare product firmware** builds one isolated Waveshare job
+in the official `espressif/idf:v6.1` container, asserts the locked SDK commit,
+and runs host tests plus canonical preparation/build:
 
 ```sh
 python3 firmware/tools/prepare_experiment.py
 cd firmware/.cache/experiment
-python3 scripts/build.py m5stack/stopwatch --name m5stack-stopwatch-software-aec --language zh-CN --zip
-# In the other isolated job: --name m5stack-stopwatch
-# Xiaoman job: --name m5stack-stopwatch-xiaoman
-# Fourth isolated job uses the Waveshare board/variant command above.
+python3 scripts/build.py waveshare/esp32-s3-touch-amoled-2.16 --name esp32-s3-touch-amoled-2.16-xiaoman --language zh-CN --zip
 ```
 
 `tools/verify_experiment.py` rejects resolved native dependency-byte drift,
 checks critical component versions and source provenance, and asserts effective
-SDK config. The original variant from the patched tree keeps software/device
-AEC off and UART primary; the experiment enables software/device AEC and USB
-primary. Both require ISR IRAM safety and unconditional audio debugger off.
-Kconfig may omit the original device-AEC symbol or the experimental secondary
-USB symbol when their dependencies are false; these are disabled, never enabled. The separate unmodified stock workflow remains
-independent of this patched-tree check.
+SDK config for the actual Waveshare board, hardware AEC and product partition
+layout. The independent unmodified stock workflow verifies its own original
+Waveshare board source against the checksum-locked archive, actual compile inputs,
+effective board/AEC configuration, native network inputs, flash images and
+manufacturer-prefixed release ZIP. Legacy verifier functions remain available
+for historical evidence; the public CLI accepts only the current Wave variant.
 
-Download `stopwatch-patched-<variant>-<exact github.sha>` within seven days. Its
+Download `waveshare-product-<variant>-<exact github.sha>` within seven days. Its
 allowlisted contents include source/SDK lock, native resolved dependencies,
 effective sdkconfig, patch/overlay inputs and provenance, app/merged/bootloader/
 partition/assets/flasher args, canonical release ZIP, build identity and SHA256
@@ -576,13 +580,13 @@ acoustic acceptance and USB-noise comparison remain separate pending work.
 
 ## Factory onboarding screen (ESP32-S3)
 
-`prepare_onboarding.py` modifies only its fresh isolated candidate tree. Both
-Waveshare and M5 StopWatch load a device-ID-bound, CRC-validated FRC1 280×280
+`prepare_onboarding.py` modifies only its fresh isolated candidate tree.
+Waveshare loads a device-ID-bound, CRC-validated FRC1 280×280
 monochrome screen code from factory NVS before unactivated onboarding. Activated
 normal boot does not load or expose it. Invalid/missing codes show the existing
 configuration error instead of an unvalidated bitmap.
 
-The M5 240×240 round screen renders a deterministic nearest-neighbour 224×224
+Historical M5 support (retired): its 240×240 round screen renders a deterministic nearest-neighbour 224×224
 I1 code centered at (8,8), without text over the scan area. Subsequent connection,
 time, confirmation, failure, timeout and success screens reuse the offline
 Chinese font at half size. M5 Wi-Fi failure shows the retry status; Waveshare
@@ -593,9 +597,9 @@ adding the device. Host rendering does not establish actual phone scan success.
 The onboarding M5 `partitions/v2/16m.csv` alone expands NVS to 0x6000 at 0x9000,
 with otadata at 0xf000 and phy_init at 0x11000. The 0x20000/0x3f0000 application
 slots and 0x800000/8MiB assets stay unchanged. Stock preparation stays unchanged.
-`provision_factory_nvs.py --screen-code` supports both S3 models, keeps strict
-private-file/FRC1 identity/CRC/SRP checks, and creates 0x6000 NVS when M5 carries a
-screen code; ordinary M5 without a screen code retains 0x4000. This is a new
+`provision_factory_nvs.py --screen-code` now accepts only Waveshare, keeps strict
+private-file/FRC1 identity/CRC/SRP checks, and creates its 0x6000 NVS. Historical
+M5 layouts above are not accepted for new supply. This is a new
 factory full-flash layout, not an app-only OTA or an overlay for an activated
 unit. Preserve the current identity, runtime NVS and full rollback evidence
 before a separately authorized layout installation.
@@ -606,7 +610,7 @@ payloads, Wi-Fi values, claim/key material or phone identifiers. These stage
 markers help isolate a native-client timeout; they do not establish its cause or
 change Security2, device proof or strict framing validation.
 
-Both supported S3 onboarding profiles share Bluetooth host PSRAM preference and
+Current Waveshare and retained historical S3 onboarding code share Bluetooth host PSRAM preference and
 activated-only Bluetooth cleanup. After a durable activation receipt, the common
 path blocks until the provisioning manager shuts down, releases unused BLE
 memory, then permits voice callbacks. Activated boot performs that release before

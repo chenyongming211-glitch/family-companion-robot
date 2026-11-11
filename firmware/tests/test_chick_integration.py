@@ -12,7 +12,6 @@ class ChickIntegrationTests(unittest.TestCase):
     def test_product_targets_select_face_without_reactivating_wake_experiment(self):
         for directory, variant in [
             ('waveshare/esp32-s3-touch-amoled-2.16','esp32-s3-touch-amoled-2.16-xiaoman'),
-            ('m5stack/stopwatch','m5stack-stopwatch-xiaoman'),
         ]:
             builds=json.loads((self.source/'main/boards'/directory/'config.json').read_text())['builds']
             options=next(b['sdkconfig_append'] for b in builds if b['name']==variant)
@@ -27,8 +26,7 @@ class ChickIntegrationTests(unittest.TestCase):
         cmake=(self.source/'main/CMakeLists.txt').read_text()
         self.assertIn('display/chick_face_view.cc',cmake)
         self.assertNotIn('xiaoman_orb_view.cc',cmake)
-        for relative in ['main/boards/m5stack/stopwatch/m5stack_stopwatch.cc',
-                         'main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc']:
+        for relative in ['main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc']:
             source=(self.source/relative).read_text()
             self.assertIn('chick_face_display.inc',source)
             self.assertIn('SetupFaceUI()',source)

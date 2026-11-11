@@ -28,12 +28,21 @@ def supported_suite():
     loader = unittest.TestLoader()
     selected = []
     for path in sorted(directory.glob('test_*.py')):
-        if path.stem.startswith('test_c3_'):
+        if path.stem.startswith(('test_c3_', 'test_m5_')) or path.stem == 'test_experiment_evidence':
             continue
         for case in cases(loader.loadTestsFromName(path.stem)):
             method = case.id().rsplit('.', 1)[-1]
-            if not method.startswith(('test_c3_', 'test_cli_c3_')):
-                selected.append(case)
+            if method.startswith(('test_c3_', 'test_cli_c3_', 'test_m5_')):
+                continue
+            if path.stem == 'test_realtime_default' and method in {
+                    'test_xiaoman_realtime_intent_waits_for_eligible_reference_and_respects_off',
+                    'test_old_software_aec_variant_starts_off_and_keeps_explicit_on_across_pause',
+                    'test_original_stopwatch_variant_starts_off',
+                    'test_only_xiaoman_variant_requests_default_realtime'}:
+                continue
+            if path.stem == 'test_xiaoman_wake' and method == 'test_xiaoman_variant_keeps_old_variants_and_uses_real_chinese_model':
+                continue
+            selected.append(case)
     if not selected:
         raise ValueError('no supported firmware tests selected')
     return unittest.TestSuite(selected)
@@ -71,7 +80,7 @@ def main():
     if args.list:
         print(json.dumps([case.id() for case in cases(suite)], indent=2))
         return 0
-    print(f'Running {suite.countTestCases()} ESP32-S3/shared host tests; ESP32-C3 is retired.', flush=True)
+    print(f'Running {suite.countTestCases()} ESP32-S3/shared host tests; M5 and ESP32-C3 are retired.', flush=True)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
 
 

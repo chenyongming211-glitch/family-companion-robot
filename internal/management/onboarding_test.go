@@ -1,7 +1,9 @@
 package management
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -252,7 +254,7 @@ func TestOnboardingWrongDeviceChallengeScopeAndWriteFailure(t *testing.T) {
 	v := startClaim(t, s, b, a, "home-a")
 	id := v["id"].(string)
 	challenge := v["challenge"].(string)
-	b2, e := ProvisionFactory(p, "02:00:00:00:00:02", "UNIT002", "M5 ESP32-S3", nil)
+	b2, e := ProvisionFactory(p, "02:00:00:00:00:02", "UNIT002", "微雪 ESP32-S3", nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -394,7 +396,7 @@ func TestConfigStoreProcessWorker(t *testing.T) {
 	if os.Getenv("ONBOARDING_SYNTHETIC_PROCESS") == "" {
 		return
 	}
-	_, e := ProvisionFactory(os.Getenv("ONBOARDING_SYNTHETIC_PATH"), "02:00:00:00:00:30", "PROCESS-UNIT", "M5 ESP32-S3", nil)
+	_, e := ProvisionFactory(os.Getenv("ONBOARDING_SYNTHETIC_PATH"), "02:00:00:00:00:30", "PROCESS-UNIT", "微雪 ESP32-S3", nil)
 	if e != nil {
 		os.Exit(3)
 	}
@@ -444,5 +446,40 @@ func TestOnboardingAuthenticatedBLENameUsesFactoryMAC(t *testing.T) {
 		if _, ok := v[key]; ok {
 			t.Fatalf("credential disclosed: %s", key)
 		}
+	}
+}
+
+func TestFactoryProvisionRejectsRetiredModelsWithoutSaving(t *testing.T) {
+	_, _, _, p := onboardingFixture(t)
+	before, _ := os.ReadFile(p)
+	for _, model := range []string{"M5 ESP32-S3", "ESP32-C3"} {
+		saved := false
+		_, e := ProvisionFactory(p, "02:00:00:00:00:99", "UNIT99", model, func(FactoryBundle) error { saved = true; return nil })
+		if !errors.Is(e, ErrInvalid) || saved {
+			t.Fatalf("retired model accepted or saved: %v %v", e, saved)
+		}
+		after, _ := os.ReadFile(p)
+		if !bytes.Equal(before, after) {
+			t.Fatal("retired model changed config")
+		}
+	}
+}
+func TestFactoryHistoricalM5ConfigurationRemainsReadable(t *testing.T) {
+	_, b, _, p := onboardingFixture(t)
+	c, e := LoadConfig(p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i := range c.FactoryDevices {
+		if c.FactoryDevices[i].DeviceID == b.DeviceID {
+			c.FactoryDevices[i].Model = "M5 ESP32-S3"
+		}
+	}
+	if e = WritePrivateConfig(p, c); e != nil {
+		t.Fatal("historical factory rejected", e)
+	}
+	got, e := LoadConfig(p)
+	if e != nil || got.FactoryDevices[0].Model != "M5 ESP32-S3" {
+		t.Fatal("historical model lost", e)
 	}
 }

@@ -9,8 +9,8 @@
   "idf_version": "v6.1",
   "idf_commit": "fff9895c82d744c7237be8847347bdd1b07c6643",
   "esp_sr_version": "2.4.7",
-  "board": "m5stack/stopwatch",
-  "variant": "m5stack-stopwatch",
+  "board": "waveshare/esp32-s3-touch-amoled-2.16",
+  "variant": "esp32-s3-touch-amoled-2.16",
   "target": "esp32s3",
   "esp_sr_version_esp32c3": "2.6.1"
 }
