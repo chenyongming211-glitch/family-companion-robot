@@ -1,6 +1,39 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRemoteApi } from "../src/remote-api.ts";
+import { sessionGeneration } from "../src/sensitive-session.ts";
+
+test("anonymous session checks do not invalidate the guest login page", async () => {
+  for (const scope of ["admin", "family"] as const) {
+    const api = createRemoteApi((async () => new Response(
+      JSON.stringify({ code: "unauthenticated", message: "请先登录" }),
+      { status: 401 },
+    )) as typeof fetch);
+    const before = sessionGeneration();
+    assert.equal(await api.getAccount(scope), null);
+    assert.equal(await api.getAccount(scope), null);
+    assert.equal(sessionGeneration(), before, "guest checks must leave the login form active");
+  }
+});
+
+test("a previously authenticated session becoming anonymous still clears sensitive reads", async () => {
+  let expired = false;
+  let resolve!: (response: Response) => void;
+  const api = createRemoteApi((async (input: string | URL | Request) => {
+    if (!String(input).endsWith("/session")) return new Promise<Response>(r => { resolve = r; });
+    return expired
+      ? new Response(JSON.stringify({ code: "unauthenticated" }), { status: 401 })
+      : new Response(JSON.stringify({ email: "fixture", role: "家庭管理员", scope: "family" }));
+  }) as typeof fetch);
+  await api.getAccount("family");
+  const read = api.listDevices("family");
+  const before = sessionGeneration();
+  expired = true;
+  assert.equal(await api.getAccount("family"), null);
+  assert.ok(sessionGeneration() > before);
+  resolve(new Response("[]"));
+  await assert.rejects(read, /页面已离开|账号已变化/);
+});
 
 test("live lists use business chats while source conversation links remain compatible", async () => {
   const seen: string[] = [];

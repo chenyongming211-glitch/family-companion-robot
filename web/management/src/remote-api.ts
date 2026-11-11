@@ -178,8 +178,11 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
       } catch (error) {
         if (error instanceof ApiError && error.code === "unauthenticated") {
           const hadAccount=accounts.has(scope);
-          invalidateSensitive(); accounts.delete(scope);
-          if(hadAccount && typeof window!=="undefined")window.dispatchEvent(new Event("management-session-expired"));
+          accounts.delete(scope);
+          if(hadAccount) {
+            invalidateSensitive();
+            if(typeof window!=="undefined")window.dispatchEvent(new Event("management-session-expired"));
+          }
           return null;
         }
         throw error;

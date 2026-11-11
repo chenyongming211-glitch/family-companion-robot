@@ -159,7 +159,7 @@ async function load() {
     accounts.value = ac;
     daily.value = days;
     email.value = liveMode
-      ? "owner"
+      ? ""
       : scope === "admin"
         ? "admin@example.test"
         : "family@example.test";
