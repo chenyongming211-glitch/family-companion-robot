@@ -26,6 +26,7 @@ async function mount(api:any){
 test('mounted audit form, pagination and authorized links use actual Vue handlers and missing values remain unrecorded',async()=>{
  const calls:any[]=[];const api={mode:'live',listDevices:async()=>[{id,name:'客厅'}],listAuditPage:async(filter:any)=>{calls.push(filter);return {items:[{...item,canOpenDevice:calls.length>1}],hasMore:true,pending:true};}};
  const view=await mount(api);try{
+ assert.match(view.text(),/本页显示平台已记录的操作；语音指令和设备按键变化暂未纳入。/);
  assert.match(view.text(),/未记录/);assert.match(view.text(),/结果未知/);assert.match(view.text(),/日志正在写入/);assert.equal(view.all().filter(n=>n.tag==='a').length,0);
  await view.find('audit-next').props.onClick();await tick();assert.equal(calls.at(-1).offset,50);assert.equal(view.all().filter(n=>n.tag==='a').length,1);
  view.find('audit-action').props.onChange({target:{value:'settings'}});view.find('audit-from').props.onInput({target:{value:'2026-11-01'}});view.find('audit-to').props.onInput({target:{value:'2026-11-02'}});await tick();assert.doesNotMatch(view.text(),/管理员/);

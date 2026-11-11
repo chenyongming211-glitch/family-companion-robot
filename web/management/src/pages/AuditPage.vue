@@ -59,7 +59,8 @@ onBeforeUnmount(() => {
   <div class="audit-page">
     <div class="heading">
       <div><p class="eyebrow">工作台 / 审计</p><h1>操作审计</h1>
-        <p>查看获授权设备的操作记录与核实结果。旧记录缺少回执时，结果显示未知。</p></div>
+        <p>查看获授权设备的操作记录与核实结果。旧记录缺少回执时，结果显示未知。</p>
+        <p>本页显示平台已记录的操作；语音指令和设备按键变化暂未纳入。</p></div>
     </div>
     <section v-if="active" class="panel">
       <form id="audit-form" class="audit-filters" @submit.prevent="control.refresh()">
