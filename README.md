@@ -2,7 +2,7 @@
 
 当前产品主线为**Go原生Realtime**，以已经验证的语音核心为基础，后续逐项适配旧Go业务模块。默认入口云端18040，Mac只作客户端；后端依赖、运行测试和部署均在云端。先读[开发交接](docs/DEVELOPMENT_HANDOFF.md)与[代码生命周期清单](docs/CODE_LIFECYCLE.md)。
 
-- [管理平台](web/management/README.md)：Vue 3两端31页mock已实现并接入真实账号、设备与聊天。内部后台现已接入心跳在线状态、音量/亮度、近期记忆清除及真实回执，家庭网页复用同一组件；云端验证和发布完成，真实设备操作未在本批追加现场验收。见[本批记录](docs/verification/2026-11-11-admin-device-management.md)。
+- [管理平台](web/management/README.md)：Vue 3两端31页mock已实现并接入真实账号、设备与聊天。内部后台支持在线状态、音量/亮度、近期记忆清除和回执；新增真实操作审计，按设备/日期/类型查询，缺少回执的旧记录保持未知。审计管理版本已切换且功能核验通过，防火墙摘要差异使发布全保护验收尚未收口；详见[审计验证与限制](docs/verification/2026-11-11-admin-audit.md)。
 
 - [家庭小程序](web/miniprogram/README.md)：设备→聊天→详情→设置已接真实授权数据；新增鉴权心跳在线状态与音量、亮度控制，支持待机下发，以设备实际读回回执确认。服务发布、微雪固件升级与现场边界见[本批验证](docs/verification/2026-11-10-device-live-control.md)。
 

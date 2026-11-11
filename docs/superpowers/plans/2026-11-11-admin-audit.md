@@ -23,24 +23,30 @@
 **Files:** internal/management/audit.go及新audit_read.go/相关tests；runtime.go、memory_clear.go、server.go及必要相关测试。只拥有后端文件。
 **Interfaces:** 设计中的AuditPage/AuditItem/AuditFilter及GET /api/admin/audit；现有runtime/clear HTTP与私有claim保持，auditEntry仅omitempty扩展。
 
-- [ ] 云端RED：旧请求无结果为未知、访问只表示已记录；新控制request→真实匹配ack、清除RPC三类结果、终态失败不重发/伪报、重复终态不追加。
-- [ ] 实现元数据请求/终态追加与关联，不改变原设备/RPC成功契约；记录绑定锚点，保留旧六字段调用兼容及锁顺序。
-- [ ] 云端RED→GREEN：两家庭/无设备/转让历史/撤销角色/当前会话、迟到结果、冲突/孤立事件，未知过滤参数、分页/文件私有和大小/尾行边界。实现有界快照、严格授权投影及仅admin路由。
-- [ ] 最终完整相关race、vet、管理build，source摘要；权限负例使用既有去DAC特权测试子进程，不弱化测试。提交main，报告失败/修正/边界，独立规格/质量审查。
+- [x] 云端RED：旧请求无结果为未知、访问只表示已记录；新控制request→真实匹配ack、清除RPC三类结果、终态失败不重发/伪报、重复终态不追加。
+- [x] 实现元数据请求/终态追加与关联，不改变原设备/RPC成功契约；记录绑定锚点，保留旧六字段调用兼容及锁顺序。
+- [x] 云端RED→GREEN：两家庭/无设备/转让历史/撤销角色/当前会话、迟到结果、冲突/孤立事件，未知过滤参数、分页/文件私有和大小/尾行边界。实现有界快照、严格授权投影及仅admin路由。
+- [x] 最终完整相关race、vet、管理build，source摘要；权限负例使用既有去DAC特权测试子进程，不弱化测试。提交main，报告失败/修正/边界，独立规格/质量审查。
 
 ### Task 2：后台审计真实页面
 
 **Files:** web/management/src/{App.vue,remote-api.ts,types.ts}，新pages/AuditPage.vue及必要小控制单元/测试；mock现有OperationsPages审计保持。只拥有web/management。
 **Interfaces:** 集中API listAuditPage(AuditFilter)→AuditPage，字段按设计；live独立admin，API不接受scope改写或任意文件路径；mock原listAudit(query)契约不改。
 
-- [ ] 云端RED：筛选参数/日期转换/分页、未知与缺失数值、不授权设备跳转、错误/空/partial、隐藏/401/退出/账号/路由变化及迟到请求清理，实际组件事件绑定。
-- [ ] 实现live审计入口和简洁表单/列表/结果，按id操作独立展开可选；优先复用敏感会话/请求代际，无新状态框架，不扩展无关mock功能。
-- [ ] 完整npm test/typecheck/mock+live构建，source/dist摘要，提交main与独立规格/质量复核。root使用合成API浏览器走查，无真实操作。
+- [x] 云端RED：筛选参数/日期转换/分页、未知与缺失数值、不授权设备跳转、错误/空/partial、隐藏/401/退出/账号/路由变化及迟到请求清理，实际组件事件绑定。
+- [x] 实现live审计入口和简洁表单/列表/结果，按id操作独立展开可选；优先复用敏感会话/请求代际，无新状态框架，不扩展无关mock功能。
+- [x] 完整npm test/typecheck/mock+live构建，source/dist摘要，提交main与独立规格/质量复核。root使用合成API浏览器走查，无真实操作。
 
 ### Task 3：最小管理发布与交接
 
 **Files:** 验证/README/API与交接/计划，运维脚本仅忽略目录/云端。
-- [ ] 冻结实际管理178项及原binary/static、Voice/Caddy/配置/数据/旧audit前缀；最小Go补丁反向核对，云端实际候选相关race/vet/build与静态manifest核验。
-- [ ] 合成浏览器验证admin筛选/分页/设备链接/未知、权限拒绝/迟到清理与375/1440布局，结束测试空间/服务/新增SSH转发。
+- [x] 冻结实际管理178项及原binary/static、Voice/Caddy/配置/数据/旧audit前缀；最小Go补丁反向核对，云端实际候选相关race/vet/build与静态manifest核验。
+- [x] 合成浏览器验证admin筛选/分页/设备链接/未知、权限拒绝/迟到清理与375/1440布局，结束测试空间/服务/新增SSH转发。
 - [ ] 管理仅换已核验binary/static；原Voice/Caddy/防火墙不动，未知process/unit拒绝切换，失败仅回退已知代码/static不恢复旧数据或日志。只读实际接口计数/401/403/公网404检查，无真实设置/清除。
-- [ ] 最终整体审查及上线独立SHA/参数/环境/保护文件/审计前缀核对，更新验证/README/交接/任务清单，main推送核对远端和干净工作区。
+- [ ] 最终整体审查及上线独立SHA/参数/环境/保护文件/审计前缀核对，更新验证/README/交接/任务清单，main推送核对远端和本批文件无未提交变更。
+
+## 本轮交接状态
+
+Task1/2已实现、测试、审查并推送main；Task3已最小来源切换，实际功能、数据/配置/旧日志/Voice/Caddy等核验通过，但不勾选发布全流程及全保护完成。首次事务中断且自动回退未完成，保留健康已知新管理；一次独立全保护证明后，后续观察的防火墙摘要与起点不同，严格验收仍未收口。没有改写规则、重新设定基线、伪造deployment.json或还原旧数据。原异常未保存，后续明确firewall guard失败不等于首次原因已查明；私有异常记录修复57项合成及复核通过。详见[实际验证与限制](../../verification/2026-11-11-admin-audit.md)。
+
+主线/文档按main提交推送；工作区另有原有robot-audio-capture三文件及M01验证文档，不属于本批，保持未暂存。用户暂缓预览/现场操作，不新增手机或真实设备成绩。下次先核对防火墙差异来源及原事务状态，再决定恢复/回退；不能绕过现有保护条件。

@@ -1,5 +1,7 @@
 # 独立管理服务
 
+**2026-11-11操作审计：** 新增仅内部`GET /api/admin/audit`，有效admin会话、当前InternalAdmin及事件时刻明确家庭/设备授权共同决定可见行。参数仅单值`device/from/to/action/offset/limit`；带时区RFC3339半开时间区间，action为access/device_control/memory_clear/settings，offset0..10000、limit1..100默认50。返回items/hasMore/pending，不暴露原始日志或全局总数，无family及公网代理。管理已切换`admin-audit-20261111-r1`，Voice保持原版；功能及数据核验通过，原发布事务中断且后续防火墙摘要不匹配，严格全保护验收尚未完成。不要覆盖既有事务重跑fresh deploy或回写旧数据，见[验证与恢复边界](../../docs/verification/2026-11-11-admin-audit.md)。
+
 **2026-11-11最新：** admin/family均支持`GET/PUT /api/<scope>/device-runtime/<dev_32hex>`及`POST /api/<scope>/memory-clear/<dev_32hex>`，复用既有命令/回执和唯一Voice Store。内部入口另需当前InternalAdmin；两端同样校验明确设备及CanAddDevices，清除还需正文授权。admin新接口未增加公网代理，仅现有回环/SSH访问。两服务既有`--memory-control-socket`及Voice `--management-config`保持，私有claim可选scope省略兼容family，Voice新授权含scope。实际已发布admin-control-20261111-r1；本次current链接未移动，以实际systemd exe/argv为准，管理static显式指向新release/web，旧static保留。详情见[验证](../../docs/verification/2026-11-11-admin-device-management.md)。以下日期段落和基础模板保留各自历史范围。
 
 2026-11-10 家庭小程序新增设备/聊天只读页与真实云端展示设置。`GET/PUT /api/family/device-settings/<dev_32hex>` 读写家庭展示昵称和摆放位置，PUT 必须提交 `name,location,version`，保存后客户端重新 GET 对照值和版本。读取需当前设备授权，写入另需当前绑定家庭 canAddDevices 管理权限；事务内重新核对会话、权限与版本，冲突409。昵称1至12字、位置最多24字，拒绝控制符及大小写别名/重复/额外键。正文授权边界与语音配置不变。
@@ -26,7 +28,7 @@ install -d -m 0700 /var/lib/family-robot-management
 
 `init` 仅首次创建，拒绝覆盖现有配置，绑定起点固定为此次实际UTC时间，没有导入旧记录或指定历史时间的选项。它向当前终端输出一次 JSON（账号、随机密码、绑定起点）；密码不在命令参数中、不写入配置、日志、Git或Mac文件。不要将初始化标准输出重定向到普通日志或交给常驻服务。丢失输出时应由管理员单独处置，不用重复 init 覆盖权威配置。配置只存600000轮PBKDF2-SHA256摘要和随机盐。
 
-会话保留在内存中，重启须重新登录；两端分别退出。每IP每分钟最多10次登录尝试，同时最多2次密码校验；最大1024会话、4096限流IP条目，达到上限明确拒绝。正文读取先完成权限校验和私有审计追加/fsync，失败则503且不输出正文。审计只有UTC、账号ID、入口、操作、设备ID、记录ID，无正文或凭据；请由后续运维维护磁盘空间与审计留存，服务不自动删除。
+会话保留在内存中，重启须重新登录；两端分别退出。每IP每分钟最多10次登录尝试，同时最多2次密码校验；最大1024会话、4096限流IP条目，达到上限明确拒绝。正文读取先完成权限校验和私有审计追加/fsync，失败则503且不输出正文。初版审计为UTC、账号ID、入口、操作、设备ID、记录ID六字段；操作审计版新增schemaVersion及可选绑定、目标、操作ID、受控结果元数据，无正文或凭据，原行不改写。新请求先持久化，结果追加失败不能触发重新执行。读取日志限root普通0600、32MiB/100000行/每行4096字节；不完整尾行pending，坏整行或超限503。磁盘空间与审计留存仍由运维维护，服务不自动删除。
 
 2026-11-09基础版本中，专用 onboarding/activation 接口可创建认领与新绑定，其余业务API只读；后续已发布控制/清除以上方最新记录为准，其他设备/家庭/账号编辑与删除仍未接入。近期记忆使用原记录根目录内.memory快照和相同正文/绑定授权，不增加挂载，不调用recordstore.Open/Load，不写源快照或锁。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html、family.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
 

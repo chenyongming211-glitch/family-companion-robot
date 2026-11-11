@@ -1,5 +1,15 @@
 # 换电脑开发交接
 
+**内部后台操作审计已切换，发布全保护验收未收口（2026-11-11最新）：** 内部“审计”已接真实平台日志、设备/本地日期/类型过滤、分页和安全设备跳转。访问仅表示已记录，旧请求无回执显示未知；语音/按键操作尚无管理日志来源。新schema1绑定锚点，Reader原权限快照和最新快照共同核对；跨家庭无法确定来源的新访问/旧六键访问保守不输出，原日志保持。后端716d5c8/c8b515f/bd3e4db、Vue043b267/75512e4已推main，无新依赖/服务/Voice/固件改动。
+
+最终main Go专项25顶层/53含子用例、vet/build/194输入一致通过；完整116/326是最后两项保护前版本，不冒充最终全包成绩。实际178仅7文件增量得180，反向恢复全部基线；canonical source c8c2edcd，候选相关72顶层/217含子用例、零失败/跳过、vet/build和源码不变通过。Vue61项、类型/mock/live构建、Asia/Shanghai7项及375/1440合成浏览器/隐私负例通过。测试空间/合成服务/新增18795转发关闭，原18791保留。
+
+管理当前`admin-audit-20261111-r1`/PID1401849/SHA`b49d95542359d5cf07d549145d5acee567e168bdc426775700d9338908a0ba9d`，static同release/web，原current/旧static保留；只换exe/static，其余argv/稳定env一致。Voice仍PID1161080/eab47a77，ready/memory_ready/active0/容量2/诊断false；旧Go4139310和Caddy2415423保持。4项web map004e91e8、JS main-xk29ZQv3.js/f8ae748b，HTTP SHA/no-store及回环admin审计401/公网admin和family审计404通过。实际只读前后2021条授权记录（recorded2012/unknown9），33条授权记忆/33来源（逐设备9和24），原数据/config/偏好/绑定/全部记录/.memory/原359865字节audit前缀、Caddy字节及元数据、RW/socket/锁均保持；未做真实调节或清除，没有USB/退货M5操作。
+
+首次发布脚本切换后通用失败，自动回退未完成，原异常未捕获；随后一次独立完整核验包括防火墙原摘要匹配。后续只读verify_new明确在firewall guard失败：当前c34cd347...与原951e883a...不同；不证明首次同因，也未确定规则变动者。脚本防火墙调用只有-S读取，没有修改/恢复/重设基线或绕过原条件。保留已知健康新管理和原中断事务，当前观察明确strict_original_transaction_acceptance=false，不能标记整次发布全约束PASS。补私有0600原始/回退异常证据并保留原异常，最终实际pins合成57项及复核通过；没有纳入未证实启动竞态的等待修改。
+
+**下一轮先读取证据，不要直接重跑fresh deploy或强行回退：** `/var/backups/family-robot/admin-audit-20261111`和owned drop170均已存在，transaction attempted=true，未补造deployment.json；原baseline/事务不改写。回退不能恢复旧数据、日志或覆盖当前防火墙。公开来源/测试/安全证明在`/home/ubuntu/admin-audit-20261111`，原argv/env/规则快照仅云端私有，不复制Mac。原账号不变，管理重启后须重登；用户未要求现在预览或现场验证。见[本批验证](verification/2026-11-11-admin-audit.md)、[设计](superpowers/specs/2026-11-11-admin-audit-design.md)、[计划](superpowers/plans/2026-11-11-admin-audit.md)。下方“最新”是此前批次。
+
 **内部后台真实设备控制与记忆管理已发布（2026-11-11最新）：** 按原P3补齐在线状态、音量/亮度、近期记忆清除与回执；Vue aa7eacb/bef2dae、Go91bee707已推main。admin/family共用runtime队列和Voice Store，内部独立会话+当前InternalAdmin不代替明确设备/正文/CanAddDevices授权。命令保留scope并在设备取指令/ack重检；私有claim可选scope，旧六键family兼容，Voice持配置锁新核验当前作用域/绑定到Save receipt。原账户权限未改。网页名称/位置编辑、邀请、留存/删除等仍有缺口，不把整个平台/P3或P4/P5写成完成。
 
 实际Voice `admin-control-20261111-r1`/PID1161080/SHA`eab47a77110548a09d4dc0340c6a52660d9a7a926c587d220640ff95672e3519`；管理同release名/PID1161165/SHA`1e1d778bfa531bb039d8029135ee22672149a91818f45632199e02c7da6b9cd1`。实际共同176baseline仅4修改/2新增测试得178，reverse恢复全基线，source map e870a511；保留旧语音差异。Voice仅换exe，管理仅换exe/--static到新release/web，current/旧static保持。4项web map8da2c13b，main-CmM3MqOg.js/bf4c6350，HTTP真实index/no-store核对。
