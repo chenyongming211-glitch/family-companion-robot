@@ -1,5 +1,17 @@
 # 换电脑开发交接
 
+**内部后台真实设备控制与记忆管理已发布（2026-11-11最新）：** 按原P3补齐在线状态、音量/亮度、近期记忆清除与回执；Vue aa7eacb/bef2dae、Go91bee707已推main。admin/family共用runtime队列和Voice Store，内部独立会话+当前InternalAdmin不代替明确设备/正文/CanAddDevices授权。命令保留scope并在设备取指令/ack重检；私有claim可选scope，旧六键family兼容，Voice持配置锁新核验当前作用域/绑定到Save receipt。原账户权限未改。网页名称/位置编辑、邀请、留存/删除等仍有缺口，不把整个平台/P3或P4/P5写成完成。
+
+实际Voice `admin-control-20261111-r1`/PID1161080/SHA`eab47a77110548a09d4dc0340c6a52660d9a7a926c587d220640ff95672e3519`；管理同release名/PID1161165/SHA`1e1d778bfa531bb039d8029135ee22672149a91818f45632199e02c7da6b9cd1`。实际共同176baseline仅4修改/2新增测试得178，reverse恢复全基线，source map e870a511；保留旧语音差异。Voice仅换exe，管理仅换exe/--static到新release/web，current/旧static保持。4项web map8da2c13b，main-CmM3MqOg.js/bf4c6350，HTTP真实index/no-store核对。
+
+云端main Go race717含子测/298顶层、2旧可选skip、vet/两build通过；上传漏公开fixture与中途新增竞态修正均保留失败并用最终源码重跑。实际候选Voice/Store/cmd完整＋management Admin/Runtime/Memory/Authority范围579含子测/239顶层、2旧skip及vet/build，178源码前后不变；不声明management二次全跑。Vue53、类型/mock/live构建，35输入构建时一致。任务和整体审查PASS：runtime等待锁后旧权限准入、Vue清除中刷新解除防重、运维遗漏effective DropInPaths均已RED→GREEN修正；最终真实pins脚本79项通过。
+
+合成浏览器验证整10滑块每项一次提交/confirmed、22圆点、来源chat/turn、取消0POST、清除中刷新禁用且仅1POST/档案保留、离线/只读/正文拒绝/错误回执/busy与家庭共享，以及375/1440布局。Ego点击包装器会临时hide导致正常清理，使用其允许的DOM/CDP与合成confirm，不弱化隐私，不宣称真人弹窗/手机或实机声学PASS；最终资产已排除中间HTML缓存。TaskSpace及合成服务/18794转发关闭。
+
+空闲IPv4/6门控先Voice后管理一次成功，无Caddy变更/reload。实际exe/hash/argv/env、ready/memory_ready/active0/容量2/诊断false、私有root0700/0600 GET405与未过deadline陌生admin身份403；回环admin未登录401/公网admin404，原family401/Voice私有公共404。原10保护文件/全部JSON/JSONL/.memory/配置偏好归属/旧static/current、旧Go4139310/Caddy2415423及Caddy内容+元数据、原RW路径均保持；主机IPv4/6规则摘要复原、临时0。前后云端RAM admin只读24条记忆均授权来源匹配，未清除真实记忆/调真实偏好，无固件/USB/退货M5操作，统一S3 600ms/语义控制保持。
+
+后台仍用原SSH18791/index.html，重启后需重新登录；无需现在预览，真实设备操作待方便时验证。云端来源/测试/证明`/home/ubuntu/admin-device-management-20261111`，私有备份仅`/var/backups/family-robot/admin-device-management-20261111`，不复制原始argv/env/config到Mac或回写旧数据。见[验证](verification/2026-11-11-admin-device-management.md)、[方案](superpowers/specs/2026-11-11-admin-device-management-design.md)、[计划](superpowers/plans/2026-11-11-admin-device-management.md)。下方旧PID/待办是此前批次。
+
 **小程序近期记忆管理已发布（2026-11-11最新）：** 设备详情→近期记忆，最近7天/最多24轮真实续聊摘录、授权来源聊天、管理员一次确认清除且聊天档案保留。前端217b00c/后端e54f1e8已推main；前端170项及type/build/native、官方CLI213360B预览通过，26份Mac dist与云端相同。后端main相关race317顶层/730含子测、2原有可选跳过、vet/build通过；云端root权限负例在原基线复现后，仅测试子进程去DAC特权修正，产品未放宽。
 
 从实际Voice135+已核对管理35+2未变依赖冻结172，仅应用feature patch得176项，反向恢复全172；源码map9f7bd2fe，保留实际旧语音差异。实际候选race247顶层/587含子测、2原有可选跳过及vet/build通过，不作管理全包二次全跑声明。旧管理缺manifest且旧binary未完全复现，已明确known-direct-packages部分基线，无伪造历史证明。Voice现为`recent-memory-20261111-r1`/PID368937/SHA`b9a4e20ce9109631999affc87b69d5e6f49431c7e0cdb6c91bec39b823fc4545`；管理`memory-pages-20261111-r1`/PID368956/SHA`00727d997822e13db2424d8fdab095a2bb818076dc5ba8721fe71fef6a4510ef`。实际argv/env仅追加私有socket及Voice management-config；current链接/static保持。

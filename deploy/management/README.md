@@ -1,5 +1,7 @@
 # 独立管理服务
 
+**2026-11-11最新：** admin/family均支持`GET/PUT /api/<scope>/device-runtime/<dev_32hex>`及`POST /api/<scope>/memory-clear/<dev_32hex>`，复用既有命令/回执和唯一Voice Store。内部入口另需当前InternalAdmin；两端同样校验明确设备及CanAddDevices，清除还需正文授权。admin新接口未增加公网代理，仅现有回环/SSH访问。两服务既有`--memory-control-socket`及Voice `--management-config`保持，私有claim可选scope省略兼容family，Voice新授权含scope。实际已发布admin-control-20261111-r1；本次current链接未移动，以实际systemd exe/argv为准，管理static显式指向新release/web，旧static保留。详情见[验证](../../docs/verification/2026-11-11-admin-device-management.md)。以下日期段落和基础模板保留各自历史范围。
+
 2026-11-10 家庭小程序新增设备/聊天只读页与真实云端展示设置。`GET/PUT /api/family/device-settings/<dev_32hex>` 读写家庭展示昵称和摆放位置，PUT 必须提交 `name,location,version`，保存后客户端重新 GET 对照值和版本。读取需当前设备授权，写入另需当前绑定家庭 canAddDevices 管理权限；事务内重新核对会话、权限与版本，冲突409。昵称1至12字、位置最多24字，拒绝控制符及大小写别名/重复/额外键。正文授权边界与语音配置不变。
 
 设置通过管理私有配置中的可选 `devices[].display_name` 覆盖家庭列表展示，原 `name` 与 voice profile 保持；位置使用既有 `location`。不写 presentation 只读挂载，不下发音量/亮度，不宣称设备回读。网页两端仍保留原只读交互。新增配置字段与旧二进制的严格解析不兼容：用户保存后，不能直接换回不认识 display_name 的旧二进制；应优先保留新管理二进制仅回退小程序/代理，必要时先在云端私有备份最新配置，再事务移除展示覆盖字段，保留最新账户、绑定和认领，禁止整份回写旧配置。
@@ -26,7 +28,7 @@ install -d -m 0700 /var/lib/family-robot-management
 
 会话保留在内存中，重启须重新登录；两端分别退出。每IP每分钟最多10次登录尝试，同时最多2次密码校验；最大1024会话、4096限流IP条目，达到上限明确拒绝。正文读取先完成权限校验和私有审计追加/fsync，失败则503且不输出正文。审计只有UTC、账号ID、入口、操作、设备ID、记录ID，无正文或凭据；请由后续运维维护磁盘空间与审计留存，服务不自动删除。
 
-专用 onboarding/activation 接口可创建认领与新绑定；其余已发布业务 API 仍只读，设备/家庭/账号编辑、删除、记忆清除及硬件操作不支持。近期记忆使用原记录根目录内.memory快照和相同正文/绑定授权，不增加挂载，不调用recordstore.Open/Load，不写源快照或锁。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html、family.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
+2026-11-09基础版本中，专用 onboarding/activation 接口可创建认领与新绑定，其余业务API只读；后续已发布控制/清除以上方最新记录为准，其他设备/家庭/账号编辑与删除仍未接入。近期记忆使用原记录根目录内.memory快照和相同正文/绑定授权，不增加挂载，不调用recordstore.Open/Load，不写源快照或锁。内部管理员仍须明确家庭/设备授权才能读取正文。静态服务只提供 index.html、family.html 和 assets，禁止目录列表、隐藏文件和符号链接；未知 SPA 路由由前端处理。
 
 验证门槛：云端 `go test -race ./internal/management ./cmd/management`、`go vet ./internal/management ./cmd/management`、`go build -o <private-output>/management ./cmd/management`，配合已核验的 live 前端。部署后的浏览器验收与用户新实机发言验证分开记录，合成测试不代表现场验收。
 
