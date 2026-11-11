@@ -121,7 +121,7 @@ for (const scope of ['admin', 'family'] as const) {
       assert.equal(view.state.account?.email, 'isolated-owner');
       assert.equal(view.state.pageVisible, true);
       assert.equal(view.state.needsLogin, false);
-      assert.match(view.text(), scope === 'admin' ? /管理总览/ : /和家人一起/);
+      assert.match(view.text(), scope === 'admin' ? /管理总览/ : /家庭设备/);
       assert.doesNotMatch(view.text(), /页面内容已清理/);
     } finally { view.close(); }
   });

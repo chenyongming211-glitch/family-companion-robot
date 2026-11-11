@@ -226,7 +226,7 @@ function memoryDate(date: string) {
           <p class="eyebrow">账号登录</p>
           <h1>{{ scope === "admin" ? "内部登录" : "家庭登录" }}</h1>
           <p>
-            请使用为你配置的管理平台账号。
+            {{ scope === "admin" ? "使用管理账号查看已授权的家庭与设备" : "使用家庭账号查看已绑定的机器人" }}
           </p>
         </div>
       </div>
@@ -328,7 +328,7 @@ function memoryDate(date: string) {
             :key="d.id"
             class="list-row"
             :href="linkTo(scope, 'device', { device: d.id })"
-            >{{ d.name }} <span>›</span></a
+            >{{ d.name }} <span class="row-arrow" aria-hidden="true">›</span></a
           >
           <p
             v-if="!devices.some((d) => d.familyId === family?.id)"
@@ -371,7 +371,7 @@ function memoryDate(date: string) {
           <p class="eyebrow">记录 / 记忆</p>
           <h1>{{ route.page === "memory" ? "记忆详情" : "设备记忆" }}</h1>
           <p>
-            机器人保存的近期上下文片段：最近7天、最多24轮；仅显示本次绑定后的获授权内容。
+            用于续聊的对话片段，最多包含最近7天、24轮；仅显示本次绑定后的获授权内容。
           </p>
         </div>
       </div>

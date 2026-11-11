@@ -148,6 +148,8 @@ function active(page: string) {
     route.value.page === page ||
     (page === "devices" && route.value.page === "device") ||
     (page === "conversations" && route.value.page === "conversation") ||
+    (page === "memories" && route.value.page === "memory") ||
+    (page === "configuration" && route.value.page === "settings") ||
     (page === "settings" &&
       route.value.page === "family")
   );
@@ -193,10 +195,11 @@ function directoryLink(page: string) {
     <div class="workspace">
       <header class="topbar">
         <div>
-          <strong>{{ scope === "admin" ? "管理工作台" : "伴伴" }}</strong
-          ><span class="data-source">真实数据 · 设备回执确认</span>
+          <strong>{{ scope === "admin" ? "设备与家庭" : "伴伴" }}</strong
+          ><span v-if="scope === 'family'" class="workspace-caption">家庭机器人</span>
         </div>
         <div class="top-actions">
+          <span v-if="account" class="account-label">{{ account.email }}</span>
           <button
             v-if="account"
             class="text-button"
@@ -213,17 +216,6 @@ function directoryLink(page: string) {
       <div v-if="sessionNotice" role="status" class="reset-message">
         {{ sessionNotice }}
       </div>
-      <details v-if="account" class="page-directory">
-        <summary>页面目录（{{ routes.length }}）</summary>
-        <div class="directory-grid">
-          <a
-            v-for="item in routes"
-            :key="item[0]"
-            :href="directoryLink(item[0])"
-            >{{ item[1] }}</a
-          >
-        </div>
-      </details>
       <main id="main-content" tabindex="-1">
         <section v-if="!sessionReady" class="panel" role="status">
           正在检查登录状态…
@@ -235,7 +227,7 @@ function directoryLink(page: string) {
         </section>
         <section v-else-if="!knownPage" class="panel">
           <h1>页面未找到</h1>
-          <p>请从页面目录选择一个有效页面。</p>
+          <p>请从导航选择页面，或返回首页</p>
           <a
             class="button"
             :href="linkTo(scope, scope === 'admin' ? 'overview' : 'home')"
@@ -251,6 +243,17 @@ function directoryLink(page: string) {
           :route="displayedRoute"
         />
       </main>
+      <details v-if="account" class="page-directory">
+        <summary>更多页面</summary>
+        <div class="directory-grid">
+          <a
+            v-for="item in routes"
+            :key="item[0]"
+            :href="directoryLink(item[0])"
+            >{{ item[1] }}</a
+          >
+        </div>
+      </details>
     </div>
     <nav
       v-if="scope === 'family' && (account)"

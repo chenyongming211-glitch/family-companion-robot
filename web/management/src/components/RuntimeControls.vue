@@ -47,9 +47,9 @@ function disabled(field: RuntimeField) {
       <h2>设备状态与控制</h2>
       <span class="badge" :data-status="state.runtime?.connection">{{ state.runtime?.connection === 'online' ? '在线' : state.runtime?.connection === 'offline' ? '离线' : '尚未上报' }}</span>
     </div>
-    <p>只在设备回执核实后显示生效；拖动预览，松手提交。</p>
+    <p>拖动预览，松手提交；机器人确认后才显示生效</p>
     <p v-if="state.runtime?.seenAt" class="muted">
-      最近心跳：{{ new Date(state.runtime.seenAt).toLocaleString('zh-CN') }}
+      最近更新：{{ new Date(state.runtime.seenAt).toLocaleString('zh-CN') }}
     </p>
     <div v-for="[field, label] in fields" :key="field" class="runtime-field">
       <label :for="'runtime-' + field">{{ label }}：{{ state[field] === null ? '尚未上报' : state[field] + '%' }}</label>

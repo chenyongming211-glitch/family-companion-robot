@@ -114,7 +114,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .audit-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
 .audit-filters label { display: grid; gap: 8px; min-width: 150px; flex: 1; }
-.audit-filters input, .audit-filters select { min-height: 44px; width: 100%; padding: 8px; border: 1px solid #c3c8c0; border-radius: 8px; background: var(--surface); color: inherit; }
+.audit-filters input, .audit-filters select { min-height: 44px; width: 100%; padding: 8px; border: 1px solid #8b948d; border-radius: 8px; background: var(--surface); color: inherit; }
 .audit-list { list-style: none; padding: 0; margin: 0; }
 .audit-entry { padding: 20px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .audit-entry:first-child { padding-top: 4px; }

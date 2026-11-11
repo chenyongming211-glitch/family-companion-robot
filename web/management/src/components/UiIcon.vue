@@ -305,6 +305,14 @@ const icons: Record<string, { tag: string; attrs: Record<string, string> }[]> = 
         "d": "M7 17 17 7"
       }
     }
+  ],
+  "chevron-right": [
+    {
+      "tag": "path",
+      "attrs": {
+        "d": "m9 18 6-6-6-6"
+      }
+    }
   ]
 };
 const shapes = computed(() => icons[props.name] ?? icons.bot);

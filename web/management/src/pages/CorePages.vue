@@ -260,11 +260,11 @@ function chatLink(c: Conversation) {
       <div class="heading">
         <div>
           <p class="eyebrow">
-            {{ scope === "admin" ? "工作台 / 总览" : "你好，欢迎回来" }}
+            {{ scope === "admin" ? "工作台 / 总览" : "我的家庭" }}
           </p>
-          <h1>{{ scope === "admin" ? "管理总览" : "和家人一起，慢慢长大" }}</h1>
+          <h1>{{ scope === "admin" ? "管理总览" : "家庭设备" }}</h1>
           <p>
-            查看已授权的设备和本次绑定后的聊天记录。
+            查看机器人状态，以及绑定后保存的聊天记录
           </p>
         </div>
         <a
@@ -280,16 +280,16 @@ function chatLink(c: Conversation) {
       <div class="stats">
         <div class="panel">
           <span>设备</span><strong>{{ devices.length }}</strong
-          ><small>获授权设备</small>
+          ><small>当前可查看</small>
         </div>
         <div class="panel">
           <span>聊天记录</span><strong>{{ chats.length }}</strong
-          ><small>当前加载的聊天</small>
+          ><small>当前已加载</small>
         </div>
         <div class="panel">
           <span>在线设备</span
           ><strong>{{ devices.filter((d) => d.connection === "online").length }}</strong
-          ><small>以最近上报状态为准</small>
+          ><small>最近上报在线</small>
         </div>
       </div>
       <div class="columns">
@@ -311,7 +311,7 @@ function chatLink(c: Conversation) {
             :key="d.id"
             class="list-row"
             :href="deviceLink(d.id)"
-            ><span class="device-icon">◉</span
+            ><span class="device-icon"><UiIcon name="bot" /></span
             ><span
               ><b>{{ d.name }}</b
               ><small>{{ d.location }} · {{ d.model }}</small></span
@@ -339,7 +339,7 @@ function chatLink(c: Conversation) {
             ><span
               ><b>{{ c.title }}</b
               ><small>{{ c.date }} {{ c.time }} · {{ c.status }}</small></span
-            ><span>›</span></a
+            ><span class="row-arrow"><UiIcon name="chevron-right" /></span></a
           >
         </section>
       </div>
@@ -361,12 +361,12 @@ function chatLink(c: Conversation) {
           :key="d.id"
           class="list-row"
           :href="deviceLink(d.id)"
-          ><span class="device-icon">◉</span
+          ><span class="device-icon"><UiIcon name="bot" /></span
           ><span
             ><b>{{ d.name }}</b
             ><small>{{ d.id }} · {{ d.model }} · {{ d.location }}</small></span
           ><span class="badge">{{ connectionLabel(d.connection) }}</span
-          ><span>›</span></a
+          ><span class="row-arrow"><UiIcon name="chevron-right" /></span></a
         >
       </div></template
     >
@@ -500,7 +500,7 @@ function chatLink(c: Conversation) {
                   c.summary ||
                   (c.bodyAvailable ? "点击查看文字与播放记录" : "正文未授权")
                 }}</small></span
-              ><span>›</span></a
+              ><span class="row-arrow"><UiIcon name="chevron-right" /></span></a
             ></template
           >
       </div></template

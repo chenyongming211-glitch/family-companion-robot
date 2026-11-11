@@ -14,7 +14,7 @@ export const familyNav = [
   ["device", "设备"],
   ["conversations", "聊天"],
   ["memories", "记忆"],
-  ["settings", "我的"],
+  ["settings", "设置"],
 ] as const;
 export const adminRoutes = [
   ["overview", "工作台"],
