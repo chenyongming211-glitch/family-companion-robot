@@ -88,6 +88,53 @@ class WaveshareEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence['partition_layout']['app_limit'], 0x300000)
         self.assertEqual(evidence['partition_layout']['assets_limit'], 0x600000)
 
+    def replace_packed_assets(self, **options):
+        # The legacy asset fixture also changes StopWatch sdkconfig defaults.
+        # Keep this already-valid Wave config unchanged while replacing bytes.
+        config = self.tree/'sdkconfig'
+        original = config.read_bytes()
+        try:
+            return existing.EvidenceTests.xiaoman_assets(self, **options)
+        finally:
+            config.write_bytes(original)
+
+    def test_wrong_packed_wake_command_is_rejected_on_valid_waveshare(self):
+        self.verify()
+        self.replace_packed_assets(command='ni hao xiao zhi')
+        with self.assertRaisesRegex(ValueError, 'Xiaoman wake word configuration differs from xiao man'):
+            self.verify()
+
+    def test_wrong_packed_acoustic_model_is_rejected_on_valid_waveshare(self):
+        self.verify()
+        self.replace_packed_assets(model='mn6_cn')
+        with self.assertRaisesRegex(ValueError, 'must contain only mn7_cn and fst models'):
+            self.verify()
+
+    def test_missing_multinet_configuration_is_rejected_on_valid_waveshare(self):
+        self.verify()
+        config = self.tree/'sdkconfig'
+        original = config.read_text()
+        self.assertEqual(original.count('CONFIG_SR_MN_CN_MULTINET7_QUANT=y'), 1)
+        config.write_text(original.replace('CONFIG_SR_MN_CN_MULTINET7_QUANT=y',
+            '# CONFIG_SR_MN_CN_MULTINET7_QUANT is not set'))
+        with self.assertRaisesRegex(ValueError,
+                'effective configuration mismatch: CONFIG_SR_MN_CN_MULTINET7_QUANT'):
+            self.verify()
+
+    def test_truncated_packed_assets_are_rejected_on_valid_waveshare(self):
+        self.verify()
+        self.asset.write_bytes(self.asset.read_bytes()[:-1])
+        with self.assertRaisesRegex(ValueError, 'invalid Xiaoman assets header/checksum'):
+            self.verify()
+
+    def test_corrupt_packed_assets_are_rejected_on_valid_waveshare(self):
+        self.verify()
+        data = bytearray(self.asset.read_bytes())
+        data[-1] ^= 1
+        self.asset.write_bytes(data)
+        with self.assertRaisesRegex(ValueError, 'invalid Xiaoman assets header/checksum'):
+            self.verify()
+
     def test_wrong_board_aec_realtime_or_partition_configuration_is_rejected(self):
         path = self.tree/'sdkconfig'
         original = path.read_text()
