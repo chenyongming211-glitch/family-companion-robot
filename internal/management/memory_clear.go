@@ -14,7 +14,13 @@ import (
 )
 
 func memoryClearAuthority(c Config, actor, id string, now time.Time) (Binding, error) {
-	binding, e := c.Authorize(actor, "family", id, now, true)
+	return memoryClearScopeAuthority(c, actor, "family", id, now)
+}
+func memoryClearScopeAuthority(c Config, actor, scope, id string, now time.Time) (Binding, error) {
+	if scope == "" {
+		scope = "family" // Legacy private claims omit scope.
+	}
+	binding, e := c.Authorize(actor, scope, id, now, true)
 	if e != nil {
 		return Binding{}, e
 	}
@@ -35,7 +41,7 @@ func memoryClearAuthority(c Config, actor, id string, now time.Time) (Binding, e
 func NewMemoryClearGuard(path string) realtimelive.MemoryClearGuard {
 	return func(ctx context.Context, claim realtimelive.MemoryClearClaim, fn func() error) error {
 		return (ConfigStore{path}).WithSnapshot(ctx, func(c Config) error {
-			b, e := memoryClearAuthority(c, claim.ActorID, claim.DeviceID, time.Now())
+			b, e := memoryClearScopeAuthority(c, claim.ActorID, claim.Scope, claim.DeviceID, time.Now())
 			if e != nil || b.ID != claim.BindingID || b.Version != claim.BindingVersion || b.FamilyID != claim.FamilyID || !time.Now().Before(claim.Deadline) {
 				return realtimelive.ErrMemoryClearForbidden
 			}
@@ -48,8 +54,12 @@ func NewMemoryClearGuard(path string) realtimelive.MemoryClearGuard {
 }
 
 func familyMemoryClearRequest(r *http.Request) bool {
-	const prefix = "/api/family/memory-clear/"
-	return r.Method == "POST" && strings.HasPrefix(r.URL.Path, prefix) && device.MatchString(strings.TrimPrefix(r.URL.Path, prefix)) && r.URL.RawQuery == ""
+	for _, prefix := range []string{"/api/family/memory-clear/", "/api/admin/memory-clear/"} {
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, prefix) && device.MatchString(strings.TrimPrefix(r.URL.Path, prefix)) && r.URL.RawQuery == "" {
+			return true
+		}
+	}
+	return false
 }
 func memoryClearError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrInvalid) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
@@ -77,19 +87,20 @@ func (s *Server) familyMemoryClear(w http.ResponseWriter, r *http.Request, a Acc
 		sourceError(w, ErrInvalid)
 		return
 	}
+	scope := parts[0]
 	var claim realtimelive.MemoryClearClaim
 	e := (ConfigStore{s.opts.ConfigPath}).WithSnapshot(r.Context(), func(c Config) error {
 		fresh := r.WithContext(context.WithValue(r.Context(), configContextKey{}, c))
-		current, ok := s.account(fresh, "family")
+		current, ok := s.account(fresh, scope)
 		if !ok || current.ID != a.ID {
 			return ErrForbidden
 		}
-		b, e := memoryClearAuthority(c, current.ID, parts[2], s.now())
+		b, e := memoryClearScopeAuthority(c, current.ID, scope, parts[2], s.now())
 		if e != nil {
 			return e
 		}
-		claim = realtimelive.MemoryClearClaim{DeviceID: parts[2], ActorID: current.ID, BindingID: b.ID, BindingVersion: b.Version, FamilyID: b.FamilyID, Deadline: time.Now().Add(5 * time.Second)}
-		return s.auditAction(current.ID, "family", "clear_memory_requested", parts[2], "")
+		claim = realtimelive.MemoryClearClaim{Scope: scope, DeviceID: parts[2], ActorID: current.ID, BindingID: b.ID, BindingVersion: b.Version, FamilyID: b.FamilyID, Deadline: time.Now().Add(5 * time.Second)}
+		return s.auditAction(current.ID, scope, "clear_memory_requested", parts[2], "")
 	})
 	if e != nil {
 		memoryClearError(w, e)

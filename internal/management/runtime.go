@@ -20,6 +20,7 @@ type runtimeCommand struct {
 	Actual    *int      `json:"actual"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	actor     string
+	scope     string
 	binding   Binding
 	boot      string
 }
@@ -55,7 +56,10 @@ func runtimeExpire(v *runtimeState, now time.Time) {
 	}
 }
 func runtimePermission(c Config, actor, id string, now time.Time) (Binding, bool, error) {
-	b, e := c.Authorize(actor, "family", id, now, false)
+	return runtimeScopePermission(c, actor, "family", id, now)
+}
+func runtimeScopePermission(c Config, actor, scope, id string, now time.Time) (Binding, bool, error) {
+	b, e := c.Authorize(actor, scope, id, now, false)
 	if e != nil {
 		return b, false, e
 	}
@@ -122,13 +126,13 @@ func (s *Server) deviceRuntime(w http.ResponseWriter, r *http.Request, a Account
 		apiError(w, 405, "method_not_allowed", "请求方法不支持")
 		return
 	}
-	id := parts[2]
+	scope, id := parts[0], parts[2]
 	c, e := s.snapshot()
 	if e != nil {
 		sourceError(w, e)
 		return
 	}
-	binding, can, e := runtimePermission(c, a.ID, id, s.now())
+	binding, can, e := runtimeScopePermission(c, a.ID, scope, id, s.now())
 	if e != nil {
 		sourceError(w, e)
 		return
@@ -158,12 +162,12 @@ func (s *Server) deviceRuntime(w http.ResponseWriter, r *http.Request, a Account
 		return
 	}
 	fresh := r.WithContext(context.WithValue(r.Context(), configContextKey{}, c))
-	actor, valid := s.account(fresh, "family")
+	actor, valid := s.account(fresh, scope)
 	if !valid || actor.ID != a.ID {
 		sourceError(w, ErrForbidden)
 		return
 	}
-	binding, can, e = runtimePermission(c, a.ID, id, s.now())
+	binding, can, e = runtimeScopePermission(c, a.ID, scope, id, s.now())
 	if e != nil {
 		sourceError(w, e)
 		return
@@ -174,6 +178,22 @@ func (s *Server) deviceRuntime(w http.ResponseWriter, r *http.Request, a Account
 	}
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
+	// Waiting for runtimeMu can outlive the authority checked above. Refresh
+	// only the atomic snapshot and pure permission rule here, never session locks.
+	c, e = s.snapshot()
+	if e != nil {
+		sourceError(w, e)
+		return
+	}
+	binding, can, e = runtimeScopePermission(c, a.ID, scope, id, s.now())
+	if e != nil {
+		sourceError(w, e)
+		return
+	}
+	if r.Method == "PUT" && !can {
+		sourceError(w, ErrForbidden)
+		return
+	}
 	v := s.runtimes[id]
 	out := s.runtimeView(id, v, can)
 	if r.Method == "PUT" {
@@ -186,11 +206,11 @@ func (s *Server) deviceRuntime(w http.ResponseWriter, r *http.Request, a Account
 			sourceError(w, e)
 			return
 		}
-		if e = s.auditAction(a.ID, "family", "device_control_requested", id, ""); e != nil {
+		if e = s.auditAction(a.ID, scope, "device_control_requested", id, ""); e != nil {
 			sourceError(w, e)
 			return
 		}
-		v.command = &runtimeCommand{ID: "cmd_" + suffix, Field: field, Value: *value, Status: "queued", ExpiresAt: s.now().Add(45 * time.Second), actor: a.ID, binding: binding, boot: boot}
+		v.command = &runtimeCommand{ID: "cmd_" + suffix, Field: field, Value: *value, Status: "queued", ExpiresAt: s.now().Add(45 * time.Second), actor: a.ID, scope: scope, binding: binding, boot: boot}
 		out = s.runtimeView(id, v, can)
 	}
 	writeJSON(w, out)
@@ -305,7 +325,7 @@ func (s *Server) deviceState(w http.ResponseWriter, r *http.Request, c Config) {
 	v.brightness = brightness
 	cmd := v.command
 	if runtimePending(cmd) {
-		b, allowed, e := runtimePermission(c, cmd.actor, d.DeviceID, s.now())
+		b, allowed, e := runtimeScopePermission(c, cmd.actor, cmd.scope, d.DeviceID, s.now())
 		if e != nil || !allowed || b.ID != cmd.binding.ID || b.Version != cmd.binding.Version || !b.From.Equal(cmd.binding.From) || b.FamilyID != cmd.binding.FamilyID {
 			cmd.Status = "unknown"
 		}

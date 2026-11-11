@@ -167,7 +167,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.familyOnboarding(w, r, a, parts)
 		return
 	}
-	if resource == "device-runtime" && scope == "family" {
+	if resource == "device-runtime" {
 		s.deviceRuntime(w, r, a, parts)
 		return
 	}
@@ -175,7 +175,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.deviceSettings(w, r, a, parts)
 		return
 	}
-	if resource == "memory-clear" && scope == "family" {
+	if resource == "memory-clear" {
 		s.familyMemoryClear(w, r, a, parts)
 		return
 	}
