@@ -182,7 +182,7 @@ func TestConnectionTraceHelloFailuresReleaseLease(t *testing.T) {
 		close   bool
 	}{
 		{"malformed", websocket.TextMessage, `{"type":"hello","private":"secret-hello"}`, 1008, false},
-		{"binary", websocket.BinaryMessage, "secret-binary", 1003, false},
+		{"binary", websocket.BinaryMessage, "secret-binary", 0, false},
 		{"missing_drain", websocket.TextMessage, `{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60},"features":{"playback_progress_v1":true}}`, 1008, false},
 		{"closed", 0, "", 1000, true},
 	} {
@@ -206,7 +206,10 @@ func TestConnectionTraceHelloFailuresReleaseLease(t *testing.T) {
 				}
 			}
 			c.SetReadDeadline(time.Now().Add(time.Second))
-			c.ReadMessage()
+			_, _, readErr := c.ReadMessage()
+			if tc.name == "binary" && !websocket.IsCloseError(readErr, websocket.CloseAbnormalClosure) {
+				t.Fatal("binary hello transport behavior changed")
+			}
 			c.Close()
 			waitActive(t, s, 0)
 			out := logs.String()
@@ -228,7 +231,8 @@ func TestConnectionTraceReadStatus(t *testing.T) {
 	}{
 		{&websocket.CloseError{Code: 1000, Text: "secret"}, 1000},
 		{&websocket.CloseError{Code: 1006, Text: "secret"}, 1006},
-		{os.ErrDeadlineExceeded, 408}, {errors.New("secret"), 1011},
+		{os.ErrDeadlineExceeded, 408}, {errors.New("secret"), 0},
+		{websocket.ErrReadLimit, 1009}, {fmt.Errorf("wrapped: %w", websocket.ErrReadLimit), 1009},
 	} {
 		if got := connectionReadStatus(tc.err); got != tc.want {
 			t.Fatalf("status=%d want=%d", got, tc.want)
@@ -356,3 +360,98 @@ func TestConnectionTraceHelloTimeout(t *testing.T) {
 		t.Fatalf("unexpected timeout elapsed=%d", ms)
 	}
 }
+
+func TestConnectionTraceOversizedHelloObservedCloseAndRetry(t *testing.T) {
+	s := NewServer(Config{}, nil, t.TempDir(), "trace")
+	logs := &traceBuffer{}
+	s.connectionLog = log.New(logs, "", 0)
+	entered := make(chan *Session, 1)
+	s.runDevice = func(session *Session) { defer session.cancel(); entered <- session; session.ws.ReadMessage() }
+	h := httptest.NewServer(s.DeviceHandler(DeviceConfig{Token: testDeviceToken, AllowedDevice: testDeviceMAC}))
+	defer h.Close()
+	c, _, err := traceDial(h.URL, "c1-0123456789abcdef-00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", 16385))); err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	_, _, readErr := c.ReadMessage()
+	if !websocket.IsCloseError(readErr, websocket.CloseMessageTooBig) {
+		t.Fatal("did not observe size-limit close1009")
+	}
+	c.Close()
+	waitActive(t, s, 0)
+	out := logs.String()
+	assertTraceLines(t, out)
+	if !strings.Contains(out, "stage=hello status=1009") || strings.Contains(out, "status=1011") {
+		t.Fatalf("size-limit trace mismatch: %s", out)
+	}
+	retry, _, err := traceDial(h.URL, "c1-0123456789abcdef-00000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retry.Close()
+	deviceHello(t, retry)
+	nextSession(t, entered)
+	retry.Close()
+	waitActive(t, s, 0)
+}
+
+func TestConnectionTraceAttachRefusalDoesNotInventClose(t *testing.T) {
+	s := NewServer(Config{}, nil, t.TempDir(), "trace")
+	logs := &traceBuffer{}
+	var once sync.Once
+	// Freeze admission after a real upgrade and before attachLease without any
+	// new product test hooks. The trace writer is configured before serving.
+	s.connectionLog = log.New(traceWriterFunc(func(p []byte) (int, error) {
+		if strings.Contains(string(p), "stage=upgrade status=101") {
+			once.Do(func() { s.mu.Lock(); s.stopping = true; s.mu.Unlock() })
+		}
+		return logs.Write(p)
+	}), "", 0)
+	entered := make(chan *Session, 1)
+	s.runDevice = func(session *Session) { defer session.cancel(); entered <- session; session.ws.ReadMessage() }
+	h := httptest.NewServer(s.DeviceHandler(DeviceConfig{Token: testDeviceToken, AllowedDevice: testDeviceMAC}))
+	defer h.Close()
+	c, _, err := traceDial(h.URL, "c1-0123456789abcdef-00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	_, _, readErr := c.ReadMessage()
+	if !websocket.IsCloseError(readErr, websocket.CloseAbnormalClosure) {
+		t.Fatal("attach refusal transport behavior changed")
+	}
+	c.Close()
+	waitActive(t, s, 0)
+	out := logs.String()
+	assertTraceLines(t, out)
+	if !strings.Contains(out, "stage=disconnect status=0") || strings.Contains(out, "status=1001") {
+		t.Fatalf("invented attach close: %s", out)
+	}
+	select {
+	case <-entered:
+		t.Fatal("refused lease entered session")
+	default:
+	}
+	s.mu.Lock()
+	s.stopping = false
+	s.mu.Unlock()
+	retry, _, err := traceDial(h.URL, "c1-0123456789abcdef-00000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retry.Close()
+	deviceHello(t, retry)
+	nextSession(t, entered)
+	retry.Close()
+	waitActive(t, s, 0)
+}
+
+type traceWriterFunc func([]byte) (int, error)
+
+func (f traceWriterFunc) Write(p []byte) (int, error) { return f(p) }

@@ -59,8 +59,8 @@ func lowerHex(value string) bool {
 }
 
 // Status uses HTTP results before/at upgrade and websocket close codes for
-// hello failures. 408 means a hello read timeout; 1011 an unclassified read
-// failure. Zero means a boundary was entered/returned without an observed result
+// hello failures. 408 means a hello read timeout; 1009 is the known gorilla
+// read-limit close attempt. Zero means there is no observed protocol result
 // (including session handler return), never a claim of clean transport closure.
 func (t *connectionTrace) stage(stage connectionStage, status int) {
 	if t == nil {
@@ -83,9 +83,15 @@ func connectionReadStatus(err error) int {
 	if errors.As(err, &closeErr) {
 		return closeErr.Code
 	}
+	// The pinned gorilla read-limit path attempts close 1009 before returning
+	// this sentinel instead of a CloseError. Other plain read errors do not
+	// expose a reliable protocol status and must stay unknown.
+	if errors.Is(err, websocket.ErrReadLimit) {
+		return websocket.CloseMessageTooBig
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return http.StatusRequestTimeout
 	}
-	return websocket.CloseInternalServerErr
+	return 0
 }

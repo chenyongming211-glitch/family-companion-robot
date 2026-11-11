@@ -178,7 +178,7 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 		trace.stage(connectionUpgrade, http.StatusSwitchingProtocols)
 		defer ws.Close()
 		if !s.attachLease(lease, ws) {
-			trace.stage(connectionDisconnect, websocket.CloseGoingAway)
+			trace.stage(connectionDisconnect, 0)
 			return
 		}
 		ws.SetReadLimit(16384)
@@ -189,7 +189,7 @@ func (s *Server) DeviceHandler(config DeviceConfig) http.Handler {
 			return
 		}
 		if kind != websocket.TextMessage {
-			trace.stage(connectionHello, websocket.CloseUnsupportedData)
+			trace.stage(connectionHello, 0)
 			return
 		}
 		hello, err := protocol.ParseRealtimeHello(b, int(version[0]-'0'))
