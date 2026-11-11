@@ -9,12 +9,21 @@ import (
 )
 
 type auditEntry struct {
-	UTC      time.Time `json:"utc"`
-	ActorID  string    `json:"actorID"`
-	Scope    string    `json:"scope"`
-	Action   string    `json:"action"`
-	DeviceID string    `json:"deviceID"`
-	RecordID string    `json:"recordID"`
+	UTC            time.Time `json:"utc"`
+	ActorID        string    `json:"actorID"`
+	Scope          string    `json:"scope"`
+	Action         string    `json:"action"`
+	DeviceID       string    `json:"deviceID"`
+	RecordID       string    `json:"recordID"`
+	OperationID    string    `json:"operationID,omitempty"`
+	FamilyID       string    `json:"familyID,omitempty"`
+	BindingID      string    `json:"bindingID,omitempty"`
+	BindingVersion int       `json:"bindingVersion,omitempty"`
+	Outcome        string    `json:"outcome,omitempty"`
+	Field          string    `json:"field,omitempty"`
+	Value          *int      `json:"value,omitempty"`
+	Actual         *int      `json:"actual,omitempty"`
+	Reason         string    `json:"reason,omitempty"`
 }
 
 func appendAudit(path string, entry auditEntry) error {
@@ -66,7 +75,43 @@ func (s *Server) audit(a, scope, device, record string) error {
 	return s.auditAction(a, scope, "read_conversation", device, record)
 }
 func (s *Server) auditAction(a, scope, action, device, record string) error {
+	entry := auditEntry{UTC: s.now().UTC(), ActorID: a, Scope: scope, Action: action, DeviceID: device, RecordID: record}
+	// Capture the binding at the access/request time. This helper is never used
+	// while holding runtimeMu; runtime commands already carry their own anchor.
+	if device != "" {
+		c, e := s.snapshot()
+		if e != nil {
+			return e
+		}
+		if b, e := c.Authorize(a, scope, device, entry.UTC, false); e == nil {
+			entry.FamilyID = b.FamilyID
+			entry.BindingID = b.ID
+			entry.BindingVersion = b.Version
+		}
+	}
+	return s.auditRecord(entry)
+}
+func (s *Server) auditRecord(entry auditEntry) error {
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
-	return s.auditWrite(s.opts.AuditPath, auditEntry{s.now().UTC(), a, scope, action, device, record})
+	return s.auditWrite(s.opts.AuditPath, entry)
+}
+func (s *Server) operationAudit(actor, scope, action, id, op string, b Binding, field string, value *int) auditEntry {
+	return auditEntry{UTC: s.now().UTC(), ActorID: actor, Scope: scope, Action: action, DeviceID: id, OperationID: op, FamilyID: b.FamilyID, BindingID: b.ID, BindingVersion: b.Version, Field: field, Value: value}
+}
+
+// terminalAudit is an attempt, not a durable guarantee. The private flag is set
+// before append so an I/O failure cannot cause a repeated operation or retry.
+func (s *Server) terminalAudit(id string, cmd *runtimeCommand) {
+	if cmd == nil || runtimePending(cmd) || cmd.auditAttempted {
+		return
+	}
+	cmd.auditAttempted = true
+	e := s.operationAudit(cmd.actor, cmd.scope, "device_control_result", id, cmd.ID, cmd.binding, cmd.Field, &cmd.Value)
+	e.Outcome = cmd.Status
+	if cmd.auditOutcome != "" {
+		e.Outcome = cmd.auditOutcome
+	}
+	e.Actual = cmd.Actual
+	_ = s.auditRecord(e)
 }

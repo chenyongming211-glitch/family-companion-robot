@@ -3,6 +3,7 @@ package management
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
@@ -36,6 +37,7 @@ type Server struct {
 	kdf        chan struct{}
 	dummy      PasswordHash
 	origin     *http.CrossOriginProtection
+	auditIDKey [32]byte
 	auditMu    sync.Mutex
 	auditWrite func(string, auditEntry) error
 }
@@ -57,6 +59,9 @@ func NewServer(c Config, o Options) (*Server, error) {
 	}
 	dummy := PasswordHash{Salt: strings.Repeat("00", 16), Digest: strings.Repeat("00", 32), Iterations: 600000}
 	s := &Server{cfg: c, opts: o, reader: Reader{Config: c, Root: o.RecordsPath, ProfilesPath: o.ProfilesPath, Now: o.Now}, now: o.Now, sessions: map[[32]byte]session{}, attempts: map[string]loginWindow{}, kdf: make(chan struct{}, 2), dummy: dummy, origin: http.NewCrossOriginProtection(), auditWrite: appendAudit}
+	if _, e := rand.Read(s.auditIDKey[:]); e != nil {
+		return nil, ErrSource
+	}
 	return s, nil
 }
 func apiError(w http.ResponseWriter, status int, code, message string) {
@@ -165,6 +170,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if resource == "onboarding" && scope == "family" {
 		s.familyOnboarding(w, r, a, parts)
+		return
+	}
+	if resource == "audit" {
+		s.adminAudit(w, r, a, parts)
 		return
 	}
 	if resource == "device-runtime" {

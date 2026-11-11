@@ -14,7 +14,7 @@ import (
 func TestAuditPrivateRegularAndBounded(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, "audit")
-	entry := auditEntry{time.Now().UTC(), "alice", "family", "read_conversation", "dev_synthetic", "synthetic-record"}
+	entry := auditEntry{UTC: time.Now().UTC(), ActorID: "alice", Scope: "family", Action: "read_conversation", DeviceID: "dev_synthetic", RecordID: "synthetic-record"}
 	if e := appendAudit(p, entry); e != nil {
 		t.Fatal(e)
 	}

@@ -88,8 +88,14 @@ func (s *Server) familyMemoryClear(w http.ResponseWriter, r *http.Request, a Acc
 		return
 	}
 	scope := parts[0]
+	suffix, e := randomHex(16)
+	if e != nil {
+		memoryClearError(w, e)
+		return
+	}
+	var entry auditEntry
 	var claim realtimelive.MemoryClearClaim
-	e := (ConfigStore{s.opts.ConfigPath}).WithSnapshot(r.Context(), func(c Config) error {
+	e = (ConfigStore{s.opts.ConfigPath}).WithSnapshot(r.Context(), func(c Config) error {
 		fresh := r.WithContext(context.WithValue(r.Context(), configContextKey{}, c))
 		current, ok := s.account(fresh, scope)
 		if !ok || current.ID != a.ID {
@@ -100,7 +106,8 @@ func (s *Server) familyMemoryClear(w http.ResponseWriter, r *http.Request, a Acc
 			return e
 		}
 		claim = realtimelive.MemoryClearClaim{Scope: scope, DeviceID: parts[2], ActorID: current.ID, BindingID: b.ID, BindingVersion: b.Version, FamilyID: b.FamilyID, Deadline: time.Now().Add(5 * time.Second)}
-		return s.auditAction(current.ID, scope, "clear_memory_requested", parts[2], "")
+		entry = s.operationAudit(current.ID, scope, "clear_memory_requested", parts[2], "op_"+suffix, b, "", nil)
+		return s.auditRecord(entry)
 	})
 	if e != nil {
 		memoryClearError(w, e)
@@ -108,6 +115,15 @@ func (s *Server) familyMemoryClear(w http.ResponseWriter, r *http.Request, a Acc
 	}
 	// Management must release its config lock before voice acquires the same lock.
 	e = clearMemoryRPC(r.Context(), s.opts.MemoryControlSocket, claim)
+	entry.UTC = s.now().UTC()
+	entry.Action = "clear_memory_result"
+	entry.Outcome = "unknown"
+	if e == nil {
+		entry.Outcome = "confirmed"
+	} else if errors.Is(e, realtimelive.ErrMemoryBusy) || errors.Is(e, ErrForbidden) {
+		entry.Outcome = "failed"
+	}
+	_ = s.auditRecord(entry)
 	switch {
 	case e == nil:
 		writeJSON(w, map[string]string{"deviceId": parts[2], "status": "confirmed"})

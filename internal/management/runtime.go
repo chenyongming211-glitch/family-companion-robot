@@ -13,16 +13,18 @@ var runtimeBoot = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var runtimeCommandID = regexp.MustCompile(`^cmd_[a-f0-9]{32}$`)
 
 type runtimeCommand struct {
-	ID        string    `json:"id"`
-	Field     string    `json:"field"`
-	Value     int       `json:"value"`
-	Status    string    `json:"status"`
-	Actual    *int      `json:"actual"`
-	ExpiresAt time.Time `json:"expiresAt"`
-	actor     string
-	scope     string
-	binding   Binding
-	boot      string
+	ID             string    `json:"id"`
+	Field          string    `json:"field"`
+	Value          int       `json:"value"`
+	Status         string    `json:"status"`
+	Actual         *int      `json:"actual"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+	actor          string
+	scope          string
+	binding        Binding
+	boot           string
+	auditAttempted bool
+	auditOutcome   string
 }
 type runtimeState struct {
 	boot               string
@@ -77,6 +79,7 @@ func (s *Server) runtimeView(id string, v *runtimeState, can bool) RuntimeDTO {
 		return out
 	}
 	runtimeExpire(v, s.now())
+	s.terminalAudit(id, v.command)
 	out.Boot = v.boot
 	out.Command = v.command
 	out.Volume = v.volume
@@ -206,7 +209,7 @@ func (s *Server) deviceRuntime(w http.ResponseWriter, r *http.Request, a Account
 			sourceError(w, e)
 			return
 		}
-		if e = s.auditAction(a.ID, scope, "device_control_requested", id, ""); e != nil {
+		if e = s.auditRecord(s.operationAudit(a.ID, scope, "device_control_requested", id, "cmd_"+suffix, binding, field, value)); e != nil {
 			sourceError(w, e)
 			return
 		}
@@ -337,8 +340,12 @@ func (s *Server) deviceState(w http.ResponseWriter, r *http.Request, c Config) {
 			actual = brightness
 		}
 		cmd.Status = "failed"
+		if ack.Status == "applied" {
+			cmd.auditOutcome = "unknown"
+		}
 		if ack.Status == "applied" && ack.Actual != nil && actual != nil && *actual == cmd.Value && *ack.Actual == cmd.Value {
 			cmd.Status = "confirmed"
+			cmd.auditOutcome = ""
 		}
 	}
 	var command any
@@ -354,5 +361,6 @@ func (s *Server) deviceState(w http.ResponseWriter, r *http.Request, c Config) {
 			command = map[string]any{"id": cmd.ID, "field": cmd.Field, "value": cmd.Value}
 		}
 	}
+	s.terminalAudit(d.DeviceID, cmd)
 	writeJSON(w, map[string]any{"command": command})
 }
