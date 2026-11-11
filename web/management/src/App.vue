@@ -101,6 +101,7 @@ onMounted(() => {
   window.addEventListener("hashchange", update);
   window.addEventListener("pageshow", restorePage);
   window.addEventListener("management-session-expired", expired);
+  window.addEventListener("management-account-changed", refreshAccount);
   void refreshAccount();
 });
 onUnmounted(() => {
@@ -110,6 +111,7 @@ onUnmounted(() => {
   window.removeEventListener("hashchange", update);
   window.removeEventListener("pageshow", restorePage);
   window.removeEventListener("management-session-expired", expired);
+  window.removeEventListener("management-account-changed", refreshAccount);
 });
 function focusMain() {
   document.getElementById("main-content")?.focus();
@@ -237,7 +239,6 @@ function directoryLink(page: string) {
           :key="reloadKey"
           :scope="scope"
           :route="displayedRoute"
-          @account-changed="refreshAccount"
         />
       </main>
     </div>

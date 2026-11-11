@@ -14,7 +14,6 @@ import "../data-pages.css";
 import { createMemoryClearController } from "../runtime-control.ts";
 import { onSensitiveInvalidated } from "../sensitive-session.ts";
 const props = defineProps<{ scope: Scope; route: PageRoute }>();
-const emit = defineEmits<{ accountChanged: [] }>();
 const devices = ref<Device[]>([]),
   families = ref<Family[]>([]),
   family = ref<Family | null>(null),
@@ -162,7 +161,7 @@ async function perform(action: () => Promise<void>) {
     if (token === request) feedback.value = message(e);
   } finally {
     saving.value = false;
-    emit("accountChanged");
+    window.dispatchEvent(new Event("management-account-changed"));
   }
 }
 async function login() {

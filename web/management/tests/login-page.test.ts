@@ -19,6 +19,7 @@ async function mount(scope: "admin" | "family") {
   let authenticated = false;
   let loginCalls = 0;
   let accountChanges = 0;
+  window.addEventListener("management-account-changed", () => accountChanges++);
   const api = createRemoteApi((async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).endsWith("/login")) {
       loginCalls++;
@@ -42,7 +43,7 @@ async function mount(scope: "admin" | "family") {
   const component = module.exports.default;
   component.render = () => null;
   const renderer = vue.createRenderer<any, any>({ createElement: () => ({}), insert() {}, remove() {}, createText: () => ({}), createComment: () => ({}), setText() {}, setElementText() {}, parentNode: () => null, nextSibling: () => null, patchProp() {} });
-  const app = renderer.createApp(component, { onAccountChanged: () => accountChanges++, scope, route: { page: "login", device: "", family: "", chat: "", memory: "" } });
+  const app = renderer.createApp(component, { scope, route: { page: "login", device: "", family: "", chat: "", memory: "" } });
   app.mount({});
   await new Promise(resolve => setImmediate(resolve));
   const state = (app as any)._instance.setupState;
