@@ -23,6 +23,13 @@ implementation still lives in some historically named M5 paths; do not fork it.
 checks while excluding retired board tests. New factory issuance and NVS creation
 accept only `微雪 ESP32-S3`; historical M5 configuration remains readable.
 
+The Waveshare product display reserves 10% of the screen width on each side of
+the top icon bar (48px per side at 480×480), matching its existing status-text
+safe area. This moves the network and battery icon groups away from the panel's
+rounded corners. This layout fix is independent of the recorded, unimplemented
+desktop-clock proposal. Build/install boundaries are recorded in the
+[icon layout verification](../docs/verification/2026-11-12-waveshare-status-icons.md).
+
 The onboarding overlay also provides a common S3 standby control worker used by
 Waveshare and retained in historical M5 source. After activation, networking, clock synchronization and audio readiness,
 one bounded HTTPS worker reports actual volume/brightness to the authenticated
