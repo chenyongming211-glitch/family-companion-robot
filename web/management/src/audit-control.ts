@@ -1,4 +1,5 @@
-import type { AuditAction, AuditFilter, AuditItem, AuditPage, Device } from "./types.ts";
+import type { Api } from "./api.ts";
+import type { AuditAction, AuditFilter, AuditItem, Device } from "./types.ts";
 
 export type AuditDraft = { device: string; from: string; to: string; action: AuditAction | "" };
 export function auditFilter(draft: AuditDraft, offset = 0, limit = 50): AuditFilter {
@@ -24,7 +25,7 @@ export function auditState() {
     hasMore: false, pending: false, loading: false, error: "", deviceError: "" };
 }
 type AuditState = ReturnType<typeof auditState>;
-type AuditApi = { listAuditPage(filter: AuditFilter): Promise<AuditPage>; listDevices(scope: "admin"): Promise<Device[]> };
+type AuditApi = Pick<Api, "listAuditPage" | "listDevices">;
 export function createAuditController(api: AuditApi, state: AuditState) {
   let epoch = 0, active = false;
   function clear() {

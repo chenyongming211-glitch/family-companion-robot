@@ -136,7 +136,7 @@ summary:focus-visible {
   gap: 12px;
   flex-wrap: wrap;
 }
-.demo {
+.data-source {
   color: #a45426;
   background: #fcf1e9;
   padding: 5px 9px;
@@ -536,11 +536,6 @@ main:focus {
   border: 1px solid #e8ebef;
   border-radius: 7px;
   min-height: 44px;
-}
-.danger-button {
-  background: #fff;
-  color: #9d3831;
-  border: 1px solid #d9aaa6;
 }
 .family .page-directory {
   margin: 0 20px;

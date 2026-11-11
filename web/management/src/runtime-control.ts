@@ -1,4 +1,5 @@
-import type { DeviceRuntime, ControlInput, Scope, RuntimeField } from './types.ts';
+import type { Api } from "./api.ts";
+import type { DeviceRuntime, Scope, RuntimeField } from './types.ts';
 
 export function runtimeState() {
   return {
@@ -10,10 +11,7 @@ export function runtimeState() {
   };
 }
 type State = ReturnType<typeof runtimeState>;
-type RuntimeApi = {
-  getDeviceRuntime(id: string, scope: Scope): Promise<DeviceRuntime>;
-  controlDevice(id: string, value: ControlInput, scope: Scope): Promise<DeviceRuntime>;
-};
+type RuntimeApi = Pick<Api, "getDeviceRuntime" | "controlDevice">;
 type Clock = {
   now: () => number;
   every: (fn: () => void) => unknown;
@@ -159,7 +157,7 @@ export function createRuntimeController(
 
 type TimeoutClock = { after: (fn: () => void) => unknown; cancel: (id: unknown) => void };
 export function createMemoryClearController(
-  api: { clearMemories(id: string, scope: Scope): Promise<unknown> },
+  api: Pick<Api, "clearMemories">,
   state: { pending: boolean; feedback: string },
   onCleared: (isCurrent: () => boolean) => unknown,
   clock: TimeoutClock = {

@@ -18,6 +18,7 @@ async function mount(scope: "admin" | "family") {
   Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
   let authenticated = false;
   let loginCalls = 0;
+  let accountChanges = 0;
   const api = createRemoteApi((async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).endsWith("/login")) {
       loginCalls++;
@@ -34,18 +35,18 @@ async function mount(scope: "admin" | "family") {
   const code = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const require = createRequire(import.meta.url), module = { exports: {} as any };
   new Function("require", "module", "exports", code)((name: string) =>
-    name === "vue" ? vue : name === "../api.ts" ? { api, liveMode: true } :
+    name === "vue" ? vue : name === "../api.ts" ? { api } :
     name === "../runtime-control.ts" ? control : name === "../sensitive-session.ts" ? sensitive :
     name === "../navigation.ts" ? { linkTo: (_scope: string, page: string) => `#/${page}` } :
     name.endsWith(".css") ? {} : require(name), module, module.exports);
   const component = module.exports.default;
   component.render = () => null;
   const renderer = vue.createRenderer<any, any>({ createElement: () => ({}), insert() {}, remove() {}, createText: () => ({}), createComment: () => ({}), setText() {}, setElementText() {}, parentNode: () => null, nextSibling: () => null, patchProp() {} });
-  const app = renderer.createApp(component, { scope, route: { page: "login", device: "", family: "", chat: "", memory: "" } });
+  const app = renderer.createApp(component, { onAccountChanged: () => accountChanges++, scope, route: { page: "login", device: "", family: "", chat: "", memory: "" } });
   app.mount({});
   await new Promise(resolve => setImmediate(resolve));
   const state = (app as any)._instance.setupState;
-  return { state, location, loginCalls: () => loginCalls, close() {
+  return { state, location, accountChanges: () => accountChanges, loginCalls: () => loginCalls, close() {
     app.unmount();
     for (const [key, old] of prior) { if (old) Object.defineProperty(globalThis, key, old); else Reflect.deleteProperty(globalThis, key); }
   } };
@@ -64,9 +65,11 @@ for (const scope of ["admin", "family"] as const) {
       assert.equal(page.loginCalls(), 1);
       assert.match(page.state.feedback, /账号或密码/);
       assert.equal(page.state.saving, false);
+      assert.equal(page.accountChanges(), 1, "auth completion must refresh the application session independently of deleted demo storage events");
       page.state.secret = "fixture-correct";
       await page.state.login();
       assert.equal(page.loginCalls(), 2);
+      assert.equal(page.accountChanges(), 2);
       assert.equal(page.location.href, scope === "admin" ? "#/overview" : "#/home");
     } finally { page.close(); }
   });

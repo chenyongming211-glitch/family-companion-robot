@@ -1,6 +1,5 @@
 import { invalidateSensitive, sessionGeneration } from "./sensitive-session.ts";
-import type { MockApi } from "./mock-api.ts";
-import { ApiError } from "./mock-api.ts";
+import { ApiError } from "./api-error.ts";
 import type {
   Account,
   AuditFilter,
@@ -104,16 +103,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     if (filter.deviceId !== undefined) params.set("device", filter.deviceId);
     return request(filter.scope ?? "admin", `chats?${params}`);
   }
-  const unsupported = async (..._args: unknown[]): Promise<never> => {
-    throw new ApiError(
-      "unsupported",
-      "此操作尚未接入真实后端，当前仅支持只读查询。",
-    );
-  };
   return {
-    mode: "live" as const,
-    storageMode: "server" as const,
-    storageWarning: "",
     async listDevices(scope: Scope = "admin") {
       return request<Device[]>(scope, "devices");
     },
@@ -188,13 +178,6 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
         throw error;
       }
     },
-    updateDevice: unsupported,
-    deleteConversation: unsupported,
-    reset: unsupported,
-    inviteMember: unsupported,
-    joinFamily: unsupported,
-    bindDevice: unsupported,
-    updateMemberAccess: unsupported,
     async listMemories(filter: { deviceId?: string; scope?: Scope } = {}) {
       const params = new URLSearchParams();
       if (filter.deviceId !== undefined) params.set("device", filter.deviceId);
@@ -223,13 +206,6 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
       const receipt = await request<{deviceId:string;status:string}>(scope, `memory-clear/${encodeURIComponent(id)}`, {method:"POST",body:JSON.stringify({confirm:true})});
       if (receipt?.deviceId !== id || receipt.status !== "confirmed") throw new ApiError("memory_clear_unconfirmed", "清除结果未核实，请刷新近期记忆。");
     },
-    getPrivacy: unsupported,
-    updatePrivacy: unsupported,
-    getDailySummaries: unsupported,
-    listCapabilities: unsupported,
-    listExpressions: unsupported,
-    listTasks: unsupported,
-    listFirmware: unsupported,
     async listAuditPage(filter: AuditFilter = {}) {
       const params = new URLSearchParams({
         offset: String(filter.offset ?? 0),
@@ -240,11 +216,5 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
       }
       return request<AuditPage>("admin", `audit?${params}`);
     },
-    listAudit: unsupported,
-    getOperations: unsupported,
-  } satisfies Omit<MockApi, "storageMode" | "mode"> & {
-    storageMode: "server";
-    mode: "live";
-    listAuditPage(filter?: AuditFilter): Promise<AuditPage>;
   };
 }

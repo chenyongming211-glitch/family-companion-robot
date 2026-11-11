@@ -140,25 +140,10 @@ test("live pagination and exact device ownership remain in the request", async (
   );
 });
 
-test("unsupported real writes reject without touching fetch or mock state", async () => {
-  let calls = 0;
-  const api = createRemoteApi((async () => {
-    calls++;
-    return new Response("{}");
-  }) as typeof fetch);
-  await assert.rejects(
-    api.updateDevice(
-      "dev_live",
-      { name: "名称", volume: 50, brightness: 50 },
-      "family",
-    ),
-    /尚未接入/,
-  );
-  await assert.rejects(
-    api.deleteConversation("record-live", "family"),
-    /尚未接入/,
-  );
-  assert.equal(calls, 0);
+test("API exposes no unimplemented product writes", () => {
+  const api = createRemoteApi();
+  for (const method of ["updateDevice", "deleteConversation", "reset", "inviteMember", "joinFamily", "bindDevice", "updateMemberAccess", "getPrivacy", "updatePrivacy"])
+    assert.equal(method in api, false, method);
 });
 
 test("a rejected login stays a form error; expired protected reads notify the page", async () => {

@@ -24,7 +24,7 @@ async function mount(api:any){
  return {props,doc,all,text:()=>all().map(n=>n.text).join(' '),find:(id:string)=>{const n=all().find(n=>n.props.id===id);assert.ok(n,`missing #${id}`);return n;},close:()=>{app.unmount();if(prior)Object.defineProperty(globalThis,'document',prior);else Reflect.deleteProperty(globalThis,'document');}};
 }
 test('mounted audit form, pagination and authorized links use actual Vue handlers and missing values remain unrecorded',async()=>{
- const calls:any[]=[];const api={mode:'live',listDevices:async()=>[{id,name:'客厅'}],listAuditPage:async(filter:any)=>{calls.push(filter);return {items:[{...item,canOpenDevice:calls.length>1}],hasMore:true,pending:true};}};
+ const calls:any[]=[];const api={listDevices:async()=>[{id,name:'客厅'}],listAuditPage:async(filter:any)=>{calls.push(filter);return {items:[{...item,canOpenDevice:calls.length>1}],hasMore:true,pending:true};}};
  const view=await mount(api);try{
  assert.match(view.text(),/本页显示平台已记录的操作；语音指令和设备按键变化暂未纳入。/);
  assert.match(view.text(),/未记录/);assert.match(view.text(),/结果未知/);assert.match(view.text(),/日志正在写入/);assert.equal(view.all().filter(n=>n.tag==='a').length,0);
@@ -35,7 +35,7 @@ test('mounted audit form, pagination and authorized links use actual Vue handler
 });
 test('mounted route/hide/session/unmount cleanup rejects late rows and errors, and repeated refresh cannot overlap',async()=>{
  let next:any={items:[item],hasMore:true,pending:false};let calls=0;
- const api={mode:'live',listDevices:async()=>[{id,name:'客厅'}],listAuditPage:async()=>{calls++;return typeof next==='function'?next():next;}};
+ const api={listDevices:async()=>[{id,name:'客厅'}],listAuditPage:async()=>{calls++;return typeof next==='function'?next():next;}};
  const view=await mount(api);try{
  const late=deferred();next=()=>late.promise;const pending=view.find('audit-refresh').props.onClick();await tick();view.find('audit-refresh').props.onClick();assert.equal(calls,2);
  sensitive.invalidateSensitive();await tick();assert.doesNotMatch(view.text(),/管理员/);assert.doesNotMatch(view.text(),/第 1 页/);late.resolve({items:[item],hasMore:true,pending:true});await pending;await tick();assert.doesNotMatch(view.text(),/管理员/);
@@ -44,7 +44,7 @@ test('mounted route/hide/session/unmount cleanup rejects late rows and errors, a
  view.props.route={...view.props.route,page:'devices'};await tick();const before=calls;view.close();sensitive.invalidateSensitive();await tick();assert.equal(calls,before);
  }finally{view.close();}
 });
-test('mock and family routes never activate a live audit request',async()=>{
- let calls=0;const api={mode:'mock',listDevices:async()=>{calls++;return [];},listAuditPage:async()=>{calls++;return {items:[],hasMore:false,pending:false};}};
- const view=await mount(api);try{assert.equal(calls,0);view.props.scope='family';view.props.route={...view.props.route,page:'audit'};await tick();assert.equal(calls,0);}finally{view.close();}
+test('family routes never activate an admin audit request',async()=>{
+ let calls=0;const api={listDevices:async()=>{calls++;return [];},listAuditPage:async()=>{calls++;return {items:[],hasMore:false,pending:false};}};
+ const view=await mount(api);try{await tick();const before=calls;view.props.scope='family';view.props.route={...view.props.route,page:'audit'};await tick();assert.equal(calls,before);}finally{view.close();}
 });

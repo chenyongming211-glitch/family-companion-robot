@@ -6,15 +6,13 @@ import {
   familyNav,
   adminRoutes,
   familyRoutes,
-  operationsRoutes,
   linkTo,
   readRoute,
 } from "./navigation.ts";
-import { api, liveMode } from "./api.ts";
+import { api } from "./api.ts";
 import { onSensitiveInvalidated } from "./sensitive-session.ts";
 import CorePages from "./pages/CorePages.vue";
 import DataPages from "./pages/DataPages.vue";
-import OperationsPages from "./pages/OperationsPages.vue";
 import AuditPage from "./pages/AuditPage.vue";
 const scope: Scope = location.pathname.endsWith("family.html")
   ? "family"
@@ -22,13 +20,10 @@ const scope: Scope = location.pathname.endsWith("family.html")
 const route = ref(readRoute(scope)),
   account = ref<Account | null>(null),
   accountBusy = ref(false);
-const sessionReady = ref(!liveMode),
+const sessionReady = ref(false),
   sessionError = ref(""),
   sessionNotice = ref("");
-const resetMessage = ref(""),
-  storageWarning = ref(api.storageWarning),
-  storageMode = ref(api.storageMode),
-  reloadKey = ref(0);
+const reloadKey = ref(0);
 let authVersion = 0;
 const pageVisible = ref(document.visibilityState === "visible");
 let unsubscribeSensitive = () => {};
@@ -39,44 +34,10 @@ function foreground() {
     void refreshAccount();
   }
 }
-const implemented =
-  scope === "admin"
-    ? [
-        "overview",
-        "devices",
-        "device",
-        "conversations",
-        "conversation",
-        "configuration",
-        "audit",
-        "families",
-        "family",
-        "accounts",
-        "memories",
-        "login",
-      ]
-    : [
-        "home",
-        "device",
-        "conversations",
-        "conversation",
-        "settings",
-        "memories",
-        "memory",
-        "family",
-        "login",
-      ];
-const nav = computed(() => {
-  const items = scope === "admin" ? adminNav : familyNav;
-  return liveMode
-    ? items.filter((item) => implemented.includes(item[0]))
-    : items;
-});
-const routes = (scope === "admin" ? adminRoutes : familyRoutes).filter(
-  (item) => !liveMode || implemented.includes(item[0]),
-);
+const nav = computed(() => scope === "admin" ? adminNav : familyNav);
+const routes = scope === "admin" ? adminRoutes : familyRoutes;
 const needsLogin = computed(
-  () => liveMode && sessionReady.value && !account.value,
+  () => sessionReady.value && !account.value,
 );
 const displayedRoute = computed(() =>
   needsLogin.value ? { ...route.value, page: "login" } : route.value,
@@ -88,32 +49,14 @@ const knownPage = computed(
     (scope === "admin" &&
       ["conversation", "settings"].includes(route.value.page)),
 );
-const dataRoutes = [
-  "login",
-  "families",
-  "family",
-  "accounts",
-  "policies",
-  "memories",
-  "daily",
-  "invite",
-  "bind",
-  "privacy",
-  "memory",
-];
+const dataRoutes = ["login", "families", "family", "accounts", "memories", "memory"];
 const pageComponent = computed(() =>
-  liveMode && scope === "admin" && displayedRoute.value.page === "audit"
+  scope === "admin" && displayedRoute.value.page === "audit"
     ? AuditPage
     : dataRoutes.includes(displayedRoute.value.page)
     ? DataPages
-    : operationsRoutes.includes(route.value.page)
-      ? OperationsPages
-      : CorePages,
+    : CorePages,
 );
-function refreshStorage() {
-  storageWarning.value = api.storageWarning;
-  storageMode.value = api.storageMode;
-}
 async function refreshAccount() {
   const version = ++authVersion;
   try {
@@ -133,10 +76,6 @@ async function refreshAccount() {
   } finally {
     if (version === authVersion) sessionReady.value = true;
   }
-}
-function refreshDemo() {
-  refreshStorage();
-  void refreshAccount();
 }
 function expired() {
   authVersion++;
@@ -161,7 +100,6 @@ onMounted(() => {
   document.addEventListener("visibilitychange", foreground);
   window.addEventListener("hashchange", update);
   window.addEventListener("pageshow", restorePage);
-  window.addEventListener("demo-storage-changed", refreshDemo);
   window.addEventListener("management-session-expired", expired);
   void refreshAccount();
 });
@@ -171,7 +109,6 @@ onUnmounted(() => {
   authVersion++;
   window.removeEventListener("hashchange", update);
   window.removeEventListener("pageshow", restorePage);
-  window.removeEventListener("demo-storage-changed", refreshDemo);
   window.removeEventListener("management-session-expired", expired);
 });
 function focusMain() {
@@ -192,7 +129,6 @@ async function logout() {
       error instanceof Error ? error.message : "退出失败，请重试";
   } finally {
     accountBusy.value = false;
-    refreshStorage();
   }
 }
 function active(page: string) {
@@ -201,7 +137,7 @@ function active(page: string) {
     (page === "devices" && route.value.page === "device") ||
     (page === "conversations" && route.value.page === "conversation") ||
     (page === "settings" &&
-      ["family", "invite", "bind", "privacy"].includes(route.value.page))
+      route.value.page === "family")
   );
 }
 function navQuery(page: string): Record<string, string> {
@@ -211,30 +147,12 @@ function navQuery(page: string): Record<string, string> {
     query.family = route.value.family;
   return query;
 }
-function directoryQuery(page: string): Record<string, string> {
-  if (!liveMode && page === "conversation")
-    return { device: "dev-living", chat: "chat-story" };
-  if (!liveMode && page === "memory")
-    return { device: "dev-living", memory: "memory-story" };
-  return navQuery(page);
-}
 function directoryLink(page: string) {
   return linkTo(
     scope,
-    liveMode && page === "conversation" ? "conversations" : page,
-    directoryQuery(page),
+    page === "conversation" ? "conversations" : page,
+    navQuery(page),
   );
-}
-async function reset() {
-  if (liveMode || !confirm("重置所有演示数据？")) return;
-  try {
-    await api.reset();
-    resetMessage.value = "演示数据已重置";
-    reloadKey.value++;
-    refreshDemo();
-  } catch {
-    resetMessage.value = "重置失败，请重试";
-  }
 }
 </script>
 <template>
@@ -248,7 +166,7 @@ async function reset() {
         ><span>伴伴 <small>管理平台</small></span></a
       >
       <p class="nav-label">工作台</p>
-      <nav v-if="!liveMode || account" aria-label="内部导航">
+      <nav v-if="account" aria-label="内部导航">
         <a
           v-for="item in nav"
           :key="item[0]"
@@ -264,37 +182,26 @@ async function reset() {
       <header class="topbar">
         <div>
           <strong>{{ scope === "admin" ? "管理工作台" : "伴伴" }}</strong
-          ><span class="demo">{{
-            liveMode ? "真实数据 · 设备回执确认" : "前端演示 · 虚构数据"
-          }}</span>
+          ><span class="data-source">真实数据 · 设备回执确认</span>
         </div>
         <div class="top-actions">
-          <span v-if="storageMode === 'memory'" class="muted">仅内存保存</span
-          ><button v-if="!liveMode" class="text-button" @click="reset">
-            重置演示</button
-          ><button
+          <button
             v-if="account"
             class="text-button"
             :disabled="accountBusy"
             @click="logout"
           >
-            {{ liveMode ? "退出登录" : "退出演示" }}</button
-          ><a v-else :href="linkTo(scope, 'login')">{{
-            liveMode ? "登录" : "演示登录"
-          }}</a
+            退出登录</button
+          ><a v-else :href="linkTo(scope, 'login')">登录</a
           ><a v-if="scope === 'family'" :href="linkTo('admin', 'overview')"
             >内部端 ↗</a
           >
         </div>
       </header>
-      <div role="status" class="reset-message">{{ resetMessage }}</div>
-      <div v-if="storageWarning" role="alert" class="reset-message">
-        {{ storageWarning }}
-      </div>
       <div v-if="sessionNotice" role="status" class="reset-message">
         {{ sessionNotice }}
       </div>
-      <details v-if="!liveMode || account" class="page-directory">
+      <details v-if="account" class="page-directory">
         <summary>页面目录（{{ routes.length }}）</summary>
         <div class="directory-grid">
           <a
@@ -306,7 +213,7 @@ async function reset() {
         </div>
       </details>
       <main id="main-content" tabindex="-1">
-        <section v-if="liveMode && !sessionReady" class="panel" role="status">
+        <section v-if="!sessionReady" class="panel" role="status">
           正在检查登录状态…
         </section>
         <section v-else-if="sessionError" class="panel error" role="alert">
@@ -323,19 +230,19 @@ async function reset() {
             >返回首页</a
           >
         </section>
-        <section v-else-if="liveMode && !pageVisible" class="panel" role="status">页面内容已清理，请重新进入页面读取。</section>
+        <section v-else-if="!pageVisible" class="panel" role="status">页面内容已清理，请重新进入页面读取。</section>
         <component
           v-else
           :is="pageComponent"
           :key="reloadKey"
           :scope="scope"
           :route="displayedRoute"
-          @storage-changed="refreshStorage"
+          @account-changed="refreshAccount"
         />
       </main>
     </div>
     <nav
-      v-if="scope === 'family' && (!liveMode || account)"
+      v-if="scope === 'family' && (account)"
       class="bottom-nav"
       aria-label="家庭导航"
     >

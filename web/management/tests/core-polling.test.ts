@@ -47,7 +47,6 @@ async function page() {
   const run = new Function(
     "onSensitiveInvalidated",
     "api",
-    "liveMode",
     "pageProps",
     "vue",
     "setInterval",
@@ -58,7 +57,6 @@ async function page() {
   const state = run(
     () => () => {},
     api,
-    true,
     {
       scope: "family",
       route: { page: "conversation", chat: "chat", device: "device" },

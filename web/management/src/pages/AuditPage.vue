@@ -11,7 +11,6 @@ const state = reactive(auditState());
 const active = ref(false);
 const control = createAuditController({
   listAuditPage: filter => {
-    if (api.mode !== "live") throw new Error("真实审计仅在内部后台提供。");
     return api.listAuditPage(filter);
   },
   listDevices: () => api.listDevices("admin"),
@@ -32,7 +31,7 @@ document.addEventListener("visibilitychange", visibility);
 watch(() => [props.scope, props.route], () => {
   clear();
   state.draft.device = props.route.device;
-  if (api.mode === "live" && props.scope === "admin" && props.route.page === "audit" && document.visibilityState === "visible") {
+  if (props.scope === "admin" && props.route.page === "audit" && document.visibilityState === "visible") {
     active.value = true;
     void control.activate();
   }
