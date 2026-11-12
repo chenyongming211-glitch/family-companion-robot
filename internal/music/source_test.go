@@ -233,3 +233,25 @@ func TestResolvedFormattingDoesNotExposeTemporaryURL(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchArtistNameMustMatchWholeRequestedName(t *testing.T) {
+	c := fixtureCatalog(t, `{"code":200,"result":{"songs":[{"id":1,"name":"如愿","duration":2000,"artists":[{"name":"白浅熙想嫁给周深."}]},{"id":2,"name":"如愿","duration":2000,"artists":[{"name":"周深"}]},{"id":3,"name":"如愿 (Live)","duration":2000,"artists":[{"name":"另一位歌手"},{"name":"周深"}]},{"id":4,"name":"如愿","duration":2000,"artists":[{"name":"周深粉丝"}]}]}}`, nil)
+	rows, err := c.Search(context.Background(), Query{Title: "如愿", Artist: "周深"})
+	if err != nil || len(rows) != 2 || rows[0].ID != 2 || rows[1].ID != 3 {
+		t.Fatalf("wrong singer accepted: %+v %v", rows, err)
+	}
+}
+func TestSearchRefusesFanNameWhenRequestedArtistAbsent(t *testing.T) {
+	c := fixtureCatalog(t, `{"code":200,"result":{"songs":[{"id":1,"name":"如愿","duration":2000,"artists":[{"name":"白浅熙想嫁给周深."}]}]}}`, nil)
+	rows, err := c.Search(context.Background(), Query{Title: "如愿", Artist: "周深"})
+	if !errors.Is(err, ErrUnavailable) || len(rows) != 0 {
+		t.Fatal("must decline instead of substituting another artist", rows, err)
+	}
+}
+func TestSearchArtistNormalizationStillAllowsExactCaseAndPunctuation(t *testing.T) {
+	c := fixtureCatalog(t, `{"code":200,"result":{"songs":[{"id":1,"name":"Song","duration":2000,"artists":[{"name":"ART-IST"}]},{"id":2,"name":"Song","duration":2000,"artists":[{"name":"Artist Fans"}]}]}}`, nil)
+	rows, err := c.Search(context.Background(), Query{Title: "Song", Artist: " Art ist "})
+	if err != nil || len(rows) != 1 || rows[0].ID != 1 {
+		t.Fatal(rows, err)
+	}
+}

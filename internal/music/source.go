@@ -115,11 +115,11 @@ func (c *Catalog) Search(ctx context.Context, q Query) ([]Track, error) {
 				continue
 			}
 			artistNames = append(artistNames, a.Name)
-			if matches(a.Name, q.Artist) {
+			if matchesArtist(a.Name, q.Artist) {
 				matchedArtist = true
 			}
 		}
-		if len(artistNames) == 0 || !matchedArtist || !matches(s.Name, q.Title) || seen[s.ID] {
+		if len(artistNames) == 0 || !matchedArtist || !matchesTitle(s.Name, q.Title) || seen[s.ID] {
 			continue
 		}
 		track := Track{ID: s.ID, Title: s.Name, Artist: strings.Join(artistNames, " / "), Duration: time.Duration(s.Duration) * time.Millisecond}
@@ -199,16 +199,24 @@ func validText(s string, max int) bool {
 	}
 	return true
 }
-func matches(value, query string) bool {
-	normalize := func(s string) string {
-		return strings.Map(func(r rune) rune {
-			if unicode.IsSpace(r) || unicode.IsPunct(r) {
-				return -1
-			}
-			return unicode.ToLower(r)
-		}, s)
-	}
-	return query == "" || (normalize(query) != "" && strings.Contains(normalize(value), normalize(query)))
+func normalizeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, s)
+}
+func matchesTitle(value, query string) bool {
+	n := normalizeName(query)
+	return query == "" || (n != "" && strings.Contains(normalizeName(value), n))
+}
+
+// Each artist entry must match the requested name, not a fan's longer nickname.
+// Collaborations remain valid when one full artist entry matches.
+func matchesArtist(value, query string) bool {
+	n := normalizeName(query)
+	return query == "" || (n != "" && normalizeName(value) == n)
 }
 func (c *Catalog) metadata(ctx context.Context, uri string, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, prepareTimeout)
