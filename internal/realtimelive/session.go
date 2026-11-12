@@ -15,6 +15,7 @@ import (
 )
 
 type liveTurn struct {
+	media                   bool // Session.mu; media never supplies spoken text.
 	turn                    *realtimestate.Turn
 	ctx                     context.Context
 	cancel                  context.CancelFunc
@@ -32,6 +33,7 @@ type liveTurn struct {
 	expressionCancel        context.CancelFunc
 }
 type Session struct {
+	music            *sessionMusic // Session.mu; discarded with this authenticated connection.
 	ws               *websocket.Conn
 	wire             sessionWire
 	inputFrame       int
