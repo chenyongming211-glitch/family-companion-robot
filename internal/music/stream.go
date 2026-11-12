@@ -18,15 +18,21 @@ func ffmpegCommand(ctx context.Context) *exec.Cmd {
 }
 
 // Stream returns decoded PCM sample count, never proof of device playback.
-// emit is synchronous, must honor the caller's context while blocked, and must
-// copy the chunk if retaining it. There is no decoded PCM queue in this package.
+// The caller must set ctx's deadline no later than now + r.Track.Duration + 30s.
+// emit is synchronous and must observe that same ctx while blocked; Stream
+// cannot interrupt arbitrary callback code. Copy the chunk before retaining it.
+// There is no decoded PCM queue in this package.
 func (c *Catalog) Stream(ctx context.Context, r Resolved, emit func([]byte) error) (int64, error) {
 	u, err := url.Parse(r.url)
 	if emit == nil || !validTrack(r.Track) || r.Track != r.track || r.size <= 0 || r.size > maxSourceBytes || err != nil || !validURL(u, false) {
 		return 0, ErrInvalid
 	}
 	if ctx.Err() != nil {
-		return 0, sourceError(ctx)
+		return 0, sourceFailure{context.Cause(ctx)}
+	}
+	deadline, bounded := ctx.Deadline()
+	if !bounded || deadline.After(time.Now().Add(r.Track.Duration+30*time.Second)) {
+		return 0, ErrInvalid
 	}
 	runCtx, cancel := context.WithTimeout(ctx, r.Track.Duration+30*time.Second)
 	defer cancel()

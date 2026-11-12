@@ -35,12 +35,98 @@ func streamFixture(data []byte, declared int64, duration time.Duration) (*Catalo
 	t := Track{ID: 1, Title: "synthetic", Artist: "test", Duration: duration}
 	return c, Resolved{Track: t, track: t, url: "https://music.126.net/test.mp3", size: declared}
 }
+func boundedStreamContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestStreamRejectsMissingOrOverlongCallerDeadlineBeforeIO(t *testing.T) {
+	for _, name := range []string{"missing", "overlong"} {
+		t.Run(name, func(t *testing.T) {
+			c, r := streamFixture(nil, 100, 2*time.Second)
+			ctx := context.Background()
+			if name == "overlong" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, r.Track.Duration+31*time.Second)
+				defer cancel()
+			}
+			networkCalled, childCalled := false, false
+			c.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				networkCalled = true
+				return nil, errors.New("unexpected network")
+			})
+			c.command = func(context.Context) *exec.Cmd { childCalled = true; return nil }
+			n, err := c.Stream(ctx, r, func([]byte) error { return nil })
+			if !errors.Is(err, ErrInvalid) || n != 0 || networkCalled || childCalled {
+				t.Fatalf("deadline accepted: samples=%d err=%v network=%v child=%v", n, err, networkCalled, childCalled)
+			}
+		})
+	}
+}
+
+func TestStreamAlreadyCanceledCallerReturnsCauseBeforeDeadlineValidation(t *testing.T) {
+	c, r := streamFixture(nil, 100, 2*time.Second)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	want := errors.New("caller stopped")
+	cancel(want)
+	c.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("canceled caller reached network")
+		return nil, nil
+	})
+	c.command = func(context.Context) *exec.Cmd { t.Fatal("canceled caller started child"); return nil }
+	if n, err := c.Stream(ctx, r, func([]byte) error { return nil }); n != 0 || !errors.Is(err, want) {
+		t.Fatalf("cancellation cause lost: samples=%d err=%v", n, err)
+	}
+}
+
+func TestStreamCallerDeadlineReleasesBlockedConsumerAndReapsProcess(t *testing.T) {
+	data := syntheticMP3(t)
+	c, r := streamFixture(data, int64(len(data)), 2*time.Second)
+	var child *exec.Cmd
+	c.command = func(ctx context.Context) *exec.Cmd { child = ffmpegCommand(ctx); return child }
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Stream(ctx, r, func([]byte) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("no backpressured callback before deadline")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("consumer returned before caller deadline: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != context.DeadlineExceeded {
+			t.Fatalf("caller deadline not observed: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("deadline did not release consumer")
+	}
+	if child == nil || child.ProcessState == nil {
+		t.Fatal("Stream returned without waiting for child")
+	}
+}
+
 func TestStreamDecodesMP3ToBounded24KMonoPCM(t *testing.T) {
 	data := syntheticMP3(t)
 	c, r := streamFixture(data, int64(len(data)), 2*time.Second)
 	var total int64
 	var pcm bytes.Buffer
-	n, err := c.Stream(context.Background(), r, func(b []byte) error {
+	n, err := c.Stream(boundedStreamContext(t), r, func(b []byte) error {
 		if len(b) == 0 || len(b) > 2880 || len(b)%2 != 0 {
 			t.Fatalf("chunk length %d", len(b))
 		}
@@ -76,7 +162,7 @@ func TestStreamRejectsTruncatedCorruptAndDeceptiveSources(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, r := streamFixture(tc.data, tc.size, tc.duration)
-			_, err := c.Stream(context.Background(), r, func([]byte) error { return nil })
+			_, err := c.Stream(boundedStreamContext(t), r, func([]byte) error { return nil })
 			if !errors.Is(err, ErrSource) {
 				t.Fatalf("got %v", err)
 			}
@@ -91,11 +177,11 @@ func TestStreamRejectsForgedAndModifiedResolved(t *testing.T) {
 	data := syntheticMP3(t)
 	c, r := streamFixture(data, int64(len(data)), 2*time.Second)
 	r.Track.Duration = time.Minute
-	if _, e := c.Stream(context.Background(), r, func([]byte) error { return nil }); !errors.Is(e, ErrInvalid) {
+	if _, e := c.Stream(boundedStreamContext(t), r, func([]byte) error { return nil }); !errors.Is(e, ErrInvalid) {
 		t.Fatalf("modified: %v", e)
 	}
 	_, r = streamFixture(data, int64(len(data)), 2*time.Second)
-	if _, e := c.Stream(context.Background(), r, nil); !errors.Is(e, ErrInvalid) {
+	if _, e := c.Stream(boundedStreamContext(t), r, nil); !errors.Is(e, ErrInvalid) {
 		t.Fatalf("nil consumer: %v", e)
 	}
 }
@@ -104,7 +190,7 @@ func TestStreamConsumerBackpressureCancelAndProcessReap(t *testing.T) {
 	c, r := streamFixture(data, int64(len(data)), 2*time.Second)
 	var child *exec.Cmd
 	c.command = func(ctx context.Context) *exec.Cmd { child = ffmpegCommand(ctx); return child }
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -152,7 +238,7 @@ func TestStreamConsumerErrorIsReturnedAfterReap(t *testing.T) {
 	want := errors.New("consumer stopped")
 	var cmd *exec.Cmd
 	c.command = func(ctx context.Context) *exec.Cmd { cmd = ffmpegCommand(ctx); return cmd }
-	_, e := c.Stream(context.Background(), r, func([]byte) error { return want })
+	_, e := c.Stream(boundedStreamContext(t), r, func([]byte) error { return want })
 	if !errors.Is(e, want) || cmd.ProcessState == nil {
 		t.Fatalf("consumer failure not reaped: %v", e)
 	}
@@ -183,7 +269,7 @@ func TestStreamCancellationClosesStalledNetworkAndReapsProcess(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: body, ContentLength: -1, Request: req}, nil
 	})
 	c.command = func(ctx context.Context) *exec.Cmd { cmd = ffmpegCommand(ctx); return cmd }
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, e := c.Stream(ctx, r, func([]byte) error { return nil }); done <- e }()
@@ -211,7 +297,7 @@ func TestReadWatchdogClosesStalledBody(t *testing.T) {
 		t.Fatal("network idle limit changed")
 	}
 	body := newStalledBody()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	r := progressReader{body: body, cancel: cancel, timeout: 20 * time.Millisecond}
 	_, e := r.Read(make([]byte, 1))
@@ -236,7 +322,7 @@ func TestStreamRejectsHTTPSizeTypeAndEncodingBeforeDecoder(t *testing.T) {
 			c.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 200, Header: http.Header{tc.header: []string{tc.value}}, Body: io.NopCloser(strings.NewReader("")), ContentLength: tc.length, Request: req}, nil
 			})
-			_, e := c.Stream(context.Background(), r, func([]byte) error { return nil })
+			_, e := c.Stream(boundedStreamContext(t), r, func([]byte) error { return nil })
 			if !errors.Is(e, ErrSource) || called {
 				t.Fatalf("unsafe HTTP accepted: %v", e)
 			}
@@ -253,7 +339,7 @@ func TestStderrIsBoundedAndConsumerErrorsAreSanitized(t *testing.T) {
 	data := syntheticMP3(t)
 	c, r := streamFixture(data, int64(len(data)), 2*time.Second)
 	want := errors.New("https://secret.invalid/source-body")
-	_, e := c.Stream(context.Background(), r, func([]byte) error { return want })
+	_, e := c.Stream(boundedStreamContext(t), r, func([]byte) error { return want })
 	if e.Error() != "music_source" || !errors.Is(e, want) {
 		t.Fatalf("consumer error escaped: %v", e)
 	}
