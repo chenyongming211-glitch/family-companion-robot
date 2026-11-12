@@ -1,0 +1,10 @@
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -45,5 +45,7 @@
+ set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+ if(CONFIG_CHICK_FACE_UI)
+     list(APPEND SOURCES "display/chick_face_view.cc")
++    list(APPEND SOURCES "display/desktop_clock_font.c")
++    list(APPEND SOURCES "display/desktop_clock_digits_font.c")
+     list(APPEND INCLUDE_DIRS "boards/m5stack/stopwatch")
+ endif()

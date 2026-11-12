@@ -37,6 +37,20 @@ class AudioUiActivityTests(unittest.TestCase):
                     source=work/name
                     source.write_text((FIRMWARE/'tests'/name).read_text().replace(
                         '// PRODUCTION_JSON_DISPATCH',dispatch).replace('// PRODUCTION_LEGACY_EMOTION',legacy))
+                if name=='chick_face_display_host.cc':
+                    native=(self.source/'main/display/lvgl_display/lvgl_display.cc').read_text()
+                    def stock_method(signature):
+                        body=defaults.method(native,signature)
+                        return body.replace('void LvglDisplay::','virtual void ').replace('int duration_ms)', 'int duration_ms=3000)')
+                    timer_start=native.index('    esp_timer_create_args_t notification_timer_args')
+                    timer_end=native.index('\n',native.index('ESP_ERROR_CHECK(esp_timer_create(&notification_timer_args',timer_start))
+                    source=work/name
+                    source.write_text((FIRMWARE/'tests'/name).read_text().replace(
+                        '// PRODUCTION_NOTIFICATION_TIMER',native[timer_start:timer_end]).replace(
+                        '// PRODUCTION_SET_STATUS',stock_method('void LvglDisplay::SetStatus(')).replace(
+                        '// PRODUCTION_SHOW_NOTIFICATION',
+                        stock_method('void LvglDisplay::ShowNotification(const char*')+'\n'+
+                        stock_method('void LvglDisplay::ShowNotification(const std::string&')))
                 if name=='chick_face_view_host.cc':
                     view=(FIRMWARE/'overlays/main/display/chick_face_view.cc').read_text()
                     view=re.sub(r'^#include .*\n', '', view, flags=re.MULTILINE)

@@ -12,15 +12,26 @@
 #include "face_layout.h"
 #include "playback_progress.h"
 #include <functional>
+#include <ctime>
 enum lv_obj_flag_t {LV_OBJ_FLAG_HIDDEN=1,LV_OBJ_FLAG_SCROLLABLE=2,LV_OBJ_FLAG_OVERFLOW_VISIBLE=4,LV_OBJ_FLAG_CLICKABLE=8};
 enum lv_align_t {LV_ALIGN_TOP_MID,LV_ALIGN_CENTER};
 enum lv_part_t {LV_PART_MAIN=0};
 enum lv_state_t {LV_STATE_DEFAULT=0};
 using lv_style_selector_t=uint32_t;
 struct lv_font_t {int line_height;};
+#if LV_FONT_MONTSERRAT_48
+static const lv_font_t lv_font_montserrat_48{48};
+#endif
+static const lv_font_t family_robot_desktop_clock_digits_font{48};
+static const lv_font_t family_robot_desktop_clock_font{44};
+struct lv_point_t {int32_t x,y;};
+constexpr int LV_TEXT_FLAG_NONE=0;
+static void lv_text_get_size(lv_point_t* size,const char* text,const lv_font_t* font,int,int,int,int) {
+    size->x=std::strlen(text)*font->line_height*3/5;size->y=font->line_height;
+}
 struct lv_obj_t {
     lv_obj_t* parent=nullptr;std::vector<lv_obj_t*> children;
-    int x=0,y=0,w=128,h=128;uint32_t scale=256;
+    int x=0,y=0,w=128,h=128,transform_scale=256;uint32_t scale=256,writes=0;
     const lv_font_t* font=nullptr;bool label=false;unsigned flags=0;std::string text;
 };
 struct lv_timer_t {void* user=nullptr;bool paused=false;uint32_t period=67;};
@@ -50,12 +61,16 @@ static void lv_obj_set_style_bg_color(lv_obj_t*,uint32_t,lv_style_selector_t){}
 static void lv_obj_set_style_border_color(lv_obj_t*,uint32_t,lv_style_selector_t){}
 static void lv_obj_set_style_text_color(lv_obj_t*,uint32_t,lv_style_selector_t){}
 static void lv_obj_set_style_text_align(lv_obj_t*,int,lv_style_selector_t){}
+static void lv_obj_set_style_transform_scale_x(lv_obj_t* p,int s,lv_style_selector_t){p->transform_scale=s;}
+static void lv_obj_set_style_transform_scale_y(lv_obj_t*,int,lv_style_selector_t){}
+static void lv_obj_set_style_transform_pivot_x(lv_obj_t*,int,lv_style_selector_t){}
+static void lv_obj_set_style_transform_pivot_y(lv_obj_t*,int,lv_style_selector_t){}
 static uint32_t lv_color_hex(uint32_t color){return color;}
 static void lv_obj_add_flag(lv_obj_t* p,lv_obj_flag_t f){p->flags|=f;}
 static void lv_obj_remove_flag(lv_obj_t* p,lv_obj_flag_t f){p->flags&=~f;}
 static void lv_obj_move_to_index(lv_obj_t*,int){}
 static void lv_label_set_long_mode(lv_obj_t*,int){}
-static void lv_label_set_text(lv_obj_t* p,const char* text){p->text=text;}
+static void lv_label_set_text(lv_obj_t* p,const char* text){p->text=text;++p->writes;}
 static void lv_image_set_src(lv_obj_t* p,lv_image_dsc_t* d){p->w=d->header.w;p->h=d->header.h;}
 static void lv_image_set_scale(lv_obj_t* p,uint32_t scale){p->scale=scale;}
 static void lv_image_set_antialias(lv_obj_t*,bool){}
@@ -166,7 +181,7 @@ int main() {
         facts.state=FaceState::Upgrading;assert(view.Update(facts));assert(view.caption_->text=="正在升级");
         facts.audio.output.draining=false;facts.state=FaceState::Idle;
         facts.quiet=true;facts.now_us+=200000;assert(view.Update(facts));
-        assert(view.timer_->period==(fail?1000u:200u));
+        assert(view.timer_->period==1000u); // quiet standby is a static clock
         view.SetScreenOn(false);assert(!view.Update(facts));
         assert(view.timer_->paused && (view.root_->flags&LV_OBJ_FLAG_HIDDEN));
         view.SetScreenOn(true);facts.system_page=true;assert(!view.Update(facts));

@@ -63,6 +63,8 @@ private:
         // A completion may occur while observing audio; PMIC reads can also
         // take time. Evaluate at actual current time after all observations.
         facts.now_us=esp_timer_get_time();
+        // Stock notifications change only LVGL visibility, not app/audio state.
+        chick_face_.SetClockNotice(notification_label_ && !lv_obj_has_flag(notification_label_,LV_OBJ_FLAG_HIDDEN));
         const bool shown=chick_face_.Update(facts);
         // Never return to the stock smile/sleep glyph while this UI is selected.
         if(emoji_box_)lv_obj_add_flag(emoji_box_,LV_OBJ_FLAG_HIDDEN);

@@ -1,10 +1,13 @@
 #include "chick_face_view.h"
 #include "face_layout.h"
+#include "desktop_clock_font.h"
+#include "desktop_clock_digits_font.h"
 #if CONFIG_CHICK_FACE_UI
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -87,6 +90,14 @@ void ChickFaceView::Initialize(const lv_font_t* font,int width,int height,
     lv_obj_set_style_text_color(caption_,lv_color_hex(0xffd8a8),0);
     lv_obj_set_style_text_align(caption_,LV_TEXT_ALIGN_CENTER,0);
     lv_label_set_long_mode(caption_,LV_LABEL_LONG_WRAP);
+    clock_time_=lv_label_create(root_);clock_date_=lv_label_create(root_);
+    for(auto* label:{clock_time_,clock_date_}) {
+        lv_obj_set_style_text_color(label,lv_color_hex(0xffd8a8),0);
+        lv_obj_set_style_text_align(label,LV_TEXT_ALIGN_CENTER,0);
+        Hide(label,true);
+    }
+    lv_label_set_text(clock_time_,clock_text_.time);
+    lv_label_set_text(clock_date_,clock_text_.date);
     SetFont(font);
     Hide(root_,true);
     timer_=lv_timer_create([](lv_timer_t* timer) {
@@ -100,6 +111,9 @@ void ChickFaceView::Initialize(const lv_font_t* font,int width,int height,
 void ChickFaceView::SetFont(const lv_font_t* font) {
     font_=font;
     if(caption_ && font_)lv_obj_set_style_text_font(caption_,font_,0);
+    clock_font_=&family_robot_desktop_clock_digits_font;
+    if(clock_time_ && clock_font_)lv_obj_set_style_text_font(clock_time_,clock_font_,0);
+    if(clock_date_)lv_obj_set_style_text_font(clock_date_,&family_robot_desktop_clock_font,0);
     Layout();
 }
 void ChickFaceView::Layout() {
@@ -117,7 +131,61 @@ void ChickFaceView::Layout() {
     }
     lv_obj_set_size(caption_,layout.caption_width,layout.caption_height);
     lv_obj_set_pos(caption_,layout.caption_x,layout.caption_y);
+    if(clock_time_ && clock_font_) {
+        // Measure all digit combinations plus the invalid placeholder. Pivot at
+        // the top-left so transformed visual bounds have an explicit position.
+        lv_point_t size{},sample{};
+        for(const char* text:{"00:00","11:11","22:22","33:33","44:44","55:55",
+                              "66:66","77:77","88:88","99:99","--:--"}) {
+            lv_text_get_size(&sample,text,clock_font_,0,0,width_,LV_TEXT_FLAG_NONE);
+            size.x=std::max(size.x,sample.x);size.y=std::max(size.y,sample.y);
+        }
+        lv_point_t date_size{};
+        lv_text_get_size(&date_size,"12月31日 星期三",&family_robot_desktop_clock_font,0,0,INT32_MAX,LV_TEXT_FLAG_NONE);
+        const int date_scale=std::max(1,std::min(256,(width_-2*(width_/10))*256/std::max(1,int(date_size.x))));
+        const auto clock=ComputeDesktopClockLayout(width_,height_,font_->line_height,(date_size.y+4)*date_scale/256,
+                                                   size.x,size.y,clock_mode_);
+        lv_obj_set_size(clock_time_,size.x,size.y);
+        lv_obj_set_style_transform_pivot_x(clock_time_,0,0);
+        lv_obj_set_style_transform_pivot_y(clock_time_,0,0);
+        lv_obj_set_style_transform_scale_x(clock_time_,clock.scale,0);
+        lv_obj_set_style_transform_scale_y(clock_time_,clock.scale,0);
+        lv_obj_set_pos(clock_time_,clock.x,clock.y);
+        lv_obj_set_size(clock_date_,date_size.x,date_size.y+4);
+        lv_obj_set_style_transform_pivot_x(clock_date_,0,0);
+        lv_obj_set_style_transform_pivot_y(clock_date_,0,0);
+        lv_obj_set_style_transform_scale_x(clock_date_,date_scale,0);
+        lv_obj_set_style_transform_scale_y(clock_date_,date_scale,0);
+        lv_obj_set_pos(clock_date_,(width_-date_size.x*date_scale/256)/2,clock.date_y);
+        const bool desktop=clock_mode_==DesktopClockMode::Desktop || clock_mode_==DesktopClockMode::Quiet;
+        if(desktop && image_) {
+            lv_image_set_scale(image_,clock.face_scale);
+            const int center=clock.face_top+FaceRenderer::kHeight*clock.face_scale/512;
+            lv_obj_align(image_,LV_ALIGN_CENTER,0,center-height_/2);
+        }
+        if(desktop && fallback_left_) {
+            const int unit=std::max(1,clock.face_scale);
+            auto place=[&](lv_obj_t* object,int x,int y,int w,int h) {
+                lv_obj_set_size(object,std::max(1,w*unit/256),std::max(1,h*unit/256));
+                lv_obj_set_pos(object,width_/2+x*unit/256,clock.face_top+y*unit/256);
+            };
+            place(fallback_left_,-58,112,32,48);place(fallback_right_,26,112,32,48);
+            place(fallback_mouth_,-18,196,36,6);
+        } else if(fallback_left_) {
+            lv_obj_set_size(fallback_left_,32,48);lv_obj_set_size(fallback_right_,32,48);
+            lv_obj_set_size(fallback_mouth_,36,6);
+        }
+    }
     painted_=false;
+}
+void ChickFaceView::UpdateClock(int64_t now_us) {
+    if(clock_notice_ || clock_mode_==DesktopClockMode::Hidden){clock_sampled_=false;return;}
+    if(clock_sampled_ && now_us>=clock_sample_us_ && now_us-clock_sample_us_<1000000)return;
+    clock_sample_us_=now_us;clock_sampled_=true;
+    const auto next=FormatDesktopClock(time(nullptr));
+    if(std::strcmp(clock_text_.time,next.time))lv_label_set_text(clock_time_,next.time);
+    if(std::strcmp(clock_text_.date,next.date))lv_label_set_text(clock_date_,next.date);
+    clock_text_=next;
 }
 void ChickFaceView::SetEmotion(const char* emotion,int64_t now) {
     if(!emotion)return;
@@ -142,12 +210,29 @@ void ChickFaceView::SetMessage(const char* text) {
     if(next==message_)return;
     message_=std::move(next);Layout();
 }
+void ChickFaceView::SetClockNotice(bool on) {
+    if(clock_notice_==on)return;
+    clock_notice_=on;
+    // Stock transient banners own only clock visibility, never FaceModel facts.
+    Hide(clock_time_,on || clock_mode_==DesktopClockMode::Hidden);
+    Hide(clock_date_,on || (clock_mode_!=DesktopClockMode::Desktop && clock_mode_!=DesktopClockMode::Quiet));
+    if(on)clock_sampled_=false;
+}
 bool ChickFaceView::Update(FaceFacts facts) {
     if(!Ready())return false;
     facts.screen_on=facts.screen_on && screen_on_;
     facts.quiet=facts.quiet || quiet_;
     facts.model_thinking=facts.model_thinking || thinking_;
     auto frame=model_.Update(facts);
+    const auto clock_mode=SelectDesktopClockMode(frame,facts.quiet,!message_.empty());
+    const bool clock_changed=clock_mode_!=clock_mode;
+    if(clock_changed) {
+        clock_mode_=clock_mode;Layout();
+        Hide(clock_time_,clock_notice_ || clock_mode==DesktopClockMode::Hidden);
+        Hide(clock_date_,clock_notice_ || (clock_mode!=DesktopClockMode::Desktop && clock_mode!=DesktopClockMode::Quiet));
+        const bool hide_face=clock_mode==DesktopClockMode::Quiet;
+        for(auto* object:{image_,fallback_left_,fallback_right_,fallback_mouth_})Hide(object,hide_face);
+    }
     // First real DMA activity proves generation advanced beyond waiting;
     // later draining cannot resurrect the thinking hint.
     if(frame.state==FaceState::Speaking)thinking_=false;
@@ -158,16 +243,18 @@ bool ChickFaceView::Update(FaceFacts facts) {
     if(!facts.screen_on) {
         if(timer_running_){lv_timer_pause(timer_);timer_running_=false;}
         painted_=false;last_frame_us_=0;
+        clock_sampled_=false;
         return false;
     }
     if(!timer_running_){lv_timer_resume(timer_);timer_running_=true;}
+    UpdateClock(facts.now_us);
     const auto request=requested_mode.load();
     if(request!=applied_request_) {
         applied_request_=request;refresh_policy_.Request(int(request&3));
         painted_=false;
     }
     mode_=refresh_policy_.effective();
-    uint32_t period=(!pixels_ || mode_==0)?1000u:((facts.quiet || mode_==1 || !frame.shown)?200u:
+    uint32_t period=(!pixels_ || mode_==0 || clock_mode_==DesktopClockMode::Quiet)?1000u:((facts.quiet || mode_==1 || !frame.shown)?200u:
                                       (frame.state==FaceState::Speaking?33u:67u));
     if(period_ms_!=period){lv_timer_set_period(timer_,period);period_ms_=period;}
     if(!frame.shown){painted_=false;return false;}
@@ -175,6 +262,7 @@ bool ChickFaceView::Update(FaceFacts facts) {
         const char* caption=message_.empty()?frame.Caption():message_.c_str();
         lv_label_set_text(caption_,caption);
     }
+    if(clock_mode_==DesktopClockMode::Quiet){painted_=true;return true;}
     if(!pixels_){painted_=true;return true;}
     if(painted_ && !changed && (mode_==0 ||
        (facts.now_us>=last_frame_us_ && facts.now_us-last_frame_us_<int64_t(period_ms_)*1000)))return true;

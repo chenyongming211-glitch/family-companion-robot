@@ -8,6 +8,7 @@
 #include <atomic>
 #include <thread>
 #include <future>
+#include <chrono>
 #include "experiment_gate.h"
 
 static int mutations=0,audio_reads=0;
@@ -19,7 +20,7 @@ using lv_style_selector_t=uint32_t;
 using lv_color_t=uint32_t;
 constexpr int LV_OPA_TRANSP=0,LV_OPA_50=127;
 struct lv_obj_t {
-    bool hidden=false;
+    bool hidden=false;std::string text{};
     lv_state_t state=LV_STATE_DEFAULT;
     int bg_opa=LV_OPA_50,orb_bg_opa=-1;
     lv_color_t text_color=0,orb_text_color=0;
@@ -50,6 +51,7 @@ constexpr int LV_OBJ_FLAG_HIDDEN=1;
 static bool lv_obj_has_flag(lv_obj_t* p,int){assert(p);return p->hidden;}
 static void lv_obj_add_flag(lv_obj_t* p,int){assert(p);++mutations;p->hidden=true;}
 static void lv_obj_remove_flag(lv_obj_t* p,int){assert(p);++mutations;p->hidden=false;}
+static void lv_label_set_text(lv_obj_t* p,const char* text){p->text=text;}
 static int64_t now=1000000;
 static int64_t esp_timer_get_time(){return now;}
 static std::recursive_mutex display_mutex;
@@ -60,22 +62,41 @@ struct DisplayLockGuard {
  ~DisplayLockGuard(){--display_lock_depth;}
  explicit operator bool()const{return true;}
 };
+struct esp_timer_create_args_t {
+    void (*callback)(void*);void* arg;int dispatch_method;const char* name;bool skip_unhandled_events;
+};
+struct HostTimer {esp_timer_create_args_t args{};bool pending=false;int64_t delay_us=0;};
+using esp_timer_handle_t=HostTimer*;
+constexpr int ESP_TIMER_TASK=0;
+static int esp_timer_create(const esp_timer_create_args_t* args,esp_timer_handle_t* out){(*out)->args=*args;return 0;}
+static int esp_timer_stop(esp_timer_handle_t timer){timer->pending=false;return 0;}
+static int esp_timer_start_once(esp_timer_handle_t timer,int64_t delay){timer->pending=true;timer->delay_us=delay;return 0;}
+#define ESP_ERROR_CHECK(value) assert((value)==0)
+#define ESP_LOGW(...) ((void)0)
 struct LvglImage {};
 struct Font {int* font(){return nullptr;}};
 struct Theme {uint32_t text_color=0;std::shared_ptr<Font> GetTextFont(){return std::make_shared<Font>();}};
+class SpiLcdDisplay;
+using LvglDisplay=SpiLcdDisplay;
 class SpiLcdDisplay {
 public:
+    HostTimer host_timer;esp_timer_handle_t notification_timer_=&host_timer;
+    bool setup_ui_called_=false;
+    std::chrono::system_clock::time_point last_status_update_time_{};
+    SpiLcdDisplay(){// PRODUCTION_NOTIFICATION_TIMER
+    }
     virtual ~SpiLcdDisplay()=default;
+    void ExpireNotification(){assert(host_timer.pending);host_timer.pending=false;host_timer.args.callback(host_timer.args.arg);}
     bool setup=false;int chat_writes=0;Theme theme;Theme* current_theme_=&theme;
     lv_obj_t emoji,status,bottom,preview{true},battery{true},notification{true};
     lv_obj_t top,network,mute,battery_icon;
     lv_obj_t *top_bar_=nullptr,*network_label_=nullptr,*mute_label_=nullptr,*battery_label_=nullptr;
     lv_obj_t *emoji_box_=nullptr,*status_label_=nullptr,*bottom_bar_=nullptr,*preview_image_=nullptr,*low_battery_popup_=nullptr,*notification_label_=nullptr;
     bool IsSetupUICalled()const{return setup;}
-    virtual void SetupUI(){setup=true;emoji_box_=&emoji;status_label_=&status;bottom_bar_=&bottom;preview_image_=&preview;low_battery_popup_=&battery;notification_label_=&notification;
+    virtual void SetupUI(){setup=true;setup_ui_called_=true;emoji_box_=&emoji;status_label_=&status;bottom_bar_=&bottom;preview_image_=&preview;low_battery_popup_=&battery;notification_label_=&notification;
         top_bar_=&top;network_label_=&network;mute_label_=&mute;battery_label_=&battery_icon;
     }
-    virtual void SetStatus(const char*){if(status_label_)lv_obj_remove_flag(status_label_,1);if(notification_label_)lv_obj_add_flag(notification_label_,1);}
+    // PRODUCTION_SET_STATUS
     virtual void SetEmotion(const char*){if(emoji_box_)lv_obj_remove_flag(emoji_box_,1);}
     virtual void SetThinking(bool){}
     virtual void SetLegacyEmotion(uint32_t,const char* name){SetEmotion(name);}
@@ -84,8 +105,7 @@ public:
     virtual void SetChatMessage(const char*,const char* text){++chat_writes;bottom.hidden=!text||!*text;}
     virtual void ClearChatMessages(){bottom.hidden=true;}
     virtual void SetPowerSaveMode(bool){}
-    virtual void ShowNotification(const char*,int=3000){notification.hidden=false;status.hidden=true;}
-    virtual void ShowNotification(const std::string&,int=3000){}
+    // PRODUCTION_SHOW_NOTIFICATION
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> p){
         preview.hidden=!p;
         emoji.hidden=bool(p); // matches pinned LcdDisplay: preview owns emoji visibility
@@ -103,12 +123,13 @@ public:
 namespace family_robot {
 class ChickFaceView {
 public:
- FaceModel model;bool ready=false,screen=true,quiet=false,thinking=false;FaceFacts last{};FaceFrame frame{};std::string message;
+ FaceModel model;bool clock_notice=false;bool ready=false,screen=true,quiet=false,thinking=false;FaceFacts last{};FaceFrame frame{};std::string message;
  bool Ready()const{return ready;}
  void Initialize(int*,int width,int height,void (*)(void*),void*){assert(width==480&&height==480);ready=true;}
  void SetFont(int*){}
  void SetScreenOn(bool on){screen=on;}void SetQuiet(bool on){quiet=on;}
  void SetThinking(bool on){thinking=on;}
+ void SetClockNotice(bool on){assert(display_lock_depth>0);clock_notice=on;}
  void SetEmotion(const char* name,int64_t time){model.SetEmotion(name,time);}
  void SetLegacyEmotion(uint32_t connection,const char* name,int64_t time){model.SetLegacyEmotion(connection,name,time);}
  bool SetPlaybackEmotion(OrbOutputActivity::Identity id,const char* name,int64_t time){return model.SetPlaybackEmotion(id,name,time);}
@@ -162,6 +183,24 @@ int main(){
  assert(d.Face().frame.state==FaceState::Notifying&&d.Face().message=="connection trouble");
  assert(!d.Face().thinking);
  d.ClearChatMessages();assert(d.Face().frame.state==FaceState::Idle);
+ // Run the real pinned stock ShowNotification/SetStatus/timer callback bodies.
+ // A transient banner must only suppress the clock, preserving model/caption/chrome.
+ for(auto state:{kDeviceStateIdle,kDeviceStateListening,kDeviceStateSpeaking}) {
+  app.state=state;d.SetPowerSaveMode(state==kDeviceStateIdle);d.SetStatus("ready");
+  const auto prior=d.Face().frame.state;
+  d.ShowNotification("音量已调整",2500);
+  assert(!d.notification.hidden && d.notification.text=="音量已调整");
+  assert(d.host_timer.pending && d.host_timer.delay_us==2500000);
+  assert(d.Face().clock_notice && d.Face().frame.state==prior && d.Face().message.empty());
+  assert(d.Face().frame.shown && !d.Face().last.system_page);
+  // SetStatus explicitly clears the stock banner and refreshes immediately.
+  d.SetStatus("ready");assert(!d.Face().clock_notice && d.notification.hidden);
+  d.ShowNotification(std::string("临时通知"),3000);assert(d.Face().clock_notice);
+  // Exact production timer hides the label; next normal refresh observes clearance.
+  d.ExpireNotification();assert(d.notification.hidden);
+  d.SetThinking(false);assert(!d.Face().clock_notice && d.Face().frame.state==prior);
+ }
+ app.state=kDeviceStateIdle;d.SetPowerSaveMode(false);
  d.ShowNotification("音量已调整");assert(!d.notification.hidden);
  assert(lv_obj_get_style_text_color(&d.notification,LV_PART_MAIN)==0xffd8a8);
  Theme light;light.text_color=0;d.SetTheme(&light);

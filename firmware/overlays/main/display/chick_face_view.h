@@ -4,6 +4,7 @@
 #include "chick_face_model.h"
 #include "chick_face_renderer.h"
 #include "face_refresh_policy.h"
+#include "desktop_clock.h"
 #include <lvgl.h>
 #include <initializer_list>
 #include <string>
@@ -22,19 +23,27 @@ public:
     void ClearPlaybackEmotions();
     void SetThinking(bool on) { thinking_=on; }
     void SetMessage(const char*);
+    void SetClockNotice(bool on);
     void SetScreenOn(bool on) { screen_on_=on; }
     void SetQuiet(bool on) { quiet_=on; }
     bool Ready() const { return root_ && timer_; }
 private:
     void Layout();
+    void UpdateClock(int64_t now_us);
     FaceModel model_;
     FaceRefreshPolicy refresh_policy_;
     lv_obj_t *root_=nullptr,*image_=nullptr,*caption_=nullptr;
+    lv_obj_t *clock_time_=nullptr,*clock_date_=nullptr;
     lv_obj_t *fallback_left_=nullptr,*fallback_right_=nullptr,*fallback_mouth_=nullptr;
     lv_timer_t* timer_=nullptr;
     uint16_t* pixels_=nullptr;
     lv_image_dsc_t descriptor_{};
     const lv_font_t* font_=nullptr;
+    const lv_font_t* clock_font_=nullptr;
+    DesktopClockText clock_text_{};
+    DesktopClockMode clock_mode_=DesktopClockMode::Hidden;
+    int64_t clock_sample_us_=0;
+    bool clock_sampled_=false,clock_notice_=false;
     void (*refresh_)(void*)=nullptr;
     void* context_=nullptr;
     std::string message_;
