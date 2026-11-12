@@ -17,7 +17,6 @@
 namespace family_robot {
 namespace {
 std::atomic<uint32_t> requested_mode{2};
-std::atomic<bool> clock_diagnostic_pending{false};
 std::atomic<uint32_t> rendered_frames{0},maximum_draw_us{0};
 void Hide(lv_obj_t* o,bool hide) {
     if(!o)return;
@@ -36,7 +35,6 @@ bool ChickFaceConsole(const char* line) {
             static_cast<unsigned long>(rendered_frames.load()),
             static_cast<unsigned long>(maximum_draw_us.load()),
             static_cast<unsigned long>(requested_mode.load()&3));
-        clock_diagnostic_pending.store(true);
         return true;
     } else return false;
     const auto revision=(requested_mode.load()+4u)&~uint32_t{3};
@@ -250,9 +248,11 @@ bool ChickFaceView::Update(FaceFacts facts) {
     }
     if(!timer_running_){lv_timer_resume(timer_);timer_running_=true;}
     UpdateClock(facts.now_us);
-    // Console only signals; all LVGL reads stay in the existing display owner
-    // update/lock path. A screen-off refresh above leaves the request pending.
-    if(clock_diagnostic_pending.exchange(false)) {
+    // Sample each visible clock mode once per view on the existing display
+    // owner/lock path. Hidden and screen-off refreshes do not spend the budget.
+    const auto diagnostic_mode=static_cast<uint8_t>(1u<<static_cast<unsigned>(clock_mode_));
+    if(clock_mode_!=DesktopClockMode::Hidden && !(clock_diagnostic_modes_&diagnostic_mode)) {
+        clock_diagnostic_modes_|=diagnostic_mode;
         lv_obj_update_layout(root_);
         ESP_LOGI("ChickClock","mode=%d notice=%d root_hidden=%d screen_on=%d quiet=%d valid=%d time=%.5s date=%.39s",
             static_cast<int>(clock_mode_),int(clock_notice_),int(lv_obj_has_flag(root_,LV_OBJ_FLAG_HIDDEN)),

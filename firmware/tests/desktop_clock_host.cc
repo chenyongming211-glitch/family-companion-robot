@@ -118,7 +118,7 @@ static void ClockView() {
     assert(view.clock_mode_==DesktopClockMode::Compact && !Hidden(view.clock_time_) && Hidden(view.clock_date_));
 }
 
-static void RequestClockDiagnostic() {
+static void CheckFaceStatsConsole() {
     const auto calls=lvgl_accesses.load();
     const auto lines=clock_logs.size();
     std::thread console([]{console_thread=true;assert(family_robot::ChickFaceConsole("face_stats"));console_thread=false;});
@@ -143,56 +143,94 @@ static void ExpectDiagnosticLabel(const std::string& line,const char* name,const
 }
 static void ClockDiagnostic() {
     using namespace family_robot;
-    allocation_fails=false;lv_font_t font{30},wrong_font{19};ChickFaceView view;
-    wall_seconds=1735689600;view.Initialize(&font,480,480,[](void*){},nullptr);
-    FaceFacts f;f.now_us=1000000;assert(view.Update(f));
-    clock_logs.clear();const auto layouts=layout_updates;
-    f.now_us+=1;assert(view.Update(f));assert(layout_updates==layouts && clock_logs.empty());
-    RequestClockDiagnostic();f.now_us+=1;assert(view.Update(f));
-    assert(clock_logs.size()==3); // RED: missing production diagnostic, not missing stub API.
-    assert(layout_updates==layouts+1);
-    assert(clock_logs[0].find("mode=1 notice=0 root_hidden=0 screen_on=1 quiet=0 valid=1")!=std::string::npos);
-    assert(clock_logs[0].find(" time=00:00 date=1月1日 星期三")!=std::string::npos);
-    ExpectDiagnosticLabel(clock_logs[1],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
-    ExpectDiagnosticLabel(clock_logs[2],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
-    f.now_us+=1;assert(view.Update(f));assert(clock_logs.size()==3 && layout_updates==layouts+1);
-    // Real label text, geometry, opacity, transform and font may differ from cache/layout.
-    view.clock_time_->text="19:45longer";view.clock_time_->font=&wrong_font;
-    view.clock_time_->x=-17;view.clock_time_->y=511;view.clock_time_->w=0;view.clock_time_->h=7;
-    view.clock_time_->text_opa=120;view.clock_time_->opa=64;view.root_->opa=128;
-    view.clock_time_->transform_scale=77;view.clock_time_->transform_scale_y=99;
-    RequestClockDiagnostic();f.now_us+=1;assert(view.Update(f));
-    assert(clock_logs.size()==6);
-    assert(clock_logs[3].find(" time=00:00 ")!=std::string::npos);
-    ExpectDiagnosticLabel(clock_logs[4],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
-    assert(clock_logs[4].find("longer")==std::string::npos && clock_logs[4].find("cache_match=0")!=std::string::npos);
-    assert(clock_logs[1].find("cache_match=1")!=std::string::npos);
-    view.SetClockNotice(true);f.state=FaceState::Thinking;f.now_us+=1;
-    RequestClockDiagnostic();assert(view.Update(f));assert(clock_logs.size()==9);
-    assert(clock_logs[6].find("mode=2 notice=1 root_hidden=0 screen_on=1 quiet=0 valid=1")!=std::string::npos);
-    ExpectDiagnosticLabel(clock_logs[7],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
-    ExpectDiagnosticLabel(clock_logs[8],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
-    assert(Hidden(view.clock_time_) && Hidden(view.clock_date_));
-    view.SetClockNotice(false);RequestClockDiagnostic();assert(view.Update(f));assert(clock_logs.size()==12);
-    assert(!Hidden(view.clock_time_) && Hidden(view.clock_date_));
-    ExpectDiagnosticLabel(clock_logs[10],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
-    ExpectDiagnosticLabel(clock_logs[11],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
-    f.system_page=true;RequestClockDiagnostic();assert(!view.Update(f));assert(clock_logs.size()==15);
-    assert(clock_logs[12].find("mode=0 notice=0 root_hidden=1")!=std::string::npos);
-    f.system_page=false;f.state=FaceState::Idle;f.quiet=true;wall_seconds=0;f.now_us+=1000000;
-    RequestClockDiagnostic();assert(view.Update(f));assert(clock_logs.size()==18);
-    assert(clock_logs[15].find("mode=3 notice=0 root_hidden=0 screen_on=1 quiet=1 valid=0")!=std::string::npos);
-    assert(clock_logs[15].find(" time=--:-- date=")!=std::string::npos);
-    view.SetScreenOn(false);assert(!view.Update(f));
-    const auto paused_layouts=layout_updates;const auto samples=wall_samples;
-    RequestClockDiagnostic();assert(!view.Update(f));
-    assert(clock_logs.size()==18 && layout_updates==paused_layouts && wall_samples==samples && view.timer_->paused);
-    view.SetScreenOn(true);f.now_us+=1;assert(view.Update(f));assert(clock_logs.size()==21);
-    f.now_us+=1;assert(view.Update(f));assert(clock_logs.size()==21);
-    view.SetMessage("private user speech");RequestClockDiagnostic();assert(view.Update(f));
-    assert(clock_logs.size()==24);
+    allocation_fails=false;lv_font_t font{30},wrong_font{19};
+    clock_logs.clear();
+    {
+        ChickFaceView view;wall_seconds=1735689600;
+        view.Initialize(&font,480,480,[](void*){},nullptr);
+        FaceFacts f;f.now_us=1000000;f.state=FaceState::Boot;
+        const auto layouts=layout_updates;assert(view.Update(f));
+        assert(clock_logs.empty() && layout_updates==layouts); // Hidden never consumes a mode.
+        f.state=FaceState::Idle;f.now_us+=1;assert(view.Update(f));
+        assert(clock_logs.size()==3); // RED: supported Update must emit without any console request.
+        assert(layout_updates==layouts+1);
+        assert(clock_logs[0].find("mode=1 notice=0 root_hidden=0 screen_on=1 quiet=0 valid=1")!=std::string::npos);
+        assert(clock_logs[0].find(" time=00:00 date=1月1日 星期三")!=std::string::npos);
+        ExpectDiagnosticLabel(clock_logs[1],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+        ExpectDiagnosticLabel(clock_logs[2],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
+        CheckFaceStatsConsole();f.now_us+=1;assert(view.Update(f));
+        assert(clock_logs.size()==3 && layout_updates==layouts+1);
+        f.system_page=true;assert(!view.Update(f));assert(clock_logs.size()==3 && layout_updates==layouts+1);
+        f.system_page=false;f.state=FaceState::Thinking;f.now_us+=1;assert(view.Update(f));
+        assert(clock_logs.size()==6 && layout_updates==layouts+2);
+        assert(clock_logs[3].find("mode=2 notice=0 root_hidden=0 screen_on=1 quiet=0 valid=1")!=std::string::npos);
+        assert(!Hidden(view.clock_time_) && Hidden(view.clock_date_));
+        ExpectDiagnosticLabel(clock_logs[4],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+        ExpectDiagnosticLabel(clock_logs[5],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
+        f.now_us+=1;assert(view.Update(f));assert(clock_logs.size()==6 && layout_updates==layouts+2);
+        f.state=FaceState::Idle;f.quiet=true;wall_seconds=0;f.now_us+=1000000;assert(view.Update(f));
+        assert(clock_logs.size()==9 && layout_updates==layouts+3);
+        assert(clock_logs[6].find("mode=3 notice=0 root_hidden=0 screen_on=1 quiet=1 valid=0")!=std::string::npos);
+        assert(clock_logs[6].find(" time=--:-- date=")!=std::string::npos);
+        ExpectDiagnosticLabel(clock_logs[7],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+        ExpectDiagnosticLabel(clock_logs[8],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
+        // Revisiting each visible mode, notices and console requests cannot exceed nine lines.
+        for(int i=0;i<3;++i) {
+            f.quiet=false;f.state=FaceState::Idle;f.now_us+=1;assert(view.Update(f));
+            f.state=FaceState::Thinking;assert(view.Update(f));
+            view.SetClockNotice(true);assert(view.Update(f));view.SetClockNotice(false);
+            f.state=FaceState::Idle;f.quiet=true;assert(view.Update(f));
+            CheckFaceStatsConsole();assert(view.Update(f));
+            assert(clock_logs.size()==9 && layout_updates==layouts+3);
+        }
+    }
+    {
+        // Per-view budget resets. Off and Hidden must leave all three visible modes available.
+        const auto begin=clock_logs.size();const auto layouts=layout_updates;
+        ChickFaceView view;view.Initialize(&font,480,480,[](void*){},nullptr);
+        view.SetScreenOn(false);FaceFacts f;f.now_us=20000000;f.quiet=true;
+        const auto samples=wall_samples;assert(!view.Update(f));assert(!view.Update(f));
+        assert(clock_logs.size()==begin && layout_updates==layouts && wall_samples==samples && view.timer_->paused);
+        view.SetScreenOn(true);f.system_page=true;assert(!view.Update(f));
+        assert(clock_logs.size()==begin && layout_updates==layouts);
+        f.system_page=false;f.quiet=false;f.state=FaceState::Thinking;assert(view.Update(f));
+        assert(clock_logs.size()==begin+3 && layout_updates==layouts+1 && !view.timer_->paused);
+        assert(clock_logs[begin].find("mode=2 notice=0 root_hidden=0 screen_on=1 quiet=0")!=std::string::npos);
+        assert(view.Update(f));assert(clock_logs.size()==begin+3 && layout_updates==layouts+1);
+        f.state=FaceState::Idle;view.SetClockNotice(true);assert(view.Update(f));
+        assert(clock_logs.size()==begin+6 && layout_updates==layouts+2);
+        assert(clock_logs[begin+3].find("mode=1 notice=1 root_hidden=0")!=std::string::npos);
+        assert(Hidden(view.clock_time_) && Hidden(view.clock_date_));
+        ExpectDiagnosticLabel(clock_logs[begin+4],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+        ExpectDiagnosticLabel(clock_logs[begin+5],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
+        view.SetClockNotice(false);assert(view.Update(f));assert(clock_logs.size()==begin+6);
+        view.SetScreenOn(false);f.quiet=true;assert(!view.Update(f));
+        assert(clock_logs.size()==begin+6 && layout_updates==layouts+2 && view.timer_->paused);
+        view.SetScreenOn(true);assert(view.Update(f));
+        assert(clock_logs.size()==begin+9 && layout_updates==layouts+3);
+        assert(clock_logs[begin+6].find("mode=3 notice=0 root_hidden=0 screen_on=1 quiet=1")!=std::string::npos);
+        assert(view.Update(f));assert(clock_logs.size()==begin+9 && layout_updates==layouts+3);
+    }
+    {
+        // Deliberately differ the actual fields from cached/layout expectations before
+        // the first sample; bypass a mode transition so Layout does not overwrite them.
+        const auto begin=clock_logs.size();ChickFaceView view;
+        view.Initialize(&font,480,480,[](void*){},nullptr);view.clock_mode_=DesktopClockMode::Desktop;
+        view.clock_time_->text="19:45longer";view.clock_time_->font=&wrong_font;
+        view.clock_time_->x=-17;view.clock_time_->y=511;view.clock_time_->w=0;view.clock_time_->h=7;
+        view.clock_time_->text_opa=120;view.clock_time_->opa=64;view.root_->opa=128;
+        view.clock_time_->transform_scale=77;view.clock_time_->transform_scale_y=99;
+        wall_seconds=0;FaceFacts f;f.now_us=30000000;assert(view.Update(f));
+        assert(clock_logs.size()==begin+3);
+        assert(clock_logs[begin].find(" time=--:-- ")!=std::string::npos);
+        ExpectDiagnosticLabel(clock_logs[begin+1],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+        assert(clock_logs[begin+1].find("longer")==std::string::npos && clock_logs[begin+1].find("cache_match=0")!=std::string::npos);
+        assert(clock_logs[1].find("cache_match=1")!=std::string::npos);
+        view.SetMessage("private user speech");assert(view.Update(f));assert(clock_logs.size()==begin+3);
+        view.SetMessage("");assert(view.Update(f));assert(clock_logs.size()==begin+3);
+    }
     for(const auto& log:clock_logs)assert(log.find("private user speech")==std::string::npos && log.find("待机中")==std::string::npos);
-    std::puts("Clock diagnostic console isolation, one-shot metadata, actual object fields and screen-off deferral passed");
+    std::puts("Automatic clock diagnostic per-view mode budget, actual metadata, console isolation and off/Hidden deferral passed");
 }
 
 int main(){ClockFormatting();ClockView();ClockDiagnostic();std::puts("Desktop clock formatting, real view modes/cache/layout/lifecycle passed");}

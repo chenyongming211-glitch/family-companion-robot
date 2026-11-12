@@ -42,6 +42,7 @@ private:
     const lv_font_t* clock_font_=nullptr;
     DesktopClockText clock_text_{};
     DesktopClockMode clock_mode_=DesktopClockMode::Hidden;
+    uint8_t clock_diagnostic_modes_=0;
     int64_t clock_sample_us_=0;
     bool clock_sampled_=false,clock_notice_=false;
     void (*refresh_)(void*)=nullptr;
