@@ -39,11 +39,11 @@ func locationName(value string) (string, error) {
 	return value, nil
 }
 
-func (s *Server) settings(c Config, actor, id string) (DeviceSettingsDTO, error) {
+func (s *Server) settings(c Config, actor, scope, id string) (DeviceSettingsDTO, error) {
 	if !device.MatchString(id) {
 		return DeviceSettingsDTO{}, ErrInvalid
 	}
-	binding, err := c.Authorize(actor, "family", id, s.now(), false)
+	binding, err := c.Authorize(actor, scope, id, s.now(), false)
 	if err != nil {
 		return DeviceSettingsDTO{}, err
 	}
@@ -98,7 +98,8 @@ func (s *Server) deviceSettings(w http.ResponseWriter, r *http.Request, a Accoun
 		apiError(w, 405, "method_not_allowed", "请求方法不支持")
 		return
 	}
-	current, err := s.settings(requestConfig(r), a.ID, parts[2])
+	scope := parts[0]
+	current, err := s.settings(requestConfig(r), a.ID, scope, parts[2])
 	if err != nil {
 		sourceError(w, err)
 		return
@@ -142,11 +143,11 @@ func (s *Server) deviceSettings(w http.ResponseWriter, r *http.Request, a Accoun
 	err = (ConfigStore{s.opts.ConfigPath}).Transaction(func(c *Config) error {
 		// Permission and session are checked again after acquiring the writer lock.
 		freshRequest := r.WithContext(context.WithValue(r.Context(), configContextKey{}, *c))
-		freshActor, ok := s.account(freshRequest, "family")
+		freshActor, ok := s.account(freshRequest, scope)
 		if !ok || freshActor.ID != a.ID {
 			return ErrForbidden
 		}
-		latest, err := s.settings(*c, a.ID, parts[2])
+		latest, err := s.settings(*c, a.ID, scope, parts[2])
 		if err != nil {
 			return err
 		}
@@ -156,7 +157,7 @@ func (s *Server) deviceSettings(w http.ResponseWriter, r *http.Request, a Accoun
 		if latest.Version != *in.Version {
 			return errSettingsConflict
 		}
-		if err = s.auditAction(a.ID, "family", "update_device_settings_requested", parts[2], ""); err != nil {
+		if err = s.auditAction(a.ID, scope, "update_device_settings_requested", parts[2], ""); err != nil {
 			return err
 		}
 		for i := range c.Devices {
@@ -165,7 +166,7 @@ func (s *Server) deviceSettings(w http.ResponseWriter, r *http.Request, a Accoun
 				c.Devices[i].Location = location
 			}
 		}
-		out, err = s.settings(*c, a.ID, parts[2])
+		out, err = s.settings(*c, a.ID, scope, parts[2])
 		return err
 	})
 	if errors.Is(err, errSettingsConflict) {

@@ -85,8 +85,8 @@ func TestAdminRuntimeLifecycleAndAuditScope(t *testing.T) {
 	if e != nil || !strings.Contains(string(raw), `"scope":"admin"`) {
 		t.Fatal("audit scope", e, string(raw))
 	}
-	if w := request(s, "PUT", "/api/admin/device-settings/"+b.DeviceID, `{}`, admin); w.Code == 200 {
-		t.Fatal("unrelated settings write expanded")
+	if w := request(s, "PUT", "/api/admin/device-settings/"+b.DeviceID, `{}`, admin); w.Code != 400 {
+		t.Fatal("empty settings write accepted", w.Code)
 	}
 }
 func TestAdminRuntimeFreshPermissionsAndCommandRevalidation(t *testing.T) {
