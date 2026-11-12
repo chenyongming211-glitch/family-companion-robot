@@ -626,7 +626,7 @@ def stop_child(child, timeout=2):
         return child.communicate(timeout=timeout)
 
 
-def capture_live(engine, wait_limit, first_audio_limit=15, popen=subprocess.Popen, ready=None):
+def capture_live(engine, wait_limit, first_audio_limit=15, popen=subprocess.Popen, ready=None, interface="eth0"):
     """The only live entry. Tests call parsers directly and never invoke it."""
     child = None
     selector = selectors.DefaultSelector()
@@ -639,9 +639,10 @@ def capture_live(engine, wait_limit, first_audio_limit=15, popen=subprocess.Pope
     def stop_signal(signum, frame):
         raise CaptureError("signal")
     try:
+        require(interface in ("eth0", "lo"), "capture_start")
         for signum in (signal.SIGTERM, signal.SIGHUP):
             previous_handlers[signum] = signal.signal(signum, stop_signal)
-        child = popen(["tcpdump", "-n", "-i", "eth0", "-s", "0", "-U", "-B", "4096", "-w", "-", "tcp", "port", str(PORT)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, start_new_session=True)
+        child = popen(["tcpdump", "-n", "-i", interface, "-s", "0", "-U", "-B", "4096", "-w", "-", "tcp", "port", str(PORT)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, start_new_session=True)
         for stream in (child.stdout, child.stderr):
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ)
@@ -662,7 +663,7 @@ def capture_live(engine, wait_limit, first_audio_limit=15, popen=subprocess.Pope
                 if key.fileobj is child.stderr:
                     require(len(stderr) + len(data) <= 65536, "capture_io")
                     stderr.extend(data)
-                    if not listening and re.search(rb"(?m)^tcpdump: listening on eth0,", stderr):
+                    if not listening and re.search(rb"(?m)^tcpdump: listening on " + re.escape(interface.encode()) + rb",", stderr):
                         listening = True
                         if ready:
                             ready()
@@ -712,6 +713,7 @@ def main(argv=None):
     parser.add_argument("--device", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--interface", choices=("eth0", "lo"), default="eth0")
     parser.add_argument("--wait-limit", type=float, default=180)
     parser.add_argument("--audio-limit", type=float, default=15)
     args = parser.parse_args(argv)
@@ -726,8 +728,8 @@ def main(argv=None):
         decoder = OpusDecoder()
         engine = Engine(mac, token, decoder.decode, args.audio_limit)
         def ready():
-            print(json.dumps({"event": "ready", "stage": "capture_readiness"}), flush=True)
-        error, verified, drops = capture_live(engine, args.wait_limit, ready=ready)
+            print(json.dumps({"event": "ready", "stage": "capture_readiness", "interface": args.interface}), flush=True)
+        error, verified, drops = capture_live(engine, args.wait_limit, ready=ready, interface=args.interface)
         report = output.finish(engine.session, error, verified, drops)
         print(json.dumps({"event": "finished", "status": report["status"], "reason": report["reason"], "frames": report["frames"], "samples": report["samples"], "stage": "capture_readiness", "human_acceptance": False, "production_acceptance": False}), flush=True)
         return 0 if report["status"] == "complete" else 2

@@ -545,6 +545,40 @@ class LifecycleTests(Base):
         self.assertEqual((verified, drops), (True, 0))
         self.assertEqual(children[0].returncode, 0)
 
+    def test_loopback_capture_completes_and_arms_only_requested_interface(self):
+        raw = complete_pcap()
+        for notice, confirmed in (("lo", True), ("eth0", False)):
+            with self.subTest(notice=notice):
+                script = "import os,signal,time\ndef stop(a,b):\n os.write(2,b'0 packets dropped by kernel\\n');raise SystemExit(0)\nsignal.signal(signal.SIGTERM,stop)\n"
+                script += "os.write(2," + repr(("tcpdump: listening on " + notice + ", link-type EN10MB\n").encode()) + ")\ntime.sleep(0.03)\n"
+                script += "os.write(1," + repr(raw) + ")\ntime.sleep(30)"
+                children, spawn = self.process(script)
+                commands, ready = [], []
+                def popen(argv, **kwargs):
+                    commands.append(argv)
+                    return spawn(argv, **kwargs)
+                engine = self.engine()
+                try:
+                    result = c.capture_live(engine, 0.5, popen=popen, ready=lambda: ready.append(True), interface="lo")
+                except TypeError:
+                    self.fail("explicit loopback capture is not supported")
+                self.assertEqual(commands[0][3], "lo")
+                self.assertEqual(ready, [True] if confirmed else [])
+                self.assertEqual(result, (None if confirmed else "capture_start", True, 0))
+                self.assertEqual(engine.session.frames, [b"business"])
+                self.assertIsNotNone(children[0].returncode)
+
+    def test_capture_rejects_broad_or_unknown_interface_before_spawning(self):
+        for interface in ("any", "eth1", "lo;id", "", "lo\n"):
+            with self.subTest(interface=interface):
+                def popen(*args, **kwargs):
+                    self.fail("invalid interface must not start tcpdump")
+                try:
+                    result = c.capture_live(self.engine(), 0.1, popen=popen, interface=interface)
+                except TypeError:
+                    self.fail("explicit capture interface validation is missing")
+                self.assertEqual(result, ("capture_start", False, None))
+
     def test_nonzero_exit_and_unavailable_stats_invalidate(self):
         raw = pcap([])
         children, popen = self.process("import os;os.write(1," + repr(raw) + ");raise SystemExit(3)")
@@ -599,7 +633,7 @@ class LifecycleTests(Base):
                 child_pid_file = root / "child.pid"
                 sample = root / "sample"
                 fixture = "import os,signal,time\ndef stop(a,b):\n os.write(2,b'0 packets dropped by kernel\\n');raise SystemExit(0)\nsignal.signal(signal.SIGTERM,stop)\nos.write(2,b'tcpdump: listening on eth0, link-type EN10MB\\n')\ntime.sleep(30)"
-                script = "import capture as c,subprocess,sys\nfrom pathlib import Path\nactual=subprocess.Popen\nrun=c.capture_live\ndef fake(argv,**kw):\n child=actual([sys.executable,'-u','-c'," + repr(fixture) + "],**kw)\n Path(" + repr(str(child_pid_file)) + ").write_text(str(child.pid))\n return child\nc.capture_live=lambda engine,wait,ready=None:run(engine,wait,popen=fake,ready=ready)\nraise SystemExit(c.main(" + repr(["--device", MAC, "--config", str(config), "--output", str(sample), "--wait-limit", "10"]) + "))"
+                script = "import capture as c,subprocess,sys\nfrom pathlib import Path\nactual=subprocess.Popen\nrun=c.capture_live\ndef fake(argv,**kw):\n child=actual([sys.executable,'-u','-c'," + repr(fixture) + "],**kw)\n Path(" + repr(str(child_pid_file)) + ").write_text(str(child.pid))\n return child\nc.capture_live=lambda engine,wait,ready=None,interface='eth0':run(engine,wait,popen=fake,ready=ready,interface=interface)\nraise SystemExit(c.main(" + repr(["--device", MAC, "--config", str(config), "--output", str(sample), "--wait-limit", "10"]) + "))"
                 recorder = subprocess.Popen([sys.executable, "-u", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 child_pid = None
                 try:

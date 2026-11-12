@@ -13,6 +13,20 @@ Run tests and capture on the cloud server; Mac is for editing and Git only.
 Never copy captured audio, credentials, pcap, or production configuration to Mac
 or Git. No real audio is needed for the synthetic engineering tests.
 
+For a device using the current WSS entrance, TLS terminates at the existing
+Caddy proxy and its IPv4 loopback connection carries the same WebSocket
+protocol to port 18041. Select `--interface lo` explicitly for that path; the
+default remains `eth0` for the older direct connection. Only `eth0` and `lo`
+are accepted, and readiness must name the selected interface. The loopback
+capture does not decrypt public TLS or change Caddy, firmware or authentication.
+
+An activated factory device uses its current factory credential. The legacy
+`--config` reader does not discover that credential. A cloud-only coordinator
+must verify the existing private factory bundle against the current management
+configuration and active binding before passing the credential in RAM to
+`Engine`. Do not restore a legacy token, change the registry or copy the bundle
+to a client to make a capture work. See the [WSS continuation record](../../docs/verification/2026-11-11-m01-wss-query.md).
+
 ## Tests
 
 Copy only these source files into a new private cloud directory, then run:
@@ -62,7 +76,8 @@ Wait for the flushed JSON event before manually waking the robot:
 {"event": "ready", "stage": "capture_readiness"}
 ```
 
-It is emitted only after tcpdump confirms it is listening on eth0. Start a new
+It is emitted only after tcpdump confirms it is listening on the selected
+interface; the event also reports `interface`. Start a new
 device TCP connection after readiness; an already-open connection is ignored.
 The operator can restart/wake the device through its normal controls; the tool
 does not do so. Say one new phrase of about 3–5 seconds after the wake prompt,
