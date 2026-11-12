@@ -78,3 +78,17 @@
 查询修复已发布：独立产品/实际来源/冻结操作器审查通过，root只读probe后单次切Voice到online-music-20261112-r2，PID2804087/SHA f5dfaf86eba0a63a548456b9078ce1ee0caa7a0f4d529ba7289d9fac216e23e9。仅更换argv0，原唯一--music-online=true和其他参数/稳定环境保持。5个记忆文件仅发生已解释的启动Chmod ctime-only变化，socket仅身份变化；记录字节/其他元数据/配置/profile/其他进程/Caddy/防火墙保护通过，无数据恢复/自动回滚。管理2273712、Caddy2415423不变；独立health ready/memory_ready、容量2/会话0、诊断false。私有发布证据/var/backups/family-robot/music-track-query-20261112，原admin-audit事务仍未关闭。
 
 代码已推main d0c03da；新版本未刷固件。已请用户重新点播后查询，现场回答待确认；无需把曾经的旧Session选曲虚构为重启后仍保留。仅清理本轮5个可重建测试二进制，先记录SHA和检查无运行引用；源、候选、日志与证据保留，共享缓存未动。
+
+## 现场续测：指定歌手误匹配修复（2026-11-12）
+
+r2现场用户反馈“仍然不知道或说错了”。新会话20261112T153138-72e47906b7d4410d0866a77e286ef559已能回答实际曲名/署名，但选曲本身错误：用户明确“播放一首周深的《如愿》”，选择1897038155、署名“白浅熙想嫁给周深.”；回答也照该元数据说出这个名字，用户纠正后仍选同资源。**现场整体仍为FAIL，不把正确转述错误资源算作正确点歌/查询验收。**
+
+实际根因是Search复用了Title的子串匹配来判断单个Artist条目，导致歌手姓名出现在其他昵称中也被接纳。d3da340修复为：每个artist entry的规范化完整姓名必须等于请求，保留大小写/空格/标点归一和多人合作中一个完整条目匹配；歌名版本匹配不变。不加入艺人别名库、外部身份鉴定或新音源服务，匹配不到返回不可用，不替换其他歌手资源。
+
+三条真实Search边界夹具先RED（fans昵称、姓名前后缀、大小写归一后错误纳入），修复后internal/music全包race66项含子测试通过、零skip，3.799s，含原HTTPS/FFmpeg/截止/取消测试；vet music/realtimelive及构建通过。真实Native两种明确点播/纠正问法均提取周深/如愿/action=play；真实公开接口当前搜索无完整歌手匹配候选，返回ErrUnavailable，没有把其他昵称当候选。周传雄《黄昏》仍有13个匹配候选，前5解析3个完整版本（5255640/5233046/5265212）。探测2.25s、无设备播放；这不等于全网没有周深版本，只是当前公开入口/候选范围没有得到符合条件的资源。
+
+实际r3来源继承不可变r2，194文件中只改source.go/source_test.go、其余192不变，真实曲目事实查询修复保留。源d3da340bb455942176f48ae37b9cfa03efe011b9，摘要3ea77589edd3c634faca910825d5aa12826a47882c9737cd6b9fc04462cc24f7，全文件1c875020462515fca6d1d0e340ec45fb874befa8a021835ae02cf58d59e4d142，候选SHA5e7724aec5dda7abf211ab954e51d74d1d8660af050ed1fbf8782eba66704052。操作器只更新r3任务/旧身份/路径常量，沿用r2原argv不变和保护，22项隔离回归通过。云端/home/ubuntu/music-artist-match-20261112；实际发布及后续现场结果另记。
+
+r3发布完成：独立源码/来源/操作器审查通过，root以python3 -B只读probe后单次更新Voice到online-music-20261112-r3，PID2812428/SHA5e7724aec5dda7abf211ab954e51d74d1d8660af050ed1fbf8782eba66704052。原参数/唯一--music-online=true保持。5处既有记忆文件启动Chmod ctime-only及socket身份预期变化以外，记录字节/权限/配置/profile/其他进程/Caddy/防火墙保护相同；无数据恢复、自动重试/回滚，原审计事务仍false未关闭。管理2273712/Caddy2415423未重启，独立health ready/memory_ready、容量2/会话0/诊断false。私有发布证据/var/backups/family-robot/music-artist-match-20261112。
+
+代码d3da340已推main（第一次GitHub SSL连接失败，保留失败，随后HTTP/1.1正常推送），未刷固件。只删本轮可重建real-probe测试二进制，SHA/非运行引用检查及日志/源码/候选/证明保留，共享缓存未改。r3修复后现场“正确歌手资源点播+查询”仍待确认；不能以r2那次错误歌手资源的文本转述算作现场通过。现可明确区分：有真实正确元数据时能回答；没有符合指定歌手的可播资源时拒绝替换。
