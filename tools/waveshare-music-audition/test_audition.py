@@ -141,6 +141,30 @@ class AuditionTest(unittest.TestCase):
             self.client.main()
         self.assertTrue(port.opened)
 
+    def test_cli_rfc_uses_network_deadline(self):
+        class Port:
+            dtr=True; rts=True; opened=False
+            def open(port):
+                self.assertFalse(port.dtr); self.assertFalse(port.rts); port.opened=True
+            def __enter__(port): return port
+            def __exit__(port,*_args): pass
+        port=Port()
+        url='rfc2217://127.0.0.1:42217?timeout=5'
+        def factory(actual_url,**kwargs):
+            # pyserial 3.5 RFC2217 rejects a serial write_timeout on open;
+            # its URL timeout bounds the underlying network socket instead.
+            if kwargs.get('write_timeout') is not None:
+                raise NotImplementedError('write_timeout is not supported')
+            self.assertEqual(actual_url,url)
+            self.assertTrue(kwargs.get('do_not_open'))
+            return port
+        serial=SimpleNamespace(serial_for_url=factory,SerialException=OSError)
+        with patch.dict(sys.modules,{'serial':serial}), patch.object(sys,'argv',
+             ['client','--port',url,'--wav','fixture.wav','--rate','24000']), \
+             patch.object(self.client.signal,'signal'),patch.object(self.client,'stream_audio'):
+            self.client.main()
+        self.assertTrue(port.opened)
+
     def test_download_rejects_incomplete_http_content(self):
         class Response:
             url='https://example.invalid/audio'

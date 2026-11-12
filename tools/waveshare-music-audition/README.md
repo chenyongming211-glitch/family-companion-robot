@@ -26,18 +26,28 @@ The official source is a lossy MP3. Upsampling to 48kHz cannot recover missing h
 
 ## USB client
 
-Run only after the audition-enabled candidate is installed and the device is idle. Install pyserial in the test client's environment if it is not already available. Copy only the two licensed output WAVs, manifest and attribution from the cloud, outside the repository; do not copy server credentials. Do not stream individual blocks through SSH, whose round-trip delay can exceed the 30/60ms audio block duration.
+Run only after the audition-enabled candidate is installed and the device is idle. Use the existing pyserial test-client environment; prepare runtime dependencies and run automated tests on the cloud. Copy only the two licensed output WAVs, manifest and attribution from the cloud, outside the repository; do not copy server credentials. Do not stream individual blocks through SSH, whose round-trip delay can exceed the 30/60ms audio block duration.
+
+On the tested Mac, opening the physical USB port restarts this board even with DTR/RTS deasserted. Keep the existing loopback USB relay open across A/B runs, wait for the device to finish startup and become idle, then use local RFC2217 clients. Start this in a separate terminal and keep it running until all playback and conversation checks finish:
+
+```sh
+python3 tools/usb_serial_relay.py --serial /dev/cu.usbmodemDEVICE --port 42217
+```
+
+Then play A followed by B:
 
 ```sh
 python3 tools/waveshare-music-audition/client.py \
-  --port /dev/cu.usbmodemDEVICE \
+  --port 'rfc2217://127.0.0.1:42217?timeout=5' \
   --wav /absolute/outside-repository/carefree-24000.wav --rate 24000
 python3 tools/waveshare-music-audition/client.py \
-  --port /dev/cu.usbmodemDEVICE \
+  --port 'rfc2217://127.0.0.1:42217?timeout=5' \
   --wav /absolute/outside-repository/carefree-48000.wav --rate 48000
 ```
 
-The client opens the port with DTR/RTS deasserted to avoid requesting board reset. The transport also accepts pyserial `socket://host:port` URLs when an already authorized USB bridge is needed. The client validates the complete WAV for truncation before starting, and retains at most one PCM block. It waits for a matching device event before sending the next block. Ctrl-C requests STOP at the next block boundary; the physical button can also cancel. Other console lines are ignored. Malformed events, mismatching sequence/rate/count, short writes and a 5-second acknowledgment timeout abort transmission with restoration unconfirmed. Device idle/session deadlines remain responsible for cleanup if the connection is lost.
+The client sets DTR/RTS false before opening; this does not guarantee that a native physical USB open leaves the board running. It also accepts a physical USB path or an already authorized pyserial `socket://host:port` bridge. RFC2217 uses its network timeout (explicitly 5 seconds above) instead of the unsupported pyserial 3.5 serial `write_timeout`; native/socket writes have a 5-second write timeout. The relay binds only to local loopback; no cloud forwarding is needed for music playback.
+
+The client validates the complete WAV for truncation before starting, and retains at most one PCM block. It waits for a matching device event before sending the next block. Ctrl-C requests STOP at the next block boundary; the physical button can also cancel. Other console lines are ignored. Malformed events, mismatching sequence/rate/count, short writes and a 5-second acknowledgment timeout abort transmission with restoration unconfirmed. Device idle/session deadlines remain responsible for cleanup if the connection is lost. A START rejected during startup is an error, not a completed playback or proof of a hardware-rate failure; wait for idle before starting a new run.
 
 Output contains actual accepted device events only. `ACK` is flow control and its sample count is the device's physical completion count, which may lag sent samples. `DONE` requires the full announced sample count and verified restoration to 24kHz. `STOPPED` may contain a partial physical count, but also requires verified 24kHz restoration. Transmitted byte counts are never playback evidence. `ERROR` never proves rollback succeeded.
 

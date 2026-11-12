@@ -155,7 +155,7 @@ def stream_audio(transport, path, rate, stop_requested=lambda: False, emit=lambd
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--port', required=True, help='USB path or pyserial socket:// URL')
+    parser.add_argument('--port', required=True, help='USB path or pyserial socket:// / rfc2217:// URL')
     parser.add_argument('--wav', type=Path, required=True)
     parser.add_argument('--rate', type=int, choices=(24000, 48000), required=True)
     args = parser.parse_args()
@@ -166,8 +166,11 @@ def main():
         cancelled = True
     signal.signal(signal.SIGINT, stop)
     try:
+        # RFC2217 uses its URL's network timeout; pyserial 3.5 does not
+        # implement a serial write_timeout for this transport.
         transport = serial.serial_for_url(args.port, baudrate=115200, timeout=0.1,
-                                          write_timeout=5, do_not_open=True)
+                                          write_timeout=None if args.port.startswith('rfc2217://') else 5,
+                                          do_not_open=True)
         # ESP32 USB bridges may wire modem-control lines to boot/reset.
         transport.dtr = False
         transport.rts = False
