@@ -6,9 +6,14 @@ import { createDeviceSettingsController, deviceSettingsState } from "../device-s
 import { onSensitiveInvalidated } from "../sensitive-session.ts";
 
 const props = defineProps<{ deviceId: string; scope: Scope }>();
-const emit = defineEmits<{ saved: [value: DeviceSettings] }>();
+const emit = defineEmits<{ saved: [value: DeviceSettings]; updated: [value: DeviceSettings] }>();
 const state = reactive(deviceSettingsState());
-const control = createDeviceSettingsController(api, state, value => emit("saved", value));
+// Only current, verified controller reads publish metadata. Saved feedback and
+// its event retain their stronger PUT + matching GET confirmation contract.
+const control = createDeviceSettingsController(api, state, value => {
+  emit("saved", value);
+  emit("updated", value);
+}, undefined, value => emit("updated", value));
 let unsubscribe = () => {};
 function start() {
   if (document.visibilityState === "visible") void control.start(props.deviceId, props.scope);

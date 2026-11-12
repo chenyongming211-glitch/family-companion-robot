@@ -223,13 +223,16 @@ function switchSettingsDevice(event: Event) {
     device: (event.target as HTMLSelectElement).value,
   });
 }
-function settingsSaved(value: Settings) {
+function settingsUpdated(value: Settings) {
   if (value.deviceId !== device.value?.id) return;
   device.value.name = value.name;
   device.value.location = value.location;
-  // Keep the form mounted (and its verified feedback visible) while refreshing
-  // the device header and selector. Each confirmed save supersedes any older
-  // read so polling coalescing cannot discard its required refresh.
+  for (const entry of devices.value) {
+    if (entry.id === value.deviceId) { entry.name = value.name; entry.location = value.location; }
+  }
+  // Keep the form and feedback mounted. Each verified read (including manual
+  // rereads and confirmed saves) supersedes older parent reads so their labels
+  // cannot replace the newly verified metadata.
   void load(true, true);
 }
 function switchDevice(event: Event) {
@@ -626,7 +629,7 @@ function chatLink(c: Conversation) {
           </select>
           <p>{{ device.name }} · {{ device.model }}</p>
         </section>
-        <DeviceSettings :key="scope + ':' + device.id" :device-id="device.id" :scope="scope" @saved="settingsSaved" />
+        <DeviceSettings :key="scope + ':' + device.id" :device-id="device.id" :scope="scope" @updated="settingsUpdated" />
         <RuntimeControls :key="device.id" :device-id="device.id" :scope="scope" />
       </div>
       </template

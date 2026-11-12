@@ -23,6 +23,7 @@ export function createDeviceSettingsController(
     after: (fn, ms) => setTimeout(fn, ms),
     cancel: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
   },
+  onRead: (value: DeviceSettings) => void = () => {},
 ) {
   let epoch = 0, operation = 0, id = "", scope: Scope = "admin";
   let timer: unknown, interrupt: (() => void) | undefined;
@@ -89,7 +90,10 @@ export function createDeviceSettingsController(
     state.needsRead = true;
     await perform(async current => {
       const value = await api.getDeviceSettings(selected, selectedScope);
-      if (current()) apply(value);
+      if (current()) {
+        apply(value);
+        onRead(value);
+      }
     });
   }
   return {

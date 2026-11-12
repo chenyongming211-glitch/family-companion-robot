@@ -162,11 +162,12 @@ function deferred<T>() {
 }
 
 // Isolated HTTP fixtures drive the real compiled CorePages and settings form.
-async function settingsView(scope: Scope = 'family') {
+async function settingsView(scope: Scope = 'family', canEdit = true) {
   const props = vue.reactive({ scope, route: { page: scope === 'family' ? 'settings' : 'configuration', device: 'device-one', chat: '', memory: '', family: '' } });
   let name = '初始昵称', location = '初始位置', version = 0;
   const reads: Array<{ scope: string; result: ReturnType<typeof deferred<Response>> }> = [];
-  let deferLists = false;
+  let deferLists = false, deferSettings = false, failSettings = false;
+  const settingsReads: Array<{ result: ReturnType<typeof deferred<Response>>; response: Response }> = [];
   const detailSnapshots: Array<{ name: string; location: string }> = [];
   const response = (value: unknown) => new Response(JSON.stringify(value));
   const device = (id: string, deviceName = name, place = location) => ({ id, name: deviceName, location: place, model: 'isolated-board' });
@@ -179,9 +180,17 @@ async function settingsView(scope: Scope = 'family') {
     const id = decodeURIComponent(url.split('/').at(-1)!);
     if (url.includes('/device-settings/')) {
       if (init.method === 'PUT') {
-        const input = JSON.parse(String(init.body)); name = input.name; location = input.location; version++;
+        const input = JSON.parse(String(init.body));
+        if (input.version !== version.toString(16).padStart(64, '0'))
+          return new Response(JSON.stringify({ message: '设备设置已变化' }), { status: 409 });
+        name = input.name; location = input.location; version++;
       }
-      return response({ deviceId: id, name, location, version: version.toString(16).padStart(64, '0'), canEdit: true });
+      const snapshot = response({ deviceId: id, name, location, version: version.toString(16).padStart(64, '0'), canEdit });
+      if (init.method !== 'PUT' && failSettings) { failSettings = false; return new Response('{}', { status: 500 }); }
+      if (init.method !== 'PUT' && deferSettings) {
+        const result = deferred<Response>(); settingsReads.push({ result, response: snapshot }); return result.promise;
+      }
+      return snapshot;
     }
     if (url.includes('/device-runtime/')) return response({ deviceId: id, connection: 'unknown', seenAt: '', boot: '', canControl: false, volume: null, brightness: null, command: null });
     if (url.includes('/devices/')) {
@@ -200,9 +209,11 @@ async function settingsView(scope: Scope = 'family') {
     assert.match(view.text(), /设备昵称和放置位置已保存/);
     return settings;
   }
-  return { ...view, props, reads, labels, form, save,
+  return { ...view, props, reads, settingsReads, labels, form, save,
+    deferSettings: () => { deferSettings = true; },
+    failSettings: () => { failSettings = true; },
     deferLists: () => { deferLists = true; },
-    current: (nextName: string, nextLocation: string) => { name = nextName; location = nextLocation; },
+    current: (nextName: string, nextLocation: string) => { name = nextName; location = nextLocation; version++; },
     release: (index: number, deviceName: string, place: string, id = 'device-one') => {
       detailSnapshots.push({ name: deviceName, location: place });
       reads[index].result.resolve(response([device(id, deviceName, place)]));
@@ -255,6 +266,91 @@ for (const change of ['device', 'scope', 'route', 'account'] as const) {
         view.release(1, '当前昵称', '当前位置', change === 'device' ? 'device-two' : 'device-one'); await tick();
         assert.doesNotMatch(view.text(), /旧账号昵称|旧账号位置/);
       }
+    } finally { view.close(); }
+  });
+}
+
+for (const scope of ['family', 'admin'] as const) {
+  for (const canEdit of [true, false]) {
+    test(`${scope} manual settings reread updates the header and selector (canEdit=${canEdit})`, async () => {
+      const view = await settingsView(scope, canEdit);
+      try {
+        const form = view.form();
+        view.current('外部新昵称', '外部新位置');
+        if (canEdit) {
+          form.setupState.state.name = '旧草稿';
+          await form.setupState.control.submit(); await tick();
+          assert.equal(form.setupState.state.needsRead, true, '409 requires an explicit read');
+        }
+        view.deferLists();
+        await form.setupState.control.refresh(); await tick();
+        assert.equal(form.setupState.state.name, '外部新昵称');
+        assert.equal(view.reads.length, 1, 'a verified manual read starts a mandatory parent refresh');
+        assert.deepEqual(view.labels(), { heading: scope === 'family' ? '外部新昵称的设置' : '设备配置', options: ['外部新昵称 · 外部新位置'] });
+        view.release(0, '外部新昵称', '外部新位置'); await tick();
+        assert.equal(view.form(), form, 'the read keeps the same form mounted');
+        assert.equal(form.setupState.state.settings.canEdit, canEdit);
+        assert.doesNotMatch(view.text(), /设备昵称和放置位置已保存/);
+      } finally { view.close(); }
+    });
+  }
+}
+
+for (const order of ['older-first', 'newer-first'] as const) {
+  test(`manual settings read supersedes a pending saved-settings parent refresh (${order})`, async () => {
+    const view = await settingsView();
+    try {
+      view.deferLists();
+      const form = await view.save('先前保存', '先前位置');
+      view.current('外部新昵称', '外部新位置');
+      await form.setupState.control.refresh(); await tick();
+      if (order === 'older-first') { view.release(0, '先前保存', '先前位置'); await tick(); }
+      assert.equal(view.reads.length, 2, 'a manual read must supersede the older parent read');
+      view.release(1, '外部新昵称', '外部新位置'); await tick();
+      if (order === 'newer-first') { view.release(0, '先前保存', '先前位置'); await tick(); }
+      assert.deepEqual(view.labels(), { heading: '外部新昵称的设置', options: ['外部新昵称 · 外部新位置'] });
+      assert.equal(view.form(), form);
+      assert.doesNotMatch(view.text(), /设备昵称和放置位置已保存/);
+    } finally { view.close(); }
+  });
+}
+
+test('a failed manual settings read cannot refresh parent metadata', async () => {
+  const view = await settingsView();
+  try {
+    const before = view.labels(); view.deferLists(); view.failSettings();
+    view.current('未经核实昵称', '未经核实位置');
+    await view.form().setupState.control.refresh(); await tick();
+    assert.equal(view.reads.length, 0);
+    assert.deepEqual(view.labels(), before);
+    assert.equal(view.form().setupState.state.needsRead, true);
+    assert.doesNotMatch(view.text(), /未经核实昵称|未经核实位置/);
+  } finally { view.close(); }
+});
+
+for (const change of ['device', 'scope', 'route', 'account', 'hide'] as const) {
+  test(`a late manual settings read cannot restore metadata after ${change} invalidation`, async () => {
+    const view = await settingsView();
+    try {
+      view.deferSettings(); view.current('迟到私有昵称', '迟到私有位置');
+      const form = view.form(), pending = form.setupState.control.refresh(); await tick();
+      assert.equal(view.settingsReads.length, 1);
+      view.deferLists();
+      if (change === 'account') sensitive.invalidateSensitive();
+      else if (change === 'hide') { view.document.visibilityState = 'hidden'; view.document.dispatchEvent(new Event('visibilitychange')); }
+      else {
+        view.current('当前昵称', '当前位置');
+        if (change === 'device') view.props.route = { ...view.props.route, device: 'device-two' };
+        if (change === 'scope') view.props.scope = 'admin';
+        if (change === 'route') view.props.route = { ...view.props.route, page: 'devices' };
+      }
+      await tick();
+      assert.equal(form.setupState.state.name, '');
+      assert.equal(form.setupState.state.feedback, '');
+      const count = view.reads.length;
+      view.settingsReads[0].result.resolve(view.settingsReads[0].response); await pending; await tick();
+      assert.equal(view.reads.length, count, 'a discarded read cannot emit a parent refresh');
+      assert.doesNotMatch(view.text(), /迟到私有昵称|迟到私有位置/);
     } finally { view.close(); }
   });
 }
