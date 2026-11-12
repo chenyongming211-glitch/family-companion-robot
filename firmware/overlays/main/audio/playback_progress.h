@@ -49,6 +49,8 @@ public:
         // is ignored on completion and can never become the new connection's PCM.
     }
     bool Start(PlaybackIdentity id) {
+        // Trusted dialogue receipts use the fixed24kHz media clock only.
+        if (sample_rate_ != 24000) return false;
         if (!id || id.connection != connection_ || id.playback <= last_id_) return false;
         last_id_ = id.playback;
         for (auto& r : records_) if (!r.id
@@ -118,11 +120,14 @@ public:
         // One clear, no repeated PCM compaction while task holds the IRQ mux.
         head_=used_=0; // also discard untagged prompts
     }
-    void HardwareReset() {
+    void HardwareReset(uint32_t sample_rate = 24000) {
         for(auto& r:records_) if(r.id && !Finished(r)) r.valid=false;
         head_=used_=0; slots_={}; discovered_=next_=0; last_stamp_=0;
         hardware_ok_=true;
+        sample_rate_=sample_rate;
+        untagged_completed_=0;
     }
+    uint64_t UntaggedCompleted() const { return untagged_completed_; }
     void HardwareFault() {
         hardware_ok_=false;
         for(auto& r:records_) if(r.id) r.valid=false;
@@ -132,7 +137,9 @@ public:
     // returned by the pinned SDK. The tag describes its *previous* refill.
     void Complete(int16_t* address, size_t n, int64_t stamp) {
         if(!address || n!=kBlock || stamp<=0) { HardwareFault(); return; }
-        if(last_stamp_ && (stamp-last_stamp_<8500 || stamp-last_stamp_>11500)) HardwareFault();
+        const int64_t period=sample_rate_==48000?5000:10000;
+        if(sample_rate_!=24000 && sample_rate_!=48000) HardwareFault();
+        if(last_stamp_ && (stamp-last_stamp_<period*85/100 || stamp-last_stamp_>period*115/100)) HardwareFault();
         last_stamp_=stamp;
         Slot* s=nullptr;
         if(discovered_<kSlots) {
@@ -146,6 +153,7 @@ public:
             next_=(next_+1)%kSlots;
         }
         if(!s) { HardwareFault(); std::memset(address,0,n*sizeof(int16_t)); return; }
+        if(!s->tag.id && hardware_ok_) untagged_completed_+=s->tag.count;
         if(auto* r=Find(s->tag.id)) {
             if(r->valid) {
                 if(s->tag.first!=r->played || r->played>kMaxSamples-s->tag.count) r->valid=false;
@@ -287,6 +295,8 @@ private:
         for(const auto& s:slots_) if(s.tag.id==r.id) return false;
         return true;
     }
+    uint32_t sample_rate_=24000;
+    uint64_t untagged_completed_=0;
     std::array<Block,kQueue> queue_{};
     std::array<Slot,kSlots> slots_{};
     std::array<Record,kRecords> records_{};

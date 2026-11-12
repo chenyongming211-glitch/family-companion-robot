@@ -15,4 +15,7 @@
 #include "xiaoman_box_lifecycle.inc"
 #include "xiaoman_box_playback.inc"
 #include "xiaoman_box_dma.inc"
+#if CONFIG_FAMILY_MUSIC_AUDITION
+#include "xiaoman_box_music.inc"
+#endif
 #endif

@@ -86,6 +86,13 @@ public:
     virtual uint32_t ReferenceIntegrity()const{return 0;}
     virtual void SetCaptureActive(bool){}
     virtual void CaptureBoundary(){}
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    virtual bool BeginMusic(int){return false;}
+    virtual bool EndMusic(){return false;}
+    virtual bool MusicActive()const{return false;}
+    virtual bool MusicWrite(std::vector<int16_t>&){return false;}
+    virtual uint64_t MusicCompleted()const{return 0;}
+#endif
     bool volume_loaded=false;
 };
 class BoxAudioCodec : public AudioCodec {
@@ -118,11 +125,27 @@ public:
     Channel tx,rx; Channel *tx_handle_=&tx,*rx_handle_=&rx;
     i2s_std_config_t standard; i2s_tdm_config_t tdm;
     int input_changes=0,output_changes=0;
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    bool reopen_fails=false,mute_fails=false,muted=false;
+    int output_sample_rate_=24000,input_sample_rate_=24000;
+    bool ReopenDuplexForMusic(int rate) {
+        if(reopen_fails)return false;
+        standard.clk_cfg.sample_rate_hz=tdm.clk_cfg.sample_rate_hz=rate;
+        tx.info.bclk_hz=rx.info.bclk_hz=rate*64;
+        tx.info.mclk_hz=rx.info.mclk_hz=rate*256;
+        input_enabled_=output_enabled_=tx.enabled=rx.enabled=true;
+        return true;
+    }
+    bool MuteMusicOutput(bool mute){if(mute_fails)return false;muted=mute;return true;}
+#endif
 };
 #include "xiaoman_box_codec.h"
 #include "xiaoman_box_lifecycle.inc"
 #include "xiaoman_box_playback.inc"
 #include "xiaoman_box_dma.inc"
+#if CONFIG_FAMILY_MUSIC_AUDITION
+#include "xiaoman_box_music.inc"
+#endif
 
 static XiaomanBoxCodec make_codec() {
     return XiaomanBoxCodec(nullptr,24000,24000,0,0,0,0,0,0,1,2,true);
@@ -265,4 +288,5 @@ int main() {
      assert(!bad.InputData(pcm)&&bad.ReferenceFaulted()&&bad.CaptureGeneration()!=before);
      read_fails=false;assert(!bad.InputData(pcm));} // no automatic fault recovery
     puts("Waveshare production lifecycle, readback, callback evidence, faults and reconnect passed");
+    return 0;
 }

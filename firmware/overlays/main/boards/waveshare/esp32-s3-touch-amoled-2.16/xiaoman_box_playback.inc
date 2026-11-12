@@ -1,4 +1,7 @@
 bool XiaomanBoxCodec::PlaybackControl(PlaybackOp op,family_robot::PlaybackIdentity id,uint64_t first,size_t n) {
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    if(op==PlaybackOp::Start && MusicActive())return false;
+#endif
     // Reset/Connect can revoke output without waiting for a lifecycle owner;
     // only Start needs the physical lifecycle.
     std::unique_lock<std::mutex> lock(lifecycle_,std::defer_lock);
@@ -41,6 +44,9 @@ void XiaomanBoxCodec::MarkOrbDraining(family_robot::PlaybackIdentity id) {portEN
 #endif
 void XiaomanBoxCodec::OutputData(std::vector<int16_t>& data) {OutputTagged(data,{},0,PlaybackGeneration());}
 void XiaomanBoxCodec::OutputTagged(std::vector<int16_t>& pcm,family_robot::PlaybackIdentity id,uint64_t first,uint32_t generation) {
+    SubmitOutput(pcm,id,first,generation);
+}
+bool XiaomanBoxCodec::SubmitOutput(std::vector<int16_t>& pcm,family_robot::PlaybackIdentity id,uint64_t first,uint32_t generation) {
     std::unique_lock<std::mutex> lock(lifecycle_);
     // Never call esp_codec_dev_write/i2s_channel_write, including failed setup.
     size_t offset=0;int64_t last_progress=esp_timer_get_time();
@@ -58,13 +64,14 @@ void XiaomanBoxCodec::OutputTagged(std::vector<int16_t>& pcm,family_robot::Playb
             ):family_robot::PlaybackProgress::SubmitResult::Rejected;
         if(!current && playback_ && generation==output_generation_)playback_->Invalidate(id);
         portEXIT_CRITICAL(&mux_);
-        if(result==family_robot::PlaybackProgress::SubmitResult::Rejected)return;
+        if(result==family_robot::PlaybackProgress::SubmitResult::Rejected)return false;
         if(result==family_robot::PlaybackProgress::SubmitResult::Accepted) {offset+=n;last_progress=esp_timer_get_time();continue;}
-        if(esp_timer_get_time()-last_progress>200000) {PlaybackControl(PlaybackOp::Invalidate,id);return;}
+        if(esp_timer_get_time()-last_progress>200000) {PlaybackControl(PlaybackOp::Invalidate,id);return false;}
         // DMA makes space independently. Let capture and hardware lifecycle
         // operations run while waiting; recheck generation/health on reentry.
         lock.unlock();
         vTaskDelay(1);
         lock.lock();
     }
+    return true;
 }

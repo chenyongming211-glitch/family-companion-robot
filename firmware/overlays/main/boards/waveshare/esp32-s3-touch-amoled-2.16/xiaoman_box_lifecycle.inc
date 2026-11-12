@@ -33,6 +33,10 @@ void XiaomanBoxCodec::Start() {
     PreparePlaybackHardware();
 }
 bool XiaomanBoxCodec::VerifyHardware() {
+    uint32_t rate=24000;
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    if(music_active_)rate=music_rate_;
+#endif
     i2s_chan_info_t tx{},rx{};
     const auto tx_result=i2s_channel_get_info(tx_handle_,&tx);
     const auto rx_result=i2s_channel_get_info(rx_handle_,&rx);
@@ -61,14 +65,14 @@ bool XiaomanBoxCodec::VerifyHardware() {
     const int tx_slot=out.slot_cfg.slot_bit_width;
     if((tx_slot!=I2S_SLOT_BIT_WIDTH_16BIT && tx_slot!=I2S_SLOT_BIT_WIDTH_32BIT) ||
        (input_enabled_ && tx_slot!=I2S_SLOT_BIT_WIDTH_32BIT))return false;
-    if(output_enabled_ && (tx.total_dma_buf_size!=2880 || out.clk_cfg.sample_rate_hz!=24000 ||
+    if(output_enabled_ && (tx.total_dma_buf_size!=2880 || out.clk_cfg.sample_rate_hz!=rate ||
        out.slot_cfg.data_bit_width!=I2S_DATA_BIT_WIDTH_16BIT || out.slot_cfg.slot_bit_width!=tx_slot ||
        out.slot_cfg.slot_mode!=I2S_SLOT_MODE_MONO || out.slot_cfg.slot_mask!=I2S_STD_SLOT_LEFT ||
-       tx.bclk_hz!=24000u*2u*static_cast<unsigned>(tx_slot) || tx.mclk_hz!=24000u*256u)) return false;
-    if(input_enabled_ && (rx.total_dma_buf_size!=5760 || in.clk_cfg.sample_rate_hz!=24000 ||
+       tx.bclk_hz!=rate*2u*static_cast<unsigned>(tx_slot) || tx.mclk_hz!=rate*256u)) return false;
+    if(input_enabled_ && (rx.total_dma_buf_size!=5760 || in.clk_cfg.sample_rate_hz!=rate ||
        in.slot_cfg.data_bit_width!=I2S_DATA_BIT_WIDTH_16BIT || in.slot_cfg.slot_bit_width!=I2S_SLOT_BIT_WIDTH_16BIT ||
        in.slot_cfg.slot_mode!=I2S_SLOT_MODE_STEREO || in.slot_cfg.slot_mask!=(I2S_TDM_SLOT0|I2S_TDM_SLOT1) ||
-       in.slot_cfg.total_slot!=4 || rx.bclk_hz!=24000u*4u*16u || rx.mclk_hz!=24000u*256u)) return false;
+       in.slot_cfg.total_slot!=4 || rx.bclk_hz!=rate*4u*16u || rx.mclk_hz!=rate*256u)) return false;
     return true;
 }
 void XiaomanBoxCodec::FaultLocked(uint32_t source) {
@@ -104,6 +108,9 @@ bool XiaomanBoxCodec::PreparePlaybackHardware() {
 }
 void XiaomanBoxCodec::EnableInput(bool enable) {
     std::lock_guard<std::mutex> lock(lifecycle_);
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    if(music_active_)return;
+#endif
     if(enable==input_enabled_) return;
     Disarm();
     BoxAudioCodec::EnableInput(enable);
@@ -116,11 +123,17 @@ void XiaomanBoxCodec::EnableInput(bool enable) {
 }
 void XiaomanBoxCodec::EnableOutput(bool enable) {
     std::lock_guard<std::mutex> lock(lifecycle_);
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    if(music_active_)return;
+#endif
     if(enable==output_enabled_) return;
     Disarm();BoxAudioCodec::EnableOutput(enable);Arm();
 }
 bool XiaomanBoxCodec::InputData(std::vector<int16_t>& data) {
     std::lock_guard<std::mutex> lock(lifecycle_);
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    if(music_active_)return false;
+#endif
     const auto generation=CaptureGeneration();
 #ifdef ESP_PLATFORM
     // Task-only diagnostics; never format or log from a DMA callback.
@@ -165,6 +178,9 @@ bool XiaomanBoxCodec::PlaybackSupported() const {
     portEXIT_CRITICAL(&mux_);return ok;
 }
 bool XiaomanBoxCodec::ReferenceValid() const {
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    if(MusicActive())return false;
+#endif
     portENTER_CRITICAL(&mux_);const bool ok=accepting_ && !faulted_;
 #ifdef ESP_PLATFORM
     // A blocked ADC read cannot report a later ISR fault. AFE calls this
@@ -186,6 +202,9 @@ bool XiaomanBoxCodec::ReferenceFaulted() const {
     portENTER_CRITICAL(&mux_);const bool fault=faulted_;portEXIT_CRITICAL(&mux_);return fault;
 }
 bool XiaomanBoxCodec::RealtimeEligible() const {
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    if(MusicActive())return false;
+#endif
     portENTER_CRITICAL(&mux_);
     const bool ok=accepting_ && !faulted_ && capture_active_ && aec_ready_==epochs_.capture();
     portEXIT_CRITICAL(&mux_);return ok;

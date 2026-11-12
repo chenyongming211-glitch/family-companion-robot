@@ -1,0 +1,272 @@
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1248,3 +1248,10 @@
+     bool "Xmini C3 bounded PCM transport and streamed cues"
+     default n
+     depends on XMINI_C3_BUTTON_ENTRY && XMINI_C3_VOICE_BARGE
++
++config FAMILY_MUSIC_AUDITION
++    bool "USB music audition (24/48kHz PCM)"
++    depends on WAVESHARE_XIAOMAN_REALTIME && ESP_CONSOLE_USB_SERIAL_JTAG
++    default n
++    help
++        Real USB music test client. Exclusive output restores24kHz before voice.
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -1,4 +1,5 @@
+ #include "application.h"
++#include "audio/music_audition.h"
+ #include "assets.h"
+ #include "assets/lang_config.h"
+ #include "audio_codec.h"
+@@ -59,6 +60,9 @@
+ }
+ 
+ bool Application::SetDeviceState(DeviceState state) {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active() && state!=kDeviceStateNotifying) {MusicAudition::Cancel();return false;}
++#endif
+     if (!state_machine_.TransitionTo(state))
+         return false;
+ #if CONFIG_STOPWATCH_DEFAULT_REALTIME || CONFIG_WAVESHARE_XIAOMAN_REALTIME
+@@ -121,6 +125,9 @@
+         notify_player_.OnPlaybackProgress(playback_id, media_position_ms);
+     };
+     audio_service_.SetCallbacks(callbacks);
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    MusicAudition::Start();
++#endif
+ 
+     // Add state change listeners
+     state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
+@@ -873,6 +880,9 @@
+ 
+ void Application::HandleToggleChatEvent() {
+     auto state = GetDeviceState();
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active()){MusicAudition::Cancel();return;}
++#endif
+ 
+     if (state == kDeviceStateNotifying) {
+         StopNotification();
+@@ -950,6 +960,9 @@
+ 
+ void Application::HandleStartListeningEvent() {
+     auto state = GetDeviceState();
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active()){MusicAudition::Cancel();return;}
++#endif
+ 
+     if (state == kDeviceStateNotifying) {
+         StopNotification();
+@@ -988,6 +1001,9 @@
+ }
+ 
+ void Application::HandleStopListeningEvent() {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active()){MusicAudition::Cancel();return;}
++#endif
+     auto state = GetDeviceState();
+ 
+     if (state == kDeviceStateNotifying) {
+@@ -1005,6 +1021,9 @@
+ }
+ 
+ void Application::HandleWakeWordDetectedEvent() {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active()){MusicAudition::Cancel();return;}
++#endif
+     if (!protocol_) {
+         return;
+     }
+@@ -1417,6 +1436,9 @@
+ }
+ 
+ void Application::StopNotification() {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active()){MusicAudition::Cancel();return;}
++#endif
+     notify_player_.Stop();
+     audio_service_.ResetDecoder();
+     auto& board = Board::GetInstance();
+@@ -1665,3 +1687,5 @@
+ }
+ 
+ #include "playback_application.inc"
++
++#include "audio/music_audition.inc"
+--- a/main/application.h
++++ b/main/application.h
+@@ -124,6 +124,10 @@
+     AecMode GetAecMode() const { return aec_mode_; }
+     void PlaySound(const std::string_view& sound);
+     AudioService& GetAudioService() { return audio_service_; }
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    bool BeginMusicAudition();
++    void FinishMusicAudition(bool restored);
++#endif
+     
+     /**
+      * Reset protocol resources (thread-safe)
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -41,6 +41,13 @@
+     virtual void OutputData(std::vector<int16_t>& data);
+     virtual bool InputData(std::vector<int16_t>& data);
+     virtual void Start();
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    virtual bool BeginMusic(int) { return false; }
++    virtual bool EndMusic() { return false; }
++    virtual bool MusicActive() const { return false; }
++    virtual bool MusicWrite(std::vector<int16_t>&) { return false; }
++    virtual uint64_t MusicCompleted() const { return 0; }
++#endif
+     enum class PlaybackOp { Connect, Start, Admit, Release, Seal, Interrupt, Invalidate, Reset };
+     virtual bool PlaybackSupported() const { return false; }
+     virtual bool PlaybackControl(PlaybackOp, family_robot::PlaybackIdentity = {}, uint64_t = 0, size_t = 0) { return false; }
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -1,4 +1,5 @@
+ #include "audio_service.h"
++#include "music_audition.h"
+ #include <esp_log.h>
+ #include <esp_heap_caps.h>
+ #include <cstring>
+@@ -951,12 +952,23 @@
+     (void)packet;(void)wait;RequestC3PcmFault(button_uplink_.Capture());return false;
+ #endif
+     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active()) {
++        codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate,packet->receipt_id);
++        codec_->PlaybackControl(AudioCodec::PlaybackOp::Release,packet->receipt_id);
++        return false;
++    }
++#endif
+     const uint32_t generation = playback_generation_;
+     if (packet->receipt_id.connection == 0) packet->output_generation = codec_->PlaybackGeneration();
+     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
+         if (wait) {
+             audio_queue_cv_.wait(lock, [this, generation]() {
+-                return service_stopped_.load() || generation != playback_generation_ ||
++                return service_stopped_.load()
++#if CONFIG_FAMILY_MUSIC_AUDITION
++                       || MusicAudition::Active()
++#endif
++                       || generation != playback_generation_ ||
+                        audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE;
+             });
+         } else {
+@@ -965,7 +977,11 @@
+             return false;
+         }
+     }
+-    if (service_stopped_.load() || generation != playback_generation_) {
++    if (service_stopped_.load()
++#if CONFIG_FAMILY_MUSIC_AUDITION
++        || MusicAudition::Active()
++#endif
++        || generation != playback_generation_) {
+         if (generation == playback_generation_)
+             codec_->PlaybackControl(AudioCodec::PlaybackOp::Invalidate, packet->receipt_id);
+         codec_->PlaybackControl(AudioCodec::PlaybackOp::Release, packet->receipt_id);
+@@ -1023,6 +1039,9 @@
+ }
+ 
+ void AudioService::EnableWakeWordDetection(bool enable) {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(enable && MusicAudition::Active())return;
++#endif
+     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
+     if (enable) {
+         if (!InitializeAudioEngine()) {
+@@ -1072,6 +1091,9 @@
+ }
+ 
+ void AudioService::EnableVoiceProcessing(bool enable) {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(enable && MusicAudition::Active())return;
++#endif
+     if ((codec_->ManagedCapture()
+ #if CONFIG_XMINI_C3_VOICE_BARGE
+          || true
+@@ -1104,6 +1126,9 @@
+ }
+ 
+ void AudioService::EnableAudioTesting(bool enable) {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(enable && MusicAudition::Active())return;
++#endif
+ #if CONFIG_XMINI_C3_PCM
+     (void)enable;ESP_LOGW(TAG,"C3 PCM audio testing unsupported");return;
+ #else
+@@ -1302,6 +1327,9 @@
+ }
+ 
+ void AudioService::CheckAndUpdateAudioPowerState() {
++#if CONFIG_FAMILY_MUSIC_AUDITION
++    if(MusicAudition::Active())return;
++#endif
+     auto now = std::chrono::steady_clock::now();
+     auto input_elapsed =
+         std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
+--- a/main/audio/codecs/box_audio_codec.cc
++++ b/main/audio/codecs/box_audio_codec.cc
+@@ -187,6 +187,7 @@
+ }
+ 
+ void BoxAudioCodec::SetOutputVolume(int volume) {
++    std::lock_guard<std::mutex> lock(data_if_mutex_);
+     ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, volume));
+     AudioCodec::SetOutputVolume(volume);
+ }
+@@ -261,3 +262,35 @@
+     }
+     return samples;
+ }
++
++#if CONFIG_FAMILY_MUSIC_AUDITION
++bool BoxAudioCodec::MuteMusicOutput(bool mute) {
++    std::lock_guard<std::mutex> lock(data_if_mutex_);
++    return esp_codec_dev_set_out_mute(output_dev_,mute)==ESP_CODEC_DEV_OK;
++}
++bool BoxAudioCodec::ReopenDuplexForMusic(int rate) {
++    if(rate!=24000 && rate!=48000)return false;
++    std::lock_guard<std::mutex> lock(data_if_mutex_);
++    const int out_closed=esp_codec_dev_close(output_dev_);
++    const int in_closed=esp_codec_dev_close(input_dev_);
++    input_enabled_=output_enabled_=false;
++    if(out_closed!=ESP_CODEC_DEV_OK || in_closed!=ESP_CODEC_DEV_OK)return false;
++    // Public sample rates remain the voice configuration. Exclusive music
++    // owns its hardware rate in the adapter and verifies actual clock readback.
++    esp_codec_dev_sample_info_t input{};
++    input.bits_per_sample=16;input.channel=4;input.channel_mask=ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0);
++    if(input_reference_)input.channel_mask|=ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
++    input.sample_rate=rate;
++    if(esp_codec_dev_open(input_dev_,&input)!=ESP_CODEC_DEV_OK)return false;
++    input_enabled_=true;
++    if(esp_codec_dev_set_in_channel_gain(input_dev_,ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),input_gain_)!=ESP_CODEC_DEV_OK)return false;
++    if(input_reference_ && reference_gain_channel_>=0 && esp_codec_dev_set_in_channel_gain(input_dev_,
++        ESP_CODEC_DEV_MAKE_CHANNEL_MASK(reference_gain_channel_),reference_gain_)!=ESP_CODEC_DEV_OK)return false;
++    esp_codec_dev_sample_info_t output{};
++    output.bits_per_sample=16;output.channel=1;output.sample_rate=rate;
++    if(esp_codec_dev_open(output_dev_,&output)!=ESP_CODEC_DEV_OK)return false;
++    output_enabled_=true;
++    return esp_codec_dev_set_out_mute(output_dev_,true)==ESP_CODEC_DEV_OK &&
++           esp_codec_dev_set_out_vol(output_dev_,output_volume_)==ESP_CODEC_DEV_OK;
++}
++#endif
+--- a/main/audio/codecs/box_audio_codec.h
++++ b/main/audio/codecs/box_audio_codec.h
+@@ -30,6 +30,11 @@
+     virtual int Read(int16_t* dest, int samples) override;
+     virtual int Write(const int16_t* data, int samples) override;
+ 
++#if CONFIG_FAMILY_MUSIC_AUDITION
++protected:
++    bool ReopenDuplexForMusic(int rate);
++    bool MuteMusicOutput(bool mute);
++#endif
+ public:
+     BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int output_sample_rate,
+                   gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din,

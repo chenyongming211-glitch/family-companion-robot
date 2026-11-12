@@ -40,12 +40,21 @@ public:
     uint32_t ReferenceIntegrity() const override;
     void SetCaptureActive(bool active) override;
     void CaptureBoundary() override;
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    bool BeginMusic(int rate) override;
+    bool EndMusic() override;
+    bool MusicActive() const override;
+    bool MusicWrite(std::vector<int16_t>& pcm) override;
+    uint64_t MusicCompleted() const override;
+#endif
 private:
     void InitializePlayback(int input_rate, int output_rate, bool reference);
     bool VerifyHardware(); // lifecycle_ held: mode_cfg points into mutable driver state
     bool PreparePlaybackHardware(); // lifecycle_ held, before Start creates its record
     void Disarm();
     void Arm();
+    bool SubmitOutput(std::vector<int16_t>& pcm,family_robot::PlaybackIdentity id,
+                      uint64_t first,uint32_t generation);
     void FaultLocked(uint32_t source=5); // mux_ held, ISR-safe scalar state only
     static bool Sent(i2s_chan_handle_t, i2s_event_data_t*, void*);
     bool Complete(i2s_event_data_t* event);
@@ -61,5 +70,9 @@ private:
     int64_t last_dma_us_=0, last_dma_gap_us_=0;
     mutable bool fault_logged_=false;
     uint32_t read_probe_count_=0;
+#if CONFIG_FAMILY_MUSIC_AUDITION
+    bool music_active_=false;
+    uint32_t music_rate_=24000;
+#endif
 };
 #endif
