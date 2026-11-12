@@ -36,9 +36,10 @@ Files: `docs/verification/2026-11-12-waveshare-music-audition.md`, current hando
 
 - [x] Check other chat snapshot and current firmware provenance. Prepare concrete candidate and installation operator before any device change; preserve authoritative binding, factory and volume/brightness.
 - [x] Install only after cloud checks and existing backup/readback protections pass. Test A, stop, B, full drain, stopped-data timeout and restored24kHz. Record I2S actual-completion evidence separately from hearing feedback.
-- [ ] Obtain user feedback for subjective A/B and ordinary conversation after restoration. Physical unplug/replug and physical-button stop are not counted as field PASS.
-- [x] Update implementation/build/install/field status honestly, retain unresolved failure evidence, commit/push owned paths only and verify remote commit. User listening is pending until actually reported.
+- [x] Obtain initial audibility feedback: user heard both A/B segments.
+- [ ] Compare subjective A/B quality and verify ordinary conversation after restoration when user returns. User has left the device and has not compared quality; do not autoplay while absent. Physical unplug/replug and physical-button stop are not counted as field PASS.
+- [x] Update implementation/build/install/field status honestly, retain unresolved failure evidence, commit/push owned paths only and verify remote commit. Both segments are confirmed audible; quality comparison and ordinary conversation remain pending.
 
 ## 进度记录
 
-2026-11-12：同源30秒素材已准备，24/48k数字响度差0.02LU。客户端12项、协议及实际worker25场景通过。首次完整165项有测试来源/工具环境错误；改用未重复插桩的锁定源码夹具、项目既有NVS0.3.0环境后165/165零跳过。已完成整包构建和97项目单元/232项目依赖/59SDK文件核对；最终审查追加音量/硬件profile互斥及逻辑语音采样率固定，两处修复已加入实际Box方法回归，最终166/166零跳过（92.063秒）及整包复验已通过。随后已冻结并核对294来源，最终pins后操作器75项及被动采集12项通过。0920343已推main并安装：新16MiB快照、仅活动槽写入、整槽及槽外/整片校验、启动到idle通过。A/B各30秒实际I2S完成720000/1440000样本；主动停止、停发约5.23秒超时及新24kHz播放/停止通过。Mac直接开物理串口会重启，采用既有持续USB relay；客户端RFC write_timeout兼容问题补RED/GREEN后13项通过。听感和恢复对话已向用户询问，等待真实反馈。
+2026-11-12：同源30秒素材已准备，24/48k数字响度差0.02LU。客户端12项、协议及实际worker25场景通过。首次完整165项有测试来源/工具环境错误；改用未重复插桩的锁定源码夹具、项目既有NVS0.3.0环境后165/165零跳过。已完成整包构建和97项目单元/232项目依赖/59SDK文件核对；最终审查追加音量/硬件profile互斥及逻辑语音采样率固定，两处修复已加入实际Box方法回归，最终166/166零跳过（92.063秒）及整包复验已通过。随后已冻结并核对294来源，最终pins后操作器75项及被动采集12项通过。0920343已推main并安装：新16MiB快照、仅活动槽写入、整槽及槽外/整片校验、启动到idle通过。A/B各30秒实际I2S完成720000/1440000样本；主动停止、停发约5.23秒超时及新24kHz播放/停止通过。Mac直接开物理串口会重启，采用既有持续USB relay；客户端RFC write_timeout兼容问题补RED/GREEN后13项通过。用户随后确认两段都有声音，但未仔细比较优劣，现已离场；回去后复听。音质差异与恢复对话仍待验证；用户重新在场前不自动播放。
