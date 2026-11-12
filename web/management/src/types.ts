@@ -79,6 +79,14 @@ export type Member = {
 };
 export type Family = { id: string; name: string; members: Member[] };
 export type Account = { email: string; role: string; scope: Scope };
+export type DeviceSettings = {
+  deviceId: string;
+  name: string;
+  location: string;
+  version: string;
+  canEdit: boolean;
+};
+export type DeviceSettingsInput = Pick<DeviceSettings, "name" | "location" | "version">;
 export type RuntimeField = "volume" | "brightness";
 export type ControlInput = { field: RuntimeField; value: number; boot: string };
 export type DeviceRuntime = {

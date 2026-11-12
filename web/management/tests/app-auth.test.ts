@@ -11,11 +11,16 @@ import { createRemoteApi } from '../src/remote-api.ts';
 import * as sensitive from '../src/sensitive-session.ts';
 import * as navigation from '../src/navigation.ts';
 import * as runtime from '../src/runtime-control.ts';
+import * as deviceSettings from '../src/device-settings.ts';
 import * as audit from '../src/audit-control.ts';
+import type { PageRoute, Scope } from '../src/types.ts';
 
 const tick = async () => { await vue.nextTick(); await new Promise(r => setImmediate(r)); await vue.nextTick(); };
 
-async function mount(scope: 'admin' | 'family', loggedIn = false) {
+async function mount(scope: 'admin' | 'family', loggedIn = false, options: {
+  core?: { scope: Scope; route: PageRoute };
+  resource?: (url: string, init: RequestInit) => Promise<Response | undefined>;
+} = {}) {
   const keys = ['location', 'document', 'window', 'Document'] as const;
   const prior = keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
   const home = scope === 'admin' ? 'overview' : 'home';
@@ -29,7 +34,7 @@ async function mount(scope: 'admin' | 'family', loggedIn = false) {
   let authenticated = loggedIn;
   let releaseLogout!: () => void;
   let sessionReads = 0;
-  const api = createRemoteApi((async (input: any) => {
+  const api = createRemoteApi((async (input: any, init: RequestInit = {}) => {
     const url = String(input);
     if (url.endsWith('/login')) authenticated = true;
     if (url.endsWith('/logout')) {
@@ -42,6 +47,8 @@ async function mount(scope: 'admin' | 'family', loggedIn = false) {
       return authenticated
         ? new Response(JSON.stringify({ email: 'isolated-owner', role: '家庭管理员', scope }))
         : new Response(JSON.stringify({ code: 'unauthenticated', message: '请先登录' }), { status: 401 });
+    const resource = await options.resource?.(url, init);
+    if (resource) return resource;
     if (url.includes('/chats?')) return new Response(JSON.stringify({ items: [], hasMore: false }));
     if (url.endsWith('/devices')) return new Response('[]');
     throw new Error(`unexpected isolated HTTP request ${url}`);
@@ -61,6 +68,7 @@ async function mount(scope: 'admin' | 'family', loggedIn = false) {
       if (name.endsWith('/navigation.ts')) return navigation;
       if (name.endsWith('/sensitive-session.ts')) return sensitive;
       if (name.endsWith('/runtime-control.ts')) return runtime;
+      if (name.endsWith('/device-settings.ts')) return deviceSettings;
       if (name.endsWith('/audit-control.ts')) return audit;
       if (name.endsWith('.css')) return {};
       if (name.endsWith('.vue')) return { default: component(resolve(dirname(path), name)) };
@@ -83,23 +91,25 @@ async function mount(scope: 'admin' | 'family', loggedIn = false) {
     remove: n => { n.parent?.children.splice(n.parent.children.indexOf(n), 1); }, parentNode: n => n.parent,
     nextSibling: n => n.parent?.children[n.parent.children.indexOf(n) + 1], patchProp: (n, key, _old, value) => n.props[key] = value,
   });
-  const app = renderer.createApp(component(fileURLToPath(new URL('../src/App.vue', import.meta.url))));
+  const app = renderer.createApp(options.core
+    ? { render: () => vue.h(component(fileURLToPath(new URL('../src/pages/CorePages.vue', import.meta.url))), options.core) }
+    : component(fileURLToPath(new URL('../src/App.vue', import.meta.url))));
   const root = node('root');
   app.mount(root); await tick();
   const instance = (app as any)._instance;
   const all = (): any[] => { const result: any[] = []; function walk(n: any) { result.push(n); for (const c of n.children) walk(c); } walk(root); return result; };
-  function dataInstance(): any {
+  function componentInstance(suffix: string): any {
     function walk(v: any): any {
       if (!v) return;
       if (v.component) {
-        if (v.component.type.fixturePath?.endsWith('/DataPages.vue')) return v.component;
+        if (v.component.type.fixturePath?.endsWith(suffix)) return v.component;
         const result = walk(v.component.subTree); if (result) return result;
       }
       if (Array.isArray(v.children)) for (const child of v.children) { const result = walk(child); if (result) return result; }
     }
-    const result = walk(instance.subTree); assert.ok(result, 'actual DataPages must be mounted'); return result;
+    const result = walk(instance.subTree); assert.ok(result, `actual ${suffix} must be mounted`); return result;
   }
-  return { state: instance.setupState, dataInstance, location, sessionReads: () => sessionReads,
+  return { state: instance.setupState, dataInstance: () => componentInstance('/DataPages.vue'), componentInstance, all, document: doc, location, sessionReads: () => sessionReads,
     text: () => all().map(n => n.text).join(' '),
     form: () => { const form = all().find(n => n.tag === 'form'); assert.ok(form); return form; },
     logoutButton: () => { const button = all().find(n => n.tag === 'button' && n.text.trim() === '退出'); assert.ok(button); return button; },
@@ -140,6 +150,111 @@ for (const scope of ['admin', 'family'] as const) {
       assert.ok(view.form());
       assert.doesNotMatch(view.text(), /页面内容已清理|当前账号：/);
       assert.ok(view.sessionReads() >= 3, 'completion rereads the actual session');
+    } finally { view.close(); }
+  });
+}
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+// Isolated HTTP fixtures drive the real compiled CorePages and settings form.
+async function settingsView(scope: Scope = 'family') {
+  const props = vue.reactive({ scope, route: { page: scope === 'family' ? 'settings' : 'configuration', device: 'device-one', chat: '', memory: '', family: '' } });
+  let name = '初始昵称', location = '初始位置', version = 0;
+  const reads: Array<{ scope: string; result: ReturnType<typeof deferred<Response>> }> = [];
+  let deferLists = false;
+  const detailSnapshots: Array<{ name: string; location: string }> = [];
+  const response = (value: unknown) => new Response(JSON.stringify(value));
+  const device = (id: string, deviceName = name, place = location) => ({ id, name: deviceName, location: place, model: 'isolated-board' });
+  const view = await mount(scope, false, { core: props, resource: async (url, init) => {
+    const selectedScope = url.split('/')[2];
+    if (url.endsWith('/devices')) {
+      if (!deferLists) return response([device(props.route.device)]);
+      const result = deferred<Response>(); reads.push({ scope: selectedScope, result }); return result.promise;
+    }
+    const id = decodeURIComponent(url.split('/').at(-1)!);
+    if (url.includes('/device-settings/')) {
+      if (init.method === 'PUT') {
+        const input = JSON.parse(String(init.body)); name = input.name; location = input.location; version++;
+      }
+      return response({ deviceId: id, name, location, version: version.toString(16).padStart(64, '0'), canEdit: true });
+    }
+    if (url.includes('/device-runtime/')) return response({ deviceId: id, connection: 'unknown', seenAt: '', boot: '', canControl: false, volume: null, brightness: null, command: null });
+    if (url.includes('/devices/')) {
+      const snapshot = detailSnapshots.shift();
+      return response(device(id, snapshot?.name, snapshot?.location));
+    }
+  } });
+  const labels = () => ({
+    heading: view.all().find(n => n.tag === 'h1')?.text,
+    options: view.all().filter(n => n.tag === 'option').map(n => n.text),
+  });
+  const form = () => view.componentInstance('/DeviceSettings.vue');
+  async function save(nextName: string, nextLocation: string) {
+    const settings = form(); settings.setupState.state.name = nextName; settings.setupState.state.location = nextLocation;
+    await settings.setupState.control.submit(); await tick();
+    assert.match(view.text(), /设备昵称和放置位置已保存/);
+    return settings;
+  }
+  return { ...view, props, reads, labels, form, save,
+    deferLists: () => { deferLists = true; },
+    current: (nextName: string, nextLocation: string) => { name = nextName; location = nextLocation; },
+    release: (index: number, deviceName: string, place: string, id = 'device-one') => {
+      detailSnapshots.push({ name: deviceName, location: place });
+      reads[index].result.resolve(response([device(id, deviceName, place)]));
+    },
+  };
+}
+
+for (const order of ['older-first', 'newer-first'] as const) {
+  test(`confirmed settings save supersedes a pending parent refresh (${order})`, async () => {
+    const view = await settingsView();
+    try {
+      const form = view.form(); view.deferLists();
+      await view.save('保存甲', '位置甲');
+      assert.equal(view.reads.length, 1);
+      await view.save('保存乙', '位置乙');
+      assert.equal(view.form(), form, 'silent refresh keeps the real form and verified feedback mounted');
+      if (order === 'older-first') { view.release(0, '保存甲', '位置甲'); await tick(); }
+      assert.equal(view.reads.length, 2, 'each confirmed save must start a mandatory fresh parent read');
+      view.release(1, '保存乙', '位置乙'); await tick();
+      if (order === 'newer-first') { view.release(0, '保存甲', '位置甲'); await tick(); }
+      assert.deepEqual(view.labels(), { heading: '保存乙的设置', options: ['保存乙 · 位置乙'] });
+      assert.equal(view.form(), form);
+      assert.match(view.text(), /设备昵称和放置位置已保存/);
+    } finally { view.close(); }
+  });
+}
+
+for (const change of ['device', 'scope', 'route', 'account'] as const) {
+  test(`pending saved-settings parent refresh cannot restore private labels after ${change} invalidation`, async () => {
+    const view = await settingsView();
+    try {
+      view.deferLists();
+      const previousForm = await view.save('旧账号昵称', '旧账号位置');
+      if (change === 'account') sensitive.invalidateSensitive();
+      else {
+        view.current('当前昵称', '当前位置');
+        if (change === 'device') view.props.route = { ...view.props.route, device: 'device-two' };
+        if (change === 'scope') view.props.scope = 'admin';
+        if (change === 'route') view.props.route = { ...view.props.route, page: 'devices' };
+      }
+      await tick();
+      assert.equal(previousForm.isUnmounted, true, 'leaving the context destroys its form state');
+      assert.equal(previousForm.setupState.state.name, '');
+      assert.equal(previousForm.setupState.state.feedback, '');
+      view.release(0, '旧账号昵称', '旧账号位置'); await tick();
+      assert.doesNotMatch(view.text(), /旧账号昵称|旧账号位置|设备昵称和放置位置已保存/);
+      if (change !== 'account') {
+        assert.equal(view.reads.length, 2);
+        assert.equal(view.reads[1].scope, change === 'scope' ? 'admin' : 'family');
+        view.release(1, '当前昵称', '当前位置', change === 'device' ? 'device-two' : 'device-one'); await tick();
+        assert.doesNotMatch(view.text(), /旧账号昵称|旧账号位置/);
+      }
     } finally { view.close(); }
   });
 }

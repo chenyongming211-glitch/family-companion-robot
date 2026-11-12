@@ -5,6 +5,8 @@ import type {
   AuditFilter,
   AuditPage,
   DeviceRuntime,
+  DeviceSettings,
+  DeviceSettingsInput,
   ControlInput,
   Conversation,
   Device,
@@ -43,6 +45,14 @@ function checkedRuntime(id: string, value: DeviceRuntime): DeviceRuntime {
         ["queued", "sent", "confirmed", "failed", "expired", "unknown"].includes(c.status) &&
         optionalPercent(c.actual))))
     throw new ApiError("invalid_runtime", "设备状态响应未核实，请刷新后再操作。");
+  return value;
+}
+
+function checkedDeviceSettings(id: string, value: DeviceSettings): DeviceSettings {
+  if (!value || value.deviceId !== id || typeof value.name !== "string" ||
+      typeof value.location !== "string" || typeof value.version !== "string" ||
+      !/^[a-f0-9]{64}$/.test(value.version) || typeof value.canEdit !== "boolean")
+    throw new ApiError("invalid_settings", "设备设置响应未核实，请重新读取。");
   return value;
 }
 
@@ -109,6 +119,14 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     },
     async getDevice(id: string, scope: Scope = "admin") {
       return request<Device>(scope, `devices/${encodeURIComponent(id)}`);
+    },
+    async getDeviceSettings(id: string, scope: Scope) {
+      return checkedDeviceSettings(id, await request<DeviceSettings>(scope, `device-settings/${encodeURIComponent(id)}`));
+    },
+    async updateDeviceSettings(id: string, value: DeviceSettingsInput, scope: Scope) {
+      return checkedDeviceSettings(id, await request<DeviceSettings>(scope, `device-settings/${encodeURIComponent(id)}`, {
+        method: "PUT", body: JSON.stringify({ name: value.name, location: value.location, version: value.version }),
+      }));
     },
     async listConversations(filter: RecordFilter = {}) {
       return (await page(filter)).items;

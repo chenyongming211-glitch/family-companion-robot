@@ -231,3 +231,29 @@ test('audit page uses only the admin endpoint and exact filter parameters with n
   const url=new URL(seen[0]!.url,'http://fixture');assert.equal(url.pathname,'/api/admin/audit');
   assert.deepEqual([...url.searchParams.keys()].sort(),['action','device','from','limit','offset','to']);assert.equal(url.searchParams.get('offset'),'50');assert.equal(url.searchParams.get('action'),'access');assert.equal(page.pending,true);assert.equal(seen[0]!.init?.cache,'no-store');
 });
+
+test('device settings GET/PUT use independent scope URLs, exact body and strict DTO checks', async () => {
+  const good = { deviceId: 'dev/x', name: '伴伴', location: '', version: 'a'.repeat(64), canEdit: true };
+  let result: unknown = good;
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const api = createRemoteApi((async (url: unknown, init?: RequestInit) => { seen.push({ url: String(url), init }); return new Response(JSON.stringify(result)); }) as typeof fetch);
+  for (const scope of ['family', 'admin'] as const) {
+    await api.getDeviceSettings('dev/x', scope);
+    await api.updateDeviceSettings('dev/x', { name: '伴伴', location: '', version: good.version }, scope);
+  }
+  assert.deepEqual(seen.map(x => x.url), ['/api/family/device-settings/dev%2Fx', '/api/family/device-settings/dev%2Fx', '/api/admin/device-settings/dev%2Fx', '/api/admin/device-settings/dev%2Fx']);
+  for (const request of seen) { assert.equal(request.init?.credentials, 'same-origin'); assert.equal(request.init?.cache, 'no-store'); }
+  assert.equal(seen[1]?.init?.method, 'PUT'); assert.deepEqual(JSON.parse(String(seen[1]?.init?.body)), { name: '伴伴', location: '', version: good.version });
+  for (const bad of [null, {}, { ...good, deviceId: 'other' }, { ...good, name: 1 }, { ...good, location: null }, { ...good, canEdit: 'yes' }, { ...good, version: 'A'.repeat(64) }, { ...good, version: 'a'.repeat(63) }]) {
+    result = bad; await assert.rejects(api.getDeviceSettings('dev/x', 'family'), /核实/); await assert.rejects(api.updateDeviceSettings('dev/x', { name: '伴伴', location: '', version: good.version }, 'admin'), /核实/);
+  }
+});
+test('settings reads cannot survive a protected 401 in the other scope', async () => {
+  let resolve!: (value: Response) => void;
+  const api = createRemoteApi((async () => new Promise<Response>(r => { resolve = r; })) as typeof fetch);
+  const reading = api.getDeviceSettings('d', 'family');
+  const expired = createRemoteApi((async () => new Response(JSON.stringify({ code: 'unauthenticated' }), { status: 401 })) as typeof fetch);
+  await assert.rejects(expired.getDeviceSettings('d', 'admin'));
+  resolve(new Response(JSON.stringify({ deviceId: 'd', name: '伴伴', location: '', version: 'a'.repeat(64), canEdit: true })));
+  await assert.rejects(reading, /页面已离开|账号已变化/);
+});

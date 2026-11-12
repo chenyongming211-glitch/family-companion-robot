@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import UiIcon from "../components/UiIcon.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { Scope, PageRoute, Device, Conversation } from "../types.ts";
+import type { Scope, PageRoute, Device, Conversation, DeviceSettings as Settings } from "../types.ts";
 import { api } from "../api.ts";
 import RuntimeControls from "../components/RuntimeControls.vue";
+import DeviceSettings from "../components/DeviceSettings.vue";
 import { onSensitiveInvalidated } from "../sensitive-session.ts";
 import { linkTo } from "../navigation.ts";
 const props = defineProps<{ scope: Scope; route: PageRoute }>();
@@ -90,8 +91,8 @@ function message(e: unknown) {
         ? "没有找到这条记录，请检查链接。"
         : "加载失败，请稍后重试。";
 }
-async function load(silent = false) {
-  if (silent && inFlight) return;
+async function load(silent = false, supersede = false) {
+  if (silent && inFlight && !supersede) return;
   inFlight = true;
   const token = ++request,
     selected = { ...props.route },
@@ -199,7 +200,7 @@ function lastSeen(value: string) {
 }
 
 watch(
-  () => props.route,
+  () => [props.route, props.scope],
   () => {
     offset.value = 0;
     load();
@@ -221,6 +222,15 @@ function switchSettingsDevice(event: Event) {
   window.location.href = linkTo(props.scope, props.route.page, {
     device: (event.target as HTMLSelectElement).value,
   });
+}
+function settingsSaved(value: Settings) {
+  if (value.deviceId !== device.value?.id) return;
+  device.value.name = value.name;
+  device.value.location = value.location;
+  // Keep the form mounted (and its verified feedback visible) while refreshing
+  // the device header and selector. Each confirmed save supersedes any older
+  // read so polling coalescing cannot discard its required refresh.
+  void load(true, true);
 }
 function switchDevice(event: Event) {
   window.location.href = deviceLink((event.target as HTMLSelectElement).value);
@@ -604,7 +614,7 @@ function chatLink(c: Conversation) {
           <p class="eyebrow">设备 / 设置</p>
           <h1>{{ scope === "admin" ? "设备配置" : device.name + "的设置" }}</h1>
           <p>
-            调整设备音量和亮度，等待设备真实回执。
+            编辑设备昵称和位置，或调整音量和亮度。
           </p>
         </div>
       </div>
@@ -616,6 +626,7 @@ function chatLink(c: Conversation) {
           </select>
           <p>{{ device.name }} · {{ device.model }}</p>
         </section>
+        <DeviceSettings :key="scope + ':' + device.id" :device-id="device.id" :scope="scope" @saved="settingsSaved" />
         <RuntimeControls :key="device.id" :device-id="device.id" :scope="scope" />
       </div>
       </template
