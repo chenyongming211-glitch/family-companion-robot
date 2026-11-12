@@ -107,7 +107,7 @@ func (s *Session) memorySnapshotLocked() memoryData {
 	turns := append([]memoryTurn(nil), m.base...)
 	s.mu.Lock()
 	for _, rt := range s.history {
-		if rt.turn.ID < s.memoryFloor || (rt.turn.User == "" && rt.turn.Completed == 0) {
+		if rt.media || rt.turn.ID < s.memoryFloor || (rt.turn.User == "" && rt.turn.Completed == 0) {
 			continue
 		}
 		evidence := realtimestate.PlaybackEvidence(rt.turn)

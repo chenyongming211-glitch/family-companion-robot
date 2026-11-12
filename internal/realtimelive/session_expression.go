@@ -16,7 +16,7 @@ func (s *Session) expressionContextReady(rt *liveTurn, history string) {
 
 func (s *Session) expressionEligibleLocked(rt *liveTurn) bool {
 	w, ok := s.wire.(*xiaozhiWire)
-	return ok && w.expression && s.cfg.ExpressionsEnabled && s.ctx.Err() == nil && rt.ctx.Err() == nil && s.output == rt && !rt.turn.Cut && !rt.turn.PlaybackFinal
+	return !rt.media && ok && w.expression && s.cfg.ExpressionsEnabled && s.ctx.Err() == nil && rt.ctx.Err() == nil && s.output == rt && !rt.turn.Cut && !rt.turn.PlaybackFinal
 }
 
 func (s *Session) maybeStartExpressionLocked(rt *liveTurn) {

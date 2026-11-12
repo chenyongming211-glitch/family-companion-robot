@@ -168,7 +168,7 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 	if e := s.wire.sendAudio(rt.turn.ID, packet); e != nil {
 		return true, e
 	}
-	if codec != nil || (s.pcmTransport() && resampler != nil) {
+	if rt.asr != nil && (codec != nil || (s.pcmTransport() && resampler != nil)) {
 		decoded := packet
 		if codec != nil {
 			var e error
@@ -719,7 +719,9 @@ waitLoop:
 	turns := []*realtimestate.Turn{}
 	records := []map[string]any{}
 	for _, v := range prior {
-		turns = append(turns, v.turn)
+		if !v.media {
+			turns = append(turns, v.turn)
+		}
 	}
 	contextText := realtimestate.ContextFor(turns)
 	for _, v := range prior[max(0, len(prior)-realtimestate.RecentTurnLimit):] {
@@ -798,24 +800,44 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.fail()
 		return
 	}
-	contextText, memoryReceipt, e := s.routeMemory(rt, contextText)
+	route, e := s.routeMusic(rt, contextText)
 	if e != nil {
 		return
 	}
-	s.expressionContextReady(rt, contextText)
-	controlContext, e := s.routeDeviceControls(rt, contextText)
-	if e != nil {
+	media := route.Stream != nil
+	if media && (route.Duration < time.Second || route.Duration > 20*time.Minute) {
+		s.turnError(rt)
 		return
+	}
+	memoryReceipt, controlContext := "", ""
+	if !route.Handled {
+		contextText, memoryReceipt, e = s.routeMemory(rt, contextText)
+		if e != nil {
+			return
+		}
+		s.expressionContextReady(rt, contextText)
+		controlContext, e = s.routeDeviceControls(rt, contextText)
+		if e != nil {
+			return
+		}
 	}
 	prompt, e := s.product.InstructionsFor(s.sessionFacts(), contextText, true, time.Now())
 	if e != nil {
 		s.turnError(rt)
 		return
 	}
-	prompt += controlContext + memoryReceipt
+	prompt += controlContext + memoryReceipt + route.Guidance
 	producerCtx, cancel := context.WithCancel(ctx)
+	queueFrames := 1002
+	if media {
+		cancel()
+		// The source and synchronous encoded puts share one deadline, so a
+		// stalled consumer cannot outlive the bounded media source/process.
+		producerCtx, cancel = context.WithTimeout(ctx, route.Duration+30*time.Second)
+		queueFrames = 10
+	}
 	defer cancel()
-	encoded := make(chan encodedPacket, 1002)
+	encoded := make(chan encodedPacket, queueFrames)
 	produced := make(chan struct{})
 	prepared := make(chan struct{})
 	var ready sync.Once
@@ -840,6 +862,9 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			if kind == "ready" {
 				return nil
 			}
+			if media && kind != "audio" {
+				return errors.New("invalid_media_event")
+			}
 			if kind == "text" {
 				s.mu.Lock()
 				rt.turn.Generated = string(value)
@@ -861,7 +886,12 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 			return nil
 		}
-		e := s.generate(producerCtx, rt.turn.ID, prompt, pcm, emit)
+		var e error
+		if media {
+			e = route.Stream(producerCtx, emit)
+		} else {
+			e = s.generate(producerCtx, rt.turn.ID, prompt, pcm, emit)
+		}
 		if e == nil && pcmTransport && total == 0 {
 			// There is no PCM packet to begin/seal. Resolve only this turn through
 			// the existing generation-error drain path; keep the Session usable.
@@ -907,7 +937,10 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	// Opening the native session has its own 12s budget; the baseline 40s
 	// packet wait starts only after Open returns.
 	select {
-	case <-ctx.Done():
+	case <-producerCtx.Done():
+		if ctx.Err() == nil {
+			s.turnError(rt)
+		}
 		return
 	case <-prepared:
 	}
@@ -916,8 +949,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		var p encodedPacket
 		timer := time.NewTimer(40 * time.Second)
 		select {
-		case <-ctx.Done():
+		case <-producerCtx.Done():
 			timer.Stop()
+			if ctx.Err() == nil {
+				s.turnError(rt)
+			}
 			return
 		case <-timer.C:
 			s.turnError(rt)
@@ -947,8 +983,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 			timer := time.NewTimer(5 * time.Second)
 			select {
-			case <-ctx.Done():
+			case <-producerCtx.Done():
 				timer.Stop()
+				if ctx.Err() == nil {
+					s.turnError(rt)
+				}
 				return
 			case <-timer.C:
 				s.turnError(rt)
@@ -970,18 +1009,20 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 				s.fail()
 				return
 			}
-			if e = s.sendExpressionLocked(rt); e != nil {
-				s.mu.Unlock()
-				s.fail()
-				return
+			if !media {
+				if e = s.sendExpressionLocked(rt); e != nil {
+					s.mu.Unlock()
+					s.fail()
+					return
+				}
+				asr = NewOutputASR(s.ctx, s.cfg, s.directory, func(sentence map[string]any, elapsed int64) error {
+					s.mu.Lock()
+					rt.turn.Tracker.Add(sentence, float64(elapsed))
+					s.mu.Unlock()
+					return s.record("output_asr_final", map[string]any{"id": rt.turn.ID, "elapsed_ms": elapsed, "sentence": sentence})
+				})
+				rt.asr = asr
 			}
-			asr = NewOutputASR(s.ctx, s.cfg, s.directory, func(sentence map[string]any, elapsed int64) error {
-				s.mu.Lock()
-				rt.turn.Tracker.Add(sentence, float64(elapsed))
-				s.mu.Unlock()
-				return s.record("output_asr_final", map[string]any{"id": rt.turn.ID, "elapsed_ms": elapsed, "sentence": sentence})
-			})
-			rt.asr = asr
 			if e = s.record("first_packet", map[string]any{"id": rt.turn.ID, "speech_stop_to_packet_ms": time.Since(rt.stoppedAt).Milliseconds()}); e != nil {
 				s.mu.Unlock()
 				return
