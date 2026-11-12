@@ -107,7 +107,7 @@ func (s *Session) memorySnapshotLocked() memoryData {
 	turns := append([]memoryTurn(nil), m.base...)
 	s.mu.Lock()
 	for _, rt := range s.history {
-		if rt.media || rt.turn.ID < s.memoryFloor || (rt.turn.User == "" && rt.turn.Completed == 0) {
+		if rt.media || (s.musicEnabled() && !rt.musicClassified) || rt.turn.ID < s.memoryFloor || (rt.turn.User == "" && rt.turn.Completed == 0) {
 			continue
 		}
 		evidence := realtimestate.PlaybackEvidence(rt.turn)
@@ -159,7 +159,7 @@ func (s *Session) notifyMemory(event string) {
 		return
 	}
 	switch event {
-	case "user_text", "device_playback", "playback", "output_asr_final", "generated", "generated_interrupted":
+	case "user_text", "music_classified", "device_playback", "playback", "output_asr_final", "generated", "generated_interrupted":
 		select {
 		case s.memory.wake <- struct{}{}:
 		default:

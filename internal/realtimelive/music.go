@@ -58,10 +58,21 @@ func (s *Session) musicStopOutcome(rt *liveTurn) string {
 	}
 	return "no_current_music"
 }
+func (s *Session) musicEnabled() bool {
+	return s.cfg.Music != nil && s.ownerErr == nil && s.rec.owner.ClientType == "xiaozhi" && s.rec.owner.DeviceID != ""
+}
 func (s *Session) routeMusic(rt *liveTurn, history string) (musicRoute, error) {
-	if s.cfg.Music == nil || s.ownerErr != nil || s.rec.owner.ClientType != "xiaozhi" || s.rec.owner.DeviceID == "" {
+	if !s.musicEnabled() {
 		return musicRoute{}, nil
 	}
+	// A user_text checkpoint may fire while the planner/source is pending.
+	// Publish classification only after media is known, and wake ordinary memory.
+	defer func() {
+		s.mu.Lock()
+		rt.musicClassified = true
+		s.mu.Unlock()
+		s.notifyMemory("music_classified")
+	}()
 	if e := waitTurnTranscript(rt); e != nil {
 		return musicRoute{}, e
 	}

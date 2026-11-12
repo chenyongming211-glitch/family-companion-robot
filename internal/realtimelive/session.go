@@ -16,6 +16,7 @@ import (
 
 type liveTurn struct {
 	media                   bool // Session.mu; media never supplies spoken text.
+	musicClassified         bool // Session.mu; defer memory until music routing finishes.
 	turn                    *realtimestate.Turn
 	ctx                     context.Context
 	cancel                  context.CancelFunc

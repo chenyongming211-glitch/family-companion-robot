@@ -159,3 +159,83 @@ func TestMusicRouteNoResultCancelAndSourceFailure(t *testing.T) {
 		t.Fatal("cancelled source started")
 	}
 }
+
+// Model and source resolution may outlast the asynchronous memory checkpoint.
+// Pending music classification must not persist a future media turn.
+type delayedMusicResolution struct {
+	routeMusicSource
+	started, release chan struct{}
+}
+
+func (d *delayedMusicResolution) Resolve(ctx context.Context, row music.Track) (music.Resolved, error) {
+	close(d.started)
+	select {
+	case <-ctx.Done():
+		return music.Resolved{}, ctx.Err()
+	case <-d.release:
+	}
+	return music.Resolved{Track: row}, nil
+}
+func TestMusicMemoryWaitsForClassification(t *testing.T) {
+	server := memoryServer(t, t.TempDir())
+	s := memorySession(t, server, memoryDeviceA)
+	s.rec.owner.ClientType = "xiaozhi"
+	s.cfg.Music = music.New()
+	source := &delayedMusicResolution{routeMusicSource: routeMusicSource{rows: []music.Track{{ID: 7, Title: "黄昏", Artist: "周传雄", Duration: time.Minute}}}, started: make(chan struct{}), release: make(chan struct{})}
+	s.music = &sessionMusic{source: source}
+	prepareMusicPlan(t, s, "play", "黄昏", "周传雄")
+	rt := musicRequest(s, "播放周传雄的黄昏")
+	done := make(chan struct{})
+	var routeErr error
+	go func() { defer close(done); _, routeErr = s.routeMusic(rt, `{"recent_turns":[]}`) }()
+	select {
+	case <-source.started:
+	case <-time.After(time.Second):
+		t.Fatal("resolution did not start")
+	}
+	t.Cleanup(func() {
+		s.cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("route not reaped")
+		}
+	})
+	check := func(want string) {
+		t.Helper()
+		if err := s.checkpointMemory(); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := s.memory.store.Load(context.Background(), memoryDeviceA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var data memoryData
+		if json.Unmarshal(snapshot.Data, &data) != nil {
+			t.Fatal("invalid memory")
+		}
+		if want == "" {
+			if len(data.Turns) != 0 {
+				t.Fatalf("pending/media request persisted: %+v", data.Turns)
+			}
+		} else if len(data.Turns) != 1 || data.Turns[0].User != want {
+			t.Fatal("ordinary memory lost", data.Turns)
+		}
+	}
+	check("") // Same checkpoint used by the 250ms coalescing worker, during Resolve.
+	close(source.release)
+	select {
+	case <-done:
+		if routeErr != nil {
+			t.Fatal(routeErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("route did not return")
+	}
+	check("")
+	prepareMusicPlan(t, s, "none", "", "")
+	if _, err := s.routeMusic(musicRequest(s, "你好"), `{"recent_turns":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	check("你好")
+}
