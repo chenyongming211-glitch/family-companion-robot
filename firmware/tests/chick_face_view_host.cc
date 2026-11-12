@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <thread>
 #include "face_layout.h"
 #include "playback_progress.h"
 #include <functional>
@@ -24,14 +25,18 @@ static const lv_font_t lv_font_montserrat_48{48};
 #endif
 static const lv_font_t family_robot_desktop_clock_digits_font{48};
 static const lv_font_t family_robot_desktop_clock_font{44};
+static std::atomic<unsigned> lvgl_accesses{0};
+static thread_local bool console_thread=false;
+static unsigned layout_updates=0;
+static void HostLvglAccess(){assert(!console_thread);++lvgl_accesses;}
 struct lv_point_t {int32_t x,y;};
 constexpr int LV_TEXT_FLAG_NONE=0;
-static void lv_text_get_size(lv_point_t* size,const char* text,const lv_font_t* font,int,int,int,int) {
+static void lv_text_get_size(lv_point_t* size,const char* text,const lv_font_t* font,int,int,int,int) {HostLvglAccess();
     size->x=std::strlen(text)*font->line_height*3/5;size->y=font->line_height;
 }
 struct lv_obj_t {
     lv_obj_t* parent=nullptr;std::vector<lv_obj_t*> children;
-    int x=0,y=0,w=128,h=128,transform_scale=256;uint32_t scale=256,writes=0;
+    int x=0,y=0,w=128,h=128,transform_scale=256,transform_scale_y=256,text_opa=255,opa=255;uint32_t scale=256,writes=0;
     const lv_font_t* font=nullptr;bool label=false;unsigned flags=0;std::string text;
 };
 struct lv_timer_t {void* user=nullptr;bool paused=false;uint32_t period=67;};
@@ -42,45 +47,59 @@ struct lv_image_dsc_t {
 constexpr int LV_IMAGE_HEADER_MAGIC=0x19,LV_COLOR_FORMAT_RGB565=1,LV_TEXT_ALIGN_CENTER=1;
 constexpr int LV_LABEL_LONG_WRAP=0,LV_RADIUS_CIRCLE=1000,MALLOC_CAP_SPIRAM=1,MALLOC_CAP_8BIT=2;
 static lv_obj_t screen;
-static lv_obj_t* lv_screen_active(){return &screen;}
-static lv_obj_t* lv_obj_create(lv_obj_t* parent){auto* p=new lv_obj_t;p->parent=parent;if(parent)parent->children.push_back(p);return p;}
-static lv_obj_t* lv_label_create(lv_obj_t* p){auto* o=lv_obj_create(p);o->label=true;return o;}
-static lv_obj_t* lv_image_create(lv_obj_t* p){return lv_obj_create(p);}
-static void lv_obj_delete(lv_obj_t* p){for(auto* c:p->children)lv_obj_delete(c);delete p;}
-static void lv_obj_set_size(lv_obj_t* p,int w,int h){p->w=w;p->h=h;}
-static void lv_obj_set_width(lv_obj_t* p,int w){p->w=w;}
-static void lv_obj_set_pos(lv_obj_t* p,int x,int y){p->x=x;p->y=y;}
-static void lv_obj_set_style_text_font(lv_obj_t* p,const lv_font_t* f,lv_style_selector_t){p->font=f;p->h=f->line_height;}
-static void lv_obj_align(lv_obj_t* p,lv_align_t a,int x,int y){
+static lv_obj_t* lv_screen_active(){HostLvglAccess();return &screen;}
+static lv_obj_t* lv_obj_create(lv_obj_t* parent){HostLvglAccess();auto* p=new lv_obj_t;p->parent=parent;if(parent)parent->children.push_back(p);return p;}
+static lv_obj_t* lv_label_create(lv_obj_t* p){HostLvglAccess();auto* o=lv_obj_create(p);o->label=true;return o;}
+static lv_obj_t* lv_image_create(lv_obj_t* p){HostLvglAccess();return lv_obj_create(p);}
+static void lv_obj_delete(lv_obj_t* p){HostLvglAccess();for(auto* c:p->children)lv_obj_delete(c);delete p;}
+static void lv_obj_set_size(lv_obj_t* p,int w,int h){HostLvglAccess();p->w=w;p->h=h;}
+static void lv_obj_set_width(lv_obj_t* p,int w){HostLvglAccess();p->w=w;}
+static void lv_obj_set_pos(lv_obj_t* p,int x,int y){HostLvglAccess();p->x=x;p->y=y;}
+static void lv_obj_set_style_text_font(lv_obj_t* p,const lv_font_t* f,lv_style_selector_t){HostLvglAccess();p->font=f;p->h=f->line_height;}
+static void lv_obj_align(lv_obj_t* p,lv_align_t a,int x,int y){HostLvglAccess();
     p->x=(p->parent->w-p->w)/2+x;p->y=(a==LV_ALIGN_CENTER?(p->parent->h-p->h)/2:0)+y;
 }
-static void lv_obj_set_style_radius(lv_obj_t*,int,lv_style_selector_t){}
-static void lv_obj_set_style_border_width(lv_obj_t*,int,lv_style_selector_t){}
-static void lv_obj_set_style_pad_all(lv_obj_t*,int,lv_style_selector_t){}
-static void lv_obj_set_style_bg_color(lv_obj_t*,uint32_t,lv_style_selector_t){}
-static void lv_obj_set_style_border_color(lv_obj_t*,uint32_t,lv_style_selector_t){}
-static void lv_obj_set_style_text_color(lv_obj_t*,uint32_t,lv_style_selector_t){}
-static void lv_obj_set_style_text_align(lv_obj_t*,int,lv_style_selector_t){}
-static void lv_obj_set_style_transform_scale_x(lv_obj_t* p,int s,lv_style_selector_t){p->transform_scale=s;}
-static void lv_obj_set_style_transform_scale_y(lv_obj_t*,int,lv_style_selector_t){}
-static void lv_obj_set_style_transform_pivot_x(lv_obj_t*,int,lv_style_selector_t){}
-static void lv_obj_set_style_transform_pivot_y(lv_obj_t*,int,lv_style_selector_t){}
-static uint32_t lv_color_hex(uint32_t color){return color;}
-static void lv_obj_add_flag(lv_obj_t* p,lv_obj_flag_t f){p->flags|=f;}
-static void lv_obj_remove_flag(lv_obj_t* p,lv_obj_flag_t f){p->flags&=~f;}
-static void lv_obj_move_to_index(lv_obj_t*,int){}
-static void lv_label_set_long_mode(lv_obj_t*,int){}
-static void lv_label_set_text(lv_obj_t* p,const char* text){p->text=text;++p->writes;}
-static void lv_image_set_src(lv_obj_t* p,lv_image_dsc_t* d){p->w=d->header.w;p->h=d->header.h;}
-static void lv_image_set_scale(lv_obj_t* p,uint32_t scale){p->scale=scale;}
-static void lv_image_set_antialias(lv_obj_t*,bool){}
-static void lv_obj_invalidate(lv_obj_t*){}
-static lv_timer_t* lv_timer_create(void (*)(lv_timer_t*),uint32_t period,void* user){return new lv_timer_t{user,false,period};}
-static void* lv_timer_get_user_data(lv_timer_t* p){return p->user;}
-static void lv_timer_delete(lv_timer_t* p){delete p;}
-static void lv_timer_pause(lv_timer_t* p){p->paused=true;}
-static void lv_timer_resume(lv_timer_t* p){p->paused=false;}
-static void lv_timer_set_period(lv_timer_t* p,uint32_t v){p->period=v;}
+static void lv_obj_set_style_radius(lv_obj_t*,int,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_border_width(lv_obj_t*,int,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_pad_all(lv_obj_t*,int,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_bg_color(lv_obj_t*,uint32_t,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_border_color(lv_obj_t*,uint32_t,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_text_color(lv_obj_t*,uint32_t,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_text_align(lv_obj_t*,int,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_transform_scale_x(lv_obj_t* p,int s,lv_style_selector_t){HostLvglAccess();p->transform_scale=s;}
+static void lv_obj_set_style_transform_scale_y(lv_obj_t* p,int s,lv_style_selector_t){HostLvglAccess();p->transform_scale_y=s;}
+static void lv_obj_set_style_transform_pivot_x(lv_obj_t*,int,lv_style_selector_t){HostLvglAccess();}
+static void lv_obj_set_style_transform_pivot_y(lv_obj_t*,int,lv_style_selector_t){HostLvglAccess();}
+static uint32_t lv_color_hex(uint32_t color){HostLvglAccess();return color;}
+static void lv_obj_add_flag(lv_obj_t* p,lv_obj_flag_t f){HostLvglAccess();p->flags|=f;}
+static void lv_obj_remove_flag(lv_obj_t* p,lv_obj_flag_t f){HostLvglAccess();p->flags&=~f;}
+static void lv_obj_move_to_index(lv_obj_t*,int){HostLvglAccess();}
+static void lv_label_set_long_mode(lv_obj_t*,int){HostLvglAccess();}
+static void lv_label_set_text(lv_obj_t* p,const char* text){HostLvglAccess();p->text=text;++p->writes;}
+static void lv_image_set_src(lv_obj_t* p,lv_image_dsc_t* d){HostLvglAccess();p->w=d->header.w;p->h=d->header.h;}
+static void lv_image_set_scale(lv_obj_t* p,uint32_t scale){HostLvglAccess();p->scale=scale;}
+static void lv_image_set_antialias(lv_obj_t*,bool){HostLvglAccess();}
+static void lv_obj_invalidate(lv_obj_t*){HostLvglAccess();}
+static lv_timer_t* lv_timer_create(void (*)(lv_timer_t*),uint32_t period,void* user){HostLvglAccess();return new lv_timer_t{user,false,period};}
+static void* lv_timer_get_user_data(lv_timer_t* p){HostLvglAccess();return p->user;}
+static void lv_timer_delete(lv_timer_t* p){HostLvglAccess();delete p;}
+static void lv_timer_pause(lv_timer_t* p){HostLvglAccess();p->paused=true;}
+static void lv_timer_resume(lv_timer_t* p){HostLvglAccess();p->paused=false;}
+static void lv_timer_set_period(lv_timer_t* p,uint32_t v){HostLvglAccess();p->period=v;}
+static bool lv_obj_has_flag(const lv_obj_t* p,lv_obj_flag_t f){HostLvglAccess();return (p->flags&f)!=0;}
+static int lv_obj_get_x(const lv_obj_t* p){HostLvglAccess();return p->x;}
+static int lv_obj_get_y(const lv_obj_t* p){HostLvglAccess();return p->y;}
+static int lv_obj_get_width(const lv_obj_t* p){HostLvglAccess();return p->w;}
+static int lv_obj_get_height(const lv_obj_t* p){HostLvglAccess();return p->h;}
+static const lv_font_t* lv_obj_get_style_text_font(const lv_obj_t* p,lv_part_t){HostLvglAccess();return p->font;}
+static int lv_obj_get_style_text_opa(const lv_obj_t* p,lv_part_t){HostLvglAccess();return p->text_opa;}
+static int lv_obj_get_style_opa_recursive(const lv_obj_t* p,lv_part_t){HostLvglAccess();
+    int opa=p->opa;for(p=p->parent;p;p=p->parent)opa=opa*p->opa/255;return opa;
+}
+static int lv_obj_get_style_transform_scale_x(const lv_obj_t* p,lv_part_t){HostLvglAccess();return p->transform_scale;}
+static int lv_obj_get_style_transform_scale_y(const lv_obj_t* p,lv_part_t){HostLvglAccess();return p->transform_scale_y;}
+static const char* lv_label_get_text(const lv_obj_t* p){HostLvglAccess();return p->text.c_str();}
+static void lv_obj_update_layout(lv_obj_t*){HostLvglAccess();++layout_updates;}
 static bool allocation_fails=false;
 static void* heap_caps_malloc(size_t n,int){return allocation_fails?nullptr:std::malloc(n);}
 static void heap_caps_free(void* p){std::free(p);}
@@ -92,13 +111,18 @@ static unsigned stack_samples=0;
 static unsigned uxTaskGetStackHighWaterMark(void*){++stack_samples;return 4096;}
 static const char* pcTaskGetName(void*){return "lvgl";}
 static std::string profile_log;
-template<class... Args> static void HostLog(const char* format,Args... args) {
+static std::vector<std::string> clock_logs;
+template<class... Args> static void HostLog(const char* tag,const char* format,Args... args) {
+    if(!std::strcmp(tag,"ChickClock")) {
+        std::array<char,512> line{};std::snprintf(line.data(),line.size(),format,args...);
+        clock_logs.emplace_back(line.data());
+    }
     if(std::strstr(format,"frames=")) {
         std::array<char,256> line{};std::snprintf(line.data(),line.size(),format,args...);
         profile_log=line.data();
     }
 }
-#define ESP_LOGI(tag,...) HostLog(__VA_ARGS__)
+#define ESP_LOGI(tag,...) HostLog(tag,__VA_ARGS__)
 #define private public
 #include "chick_face_view.h"
 #undef private

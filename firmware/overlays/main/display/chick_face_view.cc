@@ -17,6 +17,7 @@
 namespace family_robot {
 namespace {
 std::atomic<uint32_t> requested_mode{2};
+std::atomic<bool> clock_diagnostic_pending{false};
 std::atomic<uint32_t> rendered_frames{0},maximum_draw_us{0};
 void Hide(lv_obj_t* o,bool hide) {
     if(!o)return;
@@ -35,6 +36,7 @@ bool ChickFaceConsole(const char* line) {
             static_cast<unsigned long>(rendered_frames.load()),
             static_cast<unsigned long>(maximum_draw_us.load()),
             static_cast<unsigned long>(requested_mode.load()&3));
+        clock_diagnostic_pending.store(true);
         return true;
     } else return false;
     const auto revision=(requested_mode.load()+4u)&~uint32_t{3};
@@ -248,6 +250,30 @@ bool ChickFaceView::Update(FaceFacts facts) {
     }
     if(!timer_running_){lv_timer_resume(timer_);timer_running_=true;}
     UpdateClock(facts.now_us);
+    // Console only signals; all LVGL reads stay in the existing display owner
+    // update/lock path. A screen-off refresh above leaves the request pending.
+    if(clock_diagnostic_pending.exchange(false)) {
+        lv_obj_update_layout(root_);
+        ESP_LOGI("ChickClock","mode=%d notice=%d root_hidden=%d screen_on=%d quiet=%d valid=%d time=%.5s date=%.39s",
+            static_cast<int>(clock_mode_),int(clock_notice_),int(lv_obj_has_flag(root_,LV_OBJ_FLAG_HIDDEN)),
+            int(facts.screen_on),int(facts.quiet),int(clock_text_.valid),clock_text_.time,clock_text_.date);
+        auto label_metadata=[](const char* name,lv_obj_t* label,const lv_font_t* expected,
+                               const char* cached,int text_limit) {
+            const auto* actual_font=lv_obj_get_style_text_font(label,LV_PART_MAIN);
+            const char* text=lv_label_get_text(label);
+            const int text_opa=lv_obj_get_style_text_opa(label,LV_PART_MAIN);
+            const int overall_opa=lv_obj_get_style_opa_recursive(label,LV_PART_MAIN);
+            ESP_LOGI("ChickClock","label=%s hidden=%d x=%d y=%d w=%d h=%d font_line=%d font_expected=%d text_opa=%d overall_opa=%d effective_text_opa=%d scale_x=%d scale_y=%d text=%.*s cache_match=%d",
+                name,int(lv_obj_has_flag(label,LV_OBJ_FLAG_HIDDEN)),int(lv_obj_get_x(label)),
+                int(lv_obj_get_y(label)),int(lv_obj_get_width(label)),int(lv_obj_get_height(label)),
+                actual_font?int(actual_font->line_height):0,int(actual_font==expected),text_opa,overall_opa,
+                text_opa*overall_opa/255,int(lv_obj_get_style_transform_scale_x(label,LV_PART_MAIN)),
+                int(lv_obj_get_style_transform_scale_y(label,LV_PART_MAIN)),text_limit,text,
+                int(std::strncmp(text,cached,static_cast<size_t>(text_limit)+1)==0));
+        };
+        label_metadata("time",clock_time_,&family_robot_desktop_clock_digits_font,clock_text_.time,5);
+        label_metadata("date",clock_date_,&family_robot_desktop_clock_font,clock_text_.date,39);
+    }
     const auto request=requested_mode.load();
     if(request!=applied_request_) {
         applied_request_=request;refresh_policy_.Request(int(request&3));

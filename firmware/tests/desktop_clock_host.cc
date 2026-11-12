@@ -117,4 +117,82 @@ static void ClockView() {
     view.SetClockNotice(false);f.now_us+=1;assert(view.Update(f));
     assert(view.clock_mode_==DesktopClockMode::Compact && !Hidden(view.clock_time_) && Hidden(view.clock_date_));
 }
-int main(){ClockFormatting();ClockView();std::puts("Desktop clock formatting, real view modes/cache/layout/lifecycle passed");}
+
+static void RequestClockDiagnostic() {
+    const auto calls=lvgl_accesses.load();
+    const auto lines=clock_logs.size();
+    std::thread console([]{console_thread=true;assert(family_robot::ChickFaceConsole("face_stats"));console_thread=false;});
+    console.join();
+    assert(lvgl_accesses.load()==calls && clock_logs.size()==lines);
+}
+static void ExpectDiagnosticLabel(const std::string& line,const char* name,const lv_obj_t* label,
+                                  const lv_font_t* expected,size_t bound) {
+    auto has=[&](const std::string& value){assert(line.find(value)!=std::string::npos);};
+    has(std::string("label=")+name+" ");
+    has("hidden="+std::to_string(Hidden(label)));
+    has(" x="+std::to_string(label->x)+" y="+std::to_string(label->y)+
+        " w="+std::to_string(label->w)+" h="+std::to_string(label->h));
+    has(" font_line="+std::to_string(label->font?label->font->line_height:0)+
+        " font_expected="+std::to_string(label->font==expected));
+    has(" text_opa="+std::to_string(label->text_opa)+" overall_opa="+
+        std::to_string(lv_obj_get_style_opa_recursive(label,LV_PART_MAIN)));
+    has(" effective_text_opa="+std::to_string(label->text_opa*lv_obj_get_style_opa_recursive(label,LV_PART_MAIN)/255));
+    has(" scale_x="+std::to_string(label->transform_scale)+" scale_y="+std::to_string(label->transform_scale_y));
+    has(" text="+label->text.substr(0,bound));
+    assert(line.size()<512);
+}
+static void ClockDiagnostic() {
+    using namespace family_robot;
+    allocation_fails=false;lv_font_t font{30},wrong_font{19};ChickFaceView view;
+    wall_seconds=1735689600;view.Initialize(&font,480,480,[](void*){},nullptr);
+    FaceFacts f;f.now_us=1000000;assert(view.Update(f));
+    clock_logs.clear();const auto layouts=layout_updates;
+    f.now_us+=1;assert(view.Update(f));assert(layout_updates==layouts && clock_logs.empty());
+    RequestClockDiagnostic();f.now_us+=1;assert(view.Update(f));
+    assert(clock_logs.size()==3); // RED: missing production diagnostic, not missing stub API.
+    assert(layout_updates==layouts+1);
+    assert(clock_logs[0].find("mode=1 notice=0 root_hidden=0 screen_on=1 quiet=0 valid=1")!=std::string::npos);
+    assert(clock_logs[0].find(" time=00:00 date=1月1日 星期三")!=std::string::npos);
+    ExpectDiagnosticLabel(clock_logs[1],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+    ExpectDiagnosticLabel(clock_logs[2],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
+    f.now_us+=1;assert(view.Update(f));assert(clock_logs.size()==3 && layout_updates==layouts+1);
+    // Real label text, geometry, opacity, transform and font may differ from cache/layout.
+    view.clock_time_->text="19:45longer";view.clock_time_->font=&wrong_font;
+    view.clock_time_->x=-17;view.clock_time_->y=511;view.clock_time_->w=0;view.clock_time_->h=7;
+    view.clock_time_->text_opa=120;view.clock_time_->opa=64;view.root_->opa=128;
+    view.clock_time_->transform_scale=77;view.clock_time_->transform_scale_y=99;
+    RequestClockDiagnostic();f.now_us+=1;assert(view.Update(f));
+    assert(clock_logs.size()==6);
+    assert(clock_logs[3].find(" time=00:00 ")!=std::string::npos);
+    ExpectDiagnosticLabel(clock_logs[4],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+    assert(clock_logs[4].find("longer")==std::string::npos && clock_logs[4].find("cache_match=0")!=std::string::npos);
+    assert(clock_logs[1].find("cache_match=1")!=std::string::npos);
+    view.SetClockNotice(true);f.state=FaceState::Thinking;f.now_us+=1;
+    RequestClockDiagnostic();assert(view.Update(f));assert(clock_logs.size()==9);
+    assert(clock_logs[6].find("mode=2 notice=1 root_hidden=0 screen_on=1 quiet=0 valid=1")!=std::string::npos);
+    ExpectDiagnosticLabel(clock_logs[7],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+    ExpectDiagnosticLabel(clock_logs[8],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
+    assert(Hidden(view.clock_time_) && Hidden(view.clock_date_));
+    view.SetClockNotice(false);RequestClockDiagnostic();assert(view.Update(f));assert(clock_logs.size()==12);
+    assert(!Hidden(view.clock_time_) && Hidden(view.clock_date_));
+    ExpectDiagnosticLabel(clock_logs[10],"time",view.clock_time_,&family_robot_desktop_clock_digits_font,5);
+    ExpectDiagnosticLabel(clock_logs[11],"date",view.clock_date_,&family_robot_desktop_clock_font,39);
+    f.system_page=true;RequestClockDiagnostic();assert(!view.Update(f));assert(clock_logs.size()==15);
+    assert(clock_logs[12].find("mode=0 notice=0 root_hidden=1")!=std::string::npos);
+    f.system_page=false;f.state=FaceState::Idle;f.quiet=true;wall_seconds=0;f.now_us+=1000000;
+    RequestClockDiagnostic();assert(view.Update(f));assert(clock_logs.size()==18);
+    assert(clock_logs[15].find("mode=3 notice=0 root_hidden=0 screen_on=1 quiet=1 valid=0")!=std::string::npos);
+    assert(clock_logs[15].find(" time=--:-- date=")!=std::string::npos);
+    view.SetScreenOn(false);assert(!view.Update(f));
+    const auto paused_layouts=layout_updates;const auto samples=wall_samples;
+    RequestClockDiagnostic();assert(!view.Update(f));
+    assert(clock_logs.size()==18 && layout_updates==paused_layouts && wall_samples==samples && view.timer_->paused);
+    view.SetScreenOn(true);f.now_us+=1;assert(view.Update(f));assert(clock_logs.size()==21);
+    f.now_us+=1;assert(view.Update(f));assert(clock_logs.size()==21);
+    view.SetMessage("private user speech");RequestClockDiagnostic();assert(view.Update(f));
+    assert(clock_logs.size()==24);
+    for(const auto& log:clock_logs)assert(log.find("private user speech")==std::string::npos && log.find("待机中")==std::string::npos);
+    std::puts("Clock diagnostic console isolation, one-shot metadata, actual object fields and screen-off deferral passed");
+}
+
+int main(){ClockFormatting();ClockView();ClockDiagnostic();std::puts("Desktop clock formatting, real view modes/cache/layout/lifecycle passed");}
