@@ -140,7 +140,7 @@ func (c *Catalog) Resolve(ctx context.Context, t Track) (Resolved, error) {
 		return Resolved{}, ErrInvalid
 	}
 	u := url.URL{Scheme: "https", Host: "music.163.com", Path: "/api/song/enhance/player/url"}
-	u.RawQuery = url.Values{"ids": {"[" + strconv.FormatInt(t.ID, 10) + "]"}, "br": {"128000"}}.Encode()
+	u.RawQuery = url.Values{"ids": {"[" + strconv.FormatInt(t.ID, 10) + "]"}, "br": {"320000"}}.Encode()
 	var response struct {
 		Code int `json:"code"`
 		Data []struct {
@@ -209,7 +209,23 @@ func normalizeName(s string) string {
 }
 func matchesTitle(value, query string) bool {
 	n := normalizeName(query)
-	return query == "" || (n != "" && strings.Contains(normalizeName(value), n))
+	if query != "" {
+		return n != "" && normalizeName(value) == n
+	}
+	// Artist selections exclude explicitly labelled alternate performances.
+	// Metadata matching does not authenticate the recording or its performer.
+	lower := strings.ToLower(value)
+	for _, label := range []string{"现场", "伴奏", "翻唱", "混音", "串烧"} {
+		if strings.Contains(lower, label) {
+			return false
+		}
+	}
+	for _, word := range strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) }) {
+		if word == "live" || word == "cover" || word == "remix" {
+			return false
+		}
+	}
+	return true
 }
 
 // Each artist entry must match the requested name, not a fan's longer nickname.

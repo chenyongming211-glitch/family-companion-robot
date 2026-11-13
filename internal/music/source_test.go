@@ -45,8 +45,8 @@ func TestSearchMatchesRequestedTitleAndArtist(t *testing.T) {
 }
 
 func TestResolveAcceptsCompleteMatchingMP3(t *testing.T) {
-	c := fixtureCatalog(t, `{"code":200,"data":[{"id":5255640,"code":200,"url":"http://m701.music.126.net/valid.mp3","size":5508328,"type":"mp3","freeTrialInfo":null}]}`, func(r *http.Request) {
-		if r.URL.Path != "/api/song/enhance/player/url" || r.URL.Query().Get("ids") != "[5255640]" || r.URL.Query().Get("br") != "128000" {
+	c := fixtureCatalog(t, `{"code":200,"data":[{"id":5255640,"code":200,"url":"http://m701.music.126.net/valid.mp3","size":5508328,"br":128000,"type":"mp3","freeTrialInfo":null}]}`, func(r *http.Request) {
+		if r.URL.Path != "/api/song/enhance/player/url" || r.URL.Query().Get("ids") != "[5255640]" || r.URL.Query().Get("br") != "320000" {
 			t.Fatal("unexpected resolve request")
 		}
 	})
@@ -235,7 +235,7 @@ func TestResolvedFormattingDoesNotExposeTemporaryURL(t *testing.T) {
 }
 
 func TestSearchArtistNameMustMatchWholeRequestedName(t *testing.T) {
-	c := fixtureCatalog(t, `{"code":200,"result":{"songs":[{"id":1,"name":"如愿","duration":2000,"artists":[{"name":"白浅熙想嫁给周深."}]},{"id":2,"name":"如愿","duration":2000,"artists":[{"name":"周深"}]},{"id":3,"name":"如愿 (Live)","duration":2000,"artists":[{"name":"另一位歌手"},{"name":"周深"}]},{"id":4,"name":"如愿","duration":2000,"artists":[{"name":"周深粉丝"}]}]}}`, nil)
+	c := fixtureCatalog(t, `{"code":200,"result":{"songs":[{"id":1,"name":"如愿","duration":2000,"artists":[{"name":"白浅熙想嫁给周深."}]},{"id":2,"name":"如愿","duration":2000,"artists":[{"name":"周深"}]},{"id":3,"name":"如愿","duration":2000,"artists":[{"name":"另一位歌手"},{"name":"周深"}]},{"id":4,"name":"如愿","duration":2000,"artists":[{"name":"周深粉丝"}]}]}}`, nil)
 	rows, err := c.Search(context.Background(), Query{Title: "如愿", Artist: "周深"})
 	if err != nil || len(rows) != 2 || rows[0].ID != 2 || rows[1].ID != 3 {
 		t.Fatalf("wrong singer accepted: %+v %v", rows, err)
@@ -253,5 +253,26 @@ func TestSearchArtistNormalizationStillAllowsExactCaseAndPunctuation(t *testing.
 	rows, err := c.Search(context.Background(), Query{Title: "Song", Artist: " Art ist "})
 	if err != nil || len(rows) != 1 || rows[0].ID != 1 {
 		t.Fatal(rows, err)
+	}
+}
+
+func TestTitleRequiresExactRequestedVersion(t *testing.T) {
+	for _, tc := range []struct {
+		value, query string
+		want         bool
+	}{
+		{"黄昏", "黄昏", true}, {"黄昏(Live)", "黄昏", false},
+		{"黄昏伴奏", "黄昏", false}, {"黄昏串烧", "黄昏", false}, {"黄昏之后", "黄昏", false},
+		{"黄昏 (Live)", "黄昏（Live）", true}, {"黄昏", "黄昏(Live)", false},
+		{"黄昏(Remix)", "黄昏(Live)", false}, {"黄昏(Live 2024)", "黄昏(Live)", false},
+		{"Olive", "", true}, {"Discover", "", true}, {"黄昏", "", true}, {"黄昏 (Live)", "", false}, {"黄昏现场版", "", false},
+		{"黄昏伴奏", "", false}, {"黄昏翻唱", "", false}, {"黄昏混音", "", false},
+		{"黄昏 (Cover)", "", false}, {"黄昏 (Remix)", "", false}, {"黄昏串烧", "", false},
+	} {
+		t.Run(tc.value+"/"+tc.query, func(t *testing.T) {
+			if got := matchesTitle(tc.value, tc.query); got != tc.want {
+				t.Fatalf("matchesTitle=%v want %v", got, tc.want)
+			}
+		})
 	}
 }
