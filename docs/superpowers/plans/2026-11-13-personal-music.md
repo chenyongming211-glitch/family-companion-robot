@@ -12,7 +12,7 @@
 
 - main直接提交推送，不建分支/worktree；仅微雪为固件支持目标。
 - 文件/凭据/生成音频不入Git；无产品mock、种子曲目或演示开关。
-- 先验证输入，再原子保存；MP3/FLAC单份最多30MiB，库总量最多300MiB、最多100首；实际时长1秒～20分钟，单/双声道、采样率8～192kHz；禁止图片/视频/多音轨或加密容器。
+- 先验证输入，再原子保存；MP3/FLAC单份最多30MiB，库总量最多300MiB、最多100首；实际时长1秒～20分钟，单/双声道、采样率8～192kHz；禁止独立图片/视频、多音轨或加密容器。普通歌曲的attached_pic封面可以忽略，不提取或对外提供封面。
 - 家庭成员可读；仅当前家庭有管理权（CanAddDevices）且有设备授权的账号可上传/删除；内部管理员同样必须拥有该家庭授权，不绕过范围。
 - 以当前设备绑定定位家庭，上传写前/结果输出前与语音读取时重新核验；不接受客户端传入文件路径或任意URL。
 - 私人曲库始终为空开始；实际文件须由用户自行导入，不拿测试音频充当歌曲。
@@ -22,40 +22,51 @@
 
 Files: `internal/music/source.go`, `source_test.go`, `internal/realtimelive/music.go`（事实字段由后续集成统一调整）。
 
-- [ ] RED：默认《黄昏》不接受《黄昏(Live)》《黄昏伴奏》《黄昏串烧》或更长同名；显式《黄昏(Live)》只接受匹配版本；歌手完整匹配/合作条目规则保留。歌手选集排除明确标注的现场/伴奏/翻唱/混音。
-- [ ] 使用已有云端Go测试入口验证失败，然后修改匹配规则；旧宽松版本测试更新为新需求，保留错误歌手负例。
-- [ ] 将解析请求 `br=128000` 改为 `br=320000`，接受平台实际降档的完整MP3；保留试听、大小、域名、SSRF、取消和20分钟边界。测试请求值、低码率合法完整源仍可用、试听仍拒绝。
-- [ ] 云端定向race通过；真实《黄昏》请求320后抽样测实际文件编码/时长/完整解码，临时文件删掉；不能把请求值当实测。提交并任务审查。
+- [x] RED：默认《黄昏》不接受《黄昏(Live)》《黄昏伴奏》《黄昏串烧》或更长同名；显式《黄昏(Live)》只接受匹配版本；歌手完整匹配/合作条目规则保留。歌手选集排除明确标注的现场/伴奏/翻唱/混音。
+- [x] 使用已有云端Go测试入口验证失败，然后修改匹配规则；旧宽松版本测试更新为新需求，保留错误歌手负例。
+- [x] 将解析请求 `br=128000` 改为 `br=320000`，接受平台实际降档的完整MP3；保留试听、大小、域名、SSRF、取消和20分钟边界。测试请求值、低码率合法完整源仍可用、试听仍拒绝。
+- [x] 云端定向race通过；真实《黄昏》请求320后抽样测实际文件编码/时长/完整解码，临时文件删掉；不能把请求值当实测。提交并任务审查。
 
 ## Task 2: 家庭私人曲库与语音选曲接缝
 
 Files: `internal/music/library.go`, `library_test.go`, `library_catalog.go`、必要的 `source.go/stream.go`。
 
-Interfaces: `NewLibrary(root, family string) (*Library,error)`；`Library.List() ([]LibraryTrack,error)`；`Library.Import(ctx,title,artist,format string,input io.Reader) (LibraryTrack,error)`；`Library.Delete(id int64) error`；`Catalog.WithLibrary(library *Library, allowed func()bool) *Catalog`。
+Interfaces: `NewLibrary(root, family string) (*Library,error)`；`Library.WithAccessCheck(allowed func()bool) *Library`（复制只读配置，读写/提交前复验）；`Library.List() ([]LibraryTrack,error)`；`Library.Import(ctx,title,artist,format string,input io.Reader) (LibraryTrack,error)`；`Library.Delete(id int64) error`；`Catalog.WithLibrary(library *Library, allowed func()bool) *Catalog`。
 
 LibraryTrack 的JSON字段固定：`id`（安全整数）、`title`、`artist`、`durationMs`、`bytes`、`format`、`bitrate`、`sampleRate`、`channels`、`addedAt`。私人数字ID与远端ID区分且低于JS安全整数上限；不泄露路径。每首独立目录、0600文件和0700目录；临时目录经ffprobe/完整FFmpeg解码核验后原子rename提交，删除仅操作校验过的该条目；进程间写锁和删除/读取并发处理，不保留部分上传。容量同时包括暂存以防并发绕过，读取不遍历其他家庭。
 
-- [ ] RED：实际合成MP3/FLAC导入、列出、精确选曲、删除；家庭隔离、越界ID/路径/符号链接、超限/损坏/取消/并发、重启后仍可读。
-- [ ] 实现库和复用匹配/解码的Catalog接缝。匹配私人条目优先；无匹配再查询在线，损坏/无权限拒绝且不泄露家庭条目。每次搜索/解析/开始播放及输出过程中检查allowed；资源只能由同一库解析/打开，不能传客户端路径。
-- [ ] Stream私有文件仍经同一FFmpeg输出24kHz PCM16/-6dB；为FLAC允许仅本地pipe输入的解码参数。保留有界输出及完整性检查。
-- [ ] 云端库/源race与实际FFmpeg测试通过，提交并任务审查。
+总量300MiB及100首限制覆盖整个配置根目录，避免不同家庭绕过磁盘上限；API仅显示当前家庭占用。私人ID使用 `[1<<52,1<<53)` 安全整数范围，在线候选排除此保留范围，避免ID串源。`IsPrivateTrack(Track) bool` 供Session标明来源。库错误通过 `errors.Is` 区分 `ErrInvalid/ErrSource/ErrUnavailable` 及新增 `ErrLibraryFull/ErrLibraryForbidden`。只有授权的组合层提供非空access-check，管理和语音均须在提交/输出前检查当前绑定。
+
+补充准确性/撤权接缝：指定歌名但未指定歌手、候选含不同规范化歌手时返回 `ErrAmbiguous`，让Session问清歌手，不任取翻唱。`Catalog.CanAccessTrack(Track) bool` 供Session在回答歌曲问题前检查缓存的私人选曲仍有访问权，防止重绑后通过普通问答泄露旧家庭曲名；在线曲目不属于私人范围。
+
+- [x] RED：实际合成MP3/FLAC导入、列出、精确选曲、删除；家庭隔离、越界ID/路径/符号链接、超限/损坏/取消/并发、重启后仍可读。
+- [x] 实现库和复用匹配/解码的Catalog接缝。匹配私人条目优先；无匹配再查询在线，损坏/无权限拒绝且不泄露家庭条目。每次搜索/解析/开始播放及输出过程中检查allowed；资源只能由同一库解析/打开，不能传客户端路径。
+- [x] Stream私有文件仍经同一FFmpeg输出24kHz PCM16/-6dB；为FLAC允许仅本地pipe输入的解码参数。保留有界输出及完整性检查。
+- [x] 云端库/源race与实际FFmpeg测试通过，提交并任务审查。
 
 ## Task 3: 管理API与真实语音接入
 
 Files: `internal/management/music.go`, `music_test.go`, `server.go`, `cmd/management/main.go`, `cmd/realtime-output-live/main.go`, `internal/realtimelive/config.go`, `music.go`及测试。
 
-API: `GET /api/{family|admin}/music-library/{deviceId}` → `{items,canManage,maxBytes,usedBytes,maxTrackBytes}`；`POST`同路径为multipart，字段`title/artist/file`、必须用户确认文件允许个人使用；`DELETE`同路径`?id=<safe-int>`。复用cookie/Origin/session及实时Config.Authorize，解析头前先鉴权；上传并发限制、按路由延长读写deadline，失败无成功提示。管理CLI增加`--music-library`路径；语音同名flag并复用已有`--management-config`定位当前设备家庭。与记忆开关配置校验分离，避免只启用曲库时强制需要记忆socket。
+API: `GET /api/{family|admin}/music-library/{deviceId}` → `{deviceId,items,canManage,maxBytes,usedBytes,maxTrackBytes}`；`POST`同路径为multipart并返回所导入的LibraryTrack，必须用户确认文件允许个人使用；`DELETE`同路径`?id=<safe-int>`返回`{deleted:id}`。复用cookie/Origin/session及实时Config.Authorize，解析头前先鉴权；上传并发限制、按路由延长读写deadline，失败无成功提示。管理CLI增加`--music-library`路径；语音同名flag并复用已有`--management-config`定位当前设备家庭。与记忆开关配置校验分离，避免只启用曲库时强制需要记忆socket。
 
-- [ ] RED：未登录、只读、跨家庭/admin无grant、绑定迁移、超大multipart、伪格式、重复字段、非法ID/方法；真实文件导入→GET→语音来源查找/解码→删除后不可新播放；不会提供无鉴权文件下载。
-- [ ] 仅在CLI组合层读取管理配置并构造带当前绑定校验的私人Catalog；Session仍拥有播放/切歌状态，来源不得修改设备状态。源事实新增来源标记，区分平台与私人用户填写信息；不把录音标题称为已认证原唱。
-- [ ] 云端全相关Go测试/race、vet和两个二进制构建，提交并任务审查。
+POST具体字段为 `title/artist/personalUse/file`，`personalUse=true`；文件必须为最后一个part（网页FormData按此顺序生成）。可用EOF-checking reader在Import提交前核验multipart尾部，额外/重复part必须取消Import，不写入已提交曲目。不使用会落盘无界临时文件的ParseMultipartForm。
+
+- [x] RED：未登录、只读、跨家庭/admin无grant、绑定迁移、超大multipart、伪格式、重复字段、非法ID/方法；真实文件导入→GET→语音来源查找/解码→删除后不可新播放；不会提供无鉴权文件下载。
+- [x] 仅在CLI组合层读取管理配置并构造带当前绑定校验的私人Catalog；Session仍拥有播放/切歌状态，来源不得修改设备状态。源事实新增来源标记，区分平台与私人用户填写信息；不把录音标题称为已认证原唱。
+- [x] 私人目录元数据可能出现在普通曲目问答中；撤权/重绑后除清选曲外还须抑制本连接旧模型上下文。从首次私人选曲起，本连接后续轮次暂不进入续聊记忆，避免下次连接重新带回旧家庭曲名；聊天档案和实际播放回执保留，私人选曲前及新普通连接的记忆不变。该保守边界需在验证报告说明。
+- [x] 云端全相关Go测试/race、vet和两个二进制构建，提交并任务审查。
 
 ## Task 4: 网页私人曲库入口与发布验证
 
 Files: `web/management/src/components/MusicLibrary.vue`、相关类型/API及CorePages settings接入、组件/API测试；实施验证与交接文档。
 
-- [ ] RED：编译组件测试上传字段/成功后GET确认/取消删除或成功后重读/403与超限可见/切设备或退出后旧结果不回填；真实API调用测试不含产品假数据。
-- [ ] 家庭“设置”和内部“配置”都挂在所选设备下，列表展示歌手、时长、格式和实际编码参数。管理者显示title/artist/file和个人使用确认，上传成功重读后展示；删除有确认。无网页试听/公开分享/复杂动画/新依赖。
-- [ ] 云端npm测试、类型检查、构建；隔离真实管理服务浏览器验收家庭导入/删除与只读隔离，不在正式库植入合成曲目。
-- [ ] 对照实际运行来源构建候选，保留既有未部署差异；检查磁盘/活动语音/服务身份和私有配置保护后发布管理与语音，库只创建空目录。后台读回及健康核对，用户真实文件/微雪听感作为独立待验，不伪造现场PASS。
-- [ ] 最终架构与差异审查，main推送，更新交接与验证报告；只清本任务可重建缓存和临时音频，不动历史证据/备份。
+- [x] RED：编译组件测试上传字段/成功后GET确认/取消删除或成功后重读/403与超限可见/切设备或退出后旧结果不回填；真实API调用测试不含产品假数据。
+- [x] 家庭“设置”和内部“配置”都挂在所选设备下，列表展示歌手、时长、格式和实际编码参数。管理者显示title/artist/file和个人使用确认，上传成功重读后展示；删除有确认。无网页试听/公开分享/复杂动画/新依赖。
+- [x] 云端npm测试、类型检查、构建；隔离真实管理服务浏览器验收家庭导入/删除与只读隔离，不在正式库植入合成曲目。
+- [x] 对照实际运行来源构建候选，保留既有未部署差异；检查磁盘/活动语音/服务身份和私有配置保护后发布管理与语音，库只创建空目录。后台读回及健康核对，用户真实文件/微雪听感作为独立待验，不伪造现场PASS。
+- [x] 最终架构与差异审查，main推送，更新交接与验证报告；只清本任务可重建缓存和临时音频，不动历史证据/备份。
+
+## 收尾记录
+
+所有计划项已完成。Go来源1585dfd、网页b481bcd；实际管理/语音r1已发布并完成保护、健康、两端真实GET及临时会话注销。首次Voice3z被旧8z覆盖的失败已保留，9z单次补完仅重启Voice且通过独立审查/16项运维回归。公网配置保持API白名单，网页沿用本机18791；正式曲库音频0。新增私人曲库真实文件的现场点播/完整播放/听感仍待用户导入后验证，不计作本轮实机PASS。见[完整验证](../../verification/2026-11-13-personal-music.md)。
