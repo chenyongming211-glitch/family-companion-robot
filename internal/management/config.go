@@ -238,15 +238,22 @@ func (c Config) AccountByID(id string) (AccountConfig, bool) {
 	}
 	return AccountConfig{}, false
 }
+
+// CurrentBinding returns the active device-family binding at the supplied time.
+func (c Config) CurrentBinding(deviceID string, at time.Time) (Binding, bool) {
+	for _, b := range c.Bindings {
+		if b.DeviceID == deviceID && !at.Before(b.From) && (b.Until == nil || at.Before(*b.Until)) {
+			return b, true
+		}
+	}
+	return Binding{}, false
+}
 func (c Config) Authorize(accountID, scope, deviceID string, at time.Time, body bool) (Binding, error) {
 	a, ok := c.AccountByID(accountID)
 	if !ok || (scope != "family" && scope != "admin") || (scope == "admin" && !a.InternalAdmin) || strings.TrimSpace(deviceID) == "" {
 		return Binding{}, ErrForbidden
 	}
-	for _, b := range c.Bindings {
-		if b.DeviceID != deviceID || at.Before(b.From) || (b.Until != nil && !at.Before(*b.Until)) {
-			continue
-		}
+	if b, active := c.CurrentBinding(deviceID, at); active {
 		for _, m := range a.Memberships {
 			if m.FamilyID != b.FamilyID {
 				continue
