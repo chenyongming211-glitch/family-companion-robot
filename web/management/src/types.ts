@@ -121,3 +121,13 @@ export type AuditFilter = {
   limit?: number;
 };
 export type AuditPage = { items: AuditItem[]; hasMore: boolean; pending: boolean };
+
+export type LibraryTrack = {
+  id: number; title: string; artist: string; durationMs: number; bytes: number;
+  format: "mp3" | "flac"; bitrate: number; sampleRate: number; channels: number; addedAt: string;
+};
+export type MusicLibrary = {
+  deviceId: string; items: LibraryTrack[]; canManage: boolean;
+  maxBytes: number; usedBytes: number; maxTrackBytes: number;
+};
+export type MusicUpload = { title: string; artist: string; personalUse: boolean; file: File };

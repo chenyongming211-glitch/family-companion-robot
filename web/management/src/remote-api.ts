@@ -2,6 +2,9 @@ import { invalidateSensitive, sessionGeneration } from "./sensitive-session.ts";
 import { ApiError } from "./api-error.ts";
 import type {
   Account,
+  LibraryTrack,
+  MusicLibrary,
+  MusicUpload,
   AuditFilter,
   AuditPage,
   DeviceRuntime,
@@ -56,6 +59,32 @@ function checkedDeviceSettings(id: string, value: DeviceSettings): DeviceSetting
   return value;
 }
 
+function privateTrackID(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 2 ** 52 && value < 2 ** 53;
+}
+function checkedMusicTrack(value: LibraryTrack): LibraryTrack {
+  const integer = (n: unknown, min: number, max: number) => typeof n === "number" && Number.isSafeInteger(n) && n >= min && n <= max;
+  const text = (t: unknown, max: number) => typeof t === "string" && t.trim().length > 0 && Array.from(t).length <= max && !/[\p{Cc}]/u.test(t);
+  if (!value || !privateTrackID(value.id) || !text(value.title, 500) || !text(value.artist, 2000) ||
+      !integer(value.durationMs, 1000, 1200000) || !integer(value.bytes, 1, 30 * 1024 * 1024) ||
+      !["mp3", "flac"].includes(value.format) || !integer(value.bitrate, 0, Number.MAX_SAFE_INTEGER) ||
+      !integer(value.sampleRate, 8000, 192000) || !integer(value.channels, 1, 2) ||
+      typeof value.addedAt !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(value.addedAt) || Number.isNaN(Date.parse(value.addedAt)))
+    throw new ApiError("invalid_music_library", "曲库响应未核实，请重新读取。");
+  return value;
+}
+function checkedMusicLibrary(id: string, value: MusicLibrary): MusicLibrary {
+  if (!value || value.deviceId !== id || typeof value.canManage !== "boolean" ||
+      value.maxBytes !== 300 * 1024 * 1024 || value.maxTrackBytes !== 30 * 1024 * 1024 ||
+      !Number.isSafeInteger(value.usedBytes) || value.usedBytes < 0 || value.usedBytes > value.maxBytes ||
+      !Array.isArray(value.items) || value.items.length > 100)
+    throw new ApiError("invalid_music_library", "曲库响应未核实，请重新读取。");
+  value.items.forEach(checkedMusicTrack);
+  if (new Set(value.items.map(t => t.id)).size !== value.items.length || value.items.reduce((n, t) => n + t.bytes, 0) !== value.usedBytes)
+    throw new ApiError("invalid_music_library", "曲库响应未核实，请重新读取。");
+  return value;
+}
+
 export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
   const accounts = new Map<Scope, string>();
   async function request<T>(
@@ -73,7 +102,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
         cache: "no-store",
         headers: {
           Accept: "application/json",
-          ...(init.body ? { "Content-Type": "application/json" } : {}),
+          ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
         },
       });
     } catch {
@@ -91,6 +120,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
       throw new ApiError(
         "invalid_response",
         `管理服务响应异常（HTTP ${response.status}）。`,
+        response.status,
       );
     }
     if (response.ok && generation !== sessionGeneration()) throw new ApiError("stale_response", "页面已离开或账号已变化，请重新读取。");
@@ -101,6 +131,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
         typeof error?.message === "string"
           ? error.message
           : `管理请求失败（HTTP ${response.status}）。`,
+        response.status,
       );
     }
     return data as T;
@@ -114,6 +145,23 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     return request(filter.scope ?? "admin", `chats?${params}`);
   }
   return {
+    async getMusicLibrary(id: string, scope: Scope, signal?: AbortSignal) {
+      return checkedMusicLibrary(id, await request<MusicLibrary>(scope, `music-library/${encodeURIComponent(id)}`, {signal}));
+    },
+    async uploadMusicTrack(id: string, value: MusicUpload, scope: Scope, signal?: AbortSignal) {
+      const body = new FormData();
+      body.append("title", value.title);
+      body.append("artist", value.artist);
+      body.append("personalUse", String(value.personalUse));
+      body.append("file", value.file);
+      return checkedMusicTrack(await request<LibraryTrack>(scope, `music-library/${encodeURIComponent(id)}`, {method: "POST", body, signal}));
+    },
+    async deleteMusicTrack(id: string, trackId: number, scope: Scope, signal?: AbortSignal) {
+      if (!privateTrackID(trackId)) throw new ApiError("invalid_music_library", "曲目编号未核实，请重新读取。");
+      const receipt = await request<{deleted: number}>(scope, `music-library/${encodeURIComponent(id)}?id=${trackId}`, {method: "DELETE", signal});
+      if (!receipt || receipt.deleted !== trackId) throw new ApiError("invalid_music_library", "删除响应未核实，请重新读取。");
+      return receipt;
+    },
     async listDevices(scope: Scope = "admin") {
       return request<Device[]>(scope, "devices");
     },

@@ -12,6 +12,7 @@ import * as sensitive from '../src/sensitive-session.ts';
 import * as navigation from '../src/navigation.ts';
 import * as runtime from '../src/runtime-control.ts';
 import * as deviceSettings from '../src/device-settings.ts';
+import * as musicLibrary from '../src/music-library.ts';
 import * as audit from '../src/audit-control.ts';
 import type { PageRoute, Scope } from '../src/types.ts';
 
@@ -69,6 +70,7 @@ async function mount(scope: 'admin' | 'family', loggedIn = false, options: {
       if (name.endsWith('/sensitive-session.ts')) return sensitive;
       if (name.endsWith('/runtime-control.ts')) return runtime;
       if (name.endsWith('/device-settings.ts')) return deviceSettings;
+      if (name.endsWith('/music-library.ts')) return musicLibrary;
       if (name.endsWith('/audit-control.ts')) return audit;
       if (name.endsWith('.css')) return {};
       if (name.endsWith('.vue')) return { default: component(resolve(dirname(path), name)) };
