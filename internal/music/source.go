@@ -220,7 +220,7 @@ func matchesTitle(value, query string) bool {
 			return false
 		}
 	}
-	for _, word := range strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) }) {
+	for _, word := range strings.FieldsFunc(lower, func(r rune) bool { return r < 'a' || r > 'z' }) {
 		if word == "live" || word == "cover" || word == "remix" {
 			return false
 		}

@@ -267,6 +267,7 @@ func TestTitleRequiresExactRequestedVersion(t *testing.T) {
 		{"黄昏(Remix)", "黄昏(Live)", false}, {"黄昏(Live 2024)", "黄昏(Live)", false},
 		{"Olive", "", true}, {"Discover", "", true}, {"黄昏", "", true}, {"黄昏 (Live)", "", false}, {"黄昏现场版", "", false},
 		{"黄昏伴奏", "", false}, {"黄昏翻唱", "", false}, {"黄昏混音", "", false},
+		{"黄昏 (Live版)", "", false}, {"黄昏 (Remix版)", "", false}, {"黄昏翻Cover版", "", false},
 		{"黄昏 (Cover)", "", false}, {"黄昏 (Remix)", "", false}, {"黄昏串烧", "", false},
 	} {
 		t.Run(tc.value+"/"+tc.query, func(t *testing.T) {
