@@ -111,6 +111,7 @@ func SelectExpression(parent context.Context, cfg Config, dir string, input Expr
 	defer cancel()
 	result = ExpressionResult{Emotion: "neutral", Reason: "invalid_input"}
 	var audit *intent
+	var err error
 	applyContextOutcome := func() {
 		deadline, _ := ctx.Deadline()
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
@@ -140,16 +141,7 @@ func SelectExpression(parent context.Context, cfg Config, dir string, input Expr
 	if !utf8.ValidString(input.CurrentTranscript) || !utf8.ValidString(input.DeviceName) || len(input.CurrentTranscript) > 16384 || strings.TrimSpace(input.CurrentTranscript) == "" || len(input.DeviceName) > 256 || input.DeviceName == "" {
 		return result
 	}
-	history, ok := expressionHistory(input.PlayedContext)
-	if !ok {
-		return result
-	}
-	data := map[string]any{"device_name": input.DeviceName, "current_transcript": input.CurrentTranscript, "played_context": history}
-	if input.AssistantPrefix != "" {
-		data["assistant_prefix"] = clipMemory(input.AssistantPrefix, 1024)
-	}
-	payload, err := json.Marshal(data)
-	if err != nil {
+	if _, ok := expressionHistory(input.PlayedContext); !ok {
 		return result
 	}
 	audit, err = newIntent(dir, "expression_selection", cfg.Synthetic)
@@ -172,6 +164,21 @@ func SelectExpression(parent context.Context, cfg Config, dir string, input Expr
 	stop := context.AfterFunc(ctx, func() { n.Close() })
 	defer stop()
 	if ctx.Err() != nil {
+		return result
+	}
+	if clone.refreshMusicInput != nil {
+		input.PlayedContext, input.AssistantPrefix = clone.refreshMusicInput(input.PlayedContext, input.AssistantPrefix)
+	}
+	history, ok := expressionHistory(input.PlayedContext)
+	if !ok {
+		return result
+	}
+	data := map[string]any{"device_name": input.DeviceName, "current_transcript": input.CurrentTranscript, "played_context": history}
+	if input.AssistantPrefix != "" {
+		data["assistant_prefix"] = clipMemory(input.AssistantPrefix, 1024)
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
 		return result
 	}
 	if err = n.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": string(payload)}}}}); err != nil {

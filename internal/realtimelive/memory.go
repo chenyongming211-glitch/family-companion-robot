@@ -143,16 +143,31 @@ func (s *Session) saveMemoryLocked(data memoryData) error {
 }
 
 func (s *Session) checkpointMemory() error {
+	_, err := s.checkpointMemoryInput(0)
+	return err
+}
+
+// Inclusion is measured in the exact snapshot whose durable save was awaited;
+// a successful write of older turns does not prove this input was retained.
+func (s *Session) checkpointMemoryInput(turnID int64) (bool, error) {
 	m := s.memory
 	if m == nil {
-		return nil
+		return false, nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.loaded {
-		return errors.New("memory_not_loaded")
+		return false, errors.New("memory_not_loaded")
 	}
-	return s.saveMemoryLocked(s.memorySnapshotLocked())
+	snapshot := s.memorySnapshotLocked()
+	included := false
+	for _, turn := range snapshot.Turns {
+		if turn.SessionID == s.rec.owner.SessionID && turn.TurnID == turnID {
+			included = true
+			break
+		}
+	}
+	return included, s.saveMemoryLocked(snapshot)
 }
 
 // record() only schedules work. Disk latency never holds the audio/session lock.
@@ -344,8 +359,10 @@ func (s *Session) routeMemory(rt *liveTurn, history string) (string, string, err
 		outcome := "transcript_unavailable"
 		if text != "" {
 			outcome = "verified_saved"
-			if err := s.checkpointMemory(); err != nil {
+			if included, err := s.checkpointMemoryInput(rt.turn.ID); err != nil {
 				outcome = "failed_or_unknown"
+			} else if !included {
+				outcome = "not_saved"
 			}
 		}
 		if e := s.record("memory_checkpoint", map[string]any{"id": rt.turn.ID, "outcome": outcome, "elapsed_ms": time.Since(started).Milliseconds()}); e != nil {
@@ -355,6 +372,9 @@ func (s *Session) routeMemory(rt *liveTurn, history string) (string, string, err
 			return "", "", rt.ctx.Err()
 		}
 		status := "本轮新输入尚未核实保存，不要承诺已经记住。"
+		if outcome == "not_saved" {
+			status = "本轮输入未保存到可恢复记忆，不要承诺已经记住或下次还能记得。"
+		}
 		if outcome == "verified_saved" {
 			status = "本轮新输入已核实保存到当前设备的有界近期记忆。"
 		}

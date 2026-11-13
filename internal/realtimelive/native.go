@@ -135,6 +135,10 @@ func (n *Native) Open(ctx context.Context, prompt string, listener bool) (err er
 	if err = n.expect(openCtx, "session.created"); err != nil {
 		return err
 	}
+	// The handshake may outlast the private capability captured for this turn.
+	if allowed, ok := ctx.Value(musicSubmissionGuardKey{}).(func() bool); ok && !allowed() {
+		return errors.New("native_submission_forbidden")
+	}
 	if err = n.write(map[string]any{"type": "session.update", "session": sessionSettings(n.cfg, prompt)}); err != nil {
 		return err
 	}

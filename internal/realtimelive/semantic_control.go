@@ -363,6 +363,13 @@ func (n *Native) semanticPlan(ctx context.Context, input ControlInput, tools []m
 	}
 	stop := context.AfterFunc(ctx, func() { n.Close() })
 	defer stop()
+	if n.cfg.refreshMusicInput != nil {
+		input.PlayedContext, _ = n.cfg.refreshMusicInput(input.PlayedContext, "")
+		history = controlHistory(input.PlayedContext)
+		if history == "" {
+			return nil, errors.New("plan_input")
+		}
+	}
 	records := recentControlRecords(input.VerifiedControls, input.Turn, time.Now())
 	unique := ""
 	ambiguous := false

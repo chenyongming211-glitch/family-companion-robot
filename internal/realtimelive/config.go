@@ -12,8 +12,9 @@ import (
 )
 
 type Config struct {
-	MusicForDevice                 func(string) *music.Catalog // Fresh scoped source per play; nil result denies access.
-	Music                          *music.Catalog              // Immutable external adapter; selection stays Session-owned.
+	refreshMusicInput              func(string, string) (string, string) // Trusted live refresh at model input submission.
+	MusicForDevice                 func(string) *music.Catalog           // Fresh scoped source per play; nil result denies access.
+	Music                          *music.Catalog                        // Immutable external adapter; selection stays Session-owned.
 	Key, URL, ASRURL, Voice, Model string
 	Search                         *bool
 	Tools                          []any

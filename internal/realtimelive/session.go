@@ -93,6 +93,7 @@ func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimesta
 	}
 	s.manifest = info
 	s.rec.owner = info.Ownership
+	s.cfg.refreshMusicInput = s.refreshMusicInput
 	s.generate = s.generateNative
 	s.selectExpression = func(ctx context.Context, input ExpressionInput) ExpressionResult {
 		return SelectExpression(ctx, s.cfg, s.directory, input)
@@ -843,6 +844,9 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		queueFrames = 10
 	}
 	defer cancel()
+	if musicAllowed != nil {
+		producerCtx = context.WithValue(producerCtx, musicSubmissionGuardKey{}, musicAllowed)
+	}
 	encoded := make(chan encodedPacket, queueFrames)
 	produced := make(chan struct{})
 	prepared := make(chan struct{})

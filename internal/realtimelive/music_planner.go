@@ -92,6 +92,9 @@ func (n *Native) PlanMusic(parent context.Context, input musicInput) (musicPlan,
 	}
 	stop := context.AfterFunc(ctx, func() { n.Close() })
 	defer stop()
+	if n.cfg.refreshMusicInput != nil {
+		input.PlayedContext, _ = n.cfg.refreshMusicInput(input.PlayedContext, "")
+	}
 	data, e := json.Marshal(input)
 	if e != nil {
 		return musicPlan{}, e
