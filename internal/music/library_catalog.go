@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -14,6 +15,7 @@ func (c *Catalog) WithLibrary(l *Library, allowed func() bool) *Catalog {
 	v := *c
 	v.library = l
 	v.allowed = allowed
+	v.privateFacts = &privateFacts{tracks: make(map[int64]Track)}
 	return &v
 }
 func (c *Catalog) access() error {
@@ -25,11 +27,11 @@ func (c *Catalog) access() error {
 func (c *Catalog) scopedLibrary() *Library {
 	return c.library.WithAccessCheck(func() bool { return c.access() == nil && c.library.check() == nil })
 }
-func (c *Catalog) searchLibrary(q Query) ([]Track, error) {
+func (c *Catalog) searchLibrary(ctx context.Context, q Query) ([]Track, error) {
 	if e := c.access(); e != nil {
 		return nil, e
 	}
-	ts, e := c.scopedLibrary().List()
+	ts, e := c.scopedLibrary().list(ctx)
 	if e != nil {
 		return nil, e
 	}
@@ -45,14 +47,17 @@ func (c *Catalog) searchLibrary(q Query) ([]Track, error) {
 	if e := matchedResults(q, out); e != nil {
 		return nil, e
 	}
+	if ctx.Err() != nil {
+		return nil, sourceError(ctx)
+	}
 	return out, nil
 }
-func (c *Catalog) resolveLibrary(t Track) (Resolved, error) {
+func (c *Catalog) resolveLibrary(ctx context.Context, t Track) (Resolved, error) {
 	if c.library == nil {
 		return Resolved{}, ErrInvalid
 	}
 	l := c.scopedLibrary()
-	r, done, e := l.locked(context.Background())
+	r, done, e := l.locked(ctx)
 	if e != nil {
 		return Resolved{}, e
 	}
@@ -67,6 +72,10 @@ func (c *Catalog) resolveLibrary(t Track) (Resolved, error) {
 	if e = c.access(); e != nil {
 		return Resolved{}, e
 	}
+	if ctx.Err() != nil {
+		return Resolved{}, sourceError(ctx)
+	}
+	c.rememberPrivate(t)
 	return Resolved{Track: t, track: t, size: v.Bytes, library: c.library, format: v.Format}, nil
 }
 func (c *Catalog) streamLibrary(ctx context.Context, v Resolved, emit func([]byte) error) (int64, error) {
@@ -117,7 +126,8 @@ func matchedResults(q Query, tracks []Track) error {
 	return nil
 }
 
-// CanAccessTrack guards cached private selection facts after a binding changes.
+// CanAccessTrack checks only live scoped authorization for cached facts. It never
+// waits on storage; deletion is revalidated by Resolve/Stream, outside Session.mu.
 func (c *Catalog) CanAccessTrack(t Track) bool {
 	if !IsPrivateTrack(t) {
 		return true
@@ -125,6 +135,27 @@ func (c *Catalog) CanAccessTrack(t Track) bool {
 	if c.library == nil || c.access() != nil {
 		return false
 	}
-	_, err := c.resolveLibrary(t)
-	return err == nil
+	if !validTrack(t) || c.privateFacts == nil {
+		return false
+	}
+	c.privateFacts.mu.Lock()
+	defer c.privateFacts.mu.Unlock()
+	return c.privateFacts.tracks[t.ID] == t
+}
+
+type privateFacts struct {
+	mu     sync.Mutex
+	tracks map[int64]Track
+}
+
+func (c *Catalog) rememberPrivate(t Track) {
+	if c.privateFacts == nil {
+		return
+	}
+	c.privateFacts.mu.Lock()
+	defer c.privateFacts.mu.Unlock()
+	if len(c.privateFacts.tracks) >= MaxLibraryTracks {
+		clear(c.privateFacts.tracks)
+	}
+	c.privateFacts.tracks[t.ID] = t
 }

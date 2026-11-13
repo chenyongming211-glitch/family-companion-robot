@@ -26,6 +26,7 @@ const MaxLibraryTracks = 100
 const MaxLibraryTrackBytes int64 = 30 << 20
 const libraryMaxBytes = MaxLibraryBytes
 const libraryMaxFile = MaxLibraryTrackBytes
+const maxLibraryMetadata = 32 << 10
 
 type LibraryTrack struct {
 	ID         int64     `json:"id"`
@@ -162,7 +163,10 @@ func (l *Library) read(r *os.Root, id int64) (LibraryTrack, error) {
 		return t, ErrSource
 	}
 	defer f.Close()
-	if json.NewDecoder(io.LimitReader(f, 8192)).Decode(&t) != nil || t.ID != id || !validTrack(t.track()) || t.Bytes <= 0 || t.Bytes > libraryMaxFile || (t.Format != "mp3" && t.Format != "flac") {
+	if st, e := f.Stat(); e != nil || st.Size() > maxLibraryMetadata {
+		return LibraryTrack{}, ErrSource
+	}
+	if json.NewDecoder(io.LimitReader(f, maxLibraryMetadata+1)).Decode(&t) != nil || t.ID != id || !validTrack(t.track()) || t.Bytes <= 0 || t.Bytes > libraryMaxFile || (t.Format != "mp3" && t.Format != "flac") {
 		return LibraryTrack{}, ErrSource
 	}
 	s, e := r.Stat(name + "/audio")
@@ -171,8 +175,9 @@ func (l *Library) read(r *os.Root, id int64) (LibraryTrack, error) {
 	}
 	return t, nil
 }
-func (l *Library) List() ([]LibraryTrack, error) {
-	r, done, e := l.locked(context.Background())
+func (l *Library) List() ([]LibraryTrack, error) { return l.list(context.Background()) }
+func (l *Library) list(ctx context.Context) ([]LibraryTrack, error) {
+	r, done, e := l.locked(ctx)
 	if e != nil {
 		return nil, e
 	}
@@ -203,6 +208,9 @@ func (l *Library) List() ([]LibraryTrack, error) {
 	}
 	if e = l.check(); e != nil {
 		return nil, e
+	}
+	if ctx.Err() != nil {
+		return nil, sourceError(ctx)
 	}
 	return out, nil
 }
@@ -344,6 +352,9 @@ func (l *Library) Import(ctx context.Context, title, artist, format string, inpu
 	t.Format = format
 	t.AddedAt = time.Now().UTC()
 	data, _ := json.Marshal(t)
+	if len(data) > maxLibraryMetadata {
+		return z, ErrInvalid
+	}
 	m, e := r.OpenFile(stage+"/meta.json", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		return z, ErrSource
@@ -399,10 +410,13 @@ func validateMedia(ctx context.Context, root *os.Root, path, format string) (Lib
 	}
 	var p struct {
 		Streams []struct {
-			CodecName  string `json:"codec_name"`
-			CodecType  string `json:"codec_type"`
-			SampleRate string `json:"sample_rate"`
-			Channels   int    `json:"channels"`
+			CodecName   string `json:"codec_name"`
+			CodecType   string `json:"codec_type"`
+			SampleRate  string `json:"sample_rate"`
+			Channels    int    `json:"channels"`
+			Disposition struct {
+				AttachedPic int `json:"attached_pic"`
+			} `json:"disposition"`
 		}
 		Format struct {
 			Duration   string `json:"duration"`
@@ -410,27 +424,49 @@ func validateMedia(ctx context.Context, root *os.Root, path, format string) (Lib
 			FormatName string `json:"format_name"`
 		}
 	}
-	if json.Unmarshal(out.b, &p) != nil || len(p.Streams) != 1 {
+	if json.Unmarshal(out.b, &p) != nil {
 		return z, ErrInvalid
 	}
-	s := p.Streams[0]
+	audio := -1
+	for i, stream := range p.Streams {
+		if stream.CodecType == "audio" {
+			if audio >= 0 {
+				return z, ErrInvalid
+			}
+			audio = i
+		} else if stream.CodecType != "video" || stream.Disposition.AttachedPic != 1 {
+			return z, ErrInvalid
+		}
+	}
+	if audio < 0 {
+		return z, ErrInvalid
+	}
+	s := p.Streams[audio]
 	seconds, e := strconv.ParseFloat(p.Format.Duration, 64)
 	rate, _ := strconv.Atoi(s.SampleRate)
 	if e != nil || !(seconds >= 1 && seconds <= 1200) || s.CodecName != format || s.CodecType != "audio" || p.Format.FormatName != format || (s.Channels != 1 && s.Channels != 2) || rate < 8000 || rate > 192000 {
 		return z, ErrInvalid
 	}
-	cmd = exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-protocol_whitelist", "pipe", "-f", format, "-i", "pipe:0", "-map", "0:a:0", "-f", "null", "-")
+	cmd = exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-protocol_whitelist", "pipe", "-f", format, "-i", "pipe:0", "-map", "0:a:0", "-ac", "1", "-ar", "24000", "-f", "s16le", "pipe:1")
 	if _, e = f.Seek(0, 0); e != nil {
 		return z, ErrSource
 	}
 	cmd.Stdin = f
-	cmd.Stdout = io.Discard
+	decoded := sampleCounter{limit: 1200 * 24000 * 2}
+	cmd.Stdout = &decoded
 	var decodeErr boundedStderr
 	cmd.Stderr = &decodeErr
 	if cmd.Run() != nil || decodeErr.nonempty() {
 		return z, sourceError(ctx)
 	}
-	z.DurationMs = int64(seconds * 1000)
+	if decoded.bytes%2 != 0 || decoded.bytes < 24000*2 || decoded.bytes > 1200*24000*2 {
+		return z, ErrInvalid
+	}
+	actual := float64(decoded.bytes) / 48000
+	if actual < seconds-0.25 || actual > seconds+0.25 {
+		return z, ErrInvalid
+	}
+	z.DurationMs = decoded.bytes * 1000 / 48000
 	z.SampleRate = rate
 	z.Channels = s.Channels
 	z.Bitrate, _ = strconv.ParseInt(p.Format.BitRate, 10, 64)
@@ -450,4 +486,14 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	}
 	b.b = append(b.b, p...)
 	return n, nil
+}
+
+type sampleCounter struct{ bytes, limit int64 }
+
+func (s *sampleCounter) Write(p []byte) (int, error) {
+	if int64(len(p)) > s.limit-s.bytes {
+		return 0, ErrInvalid
+	}
+	s.bytes += int64(len(p))
+	return len(p), nil
 }

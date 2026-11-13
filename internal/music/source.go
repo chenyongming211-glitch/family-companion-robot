@@ -48,10 +48,11 @@ func (Resolved) String() string   { return "music_resource" }
 func (Resolved) GoString() string { return "music_resource" }
 
 type Catalog struct {
-	client  *http.Client
-	command func(context.Context) *exec.Cmd
-	library *Library
-	allowed func() bool
+	client       *http.Client
+	command      func(context.Context) *exec.Cmd
+	library      *Library
+	allowed      func() bool
+	privateFacts *privateFacts
 }
 
 const (
@@ -80,7 +81,7 @@ func (c *Catalog) Search(ctx context.Context, q Query) ([]Track, error) {
 		return nil, ErrInvalid
 	}
 	if c.library != nil {
-		tracks, err := c.searchLibrary(q)
+		tracks, err := c.searchLibrary(ctx, q)
 		if err != nil || len(tracks) > 0 {
 			return tracks, err
 		}
@@ -156,7 +157,7 @@ func (c *Catalog) Resolve(ctx context.Context, t Track) (Resolved, error) {
 		return Resolved{}, err
 	}
 	if IsPrivateTrack(t) {
-		return c.resolveLibrary(t)
+		return c.resolveLibrary(ctx, t)
 	}
 	if t.ID >= privateIDMin {
 		return Resolved{}, ErrInvalid
