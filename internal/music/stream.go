@@ -23,6 +23,15 @@ func ffmpegCommand(ctx context.Context) *exec.Cmd {
 // cannot interrupt arbitrary callback code. Copy the chunk before retaining it.
 // There is no decoded PCM queue in this package.
 func (c *Catalog) Stream(ctx context.Context, r Resolved, emit func([]byte) error) (int64, error) {
+	if err := c.access(); err != nil {
+		return 0, err
+	}
+	if r.library != nil {
+		return c.streamLibrary(ctx, r, emit)
+	}
+	if IsPrivateTrack(r.Track) {
+		return 0, ErrInvalid
+	}
 	u, err := url.Parse(r.url)
 	if emit == nil || !validTrack(r.Track) || r.Track != r.track || r.size <= 0 || r.size > maxSourceBytes || err != nil || !validURL(u, false) {
 		return 0, ErrInvalid
@@ -57,7 +66,10 @@ func (c *Catalog) Stream(ctx context.Context, r Resolved, emit func([]byte) erro
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
 		return 0, ErrSource
 	}
-	cmd := c.command(runCtx)
+	return c.decode(runCtx, ctx, cancel, r, resp.Body, c.command(runCtx), emit)
+}
+
+func (c *Catalog) decode(runCtx, ctx context.Context, cancel context.CancelFunc, r Resolved, body io.ReadCloser, cmd *exec.Cmd, emit func([]byte) error) (int64, error) {
 	var stderr boundedStderr
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()
@@ -75,7 +87,7 @@ func (c *Catalog) Stream(ctx context.Context, r Resolved, emit func([]byte) erro
 		return 0, ErrSource
 	}
 	// Closing the request on cancellation also wakes a currently blocked Read.
-	closeBody := context.AfterFunc(runCtx, func() { resp.Body.Close() })
+	closeBody := context.AfterFunc(runCtx, func() { body.Close() })
 	defer closeBody()
 	type feedResult struct {
 		bytes int64
@@ -83,7 +95,7 @@ func (c *Catalog) Stream(ctx context.Context, r Resolved, emit func([]byte) erro
 	}
 	fed := make(chan feedResult, 1)
 	go func() {
-		reader := &progressReader{body: resp.Body, cancel: cancel, timeout: idleTimeout}
+		reader := &progressReader{body: body, cancel: cancel, timeout: idleTimeout}
 		n, e := io.CopyBuffer(stdin, io.LimitReader(reader, r.size+1), make([]byte, 32<<10))
 		stdin.Close()
 		fed <- feedResult{n, e}
@@ -108,6 +120,10 @@ func (c *Catalog) Stream(ctx context.Context, r Resolved, emit func([]byte) erro
 				decodeErr = sourceError(runCtx)
 				break
 			}
+			if err = c.access(); err != nil {
+				errorConsumer = err
+				break
+			}
 			if err = emit(buf[:n]); err != nil {
 				errorConsumer = err
 				break
@@ -124,7 +140,7 @@ func (c *Catalog) Stream(ctx context.Context, r Resolved, emit func([]byte) erro
 	// Kill on every early exit; drain both producer and child before returning.
 	if decodeErr != nil || errorConsumer != nil {
 		cancel()
-		resp.Body.Close()
+		body.Close()
 		stdout.Close()
 	}
 	feed := <-fed

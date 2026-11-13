@@ -35,10 +35,12 @@ type Track struct {
 
 // Resolved contains a validated temporary resource. Its URL never leaves this package.
 type Resolved struct {
-	Track Track
-	url   string
-	size  int64
-	track Track
+	Track   Track
+	url     string
+	size    int64
+	track   Track
+	library *Library
+	format  string
 }
 
 // Keep temporary provider tokens out of incidental diagnostic formatting.
@@ -48,6 +50,8 @@ func (Resolved) GoString() string { return "music_resource" }
 type Catalog struct {
 	client  *http.Client
 	command func(context.Context) *exec.Cmd
+	library *Library
+	allowed func() bool
 }
 
 const (
@@ -74,6 +78,12 @@ func (c *Catalog) Search(ctx context.Context, q Query) ([]Track, error) {
 	query := strings.TrimSpace(q.Artist + " " + q.Title)
 	if !validText(query, 120) || query == "" {
 		return nil, ErrInvalid
+	}
+	if c.library != nil {
+		tracks, err := c.searchLibrary(q)
+		if err != nil || len(tracks) > 0 {
+			return tracks, err
+		}
 	}
 	u := url.URL{Scheme: "https", Host: "music.163.com", Path: "/api/search/get"}
 	u.RawQuery = url.Values{"s": {query}, "type": {"1"}, "limit": {"20"}, "offset": {"0"}}.Encode()
@@ -104,7 +114,7 @@ func (c *Catalog) Search(ctx context.Context, q Query) ([]Track, error) {
 		}
 		s.Name = strings.TrimSpace(s.Name)
 		// Check milliseconds before multiplying to avoid duration overflow.
-		if s.ID <= 0 || s.Name == "" || s.Duration < 1000 || s.Duration > int64((20*time.Minute)/time.Millisecond) || !validText(s.Name, 500) {
+		if s.ID <= 0 || s.ID >= privateIDMin || s.Name == "" || s.Duration < 1000 || s.Duration > int64((20*time.Minute)/time.Millisecond) || !validText(s.Name, 500) {
 			continue
 		}
 		artistNames := make([]string, 0, len(s.Artists))
@@ -132,10 +142,25 @@ func (c *Catalog) Search(ctx context.Context, q Query) ([]Track, error) {
 	if len(tracks) == 0 {
 		return nil, ErrUnavailable
 	}
+	if err := c.access(); err != nil {
+		return nil, err
+	}
+	if err := matchedResults(q, tracks); err != nil {
+		return nil, err
+	}
 	return tracks, nil
 }
 
 func (c *Catalog) Resolve(ctx context.Context, t Track) (Resolved, error) {
+	if err := c.access(); err != nil {
+		return Resolved{}, err
+	}
+	if IsPrivateTrack(t) {
+		return c.resolveLibrary(t)
+	}
+	if t.ID >= privateIDMin {
+		return Resolved{}, ErrInvalid
+	}
 	if !validTrack(t) {
 		return Resolved{}, ErrInvalid
 	}
@@ -181,6 +206,9 @@ func (c *Catalog) Resolve(ctx context.Context, t Track) (Resolved, error) {
 	}
 	if !validURL(media, false) {
 		return Resolved{}, ErrSource
+	}
+	if err := c.access(); err != nil {
+		return Resolved{}, err
 	}
 	return Resolved{Track: t, url: media.String(), size: d.Size, track: t}, nil
 }
