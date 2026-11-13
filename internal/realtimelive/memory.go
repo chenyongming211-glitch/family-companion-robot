@@ -107,7 +107,9 @@ func (s *Session) memorySnapshotLocked() memoryData {
 	turns := append([]memoryTurn(nil), m.base...)
 	s.mu.Lock()
 	for _, rt := range s.history {
-		if rt.media || (s.musicEnabled() && !rt.musicClassified) || rt.turn.ID < s.memoryFloor || (rt.turn.User == "" && rt.turn.Completed == 0) {
+		// Private catalogue facts may be echoed in any later ordinary answer.
+		// Keep that window out of recoverable memory without deleting archives.
+		if (s.music != nil && s.music.privateFrom > 0 && rt.turn.ID >= s.music.privateFrom) || rt.media || (s.musicEnabled() && !rt.musicClassified) || rt.turn.ID < s.memoryFloor || (rt.turn.User == "" && rt.turn.Completed == 0) {
 			continue
 		}
 		evidence := realtimestate.PlaybackEvidence(rt.turn)

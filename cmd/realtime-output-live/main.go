@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"familyrobot/internal/management"
-	"familyrobot/internal/music"
 	"familyrobot/internal/realtimelive"
 	"familyrobot/internal/realtimestate"
 	"flag"
@@ -30,15 +29,16 @@ func main() {
 	onboardingAuth := flag.String("onboarding-auth", "", "optional literal loopback factory admission authority")
 	maxSessions := flag.Int("max-sessions", 1, "maximum simultaneous terminal sessions (1-8)")
 	deviceProfiles := flag.String("device-profiles", "", "optional private device presentation profile JSON")
+	musicLibrary := flag.String("music-library", "", "optional private family music library root")
 	musicOnline := flag.Bool("music-online", false, "enable complete publicly playable online songs")
 	memory := flag.Bool("memory", true, "restore bounded recent conversation memory per authenticated device")
 	expressions := flag.Bool("expressions", false, "enable silent expression selection for negotiated face_expression_v1 devices")
 	diagnosticDevice := flag.String("diagnostics-device", "", "optional authenticated device ID for one diagnostic session")
 	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
 	memorySocket := flag.String("memory-control-socket", "", "optional root-private memory control Unix socket")
-	managementConfig := flag.String("management-config", "", "private management config required for memory control")
+	managementConfig := flag.String("management-config", "", "private management config required for memory control or family music")
 	flag.Parse()
-	if (*memorySocket == "") != (*managementConfig == "") {
+	if (*memorySocket != "" || *musicLibrary != "") && *managementConfig == "" {
 		log.Fatal("memory_control_config_invalid")
 	}
 	if *maxSessions < 1 || *maxSessions > 8 {
@@ -54,8 +54,8 @@ func main() {
 	if e != nil {
 		log.Fatal("protected_config_invalid")
 	}
-	if *musicOnline {
-		cfg.Music = music.New()
+	if e = configureMusic(&cfg, *musicOnline, *musicLibrary, *managementConfig, *memorySocket); e != nil {
+		log.Fatal("music_config_invalid")
 	}
 	cfg.MaxSessions = *maxSessions
 	cfg.MemoryEnabled = *memory

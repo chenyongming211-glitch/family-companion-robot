@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"familyrobot/internal/music"
 	"familyrobot/internal/realtimeaudio"
 	"familyrobot/internal/realtimestate"
 	"familyrobot/internal/speakerlive"
@@ -733,7 +734,7 @@ waitLoop:
 		records = append(records, map[string]any{"id": v.turn.ID, "next_id": rt.turn.ID, "candidate": v.turn.Prefix(), "evidence": realtimestate.PlaybackEvidence(v.turn), "completed": v.turn.Completed, "sent": v.turn.Sent, "asr_input_samples": samples})
 	}
 	s.mu.Unlock()
-	contextText = s.mergeMemory(contextText)
+	contextText = s.musicContext(s.mergeMemory(contextText))
 	for _, r := range records {
 		if e := s.record("settled_playback", r); e != nil {
 			return "", e
@@ -805,6 +806,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	if e != nil {
 		return
 	}
+	contextText = s.musicContext(contextText)
 	media := route.Stream != nil
 	if media && (route.Duration < time.Second || route.Duration > 20*time.Minute) {
 		s.turnError(rt)
@@ -816,12 +818,15 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		if e != nil {
 			return
 		}
+		contextText = s.musicContext(contextText)
 		s.expressionContextReady(rt, contextText)
 		controlContext, e = s.routeDeviceControls(rt, contextText)
 		if e != nil {
 			return
 		}
 	}
+	contextText, currentMusicGuidance, musicAllowed := s.musicReplyState(contextText, route)
+	route.Guidance = currentMusicGuidance
 	prompt, e := s.product.InstructionsFor(s.sessionFacts(), contextText, true, time.Now())
 	if e != nil {
 		s.turnError(rt)
@@ -848,6 +853,9 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		pending := []byte{}
 		total, frames := 0, 0
 		put := func(v encodedPacket) error {
+			if v.packet != nil && musicAllowed != nil && !musicAllowed() {
+				return music.ErrLibraryForbidden
+			}
 			select {
 			case <-producerCtx.Done():
 				return producerCtx.Err()
@@ -858,6 +866,9 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		emit := func(kind string, value []byte) error {
 			if producerCtx.Err() != nil {
 				return producerCtx.Err()
+			}
+			if musicAllowed != nil && !musicAllowed() {
+				return music.ErrLibraryForbidden
 			}
 			ready.Do(func() { close(prepared) })
 			if kind == "ready" {
@@ -968,6 +979,10 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 			return
 		}
+		if musicAllowed != nil && !musicAllowed() {
+			s.turnError(rt)
+			return
+		}
 		if p.end {
 			break
 		}
@@ -998,6 +1013,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 		}
 		s.mu.Lock()
+		if musicAllowed != nil && !musicAllowed() {
+			s.mu.Unlock()
+			s.turnError(rt)
+			return
+		}
 		if rt.turn.Cut || s.ctx.Err() != nil {
 			s.mu.Unlock()
 			return

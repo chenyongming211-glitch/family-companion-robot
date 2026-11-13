@@ -12,7 +12,8 @@ import (
 )
 
 type Config struct {
-	Music                          *music.Catalog // Immutable external adapter; selection stays Session-owned.
+	MusicForDevice                 func(string) *music.Catalog // Fresh scoped source per play; nil result denies access.
+	Music                          *music.Catalog              // Immutable external adapter; selection stays Session-owned.
 	Key, URL, ASRURL, Voice, Model string
 	Search                         *bool
 	Tools                          []any
@@ -86,7 +87,7 @@ func ParseConfig(data, search string) (Config, error) {
 	return c, nil
 }
 func (c Config) facts() map[string]any {
-	m := map[string]any{"music_online": c.Music != nil, "model": c.Model, "QWEN_REALTIME_URL": c.URL, "QWEN_VOICE": c.Voice}
+	m := map[string]any{"music_online": c.Music.OnlineEnabled(), "music_library": c.MusicForDevice != nil, "model": c.Model, "QWEN_REALTIME_URL": c.URL, "QWEN_VOICE": c.Voice}
 	if c.Search != nil {
 		m["enable_search"] = *c.Search
 	}

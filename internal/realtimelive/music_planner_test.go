@@ -100,3 +100,29 @@ func TestMusicPlannerRejectsMultipleCallsAndTimesOut(t *testing.T) {
 	}
 	<-f.closed
 }
+
+func TestMusicPlannerPreservesExplicitVersion(t *testing.T) {
+	for _, tc := range []struct {
+		request, title string
+		fail           bool
+	}{
+		{"播放周传雄黄昏现场版", "黄昏现场版", false},
+		{"播放周传雄黄昏现场版", "黄昏", true},
+		{"播放黄昏 Live", "黄昏 Live", false},
+		{"播放黄昏 Live", "黄昏", true},
+		{"播放黄昏", "黄昏", false},
+		{"播放黄昏", "黄昏 Live", true},
+	} {
+		t.Run(tc.request+tc.title, func(t *testing.T) {
+			raw, _ := json.Marshal(map[string]string{"action": "play", "title": tc.title, "artist": "周传雄"})
+			cfg, _ := expressionProvider(t, false, func(c *websocket.Conn) { musicPlannerTerminal(c, string(raw), false) })
+			p, e := NewNative(cfg, t.TempDir()).PlanMusic(context.Background(), musicInput{CurrentRequest: tc.request, PlayedContext: `{"recent_turns":[]}`})
+			if (e != nil) != tc.fail {
+				t.Fatal("version not preserved", p, e)
+			}
+			if !tc.fail && p.Title != tc.title {
+				t.Fatal("version changed", p)
+			}
+		})
+	}
+}

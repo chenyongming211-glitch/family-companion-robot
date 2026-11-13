@@ -53,6 +53,7 @@ type Catalog struct {
 	library      *Library
 	allowed      func() bool
 	privateFacts *privateFacts
+	privateOnly  bool
 }
 
 const (
@@ -74,6 +75,14 @@ func New() *Catalog {
 	return &Catalog{client: &http.Client{Transport: tr, CheckRedirect: checkRedirect}, command: ffmpegCommand}
 }
 
+// NewPrivateOnly disables all online provider fallback, including an empty library.
+func NewPrivateOnly() *Catalog {
+	c := New()
+	c.privateOnly = true
+	return c
+}
+func (c *Catalog) OnlineEnabled() bool { return c != nil && !c.privateOnly }
+
 func (c *Catalog) Search(ctx context.Context, q Query) ([]Track, error) {
 	q.Title, q.Artist = strings.TrimSpace(q.Title), strings.TrimSpace(q.Artist)
 	query := strings.TrimSpace(q.Artist + " " + q.Title)
@@ -85,6 +94,9 @@ func (c *Catalog) Search(ctx context.Context, q Query) ([]Track, error) {
 		if err != nil || len(tracks) > 0 {
 			return tracks, err
 		}
+	}
+	if c.privateOnly {
+		return nil, ErrUnavailable
 	}
 	u := url.URL{Scheme: "https", Host: "music.163.com", Path: "/api/search/get"}
 	u.RawQuery = url.Values{"s": {query}, "type": {"1"}, "limit": {"20"}, "offset": {"0"}}.Encode()
@@ -158,6 +170,9 @@ func (c *Catalog) Resolve(ctx context.Context, t Track) (Resolved, error) {
 	}
 	if IsPrivateTrack(t) {
 		return c.resolveLibrary(ctx, t)
+	}
+	if c.privateOnly {
+		return Resolved{}, ErrUnavailable
 	}
 	if t.ID >= privateIDMin {
 		return Resolved{}, ErrInvalid
