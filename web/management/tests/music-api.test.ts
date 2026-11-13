@@ -46,3 +46,8 @@ test('music metadata rejects Unicode control characters from malformed responses
  const api=createRemoteApi((async()=>new Response(JSON.stringify({...library,items:[{...track,title:'曲\u0085名'}]}))) as typeof fetch);
  await assert.rejects(api.getMusicLibrary('dev/x','family'),/核实/);
 });
+test('library DTO still accepts existing 2000-code-point artist metadata above the new upload form limit',async()=>{
+ const artist='中'.repeat(2000);
+ const api=createRemoteApi((async()=>new Response(JSON.stringify({...library,items:[{...track,artist}]}))) as typeof fetch);
+ assert.equal((await api.getMusicLibrary('dev/x','family')).items[0]!.artist,artist);
+});

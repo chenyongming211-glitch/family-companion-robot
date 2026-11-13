@@ -92,8 +92,8 @@ export function createMusicLibraryController(
     async upload() {
       if (!manageable()) return;
       const title = state.title.trim(), artist = state.artist.trim(), file = state.file;
-      if (!title || !artist || Array.from(title).length > 500 || Array.from(artist).length > 2000 || /[\p{Cc}]/u.test(title + artist)) {
-        state.feedback = "请填写曲名（最多500字）和歌手（最多2000字），不要包含控制字符。"; return;
+      if (!title || !artist || Array.from(title).length > 500 || Array.from(artist).length > 500 || /[\p{Cc}]/u.test(title + artist)) {
+        state.feedback = "请填写曲名（最多500字）和歌手（最多500字），不要包含控制字符。"; return;
       }
       if (!state.personalUse) { state.feedback = "请先确认仅供家庭个人使用。"; return; }
       if (!file || !/\.(mp3|flac)$/i.test(file.name) || file.size < 1 || file.size > state.library!.maxTrackBytes) {

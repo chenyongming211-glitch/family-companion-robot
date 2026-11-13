@@ -53,7 +53,7 @@ onBeforeUnmount(() => {
           <input id="music-title" v-model="state.title" autocomplete="off" required aria-describedby="music-metadata-help" />
           <label for="music-artist">歌手</label>
           <input id="music-artist" v-model="state.artist" autocomplete="off" required aria-describedby="music-metadata-help" />
-          <p id="music-metadata-help" class="muted">曲名最多500字，歌手最多2000字；均由你填写，不代表原唱认证。</p>
+          <p id="music-metadata-help" class="muted">曲名最多500字，歌手最多500字；均由你填写，不代表原唱认证。</p>
           <label for="music-file">音频文件</label>
           <input id="music-file" :key="state.fileVersion" type="file" accept=".mp3,.flac,audio/mpeg,audio/flac" required @change="chooseFile" />
           <label class="music-consent" for="music-personal">

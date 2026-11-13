@@ -57,3 +57,14 @@ test('late GET on device switch and after timeout cannot repopulate or claim suc
  const p=setup();const wait=deferred<MusicLibrary>();p.setRead(()=>wait.promise);const reading=p.control.start('d','family');p.control.stop();wait.resolve(dto([track]));await reading;assert.equal(p.state.library,null);
  const q=setup();await q.control.start('d','family');q.fill();const upload=deferred<LibraryTrack>();q.setWrite(()=>upload.promise);const saving=q.control.upload();q.clock(120001);upload.resolve(track);await saving;assert.equal(q.state.library,null);assert.match(q.state.feedback,/120秒/);assert.equal(q.state.pending,false);assert.equal(q.calls.length,2);
 });
+test('upload accepts and verifies a 500-code-point four-byte artist within multipart byte limit',async()=>{
+ const artist='🎵'.repeat(500),reply={...track,artist};assert.equal(Array.from(artist).length,500);assert.equal(new TextEncoder().encode(artist).length,2000);
+ const p=setup();await p.control.start('d','family');p.fill();p.state.artist=artist;p.setWrite(async()=>reply);p.setRead(async()=>dto([reply]));await p.control.upload();
+ assert.deepEqual(p.calls.map(c=>c.method),['GET','POST','GET']);assert.equal(p.calls[1]!.args[1].artist,artist);assert.equal(p.state.library!.items[0]!.artist,artist);assert.match(p.state.feedback,/已导入/);
+});
+for(const [name,artist] of [['501-code-point','🎵'.repeat(501)],['700-Chinese-character','中'.repeat(700)]] as const){
+ test(`upload rejects ${name} artist before POST while preserving the chosen form`,async()=>{
+  const p=setup();await p.control.start('d','family');p.fill();p.state.artist=artist;const file=p.state.file;await p.control.upload();
+  assert.equal(p.calls.filter(c=>c.method==='POST').length,0);assert.equal(p.calls.length,1);assert.match(p.state.feedback,/歌手（最多500字）/);assert.equal(p.state.file,file);assert.equal(p.state.artist,artist);assert.equal(p.state.needsRead,false);p.control.stop();
+ });
+}

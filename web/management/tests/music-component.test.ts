@@ -56,3 +56,6 @@ test('unmount during actual component upload aborts and erases sensitive state b
  const m=mount({getMusicLibrary:async()=>{reads++;return dto();},uploadMusicTrack:async(_id:string,_input:any,_scope:string,s:AbortSignal)=>{signal=s;return new Promise(r=>resolve=r);}});
  await tick();const state=m.state();Object.assign(state,{title:'家庭私藏',artist:'自填名字',file:new File(['x'],'p.mp3'),personalUse:true});m.nodes().find(n=>n.tag==='form')!.props.onSubmit({preventDefault(){}});await tick();m.app.unmount();assert.equal(signal.aborted,true);assert.equal(state.file,null);assert.equal(state.title,'');resolve(track);await tick();assert.equal(state.library,null);assert.equal(state.feedback,'');assert.equal(reads,1);
 }));
+test('compiled upload form advertises the same 500-code-point artist boundary as the controller',async()=>withDocument(async()=>{
+ const m=mount({getMusicLibrary:async()=>dto()});try{await tick();assert.match(m.text(),/曲名最多500字，歌手最多500字/);assert.doesNotMatch(m.text(),/歌手最多2000字/);}finally{m.app.unmount();}
+}));
