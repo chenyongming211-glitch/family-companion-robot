@@ -1,0 +1,974 @@
+// Cloud-only opt-in protocol probe; the hidden cloud directory is excluded from
+// Go's ./... discovery and is never part of a product entry point.
+package main
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+	"unicode"
+
+	"familyrobot/internal/realtimelive"
+	"github.com/gorilla/websocket"
+)
+
+const attemptPrefix = "generated-audio-repair-v2"
+const modelName = "qwen-audio-3.1-realtime-plus"
+const cloudRoot = "/home/ubuntu/waveshare-native-integration-20261114"
+const approval = "approved-generated-audio-repair-v2"
+const playedPrefix = "海风轻轻吹。"
+const interruptedState = "可信测试状态：上一条助手回答已被中断，仅替换后的助手短句是本次合成测试确认已播内容。其余生成内容是否听到未知，不得假装已说过。优先回答当前新请求；只有用户明确要求继续，才恢复旧任务。本状态是系统记录，不是助手说过的话。"
+
+type probeOptions struct {
+	URL, Key, Ledger, Output, SourceSHA256 string
+	StepTimeout                            time.Duration
+}
+type generatedResponse struct {
+	ID              string            `json:"response_id,omitempty"`
+	Items           []string          `json:"item_ids,omitempty"`
+	Samples         int64             `json:"delivered_pcm24k_samples"`
+	AudioSHA256     string            `json:"delivered_audio_sha256,omitempty"`
+	Transcript      string            `json:"synthetic_transcript,omitempty"`
+	ItemSamples     map[string]int64  `json:"delivered_pcm24k_samples_by_item,omitempty"`
+	ItemTranscripts map[string]string `json:"synthetic_transcript_by_item,omitempty"`
+	Terminal        string            `json:"terminal_status,omitempty"`
+	CancelSent      bool              `json:"cancel_sent_while_no_terminal_seen"`
+}
+type lookupFacts struct {
+	Code                   string `json:"code"`
+	Type                   string `json:"type"`
+	Correlation            string `json:"correlation"`
+	ExactItemInMessage     bool   `json:"exact_item_in_message"`
+	AbsencePhraseInMessage bool   `json:"absence_phrase_in_message"`
+}
+type repairEvidence struct {
+	ItemID, Role, Previous, Kind string
+	LookupStatus                 string       `json:"optional_lookup_status,omitempty"`
+	LookupFacts                  *lookupFacts `json:"optional_lookup_facts,omitempty"`
+}
+type scenario struct {
+	Name                string            `json:"name"`
+	UserItem            string            `json:"user_item_id"`
+	Generated           generatedResponse `json:"generated"`
+	Repaired            bool              `json:"protocol_repaired"`
+	Evidence            []repairEvidence  `json:"repair_evidence,omitempty"`
+	Followup            generatedResponse `json:"followup"`
+	Behavior            string            `json:"behavior"`
+	HiddenSyntheticTail string            `json:"removed_synthetic_tail,omitempty"`
+}
+type probeResult struct {
+	State        string      `json:"state"`
+	Error        string      `json:"error,omitempty"`
+	SessionID    string      `json:"session_id,omitempty"`
+	SourceSHA256 string      `json:"source_sha256,omitempty"`
+	Scenarios    []*scenario `json:"scenarios"`
+	Notes        []string    `json:"limits"`
+}
+type probe struct {
+	ctx                               context.Context
+	opt                               probeOptions
+	c                                 *websocket.Conn
+	log                               *os.File
+	seq, readEvents                   int
+	readBytes                         int64
+	phaseUntil                        time.Time
+	users, items, responses, terminal map[string]bool
+	serverEvents                      map[string]bool
+	result                            *probeResult
+}
+
+func obj(v any) map[string]any { m, _ := v.(map[string]any); return m }
+func str(v any) string         { s, _ := v.(string); return s }
+func bad(tag string) error     { return errors.New("generated_repair_" + tag) }
+func identity(v any) string {
+	s := str(v)
+	if len(s) < 1 || len(s) > 160 {
+		return ""
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("_.:-", c)) {
+			return ""
+		}
+	}
+	return s
+}
+func validAttempt(stage, id string) bool {
+	if stage == "protocol" {
+		return id == attemptPrefix
+	}
+	if stage != "primary" {
+		return false
+	}
+	for _, s := range []string{"completed-followup", "cancel-generate", "cancel-followup"} {
+		if id == attemptPrefix+"/"+s {
+			return true
+		}
+	}
+	return false
+}
+
+// Counts every durable intent, including unknown outcomes, under the SAME global
+// flock. No result refunds an intent; no caller retries an ID.
+func reserve(path, stage, id string) error {
+	if !validAttempt(stage, id) {
+		return bad("unreviewed_attempt")
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0600)
+	if err != nil {
+		return bad("ledger_unavailable")
+	}
+	defer f.Close()
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return bad("ledger_lock_busy_or_unknown")
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	if st, e := f.Stat(); e != nil || !st.Mode().IsRegular() || st.Size() > 8<<20 {
+		return bad("ledger_size_or_type")
+	}
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 4096), 1<<20)
+	counts := map[string]int{}
+	ownPrimary := 0
+	repairPhasePrimary := 0
+	for s.Scan() {
+		var row map[string]any
+		if json.Unmarshal(s.Bytes(), &row) != nil {
+			return bad("ledger_corrupt")
+		}
+		if row["event"] != "intent" {
+			continue
+		}
+		gotStage, gotID := str(row["stage"]), str(row["attempt"])
+		if gotStage != "protocol" && gotStage != "primary" || gotID == "" {
+			return bad("ledger_intent_corrupt")
+		}
+		if gotID == id {
+			return bad("intent_exists_no_retry")
+		}
+		counts[gotStage]++
+		if gotStage == "primary" && strings.HasPrefix(gotID, attemptPrefix+"/") {
+			ownPrimary++
+		}
+		if gotStage == "primary" && (strings.HasPrefix(gotID, "generated-audio-repair-v1/") || strings.HasPrefix(gotID, "generated-audio-repair-v2/")) {
+			repairPhasePrimary++
+		}
+	}
+	if s.Err() != nil {
+		return bad("ledger_read")
+	}
+	if stage == "protocol" && counts["protocol"] >= 8 || stage == "primary" && (counts["primary"] >= 48 || ownPrimary >= 3 || repairPhasePrimary >= 4) {
+		return bad("budget_exhausted")
+	}
+	if json.NewEncoder(f).Encode(map[string]any{"event": "intent", "stage": stage, "attempt": id, "state": "outcome_unknown", "at": time.Now().UTC().Format(time.RFC3339Nano)}) != nil || f.Sync() != nil {
+		return bad("ledger_sync_unknown")
+	}
+	return nil
+}
+
+func writeOnce(path string, v any) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return bad("record_exclusive")
+	}
+	defer f.Close()
+	if json.NewEncoder(f).Encode(v) != nil || f.Sync() != nil {
+		return bad("record_sync_unknown")
+	}
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return bad("record_directory")
+	}
+	defer d.Close()
+	if d.Sync() != nil {
+		return bad("record_directory_sync")
+	}
+	return nil
+}
+func (p *probe) event(row map[string]any) error {
+	if p.seq > 8000 {
+		return bad("audit_event_limit")
+	}
+	row["at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	if json.NewEncoder(p.log).Encode(row) != nil || p.log.Sync() != nil {
+		return bad("audit_sync_unknown")
+	}
+	return nil
+}
+func (p *probe) deadline() time.Time {
+	d := time.Now().Add(p.opt.StepTimeout)
+	if !p.phaseUntil.IsZero() && p.phaseUntil.Before(d) {
+		d = p.phaseUntil
+	}
+	if end, ok := p.ctx.Deadline(); ok && end.Before(d) {
+		d = end
+	}
+	return d
+}
+func (p *probe) send(v map[string]any) (string, error) {
+	if p.ctx.Err() != nil {
+		return "", bad("deadline")
+	}
+	p.seq++
+	id := fmt.Sprintf("ga_evt_%04d", p.seq)
+	v["event_id"] = id
+	// The audit contains synthetic IDs/counters; never auth headers or PCM.
+	row := map[string]any{"direction": "send", "type": v["type"], "event_id": id}
+	for _, k := range []string{"item_id", "previous_item_id", "response_id"} {
+		if s := identity(v[k]); s != "" {
+			row[k] = s
+		}
+	}
+	if item := obj(v["item"]); item != nil {
+		row["item_id"] = item["id"]
+		row["role"] = item["role"]
+	}
+	if err := p.event(row); err != nil {
+		return "", err
+	}
+	if p.c.SetWriteDeadline(p.deadline()) != nil || p.c.WriteJSON(v) != nil {
+		return "", bad("write_unknown")
+	}
+	return id, nil
+}
+func (p *probe) read() (map[string]any, error) {
+	p.readEvents++
+	if p.readEvents > 6000 {
+		return nil, bad("read_event_limit")
+	}
+	if p.c.SetReadDeadline(p.deadline()) != nil {
+		return nil, bad("read_deadline")
+	}
+	messageType, b, err := p.c.ReadMessage()
+	if err != nil {
+		return nil, bad("read_or_timeout_unknown")
+	}
+	if messageType != websocket.TextMessage {
+		return nil, bad("unexpected_binary_event")
+	}
+	p.readBytes += int64(len(b))
+	if p.readBytes > 32<<20 {
+		return nil, bad("read_total_limit")
+	}
+	var v map[string]any
+	if json.Unmarshal(b, &v) != nil || identity(v["type"]) == "" {
+		return nil, bad("event_invalid")
+	}
+	eventID := identity(v["event_id"])
+	if eventID == "" {
+		if err = p.event(map[string]any{"direction": "receive_rejected", "type": v["type"], "reason": "server_event_id_missing_or_invalid"}); err != nil {
+			return nil, err
+		}
+		return nil, bad("server_event_id_missing_or_invalid")
+	}
+	if p.serverEvents[eventID] {
+		if err = p.event(map[string]any{"direction": "receive_rejected", "type": v["type"], "event_id": eventID, "reason": "server_event_id_duplicate"}); err != nil {
+			return nil, err
+		}
+		return nil, bad("server_event_id_duplicate")
+	}
+	p.serverEvents[eventID] = true
+	// This bounded probe supports only content part zero. Reject other indices
+	// before any transcript update, including events received during ACK waits.
+	if index, present := v["content_index"]; present && index != float64(0) {
+		if err = p.event(map[string]any{"direction": "receive_rejected", "type": v["type"], "event_id": eventID, "reason": "content_index_unsupported"}); err != nil {
+			return nil, err
+		}
+		return nil, bad("content_index_unsupported")
+	}
+	row := map[string]any{"direction": "receive", "type": v["type"], "event_id": eventID}
+	for _, k := range []string{"item_id", "previous_item_id", "response_id"} {
+		if s := identity(v[k]); s != "" {
+			row[k] = s
+		}
+	}
+	if item := obj(v["item"]); item != nil {
+		row["item_id"] = identity(item["id"])
+		row["role"] = identity(item["role"])
+	}
+	if response := obj(v["response"]); response != nil {
+		row["response_id"] = identity(response["id"])
+		row["status"] = identity(response["status"])
+	}
+	if v["type"] == "error" {
+		row["provider_code"] = identity(obj(v["error"])["code"])
+	}
+	if err = p.event(row); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// Only these asynchronous events are accepted while awaiting an exact ACK.
+// Late input ASR never grants permission for a foreign input identity.
+func (p *probe) background(v map[string]any) error {
+	k := str(v["type"])
+	if k == "rate_limits.updated" {
+		return nil
+	}
+	if strings.HasPrefix(k, "conversation.item.input_audio_transcription.") {
+		if p.users[identity(v["item_id"])] {
+			return nil
+		}
+		return bad("foreign_input_asr")
+	}
+	if strings.HasPrefix(k, "response.") {
+		rid := identity(v["response_id"])
+		if rid == "" {
+			rid = identity(obj(v["response"])["id"])
+		}
+		id := identity(v["item_id"])
+		if id == "" {
+			id = identity(obj(v["item"])["id"])
+		}
+		if !p.responses[rid] || !p.terminal[rid] || id != "" && !p.items[id] || k == "response.audio.delta" {
+			return bad("foreign_or_unsettled_response")
+		}
+		return nil
+	}
+	if k == "conversation.item.created" {
+		item := obj(v["item"])
+		id := identity(item["id"])
+		if p.items[id] && item["role"] == "assistant" && item["type"] == "message" {
+			return nil
+		}
+	}
+	return bad("unexpected_event")
+}
+func (p *probe) wait(kind string) (map[string]any, error) {
+	for range 128 {
+		v, err := p.read()
+		if err != nil {
+			return nil, err
+		}
+		if v["type"] == kind {
+			return v, nil
+		}
+		if v["type"] == "error" {
+			return nil, bad("provider_rejected")
+		}
+		if err = p.background(v); err != nil {
+			return nil, err
+		}
+	}
+	return nil, bad("ack_event_limit")
+}
+
+func exactTextItem(item map[string]any, id, role, text string) bool {
+	parts, ok := item["content"].([]any)
+	kind := "input_text"
+	if role == "assistant" {
+		kind = "output_text"
+	}
+	return item["id"] == id && item["type"] == "message" && item["role"] == role && ok && len(parts) == 1 && obj(parts[0])["type"] == kind && obj(parts[0])["text"] == text
+}
+func previous(v map[string]any) (string, bool) {
+	a, aok := v["previous_item_id"]
+	b, bok := obj(v["item"])["previous_item_id"]
+	if aok && bok && a != b {
+		return "", false
+	}
+	if aok {
+		return str(a), true
+	}
+	if bok {
+		return str(b), true
+	}
+	return "", false
+}
+func (p *probe) createText(id, role, text, prev string) error {
+	kind := "input_text"
+	if role == "assistant" {
+		kind = "output_text"
+	}
+	msg := map[string]any{"type": "conversation.item.create", "item": map[string]any{"id": id, "type": "message", "role": role, "content": []any{map[string]any{"type": kind, "text": text}}}}
+	if prev != "" {
+		msg["previous_item_id"] = prev
+	}
+	if _, err := p.send(msg); err != nil {
+		return err
+	}
+	v, err := p.wait("conversation.item.created")
+	if err != nil {
+		return err
+	}
+	if !exactTextItem(obj(v["item"]), id, role, text) {
+		return bad("create_identity_or_text")
+	}
+	if prev != "" {
+		if got, ok := previous(v); !ok || got != prev {
+			return bad("create_position_unknown")
+		}
+	}
+	if role == "user" {
+		p.users[id] = true
+	} else {
+		p.items[id] = true
+	}
+	return nil
+}
+func (p *probe) retrieveText(id, role, text, prev string) error {
+	if _, err := p.send(map[string]any{"type": "conversation.item.retrieve", "item_id": id}); err != nil {
+		return err
+	}
+	v, err := p.wait("conversation.item.retrieved")
+	if err != nil {
+		return err
+	}
+	if !exactTextItem(obj(v["item"]), id, role, text) {
+		return bad("retrieve_identity_or_text")
+	}
+	// Retrieved may omit previous_item_id: order comes from the mandatory exact
+	// created ACK. If retrieved supplies order, it must agree as well.
+	if got, ok := previous(v); ok && got != prev {
+		return bad("retrieve_position")
+	}
+	return nil
+}
+
+// Message text is inspected only in memory; persisted evidence is bounded facts.
+func exactIDToken(msg, id string) bool {
+	if identity(id) == "" {
+		return false
+	}
+	for from := 0; from < len(msg); {
+		at := strings.Index(msg[from:], id)
+		if at < 0 {
+			break
+		}
+		at += from
+		end := at + len(id)
+		isIDByte := func(c byte) bool {
+			return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("_.:-", rune(c))
+		}
+		if (at == 0 || !isIDByte(msg[at-1])) && (end == len(msg) || !isIDByte(msg[end])) {
+			return true
+		}
+		from = end
+	}
+	return false
+}
+func (p *probe) remove(id string) (ev repairEvidence, err error) {
+	ev = repairEvidence{ItemID: id, Kind: "delete_ACK_unknown"}
+	if !p.items[id] {
+		return ev, bad("delete_unknown_item")
+	}
+	if _, err = p.send(map[string]any{"type": "conversation.item.delete", "item_id": id}); err != nil {
+		return ev, err
+	}
+	v, err := p.wait("conversation.item.deleted")
+	if err != nil {
+		return ev, err
+	}
+	if v["item_id"] != id {
+		return ev, bad("delete_ack_identity")
+	}
+	ev.Kind = "exact_deleted_ACK"
+	// There is exactly one pending retrieve; its result is optional negative
+	// lookup evidence, separate from the already verified delete ACK.
+	eid, err := p.send(map[string]any{"type": "conversation.item.retrieve", "item_id": id})
+	if err != nil {
+		return ev, err
+	}
+	for range 128 {
+		v, err = p.read()
+		if err != nil {
+			return ev, err
+		}
+		if v["type"] == "error" {
+			provider := obj(v["error"])
+			msg := str(provider["message"])
+			lower := strings.ToLower(msg)
+			facts := &lookupFacts{Code: identity(provider["code"]), Type: identity(provider["type"]), Correlation: "absent", ExactItemInMessage: exactIDToken(msg, id), AbsencePhraseInMessage: strings.Contains(lower, "not found") || strings.Contains(lower, "does not exist")}
+			corr, present := provider["event_id"]
+			if present {
+				facts.Correlation = "mismatch"
+				if identity(corr) == eid {
+					facts.Correlation = "matched"
+				}
+			}
+			ev.LookupFacts = facts
+			if err = p.event(map[string]any{"evidence": "optional_negative_lookup", "item_id": id, "request_event_id": eid, "facts": facts}); err != nil {
+				return ev, err
+			}
+			if facts.Correlation == "mismatch" {
+				return ev, bad("retrieve_correlation_mismatch")
+			}
+			if facts.Type != "invalid_request_error" || facts.Code != "invalid_value" {
+				return ev, bad("retrieve_error_not_reviewed")
+			}
+			ev.LookupStatus = "absent_lookup_UNKNOWN"
+			if err = p.event(map[string]any{"evidence": "absent_lookup_UNKNOWN", "item_id": id, "deleted_ACK_verified": true, "internal_erasure": "unknown", "facts": facts}); err != nil {
+				return ev, err
+			}
+			return ev, nil
+		}
+		if v["type"] == "conversation.item.retrieved" {
+			return ev, bad("deleted_item_still_retrievable")
+		}
+		if err = p.background(v); err != nil {
+			return ev, err
+		}
+	}
+	return ev, bad("optional_lookup_event_limit")
+}
+
+func (p *probe) addGenerated(r *generatedResponse, item map[string]any, transcript map[string]string) error {
+	id := identity(item["id"])
+	if id == "" || item["type"] != "message" || item["role"] != "assistant" {
+		return bad("generated_item_identity")
+	}
+	if !p.items[id] {
+		if len(r.Items) >= 8 {
+			return bad("generated_item_limit")
+		}
+		r.Items = append(r.Items, id)
+		p.items[id] = true
+	} else {
+		found := false
+		for _, known := range r.Items {
+			if known == id {
+				found = true
+			}
+		}
+		if !found {
+			return bad("generated_item_reused")
+		}
+	}
+	parts, ok := item["content"].([]any)
+	if !ok {
+		return bad("generated_content_unknown")
+	}
+	if len(parts) > 1 {
+		return bad("generated_multipart_unsupported")
+	}
+	for _, raw := range parts {
+		part := obj(raw)
+		kind := str(part["type"])
+		if kind != "audio" && kind != "output_audio" && kind != "text" && kind != "output_text" {
+			return bad("generated_content_type")
+		}
+		text := str(part["transcript"])
+		if text == "" {
+			text = str(part["text"])
+		}
+		if len(text) > 4096 {
+			return bad("transcript_limit")
+		}
+		if text != "" {
+			transcript[id] = text
+		}
+	}
+	return nil
+}
+func (p *probe) generate(suffix string, r *generatedResponse, cancelActive bool) (err error) {
+	// Independently fsync an irreversible intent before EVERY response.create.
+	if err = reserve(p.opt.Ledger, "primary", attemptPrefix+"/"+suffix); err != nil {
+		return err
+	}
+	if _, err = p.send(map[string]any{"type": "response.create"}); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(40 * time.Second)
+	p.phaseUntil = deadline
+	transcript := map[string]string{}
+	h := sha256.New()
+	audioItems := map[string]bool{}
+	r.ItemSamples = map[string]int64{}
+	defer func() {
+		p.phaseUntil = time.Time{}
+		r.AudioSHA256 = hex.EncodeToString(h.Sum(nil))
+		r.ItemTranscripts = transcript
+		for _, id := range r.Items {
+			r.Transcript += transcript[id]
+		}
+		if e := writeOnce(filepath.Join(p.opt.Output, suffix+".json"), r); err == nil && e != nil {
+			err = e
+		}
+	}()
+	for range 4096 {
+		if time.Now().After(deadline) {
+			return bad("generation_timeout")
+		}
+		v, e := p.read()
+		if e != nil {
+			return e
+		}
+		k := str(v["type"])
+		if k == "error" {
+			return bad("generation_provider_rejected")
+		}
+		if k == "response.created" {
+			got := obj(v["response"])
+			id := identity(got["id"])
+			if id == "" || r.ID != "" || p.responses[id] {
+				return bad("response_created_identity")
+			}
+			r.ID = id
+			p.responses[id] = true
+			continue
+		}
+		if k == "conversation.item.created" {
+			item := obj(v["item"])
+			if p.users[identity(item["id"])] {
+				continue
+			}
+			if r.ID == "" {
+				return bad("generated_item_before_response_identity")
+			}
+			if e = p.addGenerated(r, item, transcript); e != nil {
+				return e
+			}
+			continue
+		}
+		if !strings.HasPrefix(k, "response.") {
+			if e = p.background(v); e != nil {
+				return e
+			}
+			continue
+		}
+		rid := identity(v["response_id"])
+		if k == "response.done" {
+			rid = identity(obj(v["response"])["id"])
+		}
+		if rid == "" || rid != r.ID {
+			return bad("response_event_identity")
+		}
+		switch k {
+		case "response.output_item.added", "response.output_item.done":
+			if e = p.addGenerated(r, obj(v["item"]), transcript); e != nil {
+				return e
+			}
+		case "response.audio.delta", "response.audio.done", "response.audio_transcript.delta", "response.audio_transcript.done", "response.content_part.added", "response.content_part.done":
+			id := identity(v["item_id"])
+			found := false
+			for _, known := range r.Items {
+				if id == known {
+					found = true
+				}
+			}
+			if !found {
+				return bad("audio_item_identity")
+			}
+			switch k {
+			case "response.audio.delta":
+				encoded := str(v["delta"])
+				if len(encoded) == 0 || len(encoded) > 1<<20 {
+					return bad("audio_delta_limit")
+				}
+				pcm, e := base64.StdEncoding.DecodeString(encoded)
+				if e != nil || len(pcm) == 0 || len(pcm)%2 != 0 {
+					return bad("audio_delta_invalid")
+				}
+				if r.Samples+int64(len(pcm)/2) > 24000*45 {
+					return bad("audio_total_limit")
+				}
+				r.Samples += int64(len(pcm) / 2)
+				r.ItemSamples[id] += int64(len(pcm) / 2)
+				h.Write(pcm)
+				audioItems[id] = true
+				if cancelActive && !r.CancelSent {
+					r.CancelSent = true
+					if _, e = p.send(map[string]any{"type": "response.cancel"}); e != nil {
+						return e
+					}
+					deadline = time.Now().Add(8 * time.Second)
+					p.phaseUntil = deadline
+				}
+			case "response.audio_transcript.delta":
+				text := str(v["delta"])
+				if len(transcript[id])+len(text) > 4096 {
+					return bad("transcript_limit")
+				}
+				transcript[id] += text
+			case "response.audio_transcript.done":
+				text := str(v["transcript"])
+				if len(text) > 4096 {
+					return bad("transcript_limit")
+				}
+				transcript[id] = text
+			}
+		case "response.done":
+			got := obj(v["response"])
+			status := str(got["status"])
+			if status != "completed" && !(cancelActive && r.CancelSent && status == "cancelled") {
+				return bad("terminal_not_completed_or_cancelled")
+			}
+			out, ok := got["output"].([]any)
+			if !ok || len(out) == 0 || len(out) > 8 {
+				return bad("terminal_output_unknown")
+			}
+			finalItems := map[string]bool{}
+			for _, raw := range out {
+				id := identity(obj(raw)["id"])
+				if id == "" || finalItems[id] {
+					return bad("terminal_output_identity")
+				}
+				finalItems[id] = true
+			}
+			if len(finalItems) != len(r.Items) {
+				return bad("terminal_item_set_mismatch")
+			}
+			for _, id := range r.Items {
+				if !finalItems[id] {
+					return bad("terminal_item_set_mismatch")
+				}
+			}
+			for _, raw := range out {
+				if e = p.addGenerated(r, obj(raw), transcript); e != nil {
+					return e
+				}
+			}
+			if r.Samples == 0 || len(audioItems) == 0 || cancelActive && !r.CancelSent {
+				return bad("generated_audio_missing")
+			}
+			r.Terminal = status
+			p.terminal[r.ID] = true
+			return nil
+		default:
+			return bad("unsupported_response_event")
+		}
+	}
+	return bad("generation_event_limit")
+}
+
+func normalize(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, s)
+}
+
+// All new generation is gated by exact delete/create/retrieve ACKs. A generic
+// negative lookup never upgrades erasure evidence or weakens those ACK checks.
+func (p *probe) repair(s *scenario) error {
+	for _, id := range s.Generated.Items {
+		ev, err := p.remove(id)
+		s.Evidence = append(s.Evidence, ev)
+		if err != nil {
+			return err
+		}
+	}
+	prev := s.UserItem
+	for _, item := range []struct{ id, role, text string }{{"ga_" + s.Name + "_prefix", "assistant", playedPrefix}, {"ga_" + s.Name + "_state", "system", interruptedState}} {
+		if err := p.createText(item.id, item.role, item.text, prev); err != nil {
+			return err
+		}
+		if err := p.retrieveText(item.id, item.role, item.text, prev); err != nil {
+			return err
+		}
+		s.Evidence = append(s.Evidence, repairEvidence{ItemID: item.id, Role: item.role, Previous: prev, Kind: "exact_created_position_ACK_and_retrieved_role_text"})
+		prev = item.id
+	}
+	s.Repaired = true
+	return nil
+}
+func (p *probe) runV2Scenarios() error {
+	a := &scenario{Name: "cancel", UserItem: "ga_cancel_user", Behavior: "unknown"}
+	p.result.Scenarios = append(p.result.Scenarios, a)
+	request := "这是合成接口测试。请先准确说“海风轻轻吹。”然后自然讲一段约二十秒的全新短故事。"
+	if err := p.createText(a.UserItem, "user", request, ""); err != nil {
+		return err
+	}
+	if err := p.generate("cancel-generate", &a.Generated, true); err != nil {
+		return err
+	}
+	if err := p.repair(a); err != nil {
+		return err
+	}
+	// This newly completed followup is also the second scenario's generated item:
+	// one paid response serves both the cancel followup and completed repair test.
+	q := "请先准确复述本次测试确认已播的那一句话，然后自行创造一句不超过十二字的全新临时暗号，只放在回答末尾，不作解释。"
+	if err := p.createText("ga_cancel_followup", "user", q, "ga_cancel_state"); err != nil {
+		return err
+	}
+	if err := p.generate("cancel-followup", &a.Followup, false); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(a.Followup.Transcript, playedPrefix) {
+		return bad("synthetic_prefix_not_exact")
+	}
+	tail := strings.TrimSpace(strings.TrimPrefix(a.Followup.Transcript, playedPrefix))
+	if normalize(tail) == "" {
+		return bad("generated_hidden_tail_missing")
+	}
+	a.Behavior = "new_synthetic_tail_generated_internal_history_unknown"
+	if err := writeOnce(filepath.Join(p.opt.Output, "cancel-scenario.json"), a); err != nil {
+		return err
+	}
+	b := &scenario{Name: "completed", UserItem: "ga_cancel_followup", Generated: a.Followup, Behavior: "unknown", HiddenSyntheticTail: tail}
+	p.result.Scenarios = append(p.result.Scenarios, b)
+	if err := p.repair(b); err != nil {
+		return err
+	}
+	q = "请只复述上一条助手在本次测试中确认已播的那一句话，不补充未确认听到的内容。"
+	if err := p.createText("ga_completed_followup", "user", q, "ga_completed_state"); err != nil {
+		return err
+	}
+	if err := p.generate("completed-followup", &b.Followup, false); err != nil {
+		return err
+	}
+	nonce, prefix, answer := normalize(tail), normalize(playedPrefix), normalize(b.Followup.Transcript)
+	// A nonce overlapping retained text cannot distinguish leakage from an
+	// ordinary retained-prefix answer. Keep both behavioral grades unknown.
+	if !strings.Contains(prefix, nonce) && !strings.Contains(nonce, prefix) {
+		if answer == prefix {
+			b.Behavior = "prefix_only_observed_internal_history_unknown"
+		}
+		if strings.Contains(answer, nonce) {
+			b.Behavior = "removed_tail_observed"
+		}
+	}
+	return writeOnce(filepath.Join(p.opt.Output, "completed-scenario.json"), b)
+}
+
+func runProbe(parent context.Context, opt probeOptions) (result probeResult, err error) {
+	result = probeResult{State: "unknown", SourceSHA256: opt.SourceSHA256, Notes: []string{
+		"Synthetic text only; audio counted/hashed then discarded. No microphone, human voice, device, route or service involved.",
+		"Delivered PCM24k samples are not hardware playback. Inserted prefix is a trusted synthetic fixture, not measured speech alignment.",
+		"Exact create ACK establishes previous-item order; retrieve verifies exact role/text and order when returned.",
+		"Exact delete ACK, replacement ACK/readback, optional negative lookup, and behavior are separate. invalid_value yields absent_lookup_UNKNOWN; prefix-only answer does not prove provider internal erasure.",
+		"v2 uses exactly three primary slots; the completed cancel followup is reused for completed repair. All v1 intents remain consumed under the same global ledger and the four-primary repair-phase cap.",
+		"Cancel sent once after generated audio and before this reader observes terminal; racing completed terminal is recorded separately.",
+		"Only one content part per assistant item and content index zero are supported; multipart/nonzero indices are unknown, never prefix-only evidence.",
+	}}
+	if opt.StepTimeout <= 0 {
+		opt.StepTimeout = 10 * time.Second
+	}
+	if err = os.Mkdir(opt.Output, 0700); err != nil {
+		return result, bad("output_exists_or_unavailable")
+	}
+	defer func() {
+		if err != nil {
+			result.State = "unknown"
+			result.Error = err.Error()
+		}
+		if e := writeOnce(filepath.Join(opt.Output, "result.json"), &result); e != nil && err == nil {
+			err = e
+			result.State = "unknown"
+			result.Error = e.Error()
+		}
+	}()
+	log, err := os.OpenFile(filepath.Join(opt.Output, "events.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return result, bad("audit_exclusive")
+	}
+	defer log.Close()
+	if err = reserve(opt.Ledger, "protocol", attemptPrefix); err != nil {
+		return result, err
+	}
+	ctx, cancel := context.WithTimeout(parent, 150*time.Second)
+	defer cancel()
+	p := &probe{ctx: ctx, opt: opt, log: log, users: map[string]bool{}, items: map[string]bool{}, responses: map[string]bool{}, terminal: map[string]bool{}, serverEvents: map[string]bool{}, result: &result}
+	header := http.Header{}
+	if opt.Key != "" {
+		header.Set("Authorization", "Bearer "+opt.Key)
+	}
+	c, resp, e := (&websocket.Dialer{HandshakeTimeout: 8 * time.Second}).DialContext(ctx, opt.URL, header)
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+	if e != nil {
+		return result, bad("handshake_unknown")
+	}
+	p.c = c
+	defer c.Close()
+	c.SetReadLimit(1 << 20)
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
+	v, e := p.wait("session.created")
+	if e != nil {
+		return result, e
+	}
+	result.SessionID = identity(obj(v["session"])["id"])
+	if result.SessionID == "" {
+		return result, bad("session_identity")
+	}
+	settings := map[string]any{"modalities": []string{"audio", "text"}, "voice": "longanqian_v3.1", "speech_rate": 1.0, "instructions": "你是小满，简洁回答合成协议测试。", "input_audio_format": "pcm", "output_audio_format": "pcm", "turn_detection": nil, "enable_search": false}
+	if _, e = p.send(map[string]any{"type": "session.update", "session": settings}); e != nil {
+		return result, e
+	}
+	v, e = p.wait("session.updated")
+	if e != nil {
+		return result, e
+	}
+	got := obj(v["session"])
+	if got["id"] != result.SessionID || got["model"] != modelName || got["voice"] != "longanqian_v3.1" || got["output_audio_format"] != "pcm" || got["enable_search"] != false {
+		return result, bad("session_update_identity_or_settings")
+	}
+	if e = p.runV2Scenarios(); e != nil {
+		return result, e
+	}
+	result.State = "protocol_acknowledged"
+	return result, nil
+}
+
+func reviewedEndpoint(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	const host = "llm-2d0xd4l9jv3vezeu.cn-beijing.maas.aliyuncs.com"
+	const path = "/api-ws/v1/realtime"
+	if err != nil || u.Scheme != "wss" || u.User != nil || u.Opaque != "" || (u.Host != host && u.Host != host+":443") || u.Path != path || u.EscapedPath() != path || strings.Contains(raw, "#") {
+		return "", bad("endpoint_not_reviewed")
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", bad("endpoint_not_reviewed")
+	}
+	q.Set("model", modelName)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// Real provider execution ONLY through this entry: explicit opt-in plus exact
+// reviewed source SHA256. Endpoint/ledger/result/attempt/model are not flags.
+func main() {
+	if os.Getenv("NATIVE_GENERATED_AUDIO_REPAIR_ALLOW") != approval {
+		fmt.Println("submission_disabled")
+		os.Exit(2)
+	}
+	_, file, _, ok := runtime.Caller(0)
+	b, err := os.ReadFile(file)
+	if !ok || err != nil {
+		fmt.Println("source_identity_unavailable")
+		os.Exit(2)
+	}
+	sourceHash := fmt.Sprintf("%x", sha256.Sum256(b))
+	if os.Getenv("NATIVE_GENERATED_AUDIO_REPAIR_SOURCE_SHA256") != sourceHash {
+		fmt.Println("source_identity_not_approved")
+		os.Exit(2)
+	}
+	if file != cloudRoot+"/source-repair-v1/.superpowers/generated-repair-probe-v2/main.go" {
+		fmt.Println("cloud_source_path_required")
+		os.Exit(2)
+	}
+	cfg, err := realtimelive.LoadConfig("/etc/family-robot/realtime-test.env")
+	if err != nil {
+		fmt.Println("protected_config_unavailable")
+		os.Exit(2)
+	}
+	endpoint, err := reviewedEndpoint(cfg.URL)
+	if err != nil {
+		fmt.Println("endpoint_not_reviewed")
+		os.Exit(2)
+	}
+	r, err := runProbe(context.Background(), probeOptions{URL: endpoint, Key: cfg.Key, Ledger: cloudRoot + "/attempts.jsonl", Output: cloudRoot + "/ops/repair-v1/protocol-v2", SourceSHA256: sourceHash})
+	// Only bounded tags go to stdout. Synthetic evidence stays private on cloud.
+	json.NewEncoder(os.Stdout).Encode(map[string]any{"state": r.State, "error": r.Error, "result_path": cloudRoot + "/ops/repair-v1/protocol-v2/result.json"})
+	if err != nil {
+		os.Exit(1)
+	}
+}
