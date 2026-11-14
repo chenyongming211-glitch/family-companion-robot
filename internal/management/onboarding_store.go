@@ -347,6 +347,9 @@ func wechatOnboardingRequest(r *http.Request) bool {
 	if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/family/memory-clear/") && device.MatchString(strings.TrimPrefix(r.URL.Path, "/api/family/memory-clear/")) && r.URL.RawQuery == "" {
 		allowed = true
 	}
+	if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/family/device-firmware/") && device.MatchString(strings.TrimPrefix(r.URL.Path, "/api/family/device-firmware/")) && r.URL.RawQuery == "" {
+		allowed = true
+	}
 	const cancelPrefix = "/api/family/onboarding/claim_"
 	if r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, cancelPrefix) {
 		allowed = claimCode.MatchString(strings.TrimPrefix(r.URL.Path, cancelPrefix))

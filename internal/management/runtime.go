@@ -204,6 +204,28 @@ func (s *Server) deviceRuntime(w http.ResponseWriter, r *http.Request, a Account
 			apiError(w, 409, "runtime_conflict", "设备状态已变化，请刷新后重试")
 			return
 		}
+		blocked, e := s.firmwareBlocksControl(id)
+		if e != nil {
+			sourceError(w, e)
+			return
+		}
+		if blocked {
+			firmwareConflict(w)
+			return
+		}
+		// The OTA exclusion guard may wait for private-store I/O. Revalidate
+		// this ordinary command too, after that newly introduced wait.
+		if s.opts.FirmwareRoot != "" {
+			c, binding, can, e = s.firmwareBrowserAuthority(r, a, scope, id, binding)
+			if e != nil {
+				sourceError(w, e)
+				return
+			}
+			if !can {
+				sourceError(w, ErrForbidden)
+				return
+			}
+		}
 		suffix, e := randomHex(16)
 		if e != nil {
 			sourceError(w, e)

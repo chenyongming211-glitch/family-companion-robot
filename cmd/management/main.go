@@ -40,6 +40,8 @@ func run(args []string, out io.Writer) error {
 		return provision(args[1:], out)
 	case "grant-device-add":
 		return grantDeviceAdd(args[1:], out)
+	case "publish-firmware":
+		return publishFirmware(args[1:], out)
 	case "serve":
 		return serve(args[1:])
 	default:
@@ -146,6 +148,7 @@ func serve(args []string) error {
 	profiles := f.String("profiles", "", "optional profiles file")
 	static := f.String("static", "", "live static dist")
 	audit := f.String("audit", "", "private audit file")
+	firmwareRoot := f.String("firmware-root", "", "optional private firmware release and task directory")
 	musicLibrary := f.String("music-library", "", "optional private music library directory")
 	memorySocket := f.String("memory-control-socket", "", "optional private voice memory control Unix socket")
 	publicOrigin := f.String("public-origin", "", "explicit public HTTPS origin")
@@ -167,7 +170,7 @@ func serve(args []string) error {
 	if e != nil {
 		return e
 	}
-	handler, e := management.NewServer(c, management.Options{RecordsPath: *records, ProfilesPath: *profiles, StaticDir: *static, AuditPath: *audit, Build: *build, ConfigPath: *config, PublicOrigin: *publicOrigin, MusicLibraryRoot: *musicLibrary, MemoryControlSocket: *memorySocket})
+	handler, e := management.NewServer(c, management.Options{RecordsPath: *records, ProfilesPath: *profiles, StaticDir: *static, AuditPath: *audit, Build: *build, ConfigPath: *config, PublicOrigin: *publicOrigin, MusicLibraryRoot: *musicLibrary, FirmwareRoot: *firmwareRoot, MemoryControlSocket: *memorySocket})
 	if e != nil {
 		return e
 	}
@@ -199,4 +202,20 @@ func serve(args []string) error {
 		return nil
 	}
 	return e
+}
+
+func publishFirmware(args []string, out io.Writer) error {
+	f := flags("publish-firmware")
+	root := f.String("root", "", "private firmware directory")
+	manifest := f.String("manifest", "", "verified release manifest")
+	app := f.String("app", "", "verified ESP32-S3 application image")
+	partition := f.String("partition", "", "verified binary partition table")
+	if f.Parse(args) != nil || f.NArg() != 0 || *root == "" || *manifest == "" || *app == "" || *partition == "" {
+		return management.ErrInvalid
+	}
+	id, e := management.PublishFirmware(*root, *manifest, *app, *partition)
+	if e != nil {
+		return e
+	}
+	return json.NewEncoder(out).Encode(map[string]string{"releaseId": id})
 }

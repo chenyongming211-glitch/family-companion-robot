@@ -292,8 +292,8 @@ func (s *Server) deviceEndpoint(w http.ResponseWriter, r *http.Request, c Config
 			apiError(w, 405, "method_not_allowed", "请求方法不支持")
 			return true
 		}
+		var metadata map[string]any
 		if r.Method == "POST" {
-			var metadata map[string]any
 			if !decode(w, r, &metadata) {
 				return true
 			}
@@ -302,7 +302,16 @@ func (s *Server) deviceEndpoint(w http.ResponseWriter, r *http.Request, c Config
 			apiError(w, 409, "waiting_activation", "请先完成设备认领")
 			return true
 		}
-		writeJSON(w, map[string]any{"websocket": map[string]any{"url": "wss://robot.songguoxue.com/xiaozhi/v1/", "version": 1}, "server_time": map[string]any{"timestamp": s.now().UnixMilli(), "timezone_offset": 480}})
+		firmware, e := s.firmwareBootstrap(r, d, key, metadata)
+		if e != nil {
+			onboardingError(w, e)
+			return true
+		}
+		response := map[string]any{"websocket": map[string]any{"url": "wss://robot.songguoxue.com/xiaozhi/v1/", "version": 1}, "server_time": map[string]any{"timestamp": s.now().UnixMilli(), "timezone_offset": 480}}
+		if firmware != nil {
+			response["firmware"] = firmware
+		}
+		writeJSON(w, response)
 		return true
 	}
 	if r.Method != "POST" {

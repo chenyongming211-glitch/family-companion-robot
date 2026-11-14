@@ -82,7 +82,7 @@ func parseAuditFilter(raw string) (AuditFilter, error) {
 				f.To = &t
 			}
 		case "action":
-			if v[0] != "access" && v[0] != "device_control" && v[0] != "memory_clear" && v[0] != "settings" {
+			if v[0] != "access" && v[0] != "device_control" && v[0] != "memory_clear" && v[0] != "settings" && v[0] != "firmware" {
 				return f, ErrInvalid
 			}
 			f.Action = v[0]
@@ -201,6 +201,8 @@ func auditClass(action string) (class, description string) {
 	switch action {
 	case "read_conversation", "read_chat", "list_chats", "read_memory", "read_memories", "list_memories":
 		return "access", "查看记录"
+	case "device_firmware_requested":
+		return "firmware", "升级设备固件"
 	case "device_control_requested":
 		return "device_control", "调整设备"
 	case "clear_memory_requested":
@@ -212,6 +214,9 @@ func auditClass(action string) (class, description string) {
 }
 func auditSameTarget(request, result auditEntry) bool {
 	expected := "device_control_result"
+	if request.Action == "device_firmware_requested" {
+		expected = "device_firmware_result"
+	}
 	if request.Action == "clear_memory_requested" {
 		expected = "clear_memory_result"
 	}
@@ -254,7 +259,7 @@ func auditProjection(c Config, viewer string, now time.Time, entries []auditEntr
 	requests := map[string][]auditEntry{}
 	for _, e := range entries {
 		if e.OperationID != "" {
-			if e.Action == "device_control_result" || e.Action == "clear_memory_result" {
+			if e.Action == "device_control_result" || e.Action == "clear_memory_result" || e.Action == "device_firmware_result" {
 				results[e.OperationID] = append(results[e.OperationID], e)
 			} else {
 				requests[e.OperationID] = append(requests[e.OperationID], e)

@@ -22,26 +22,27 @@ import (
 type Options struct {
 	RecordsPath, ProfilesPath, StaticDir, AuditPath, Build string
 	ConfigPath, PublicOrigin, MemoryControlSocket          string
-	MusicLibraryRoot                                       string
+	MusicLibraryRoot, FirmwareRoot                         string
 	Now                                                    func() time.Time
 }
 type Server struct {
-	musicUploads chan struct{}
-	runtimeMu    sync.Mutex
-	runtimes     map[string]*runtimeState
-	cfg          Config
-	opts         Options
-	reader       Reader
-	now          func() time.Time
-	mu           sync.Mutex
-	sessions     map[[32]byte]session
-	attempts     map[string]loginWindow
-	kdf          chan struct{}
-	dummy        PasswordHash
-	origin       *http.CrossOriginProtection
-	auditIDKey   [32]byte
-	auditMu      sync.Mutex
-	auditWrite   func(string, auditEntry) error
+	musicUploads      chan struct{}
+	firmwareDownloads chan struct{}
+	runtimeMu         sync.Mutex
+	runtimes          map[string]*runtimeState
+	cfg               Config
+	opts              Options
+	reader            Reader
+	now               func() time.Time
+	mu                sync.Mutex
+	sessions          map[[32]byte]session
+	attempts          map[string]loginWindow
+	kdf               chan struct{}
+	dummy             PasswordHash
+	origin            *http.CrossOriginProtection
+	auditIDKey        [32]byte
+	auditMu           sync.Mutex
+	auditWrite        func(string, auditEntry) error
 }
 
 func NewServer(c Config, o Options) (*Server, error) {
@@ -60,7 +61,7 @@ func NewServer(c Config, o Options) (*Server, error) {
 		o.Now = time.Now
 	}
 	dummy := PasswordHash{Salt: strings.Repeat("00", 16), Digest: strings.Repeat("00", 32), Iterations: 600000}
-	s := &Server{musicUploads: make(chan struct{}, 2), cfg: c, opts: o, reader: Reader{Config: c, Root: o.RecordsPath, ProfilesPath: o.ProfilesPath, Now: o.Now}, now: o.Now, sessions: map[[32]byte]session{}, attempts: map[string]loginWindow{}, kdf: make(chan struct{}, 2), dummy: dummy, origin: http.NewCrossOriginProtection(), auditWrite: appendAudit}
+	s := &Server{musicUploads: make(chan struct{}, 2), firmwareDownloads: make(chan struct{}, 2), cfg: c, opts: o, reader: Reader{Config: c, Root: o.RecordsPath, ProfilesPath: o.ProfilesPath, Now: o.Now}, now: o.Now, sessions: map[[32]byte]session{}, attempts: map[string]loginWindow{}, kdf: make(chan struct{}, 2), dummy: dummy, origin: http.NewCrossOriginProtection(), auditWrite: appendAudit}
 	if _, e := rand.Read(s.auditIDKey[:]); e != nil {
 		return nil, ErrSource
 	}
@@ -136,6 +137,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sourceError(w, ErrForbidden)
 		return
 	}
+	if s.firmwareDeviceEndpoint(w, r, c) {
+		return
+	}
 	if r.URL.Path == "/api/device/state" {
 		s.deviceState(w, r, c)
 		return
@@ -176,6 +180,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if resource == "audit" {
 		s.adminAudit(w, r, a, parts)
+		return
+	}
+	if resource == "device-firmware" {
+		s.deviceFirmware(w, r, a, parts)
 		return
 	}
 	if resource == "device-runtime" {
