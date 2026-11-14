@@ -39,6 +39,10 @@ public:
     static constexpr size_t kBlock = 240, kSlots = 6, kQueue = 12, kRecords = 16;
     static constexpr uint64_t kMaxSamples = 9007199254740991ULL; // exact JSON integer
     enum class SubmitResult { Accepted, Full, Rejected };
+    enum class FaultReason : uint8_t {
+        None=0, External=1, InvalidBuffer=2, SampleRate=3, Cadence=4,
+        DescriptorDuplicate=5, DescriptorOrder=6, DescriptorMissing=7
+    };
     void Connect(uint32_t connection) {
         records_ = {};
 #if CONFIG_CHICK_FACE_UI
@@ -123,36 +127,38 @@ public:
     void HardwareReset(uint32_t sample_rate = 24000) {
         for(auto& r:records_) if(r.id && !Finished(r)) r.valid=false;
         head_=used_=0; slots_={}; discovered_=next_=0; last_stamp_=0;
-        hardware_ok_=true;
+        hardware_ok_=true; fault_reason_=FaultReason::None;
         sample_rate_=sample_rate;
         untagged_completed_=0;
     }
     uint64_t UntaggedCompleted() const { return untagged_completed_; }
-    void HardwareFault() {
+    void HardwareFault(FaultReason reason=FaultReason::External) {
+        if(hardware_ok_) fault_reason_=reason;
         hardware_ok_=false;
         for(auto& r:records_) if(r.id) r.valid=false;
     }
     bool HardwareHealthy() const { return hardware_ok_; }
+    FaultReason HardwareFaultReason() const { return fault_reason_; }
     // Read just-sent PCM for AEC BEFORE this call. Address is the descriptor
     // returned by the pinned SDK. The tag describes its *previous* refill.
     void Complete(int16_t* address, size_t n, int64_t stamp) {
-        if(!address || n!=kBlock || stamp<=0) { HardwareFault(); return; }
+        if(!address || n!=kBlock || stamp<=0) { HardwareFault(FaultReason::InvalidBuffer); return; }
         const int64_t period=sample_rate_==48000?5000:10000;
-        if(sample_rate_!=24000 && sample_rate_!=48000) HardwareFault();
-        if(last_stamp_ && (stamp-last_stamp_<period*85/100 || stamp-last_stamp_>period*115/100)) HardwareFault();
+        if(sample_rate_!=24000 && sample_rate_!=48000) HardwareFault(FaultReason::SampleRate);
+        if(last_stamp_ && (stamp-last_stamp_<period*85/100 || stamp-last_stamp_>period*115/100)) HardwareFault(FaultReason::Cadence);
         last_stamp_=stamp;
         Slot* s=nullptr;
         if(discovered_<kSlots) {
             for(size_t i=0;i<discovered_;++i) if(slots_[i].address==address) {
-                HardwareFault(); s=&slots_[i]; break;
+                HardwareFault(FaultReason::DescriptorDuplicate); s=&slots_[i]; break;
             }
             if(!s) { s=&slots_[discovered_++]; s->address=address; }
         } else {
-            if(slots_[next_].address!=address) HardwareFault();
             for(auto& slot:slots_) if(slot.address==address) { s=&slot; break; }
+            if(s && slots_[next_].address!=address) HardwareFault(FaultReason::DescriptorOrder);
             next_=(next_+1)%kSlots;
         }
-        if(!s) { HardwareFault(); std::memset(address,0,n*sizeof(int16_t)); return; }
+        if(!s) { HardwareFault(FaultReason::DescriptorMissing); std::memset(address,0,n*sizeof(int16_t)); return; }
         if(!s->tag.id && hardware_ok_) untagged_completed_+=s->tag.count;
         if(auto* r=Find(s->tag.id)) {
             if(r->valid) {
@@ -304,6 +310,7 @@ private:
     int64_t last_stamp_=0;
     uint32_t connection_=0,last_id_=0;
     bool hardware_ok_=true;
+    FaultReason fault_reason_=FaultReason::None;
 #if CONFIG_CHICK_FACE_UI
     struct OrbCompletion { OrbOutputActivity::Identity identity{};uint8_t level=0; };
     OrbCompletion orb_completed_{};
