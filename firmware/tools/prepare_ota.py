@@ -20,4 +20,4 @@ def prepare_ota(tree):
     header=tree/'main/application.h'
     replace(header,'    bool CanEnterSleepMode();','    bool CanEnterSleepMode();\n    bool PrepareFamilyFirmwareBootAudio();\n    bool FamilyFirmwareEligible();\n    bool BeginFamilyFirmware();\n    bool FamilyFirmwareQuiescent();\n    void PauseFamilyFirmwareInput();\n    void ResumeFamilyFirmwareInput();\n    void FinishFamilyFirmware();')
     replace(tree/'main/audio/audio_service.h','    bool IsIdle();','    bool IsIdle();\n    bool IsAudioTestingRunning() const {return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_TESTING_RUNNING;}')
-    replace(tree/'CMakeLists.txt','set(PROJECT_VER "2.5.2")','set(PROJECT_VER "2.5.3")')
+    replace(tree/'CMakeLists.txt','set(PROJECT_VER "2.5.2")','set(PROJECT_VER "2.5.4")')

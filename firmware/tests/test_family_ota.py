@@ -89,7 +89,7 @@ class FamilyOtaApplicationTests(unittest.TestCase):
             init=function(app,'void Application::Initialize() {')
             self.assertLess(init.index('audio_service_.Start();'),init.index('FamilyOta::InitializeBoot();'))
             self.assertLess(init.index('FamilyOta::InitializeBoot();'),init.index('board.StartNetwork();'))
-            self.assertEqual((source/'CMakeLists.txt').read_text().count('set(PROJECT_VER "2.5.3")'),1)
+            self.assertEqual((source/'CMakeLists.txt').read_text().count('set(PROJECT_VER "2.5.4")'),1)
 
 class FamilyOtaHttpSdkTests(unittest.TestCase):
     def test_actual_sdk_async_header_and_body_progress_survive_eagain(self):
