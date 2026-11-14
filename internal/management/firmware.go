@@ -433,7 +433,8 @@ func (s *Server) deviceFirmware(w http.ResponseWriter, r *http.Request, a Accoun
 			sourceError(w, e)
 			return
 		}
-		j := firmwareTask{FirmwareJob: FirmwareJob{ID: "ota_" + suffix, ReleaseID: releaseID, Version: target.Version, Status: "queued", RequestedAt: s.now().UTC(), ExpiresAt: s.now().Add(15 * time.Minute).UTC()}, Actor: a.ID, Scope: scope, Binding: binding, Boot: boot}
+		now := s.now().UTC()
+		j := firmwareTask{FirmwareJob: FirmwareJob{ID: "ota_" + suffix, ReleaseID: releaseID, Version: target.Version, Status: "queued", RequestedAt: now, ExpiresAt: now.Add(15 * time.Minute)}, Actor: a.ID, Scope: scope, Binding: binding, Boot: boot}
 		if e = s.auditRecord(s.operationAudit(a.ID, scope, "device_firmware_requested", id, j.ID, binding, "", nil)); e != nil {
 			sourceError(w, e)
 			return

@@ -187,6 +187,40 @@ func TestFirmwarePublishPrivateImmutableAndVerified(t *testing.T) {
 		t.Fatal("followed root symlink")
 	}
 }
+func TestFirmwareCreationWithAdvancingClockRemainsReadable(t *testing.T) {
+	s, b, c, now, m := firmwareFixture(t)
+	if w := firmwareReportRequest(s, b, firmwareTestBoot, 1, firmwareTestOldELF, "ready", ""); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	var mu sync.Mutex
+	current := *now
+	s.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		current = current.Add(time.Nanosecond)
+		return current
+	}
+	created := firmwareCreate(t, s, b, c, m)
+	if created.Job == nil || created.Job.Status != "queued" {
+		t.Fatal(created)
+	}
+	path := "/api/family/device-firmware/" + b.DeviceID
+	persisted := firmwareView(t, request(s, "GET", path, "", c))
+	if persisted.Job == nil || persisted.Job.ID != created.Job.ID || persisted.Job.ExpiresAt.Sub(persisted.Job.RequestedAt) != 15*time.Minute {
+		t.Fatal("created task must remain readable within the exact expiry bound", persisted)
+	}
+	w := firmwareReportRequest(s, b, firmwareTestBoot, 2, firmwareTestOldELF, "ready", "")
+	if w.Code != 200 {
+		t.Fatal("next device poll cannot read the persisted task", w.Code, w.Body)
+	}
+	var response struct {
+		Command *firmwareCommand `json:"command"`
+	}
+	if e := json.Unmarshal(w.Body.Bytes(), &response); e != nil || response.Command == nil || response.Command.ID != created.Job.ID {
+		t.Fatal("persisted task was not dispatched", e, w.Body)
+	}
+}
+
 func TestFirmwareOnlineLifecycleAndPersistence(t *testing.T) {
 	s, b, c, _, m := firmwareFixture(t)
 	path := "/api/family/device-firmware/" + b.DeviceID
