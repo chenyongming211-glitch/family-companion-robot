@@ -86,6 +86,16 @@ the existing recent-history limit; late ASR remains diagnostic and cannot
 silently upgrade either the repaired context or a later typed rebuild. This
 adds no further ASR wait and does not stop the shared ASR worker.
 
+The existing private result audit includes `playback_sync` for current,
+unrepaired Cut turns, bounded by the same recent-history limit. Before mutation
+or fallback, it copies the frozen clauses and their times, canonical played
+samples, unknown/completeness flags, ASR reason, and original native session,
+response, user-item and assistant-item identities. It is written only by the
+existing deferred result append, with no extra I/O path. Compare this evidence
+with the result's repair/rebuild status and exact wire ACKs to establish what
+was accepted; the snapshot alone is not a delivery ACK. Actual record contents
+remain private on the cloud host.
+
 Repair deletes every recorded assistant item and validates
 each deleted ACK. Confirmed short clauses are inserted after the original user
 item, followed by a separate system item carrying that turn's interruption,
@@ -132,6 +142,12 @@ wait for settlement, then delivers another valid ASR clause and completes ASR.
 Both same-connection repair and an initial mutation-failure rebuild must keep
 the exact original frozen text/state during a later window rebuild. Its RED
 record captured the original silent context upgrade.
+
+The same delayed-ASR regression compares the provider's inserted assistant
+clauses with the persisted `playback_sync` snapshot on both repair and fallback,
+then checks a later rebuild still inserts those exact clauses. The audit also
+retains original native identities after fallback and excludes already repaired
+or prior-connection Cut turns from later current-turn snapshots.
 
 The multipart regression's RED record captured a two-part assistant item being
 reported complete with only the second part's transcript. Its wire cases cover

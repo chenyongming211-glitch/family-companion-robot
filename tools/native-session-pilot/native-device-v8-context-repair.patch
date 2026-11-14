@@ -13,6 +13,12 @@
 +	if e := d.write(ctx, c, map[string]any{"type": "session.update", "session": settings}); e != nil {
 @@ -356,0 +362 @@
 +	d.turns = map[int64]*ndNativeTurn{}
+@@ -392 +398 @@
+-func (d *nativeDevicePilot) history(id int64) ([]ndRestore, bool, int) {
++func (d *nativeDevicePilot) history(id int64) ([]ndRestore, bool, int, []map[string]any) {
+@@ -394 +400 @@
+-		return nil, false, 0
++		return nil, false, 0, nil
 @@ -405 +411 @@
 -		if v.turn.ID >= d.floor && v.turn.Cut {
 +		if v.turn.ID >= d.floor && v.turn.Cut && (d.turns[v.turn.ID] == nil || !d.turns[v.turn.ID].repaired) {
@@ -26,20 +32,32 @@
 +			delete(d.playback, turn)
 +		}
 +	}
-@@ -418,4 +433,6 @@
+@@ -412,0 +428 @@
++	playbackSync := []map[string]any{}
+@@ -418,7 +434,13 @@
 -		ev := realtimestate.PlaybackEvidence(t)
 -		// An unmatched OutputASR observation is not a confirmed assistant prefix.
 -		if ev.SpokenText != nil && *ev.SpokenText != "" && (ev.TextSource == "native_transcript_full_playback" || ev.AlignedPrefix != nil) {
 -			out = append(out, ndRestore{"assistant", *ev.SpokenText, t.ID})
+-		}
+-	}
+-	return out, cut, omitted
 +		evidence := d.playbackSnapshot(v)
 +		for _, segment := range evidence.played.Segments {
 +			out = append(out, ndRestore{"assistant", segment.Text, t.ID})
 +		}
 +		if t.Cut {
 +			out = append(out, ndRestore{"system", ndInterruptedState(t, evidence), t.ID})
-@@ -427 +443,0 @@
++			native := d.turns[t.ID]
++			if t.ID >= d.floor && (native == nil || !native.repaired) {
++				playbackSync = append(playbackSync, ndPlaybackAudit(t.ID, native, evidence))
++			}
++		}
++	}
++	return out, cut, omitted, playbackSync
+@@ -427 +448,0 @@
 -	c := d.socket()
-@@ -435,42 +451,5 @@
+@@ -435,42 +456,5 @@
 -		itemID := "restore_" + randomID()
 -		kind := "input_text"
 -		if h.Role == "assistant" {
@@ -87,7 +105,7 @@
 +			return err
 +		}
 +		previous = next
-@@ -484,4 +463,4 @@
+@@ -484,4 +468,4 @@
 -	if !d.turnMu.TryLock() {
 -		return ndError("overlap")
 -	}
@@ -96,10 +114,10 @@
 +		return err
 +	}
 +	defer d.leave()
-@@ -516 +495 @@
+@@ -516 +500 @@
 -	ctx, cancel := context.WithTimeout(parent, timeout)
 +	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
-@@ -521 +500,7 @@
+@@ -521 +505,7 @@
 -	stop := func() bool { return true }
 +	var watch *ndCancelWatch
 +	stop := func() {
@@ -108,14 +126,20 @@
 +		}
 +	}
 +	preserve := false
-@@ -535,2 +520,4 @@
+@@ -535,2 +525,4 @@
 -			d.drop()
 -			if strings.Contains(tag, "identity") || strings.Contains(tag, "foreign") || strings.Contains(tag, "overlap") {
 +			if !preserve {
 +				d.drop()
 +			}
 +			if !preserve && parent.Err() == nil && (strings.Contains(tag, "identity") || strings.Contains(tag, "foreign") || strings.Contains(tag, "overlap")) {
-@@ -550,6 +537,10 @@
+@@ -548 +540,4 @@
+-	history, cut, omitted := d.history(id)
++	history, cut, omitted, playbackSync := d.history(id)
++	if len(playbackSync) > 0 {
++		row["playback_sync"] = playbackSync
++	}
+@@ -550,6 +545,10 @@
 -	if cut || d.audioSeconds+inputSeconds+60 >= 239 {
 -		reason := "interrupted_playback"
 -		if !cut {
@@ -132,7 +156,7 @@
 +	}
 +	if d.audioSeconds+inputSeconds+60 >= 239 {
 +		row["rebuild_reason"] = "native_audio_window"
-@@ -564 +555,6 @@
+@@ -564 +563,6 @@
 -		if err = d.open(ctx, rate); err != nil {
 +		setupCtx, setupCancel := context.WithCancel(ctx)
 +		setupStop := context.AfterFunc(parent, setupCancel)
@@ -140,30 +164,30 @@
 +		setupStop()
 +		setupCancel()
 +		if err != nil {
-@@ -571 +567 @@
+@@ -571 +575 @@
 -		stop = context.AfterFunc(ctx, func() { c.Close() })
 +		watch = d.watch(parent, ctx, c)
-@@ -589 +585 @@
+@@ -589 +593 @@
 -		stop = context.AfterFunc(ctx, func() { c.Close() })
 +		watch = d.watch(parent, ctx, c)
-@@ -594,0 +591,3 @@
+@@ -594,0 +599,3 @@
 +	}
 +	if parent.Err() != nil {
 +		return parent.Err()
-@@ -603 +602 @@
+@@ -603 +610 @@
 -		if err = ndWrite(ctx, c, map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm[off:min(off+640, len(pcm))])}); err != nil {
 +		if err = d.write(ctx, c, map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm[off:min(off+640, len(pcm))])}); err != nil {
-@@ -607 +606 @@
+@@ -607 +614 @@
 -	if err = ndWrite(ctx, c, map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
 +	if err = d.write(ctx, c, map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
-@@ -652,0 +652 @@
-+			d.turns[id] = &ndNativeTurn{user: uid}
-@@ -661 +661 @@
+@@ -652,0 +660 @@
++			d.turns[id] = &ndNativeTurn{session: d.sid, user: uid}
+@@ -661 +669 @@
 -	if err = ndWrite(ctx, c, map[string]any{"type": "response.create"}); err != nil {
 +	if err = d.write(ctx, c, map[string]any{"type": "response.create"}); err != nil {
-@@ -668,0 +669 @@
+@@ -668,0 +677 @@
 +	partAdded, audioDone, transcriptDone := map[string]bool{}, map[string]bool{}, map[string]bool{}
-@@ -691,0 +693,8 @@
+@@ -691,0 +701,8 @@
 +		if strings.HasPrefix(kind, "response.audio.") || strings.HasPrefix(kind, "response.audio_transcript.") || strings.HasPrefix(kind, "response.content_part.") {
 +			if !currentItems[ndID(v["item_id"])] {
 +				return ndError("item_identity")
@@ -172,7 +196,7 @@
 +				return e
 +			}
 +		}
-@@ -692,0 +702,12 @@
+@@ -692,0 +710,12 @@
 +		case "response.content_part.added":
 +			iid := ndID(v["item_id"])
 +			if partAdded[iid] {
@@ -185,47 +209,47 @@
 +				return ndError("unsupported_content_parts")
 +			}
 +			audioDone[iid] = true
-@@ -699,0 +721,4 @@
+@@ -699,0 +729,4 @@
 +			d.turns[id].response = r
 +			d.writeMu.Lock()
 +			watch.response = r
 +			d.writeMu.Unlock()
-@@ -707,0 +733,3 @@
+@@ -707,0 +741,3 @@
 +			if e := ndSingleContent(item); e != nil {
 +				return e
 +			}
-@@ -713,0 +742 @@
+@@ -713,0 +750 @@
 +			d.turns[id].items = append(d.turns[id].items, iid)
-@@ -715,0 +745,3 @@
+@@ -715,0 +753,3 @@
 +			if e := ndSingleContent(object(v["item"])); e != nil {
 +				return e
 +			}
-@@ -724,0 +757,3 @@
+@@ -724,0 +765,3 @@
 +				if audioDone[iid] {
 +					return ndError("unsupported_content_parts")
 +				}
-@@ -739,2 +774,4 @@
+@@ -739,2 +782,4 @@
 -				if e = emit("audio", b); e != nil {
 -					return e
 +				if parent.Err() == nil {
 +					if e = emit("audio", b); e != nil && parent.Err() == nil {
 +						return e
 +					}
-@@ -742,0 +780,6 @@
+@@ -742,0 +788,6 @@
 +				if transcriptDone[iid] {
 +					return ndError("unsupported_content_parts")
 +				}
 +				if kind == "response.audio_transcript.done" {
 +					transcriptDone[iid] = true
 +				}
-@@ -765,2 +808,4 @@
+@@ -765,2 +816,4 @@
 -				if e = emit("text", []byte(transcript)); e != nil {
 -					return e
 +				if parent.Err() == nil {
 +					if e = emit("text", []byte(transcript)); e != nil && parent.Err() == nil {
 +						return e
 +					}
-@@ -771,13 +816,2 @@
+@@ -771,13 +824,2 @@
 -			if rid == "" || terminal["id"] != rid {
 -				return ndError("response_identity")
 -			}
@@ -241,19 +265,19 @@
 -				}
 +			if e := d.terminal(watch, d.turns[id], terminal, currentItems); e != nil {
 +				return e
-@@ -786,0 +821,5 @@
+@@ -786,0 +829,5 @@
 +			if parent.Err() != nil {
 +				preserve = parent.Err() == context.Canceled && d.turns[id].terminal
 +				row["cancel_terminal_confirmed"] = preserve
 +				return parent.Err()
 +			}
-@@ -799,0 +839,5 @@
+@@ -799,0 +847,5 @@
 +			if currentItems[iid] {
 +				if e := ndSingleContent(item); e != nil {
 +					return e
 +				}
 +			}
-@@ -833 +877 @@
+@@ -833 +885 @@
 -			respond(w, 200, map[string]any{"ready": !stopping, "build": "native-device-pilot-20261114-v8", "target_device": ndOwner, "target_mac": ndMAC, "model": ndModel, "native_conversation": true, "active_sessions": count, "max_sessions": 1, "memory_enabled": false, "diagnostics": app.cfg.DiagnosticsDevice != ""})
 +			respond(w, 200, map[string]any{"ready": !stopping, "build": "native-device-pilot-20261114-v9", "target_device": ndOwner, "target_mac": ndMAC, "model": ndModel, "native_conversation": true, "active_sessions": count, "max_sessions": 1, "memory_enabled": false, "diagnostics": app.cfg.DiagnosticsDevice != ""})
 --- a/internal/realtimelive/native_device_pilot_guard_test.go

@@ -56,9 +56,25 @@ func (d *nativeDevicePilot) playbackSnapshot(v *liveTurn) ndFrozenPlayback {
 }
 
 type ndNativeTurn struct {
-	user, response     string
-	items              []string
-	terminal, repaired bool
+	session, user, response string
+	items                   []string
+	terminal, repaired      bool
+}
+
+// Copy the same frozen evidence used for wire repair/rebuild into the existing
+// private result audit. Identity fields describe the original native turn even
+// when the current operation subsequently drops/reopens that connection.
+func ndPlaybackAudit(turn int64, native *ndNativeTurn, evidence ndFrozenPlayback) map[string]any {
+	segments := make([]map[string]any, 0, len(evidence.played.Segments))
+	for _, segment := range evidence.played.Segments {
+		segments = append(segments, map[string]any{"text": segment.Text, "begin_ms": segment.BeginMS, "end_ms": segment.EndMS})
+	}
+	row := map[string]any{"turn_id": turn, "old_native_session_id": "", "original_response_id": "", "original_user_item_id": "", "original_assistant_item_ids": []string{}, "played_samples": evidence.played.PlayedSamples, "confirmed_segments": segments, "unknown": evidence.played.Unknown, "complete": evidence.played.Complete, "asr_reason": evidence.reason}
+	if native != nil {
+		row["old_native_session_id"], row["original_response_id"], row["original_user_item_id"] = native.session, native.response, native.user
+		row["original_assistant_item_ids"] = append([]string{}, native.items...)
+	}
+	return row
 }
 
 // The runner supports one audio content part per assistant item, while still

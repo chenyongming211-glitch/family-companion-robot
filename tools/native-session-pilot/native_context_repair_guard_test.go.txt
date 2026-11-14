@@ -3,9 +3,11 @@ package realtimelive
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -541,6 +543,42 @@ func TestNativeContextRepairFreezesUnfinishedOutputASRAfterSettle(t *testing.T) 
 			if len(markers) != 1 || !strings.Contains(markers[0], "output_asr_unfinished_at_settle") || !strings.Contains(markers[0], "unknown=true") {
 				t.Errorf("unfinished ASR was not explicitly frozen as unknown: %v", markers)
 			}
+			audited := ndReadPlaybackSync(t, d, 2)
+			if len(audited) != 1 {
+				t.Fatalf("missing bounded playback_sync audit for current Cut turn: %v", audited)
+			}
+			proof := object(audited[0])
+			if proof["turn_id"] != float64(1) || proof["old_native_session_id"] != "repair-session-1" || proof["original_response_id"] != "repair-response-1" || proof["original_user_item_id"] != "repair-user-1" {
+				t.Fatalf("audit lost original native identities across repair/fallback: %v", proof)
+			}
+			ids, ok := proof["original_assistant_item_ids"].([]any)
+			if !ok || len(ids) != 1 || ids[0] != "repair-item-1-0" || proof["played_samples"] != float64(12000) || proof["unknown"] != true || proof["complete"] != false || proof["asr_reason"] != "output_asr_unfinished_at_settle" {
+				t.Fatalf("audit differs from frozen playback evidence: %v", proof)
+			}
+			segments, ok := proof["confirmed_segments"].([]any)
+			if !ok || len(segments) != 1 || object(segments[0])["text"] != "可信短句。" || object(segments[0])["begin_ms"] != float64(0) || object(segments[0])["end_ms"] != float64(200) {
+				t.Fatalf("audit omitted exact confirmed text/timing: %v", proof)
+			}
+			assertWireMatchesAudit := func(events []map[string]any) {
+				texts := []string{}
+				for _, event := range events {
+					if event["type"] == "conversation.item.create" {
+						item := object(event["item"])
+						if item["role"] == "assistant" {
+							texts = append(texts, fmt.Sprint(object(item["content"].([]any)[0])["text"]))
+						}
+					}
+				}
+				if len(texts) != len(segments) {
+					t.Fatalf("wire assistant clauses differ from audited frozen clauses: %v / %v", texts, segments)
+				}
+				for i, text := range texts {
+					if text != object(segments[i])["text"] {
+						t.Fatalf("wire assistant text differs from audited frozen text: %v / %v", texts, segments)
+					}
+				}
+			}
+			assertWireMatchesAudit(f.snapshot())
 			before := len(f.snapshot())
 			// This final arrives after the freeze boundary, then the ASR succeeds.
 			// A subsequent window rebuild must retain exactly the frozen state.
@@ -556,8 +594,32 @@ func TestNativeContextRepairFreezesUnfinishedOutputASRAfterSettle(t *testing.T) 
 			if len(markers) != 2 || markers[0] != markers[1] {
 				t.Fatalf("repair and rebuild did not share immutable evidence: %v", markers)
 			}
+			assertWireMatchesAudit(f.snapshot()[before:])
+			if current := ndReadPlaybackSync(t, d, 3); len(current) != 0 {
+				t.Fatalf("already repaired/prior-connection Cut turn was audited as current: %v", current)
+			}
 		})
 	}
+}
+
+func ndReadPlaybackSync(t *testing.T, d *nativeDevicePilot, turn int64) []any {
+	t.Helper()
+	data, err := os.ReadFile(d.audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var row map[string]any
+		if json.Unmarshal([]byte(line), &row) != nil {
+			t.Fatal("invalid result audit")
+		}
+		if row["turn_id"] == float64(turn) {
+			entries, _ := row["playback_sync"].([]any)
+			return entries
+		}
+	}
+	t.Fatal("result audit missing current turn")
+	return nil
 }
 
 func TestNativeContextRepairRejectsUnsupportedContentParts(t *testing.T) {
