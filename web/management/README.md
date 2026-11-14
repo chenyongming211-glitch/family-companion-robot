@@ -12,6 +12,8 @@ Vue 3＋TypeScript＋CSS＋Vite。管理后台与家庭网页始终使用同源�
 
 近期记忆为本次绑定后最近7天、最多24轮的上下文片段，可能截断，不等同于完整档案或长期人物记忆。清除要求当前授权正文读取成功与设备管理权限，经一次确认、匹配设备的 confirmed 回执后重新读取；聊天档案保留，新对话可产生新记忆。
 
+家庭“设置”和内部“配置”提供手动固件升级：读取设备当前版本和服务器已验证的候选版本/大小/来源，选择后再次确认。旧固件未报告版本时保持未知，创建任务后按提示重启开始首次升级。页面只查询持久任务回执；发出指令、下载完成或设备重启都不等于升级成功，只有新固件启动与音频自检通过的 `confirmed` 才显示成功。进行中每3秒读取一次，失败、未知或请求超过30秒均不自动重试升级；可重新读取后由用户再次决定。
+
 ## 云端验证与构建
 
 依赖安装、测试、类型检查和构建仅在云服务器执行；Mac用于代码/Git与浏览器客户端。Node要求 `>=22.18`。
@@ -36,6 +38,7 @@ npm run build
 | `src/pages/DataPages.vue` | 登录、授权家庭/账号与近期记忆 |
 | `src/pages/AuditPage.vue`、`audit-control.ts` | 内部操作审计、筛选与分页 |
 | `src/runtime-control.ts`、`components/RuntimeControls.vue` | 共用控制/清除流程、回执匹配与50秒观察窗口 |
+| `src/firmware-upgrade.ts`、`components/FirmwareUpgrade.vue` | 手动升级确认、任务回执、请求取消与进行中查询 |
 | `src/sensitive-session.ts` | RAM请求代次、隐藏/pagehide/账号失效通知 |
 | `tests/*.test.ts` | 隔离真实HTTP输入、挂载页面及运行状态/隐私行为验证 |
 

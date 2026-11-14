@@ -10,6 +10,8 @@ import type {
   DeviceRuntime,
   DeviceSettings,
   DeviceSettingsInput,
+  DeviceFirmware,
+  FirmwareUpgradeInput,
   ControlInput,
   Conversation,
   Device,
@@ -56,6 +58,47 @@ function checkedDeviceSettings(id: string, value: DeviceSettings): DeviceSetting
       typeof value.location !== "string" || typeof value.version !== "string" ||
       !/^[a-f0-9]{64}$/.test(value.version) || typeof value.canEdit !== "boolean")
     throw new ApiError("invalid_settings", "设备设置响应未核实，请重新读取。");
+  return value;
+}
+
+const firmwareBoot = /^[a-f0-9]{32}$/;
+const firmwareReleaseID = /^fw_[a-f0-9]{64}$/;
+function checkedFirmware(id: string, value: DeviceFirmware): DeviceFirmware {
+  const exact = (v: unknown, keys: string) => !!v && typeof v === "object" && !Array.isArray(v) &&
+    Object.keys(v).sort().join(",") === keys.split(" ").sort().join(",");
+  const matches = (v: unknown, pattern: RegExp) => typeof v === "string" && pattern.test(v);
+  const version = (v: unknown) => matches(v, /^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$/);
+  const hash = (v: unknown) => matches(v, /^[a-f0-9]{64}$/);
+  const time = (v: unknown) => matches(v, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/) && Number.isFinite(Date.parse(v as string));
+  const percent = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 100;
+  const errors = ["", "busy", "invalid_command", "invalid_url", "http_error", "download_failed", "length_mismatch", "hash_mismatch", "image_mismatch", "slot_too_small", "write_failed", "boot_failed", "health_failed", "timeout", "authority_changed", "device_restarted"];
+  const current = value?.current, job = value?.job;
+  if (!exact(value, "deviceId canUpgrade connection boot mode current releases job") || value.deviceId !== id ||
+      typeof value.canUpgrade !== "boolean" || !["online", "offline", "unknown"].includes(value.connection) ||
+      !(value.boot === "" || matches(value.boot, firmwareBoot)) ||
+      (value.connection === "online" && !matches(value.boot, firmwareBoot)) ||
+      (value.canUpgrade && value.connection !== "online") || !["online", "restart"].includes(value.mode) ||
+      !(current === null || (exact(current, "version elfSha256") && version(current.version) && hash(current.elfSha256))) ||
+      (value.mode === "online") !== (current !== null) ||
+      !Array.isArray(value.releases) || value.releases.length > 8 ||
+      value.releases.some(r => !exact(r, "id version sourceCommit size sha256 elfSha256") ||
+        !matches(r.id, firmwareReleaseID) || !version(r.version) || !matches(r.sourceCommit, /^[a-f0-9]{40}$/) ||
+        !Number.isSafeInteger(r.size) || r.size < 288 || r.size > 3538944 || !hash(r.sha256) || r.id !== "fw_" + r.sha256 || !hash(r.elfSha256)) ||
+      new Set(value.releases.map(r => r.id)).size !== value.releases.length ||
+      !(job === null || (exact(job, "id releaseId version status progress error requestedAt expiresAt") &&
+        matches(job.id, /^ota_[a-f0-9]{32}$/) && matches(job.releaseId, firmwareReleaseID) && version(job.version) &&
+        ["queued", "sent", "downloading", "restarting", "confirmed", "failed", "unknown"].includes(job.status) &&
+        (job.progress === null || percent(job.progress)) && errors.includes(job.error) && time(job.requestedAt) && time(job.expiresAt) &&
+        Date.parse(job.expiresAt) > Date.parse(job.requestedAt) && Date.parse(job.expiresAt) - Date.parse(job.requestedAt) <= 900000)))
+    throw new ApiError("invalid_firmware", "固件升级响应未核实，请重新读取。");
+  return value;
+}
+
+function checkedAuditPage(value: AuditPage): AuditPage {
+  if (!value || !Array.isArray(value.items) || value.items.length > 50 ||
+      typeof value.hasMore !== "boolean" || typeof value.pending !== "boolean" ||
+      value.items.some(item => !item || !["access", "device_control", "memory_clear", "settings", "firmware"].includes(item.action)))
+    throw new ApiError("invalid_audit", "审计记录响应未核实，请重新读取。");
   return value;
 }
 
@@ -145,6 +188,16 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     return request(filter.scope ?? "admin", `chats?${params}`);
   }
   return {
+    async getDeviceFirmware(id: string, scope: Scope, signal?: AbortSignal) {
+      return checkedFirmware(id, await request<DeviceFirmware>(scope, `device-firmware/${encodeURIComponent(id)}`, {signal}));
+    },
+    async upgradeDeviceFirmware(id: string, value: FirmwareUpgradeInput, scope: Scope, signal?: AbortSignal) {
+      if (!firmwareReleaseID.test(value.releaseId) || !firmwareBoot.test(value.boot))
+        throw new ApiError("invalid_firmware", "升级目标未核实，请重新读取。");
+      return checkedFirmware(id, await request<DeviceFirmware>(scope, `device-firmware/${encodeURIComponent(id)}`, {
+        method: "POST", body: JSON.stringify({releaseId: value.releaseId, boot: value.boot}), signal,
+      }));
+    },
     async getMusicLibrary(id: string, scope: Scope, signal?: AbortSignal) {
       return checkedMusicLibrary(id, await request<MusicLibrary>(scope, `music-library/${encodeURIComponent(id)}`, {signal}));
     },
@@ -280,7 +333,7 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
       for (const key of ["device", "from", "to", "action"] as const) {
         if (filter[key]) params.set(key, filter[key]);
       }
-      return request<AuditPage>("admin", `audit?${params}`);
+      return checkedAuditPage(await request<AuditPage>("admin", `audit?${params}`));
     },
   };
 }

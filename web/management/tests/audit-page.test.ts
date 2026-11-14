@@ -48,3 +48,8 @@ test('family routes never activate an admin audit request',async()=>{
  let calls=0;const api={listDevices:async()=>{calls++;return [];},listAuditPage:async()=>{calls++;return {items:[],hasMore:false,pending:false};}};
  const view=await mount(api);try{await tick();const before=calls;view.props.scope='family';view.props.route={...view.props.route,page:'audit'};await tick();assert.equal(calls,before);}finally{view.close();}
 });
+test('firmware audit records have a label and an actual selectable query category', async () => {
+ const calls:any[]=[];
+ const view=await mount({listDevices:async()=>[],listAuditPage:async(filter:any)=>{calls.push(filter);return{items:[{...item,action:'firmware',description:'固件升级',status:'confirmed',result:'设备已确认新版本'}],hasMore:false,pending:false};}});
+ try{assert.match(view.text(),/固件升级/);assert.match(view.text(),/设备已确认新版本/);const option=view.all().find(n=>n.tag==='option'&&n.props.value==='firmware');assert.ok(option);assert.equal(option.text,'固件升级');view.find('audit-action').props.onChange({target:{value:'firmware'}});await view.find('audit-form').props.onSubmit({preventDefault(){}});await tick();assert.equal(calls.at(-1).action,'firmware');}finally{view.close();}
+});

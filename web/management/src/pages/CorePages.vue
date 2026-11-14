@@ -6,6 +6,7 @@ import { api } from "../api.ts";
 import RuntimeControls from "../components/RuntimeControls.vue";
 import DeviceSettings from "../components/DeviceSettings.vue";
 import MusicLibrary from "../components/MusicLibrary.vue";
+import FirmwareUpgrade from "../components/FirmwareUpgrade.vue";
 import { onSensitiveInvalidated } from "../sensitive-session.ts";
 import { linkTo } from "../navigation.ts";
 const props = defineProps<{ scope: Scope; route: PageRoute }>();
@@ -631,6 +632,7 @@ function chatLink(c: Conversation) {
           <p>{{ device.name }} · {{ device.model }}</p>
         </section>
         <MusicLibrary :key="'music:' + scope + ':' + device.id" :device-id="device.id" :scope="scope" />
+        <FirmwareUpgrade :key="'firmware:' + scope + ':' + device.id" :device-id="device.id" :scope="scope" />
         <DeviceSettings :key="scope + ':' + device.id" :device-id="device.id" :scope="scope" @updated="settingsUpdated" />
         <RuntimeControls :key="device.id" :device-id="device.id" :scope="scope" />
       </div>

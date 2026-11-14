@@ -13,6 +13,7 @@ import * as navigation from '../src/navigation.ts';
 import * as runtime from '../src/runtime-control.ts';
 import * as deviceSettings from '../src/device-settings.ts';
 import * as musicLibrary from '../src/music-library.ts';
+import * as firmwareUpgrade from '../src/firmware-upgrade.ts';
 import * as audit from '../src/audit-control.ts';
 import type { PageRoute, Scope } from '../src/types.ts';
 
@@ -51,6 +52,7 @@ async function mount(scope: 'admin' | 'family', loggedIn = false, options: {
     const resource = await options.resource?.(url, init);
     if (resource) return resource;
     if (url.includes('/chats?')) return new Response(JSON.stringify({ items: [], hasMore: false }));
+    if (url.includes('/device-firmware/')) return new Response(JSON.stringify({deviceId: decodeURIComponent(url.split('/').at(-1)!), canUpgrade: false, connection: 'unknown', boot: '', mode: 'restart', current: null, releases: [], job: null}));
     if (url.endsWith('/devices')) return new Response('[]');
     throw new Error(`unexpected isolated HTTP request ${url}`);
   }) as typeof fetch);
@@ -71,6 +73,7 @@ async function mount(scope: 'admin' | 'family', loggedIn = false, options: {
       if (name.endsWith('/runtime-control.ts')) return runtime;
       if (name.endsWith('/device-settings.ts')) return deviceSettings;
       if (name.endsWith('/music-library.ts')) return musicLibrary;
+      if (name.endsWith('/firmware-upgrade.ts')) return firmwareUpgrade;
       if (name.endsWith('/audit-control.ts')) return audit;
       if (name.endsWith('.css')) return {};
       if (name.endsWith('.vue')) return { default: component(resolve(dirname(path), name)) };

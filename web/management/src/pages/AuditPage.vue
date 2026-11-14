@@ -16,7 +16,7 @@ const control = createAuditController({
   listDevices: () => api.listDevices("admin"),
 }, state);
 const actions: Record<AuditAction, string> = {
-  access: "访问记录", device_control: "设备控制", memory_clear: "记忆清除", settings: "设置变更",
+  access: "访问记录", device_control: "设备控制", memory_clear: "记忆清除", settings: "设置变更", firmware: "固件升级",
 };
 const statuses = { recorded: "已记录", requested: "已请求", confirmed: "已确认", failed: "失败", unknown: "结果未知" };
 function clear() {

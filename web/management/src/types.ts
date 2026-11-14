@@ -95,7 +95,7 @@ export type DeviceRuntime = {
   command: {id:string;field:RuntimeField;value:number;status:string;actual:number|null;expiresAt?:string} | null;
 };
 
-export type AuditAction = "access" | "device_control" | "memory_clear" | "settings";
+export type AuditAction = "access" | "device_control" | "memory_clear" | "settings" | "firmware";
 export type AuditItem = {
   id: string;
   time: string;
@@ -131,3 +131,19 @@ export type MusicLibrary = {
   maxBytes: number; usedBytes: number; maxTrackBytes: number;
 };
 export type MusicUpload = { title: string; artist: string; personalUse: boolean; file: File };
+
+export type FirmwareRelease = {
+  id: string; version: string; sourceCommit: string; size: number; sha256: string; elfSha256: string;
+};
+export type FirmwareJob = {
+  id: string; releaseId: string; version: string;
+  status: "queued" | "sent" | "downloading" | "restarting" | "confirmed" | "failed" | "unknown";
+  progress: number | null; error: string; requestedAt: string; expiresAt: string;
+};
+export type DeviceFirmware = {
+  deviceId: string; canUpgrade: boolean; connection: "online" | "offline" | "unknown";
+  boot: string; mode: "online" | "restart";
+  current: { version: string; elfSha256: string } | null;
+  releases: FirmwareRelease[]; job: FirmwareJob | null;
+};
+export type FirmwareUpgradeInput = { releaseId: string; boot: string };
