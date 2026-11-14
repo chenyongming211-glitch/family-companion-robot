@@ -13,9 +13,9 @@
 ## Task 1：固定派生环境和检查原生成语音项
 
 - [x] 核对正式PID/原Caddy/admin、原209来源、v8摘要及共享账本3/13；复制source到source-repair-v1并记录原清单，保留旧证据。
-- [ ] 准备仅显式env允许才连接的云端协议检查源码与fake保护测试；调用前持久intent、未知不重试、两版补检合计协议最多2、主要回答总计最多4，凭据仅云端LoadConfig。
-- [ ] 检查两类真实生成assistant音频项：completed后delete/create/retrieve，以及生成中cancel→同response终态→delete/create。精确ACK/身份/顺序必须核对；后续仅允许已同步上下文的诊断回答，结果私有保存。
-- [ ] 失败明确降级，不以文档或合成typed项代替生成音频验证，不擅自增加探针。
+- [x] 准备仅显式env允许才连接的云端协议检查源码与fake保护测试；调用前持久intent、未知不重试、两版补检合计协议最多2、主要回答总计最多4，凭据仅云端LoadConfig。
+- [x] 检查两类真实生成assistant音频项：completed后delete/create/retrieve，以及生成中cancel→同response终态→delete/create。精确ACK/身份/顺序必须核对；后续仅允许已同步上下文的诊断回答，结果私有保存。
+- [x] 失败明确降级，不以文档或合成typed项代替生成音频验证，不擅自增加探针。v1缺项读取unknown保留；v2必需ACK/替换读取通过，额外缺项读取仍unknown，内部记忆抹除不作承诺；账本累计5/17。
 
 ## Task 2：分段已播证据（纯函数）
 
@@ -38,7 +38,7 @@ Files: 隔离runner现有`native_device_pilot_test.go`与保护测试；Git在`t
 
 ## Task 4：隔离实机与交接
 
-- [ ] 准备新路由operator版本/独立prepare目录和新PID/source proof，不复用已消费v2/v3意图；正式空闲时仅精确目标分流。
-- [ ] 用户手动测试故事中换问题、明确暂停再继续；比对已播段、未知、中断状态、旧item删除和原生session身份，不把普通mock/协议当听感成绩。用同一账本，最多总48/8。
-- [ ] 结束恢复原Caddy/admin，停止仅本轮实例，固件不变、0B增量。
-- [ ] 更新验证/主设计/交接与计划，main提交推送；未验证项目及失败原样保留。
+- [x] 准备新路由operator版本/独立prepare目录和新PID/source proof，不复用已消费v2/v3意图；正式空闲时仅精确目标分流。v4绑定审计增量后新binary/PID，apply verified。
+- [ ] 用户手动测试故事中换问题、明确暂停再继续；比对已播段、未知、中断状态、旧item删除和原生session身份，不把普通mock/协议当听感成绩。用同一账本，最多总48/8。v4约5分钟窗口无新输入，记未覆盖；下次新建独立分流意图，不能复用v4。
+- [x] 结束恢复原Caddy/admin，停止仅本轮实例及两端采集，固件不变、0B增量；restore verified、MainPID0、正式服务保持。
+- [x] 更新验证/主设计/交接与计划，直接main提交推送；实机待验和旧失败原样保留，最终结果以验证记录为准。
