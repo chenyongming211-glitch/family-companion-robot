@@ -1,6 +1,6 @@
 # 独立管理服务
 
-**2026-11-14手动OTA已验证、待发布：** 管理代码新增`--firmware-root /var/lib/family-robot-management/firmware`，私有目录0700、文件0600，沿用现有管理服务可写父目录，不增加Voice写权限。使用`management publish-firmware --root <私有目录> --manifest <已核对元数据> --app <app.bin> --partition <二进制分区表>`封存可信构建；校验实际镜像版本/ELF/内容摘要、芯片/项目、精确双槽布局，禁止任意URL输入或覆盖同一发布。最多8份/共32MiB、1024设备文件、每设备32项任务，不静默删除旧证据。两端`GET/POST /api/<scope>/device-firmware/<dev_32hex>`复用当前设备管理权限；新增审计分类`firmware`。仅必要家庭/设备接口进入Caddy白名单，内部管理路径保持既有访问边界。代码、两端真实页面、云端整包和整体审查通过；正式服务和微雪尚未更新，完整状态见[本轮验证](../../docs/verification/2026-11-14-device-ota.md)。
+**2026-11-14手动OTA管理已发布：** 管理代码新增`--firmware-root /var/lib/family-robot-management/firmware`，私有目录0700、文件0600，沿用现有管理服务可写父目录，不增加Voice写权限。使用`management publish-firmware --root <私有目录> --manifest <已核对元数据> --app <app.bin> --partition <二进制分区表>`封存可信构建；校验实际镜像版本/ELF/内容摘要、芯片/项目、精确双槽布局，禁止任意URL输入或覆盖同一发布。最多8份/共32MiB、1024设备文件、每设备32项任务，不静默删除旧证据。两端`GET/POST /api/<scope>/device-firmware/<dev_32hex>`复用当前设备管理权限；新增审计分类`firmware`。仅必要家庭/设备接口进入Caddy白名单，内部管理路径保持既有访问边界。代码、两端真实页面、云端整包和整体审查通过；管理已发布device-ota-20261114-r1，Voice保持原版，微雪首次OTA待现场确认。发布须从实际Caddy叠加三项匹配器以保留原路由，完整状态见[本轮验证](../../docs/verification/2026-11-14-device-ota.md)。
 
 **2026-11-11真实入口清理：** 管理产品只使用默认真实构建；旧mock、HTML原型、云端旧前端/静态副本及18790演示入口已删除。当前仍由原管理进程在18791服务`admin-audit-20261111-r1/web`的4个真实文件，公开pins为release父目录`real-only-frontend.json`。M5当前绑定已结束，仅微雪为当前设备；真实旧档案和历史配置兼容保留。旧release二进制/证明不删，但其旧UI已清理，不能直接作为界面回退。详情与CI/现场边界见[本批验证](../../docs/verification/2026-11-11-real-only-waveshare.md)。
 
