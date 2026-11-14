@@ -7,14 +7,14 @@ static void ClockFormatting() {
         const auto c=FormatDesktopClock(invalid);
         assert(!c.valid && !std::strcmp(c.time,"--:--") && !c.date[0]);
     }
-    const auto first=FormatDesktopClock(1735689600); // already-local2025-01-01
+    const auto first=FormatDesktopClock(1735689600); // UTC0 fixture: 2025-01-01
     assert(first.valid && !std::strcmp(first.time,"00:00"));
     assert(!std::strcmp(first.date,"1月1日 星期三"));
     assert(!std::strcmp(FormatDesktopClock(1709251199).time,"--:--")); // 2024 outside supported range
     assert(!std::strcmp(FormatDesktopClock(1835395140).date,"2月28日 星期一"));
     assert(!std::strcmp(FormatDesktopClock(1835395200).date,"2月29日 星期二"));
     assert(!std::strcmp(FormatDesktopClock(1835481600).date,"3月1日 星期三"));
-    assert(!std::strcmp(FormatDesktopClock(1794488400).time,"13:00")); // no second timezone offset
+    assert(!std::strcmp(FormatDesktopClock(1794488400).time,"13:00")); // UTC0 layout fixture
 }
 static bool Hidden(const lv_obj_t* p){return p->flags&LV_OBJ_FLAG_HIDDEN;}
 static void ClockView() {

@@ -37,7 +37,7 @@ class DesktopClockTests(unittest.TestCase):
                         '-I',str(FIRMWARE/'overlays/main/display'),str(host),'-o',str(binary)]
                     built=subprocess.run(command,capture_output=True,text=True)
                     self.assertEqual(built.returncode,0,built.stderr)
-                    environment=dict(os.environ,ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',
+                    environment=dict(os.environ,TZ='UTC0',ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',
                         UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
                     if os.environ.get('FIRMWARE_HOST_ASAN_PRELOAD'):
                         environment['LD_PRELOAD']=os.environ['FIRMWARE_HOST_ASAN_PRELOAD']

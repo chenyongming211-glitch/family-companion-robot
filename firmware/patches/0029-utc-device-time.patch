@@ -1,0 +1,33 @@
+diff --git a/main/application.cc b/main/application.cc
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -1,4 +1,5 @@
+ #include "application.h"
++#include "device_time.h"
+ #include "audio/music_audition.h"
+ #include "assets.h"
+ #include "assets/lang_config.h"
+@@ -86,6 +87,7 @@
+ }
+ 
+ void Application::Initialize() {
++    family_robot::ConfigureDefaultDeviceTimezone();
+     auto& board = Board::GetInstance();
+     SetDeviceState(kDeviceStateStarting);
+ 
+diff --git a/main/ota.cc b/main/ota.cc
+--- a/main/ota.cc
++++ b/main/ota.cc
+@@ -1,4 +1,5 @@
+ #include "ota.h"
++#include "device_time.h"
+ #include "system_info.h"
+ #include "settings.h"
+ #include "assets/lang_config.h"
+@@ -214,4 +215,4 @@
+-            // 如果有时区偏移，计算本地时间
++            // Keep the system clock UTC; the validated offset controls display only.
+             if (cJSON_IsNumber(timezone_offset)) {
+-                ts += (timezone_offset->valueint * 60 * 1000); // 转换分钟为毫秒
++                family_robot::SetDeviceTimezoneOffset(timezone_offset->valuedouble);
+             }

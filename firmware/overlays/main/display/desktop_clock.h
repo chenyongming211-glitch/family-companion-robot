@@ -5,12 +5,11 @@
 #include <ctime>
 
 namespace family_robot {
-// OTA has already applied timezone_offset before settimeofday. These seconds
-// are local wall time, so gmtime_r deliberately performs no second TZ shift.
+// OTA and SNTP both supply UTC seconds; TZ selects the local display time.
 struct DesktopClockText {char time[6]="--:--",date[40]="";bool valid=false;};
 inline DesktopClockText FormatDesktopClock(time_t seconds) {
     DesktopClockText result;std::tm local{};
-    if(seconds<0 || !gmtime_r(&seconds,&local) || local.tm_year<125 || local.tm_year>199 ||
+    if(seconds<0 || !localtime_r(&seconds,&local) || local.tm_year<125 || local.tm_year>199 ||
        local.tm_mon<0 || local.tm_mon>11 || local.tm_mday<1 || local.tm_mday>31 ||
        local.tm_wday<0 || local.tm_wday>6 || local.tm_hour<0 || local.tm_hour>23 ||
        local.tm_min<0 || local.tm_min>59 || local.tm_sec<0 || local.tm_sec>60)return result;
