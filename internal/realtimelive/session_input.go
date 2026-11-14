@@ -22,6 +22,7 @@ type pendingInput struct {
 	ended, hadPreview, finalized, retired bool
 	stoppedAt                             time.Time
 	pcm                                   []byte
+	outputAtStart                         *liveTurn
 }
 
 func inputItem(event map[string]any) (string, bool) {
@@ -55,6 +56,7 @@ func (s *Session) discardInputLocked() {
 	if p := s.lastInput; p != nil {
 		clear(p.pcm)
 		p.pcm = nil
+		p.outputAtStart = nil
 		p.retired = true
 	}
 	s.lastInput = nil
@@ -91,7 +93,7 @@ func (s *Session) startInput(event map[string]any) error {
 		start = int64(pos * 16)
 	}
 	s.seq++
-	p := &pendingInput{id: s.seq, item: item, start: start, speakerStartValid: valid && pos >= 0 && pos*16 <= float64(s.providerEnd)}
+	p := &pendingInput{id: s.seq, item: item, start: start, speakerStartValid: valid && pos >= 0 && pos*16 <= float64(s.providerEnd), outputAtStart: s.output}
 	s.lastInput = p
 	s.items[item] = p
 	s.itemOrder = append(s.itemOrder, item)
@@ -161,6 +163,7 @@ func (s *Session) previewInput(event map[string]any) error {
 		return nil
 	}
 	meaningful, chars := false, 0
+	preview := ""
 	for _, field := range []string{"text", "stash"} {
 		if value, present := event[field]; present {
 			text, bounded, hasText := inputText(value)
@@ -171,6 +174,7 @@ func (s *Session) previewInput(event map[string]any) error {
 				meaningful = true
 				chars = max(chars, utf8.RuneCountInString(text))
 			}
+			preview += text
 		}
 	}
 	if !meaningful {
@@ -179,6 +183,12 @@ func (s *Session) previewInput(event map[string]any) error {
 	s.mu.Lock()
 	p := s.lastInput
 	if s.ctx.Err() != nil || p == nil || p.item != item || p.retired || p.hadPreview || p.finalized {
+		s.mu.Unlock()
+		return nil
+	}
+	// The provider's text and stash can be stable and unstable continuations.
+	// Compare their complete content; a matching field cannot hide new words.
+	if s.suspectedOpeningEchoLocked(p, preview, time.Now()) {
 		s.mu.Unlock()
 		return nil
 	}
@@ -212,6 +222,12 @@ func (s *Session) finishInput(event map[string]any) error {
 			reason = "invalid_transcript"
 		}
 		return s.record("input_rejected", map[string]any{"id": p.id, "reason": reason, "had_preview": hadPreview, "item_scope": "current"})
+	}
+	if len(p.pcm) > 0 && len(p.pcm) <= 32000 && s.suspectedOpeningEchoLocked(p, text, time.Now()) {
+		samples, chars := len(p.pcm)/2, len(echoOpeningRunes(text))
+		s.discardInputLocked()
+		s.mu.Unlock()
+		return s.record("input_rejected", map[string]any{"id": p.id, "reason": "suspected_opening_echo", "chars": chars, "samples": samples, "had_preview": false, "item_scope": "current"})
 	}
 	s.mu.Unlock()
 	if err := s.interruptInput(nil, "provider_asr_final", p); err != nil {

@@ -23,6 +23,7 @@ type liveTurn struct {
 	cancel                  context.CancelFunc
 	done                    chan struct{}
 	stoppedAt, drainStarted time.Time
+	lastPlaybackProgress    time.Time // Session.mu; validated Completed advances only.
 	asr                     *OutputASR
 	transcriptReady         chan struct{}
 	transcriptOnce          sync.Once
@@ -550,6 +551,7 @@ func (s *Session) receiveReceipt(event map[string]any) error {
 		s.mu.Unlock()
 		return errors.New("invalid_playback_receipt")
 	}
+	completedBefore := rt.turn.Completed
 	normalized, err := s.wire.normalizeReceipt(rt.turn, event)
 	basis := "CoreAudio_dataPlayedBack"
 	_, device := s.wire.(*xiaozhiWire)
@@ -572,6 +574,9 @@ func (s *Session) receiveReceipt(event map[string]any) error {
 		}
 		s.mu.Unlock()
 		return errors.New("invalid_playback_receipt")
+	}
+	if rt.turn.Completed > completedBefore {
+		rt.lastPlaybackProgress = time.Now()
 	}
 	term := normalized["terminal"]
 	if rt.turn.PlaybackFinal {

@@ -22,23 +22,20 @@
 
 ```go
 func TestInputEchoOpeningDoesNotInterruptOrGenerate(t *testing.T) {
-    r := newAdmissionRig(t, func(s *Session) {
-        s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}
-    })
-    old := r.s.addTurn()
-    r.s.mu.Lock()
-    old.turn.Generated = "好的，我们从前有一颗星星讲起。"
-    old.turn.Sent = 27360
-    r.s.mu.Unlock()
-    // Use the actual xiaozhi receipt schema, not a forged PlaybackBasis field.
-    // Input uses r.start/preview/stop/final and r.sync barriers.
-    // Assert old remains output and uncut, history length stays one,
-    // r.primary/r.selector stay zero, input PCM is retired/cleared,
-    // and a second r.s.binary(old, packet) can still release audio.
+    r := newEchoAdmissionRig(t)
+    old := echoOutput(t, r, "好的，我们从前有一颗星星讲起。", 19)
+    if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+        t.Fatal(err)
+    }
+    r.start(t, "opening")
+    r.preview(t, "opening", "text", "好")
+    r.stop(t, "opening")
+    r.final(t, "opening", "好的")
+    assertEchoOutputAlive(t, r, old)
 }
 ```
 
-该片段给出夹具入口和故障设置；实现者需按`xiaozhi_wire.go:normalizeReceipt`填入真实回执字段，完整断言保存在测试文件，不能直接设置新增防护字段冒充回执集成。
+该故障入口及其辅助函数完整保存在`internal/realtimelive/session_echo_test.go`：echoOutput通过begin及19次真实binary建立27360样本账本，echoReceipt构造真实i2s_dma/valid/played_samples/state回执；assertEchoOutputAlive检查原输出、history及主生成/表情选择调用数。完整回归另验证PCM清除、原音频继续及重复final无效。
 
 - [ ] 云端先运行新增故障回归，确认失败原因为原回复被打断或新回复被启动；保存RED日志。Mac不执行Go测试。
 - [ ] 添加每输出`lastPlaybackProgress time.Time`，在receiveReceipt原有校验成功且`Completed`严格递增时写入time.Now；相同计数、拒绝的回执都不得刷新。
