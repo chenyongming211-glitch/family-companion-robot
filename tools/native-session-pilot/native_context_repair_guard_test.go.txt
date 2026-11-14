@@ -1,0 +1,592 @@
+package realtimelive
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"familyrobot/internal/realtimestate"
+	"github.com/gorilla/websocket"
+)
+
+// A wire-level fake: records actual client frames and can withhold or corrupt
+// acknowledgements. It never contacts a real model or opens a device listener.
+type ndRepairFake struct {
+	mu          sync.Mutex
+	events      []map[string]any
+	connections atomic.Int32
+	responses   atomic.Int32
+	closed      atomic.Int32
+	ready       chan struct{}
+	cancelling  chan struct{}
+	server      *httptest.Server
+}
+
+func ndRepairProvider(t *testing.T, mode string) *ndRepairFake {
+	f := &ndRepairFake{ready: make(chan struct{}, 8), cancelling: make(chan struct{}, 8)}
+	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if e != nil {
+			return
+		}
+		defer ws.Close()
+		defer f.closed.Add(1)
+		connection := f.connections.Add(1)
+		sid := fmt.Sprintf("repair-session-%d", connection)
+		ws.WriteJSON(map[string]any{"type": "session.created", "session": map[string]any{"id": sid}})
+		rid := ""
+		items := []any{}
+		for {
+			var v map[string]any
+			if ws.ReadJSON(&v) != nil {
+				return
+			}
+			f.mu.Lock()
+			f.events = append(f.events, v)
+			f.mu.Unlock()
+			switch v["type"] {
+			case "session.update":
+				if mode == "initial-wait" {
+					f.ready <- struct{}{}
+					continue
+				}
+				s := object(v["session"])
+				s["id"] = sid
+				s["model"] = ndModel
+				ws.WriteJSON(map[string]any{"type": "session.updated", "session": s})
+			case "input_audio_buffer.commit":
+				ws.WriteJSON(map[string]any{"type": "input_audio_buffer.committed", "item_id": fmt.Sprintf("repair-user-%d", f.responses.Load()+1)})
+			case "response.create":
+				n := f.responses.Add(1)
+				rid = fmt.Sprintf("repair-response-%d", n)
+				ws.WriteJSON(map[string]any{"type": "response.created", "response": map[string]any{"id": rid}})
+				items = nil
+				count := 1
+				if strings.Contains(mode, "multi") {
+					count = 2
+				}
+				for i := 0; i < count; i++ {
+					item := map[string]any{"id": fmt.Sprintf("repair-item-%d-%d", n, i), "type": "message", "role": "assistant"}
+					bad := mode
+					if n != 1 {
+						bad = ""
+					}
+					twoParts := []any{map[string]any{"type": "audio", "transcript": "可信短句。"}, map[string]any{"type": "audio", "transcript": "第二音频部分。"}}
+					if bad == "content/item-added-two" {
+						item["content"] = twoParts
+					}
+					items = append(items, item)
+					ws.WriteJSON(map[string]any{"type": "response.output_item.added", "response_id": rid, "item": item})
+					if bad == "content/part-index" || bad == "content/part-duplicate" {
+						index := 0
+						if bad == "content/part-index" {
+							index = 1
+						}
+						ws.WriteJSON(map[string]any{"type": "response.content_part.added", "response_id": rid, "item_id": item["id"], "content_index": index, "part": map[string]any{"type": "audio"}})
+						if bad == "content/part-duplicate" {
+							ws.WriteJSON(map[string]any{"type": "response.content_part.added", "response_id": rid, "item_id": item["id"], "content_index": 0, "part": map[string]any{"type": "audio"}})
+						}
+					}
+					audio := map[string]any{"type": "response.audio.delta", "response_id": rid, "item_id": item["id"], "content_index": 0, "delta": base64.StdEncoding.EncodeToString(make([]byte, 2880))}
+					if bad == "content/audio-index" {
+						audio["content_index"] = 1
+					}
+					if bad == "content/missing-index" {
+						delete(audio, "content_index")
+					}
+					ws.WriteJSON(audio)
+					if bad == "content/transcript-delta-index" {
+						ws.WriteJSON(map[string]any{"type": "response.audio_transcript.delta", "response_id": rid, "item_id": item["id"], "content_index": 1, "delta": "错误片段"})
+					}
+					index := 0
+					if bad == "content/transcript-index" {
+						index = 1
+					}
+					ws.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "response_id": rid, "item_id": item["id"], "content_index": index, "transcript": "可信短句。未播尾巴。"})
+					if bad == "content/second-audio-part" {
+						ws.WriteJSON(map[string]any{"type": "response.audio.delta", "response_id": rid, "item_id": item["id"], "content_index": 1, "delta": base64.StdEncoding.EncodeToString(make([]byte, 2880))})
+						ws.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "response_id": rid, "item_id": item["id"], "content_index": 1, "transcript": "第二音频部分。"})
+					}
+					if bad == "content/audio-done-index" {
+						ws.WriteJSON(map[string]any{"type": "response.audio.done", "response_id": rid, "item_id": item["id"], "content_index": 1})
+					}
+					if bad == "content/transcript-done-duplicate" {
+						ws.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "response_id": rid, "item_id": item["id"], "content_index": 0, "transcript": "第二音频部分。"})
+					}
+					if bad == "content/terminal-two" || bad == "content/item-done-two" || bad == "content/created-two" {
+						item["content"] = twoParts
+						if bad == "content/item-done-two" {
+							ws.WriteJSON(map[string]any{"type": "response.output_item.done", "response_id": rid, "item": item})
+						}
+						if bad == "content/created-two" {
+							ws.WriteJSON(map[string]any{"type": "conversation.item.created", "item": item})
+						}
+					}
+				}
+				f.ready <- struct{}{}
+				if strings.Contains(mode, "inflight") && n == 1 {
+					continue
+				}
+				ws.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": rid, "status": "completed", "output": items}})
+			case "response.cancel":
+				f.cancelling <- struct{}{}
+				if mode == "inflight-delayed-cancel" {
+					time.Sleep(300 * time.Millisecond)
+				}
+				if mode == "inflight-missing-terminal" {
+					continue
+				}
+				terminalID := rid
+				if mode == "inflight-foreign-terminal" {
+					terminalID = "foreign-response"
+				}
+				terminal := map[string]any{"id": terminalID, "status": "cancelled", "output": items}
+				if mode == "inflight-terminal-no-output" {
+					delete(terminal, "output")
+				}
+				ws.WriteJSON(map[string]any{"type": "response.done", "response": terminal})
+			case "conversation.item.delete":
+				if connection == 1 && mode == "missing-delete" {
+					continue
+				}
+				iid := v["item_id"]
+				if connection == 1 && mode == "foreign-delete" {
+					iid = "foreign-item"
+				}
+				ws.WriteJSON(map[string]any{"type": "conversation.item.deleted", "item_id": iid})
+			case "conversation.item.create":
+				if connection == 1 && mode == "missing-create" {
+					continue
+				}
+				item := object(v["item"])
+				if connection == 1 && mode == "wrong-text" {
+					item["content"] = []any{map[string]any{"type": "output_text", "text": "伪造内容"}}
+				}
+				previous := v["previous_item_id"]
+				if connection == 1 && mode == "wrong-order" {
+					previous = "wrong-user"
+				}
+				if connection == 1 && mode == "wrong-role" {
+					item["role"] = "assistant"
+				}
+				ws.WriteJSON(map[string]any{"type": "conversation.item.created", "item": item, "previous_item_id": previous})
+			}
+		}
+	}))
+	t.Cleanup(f.server.Close)
+	return f
+}
+
+func (f *ndRepairFake) snapshot() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.events...)
+}
+func ndRepairDriver(t *testing.T, f *ndRepairFake) *nativeDevicePilot {
+	d := ndTestDriver(t, &ndFake{server: f.server})
+	d.timeout = 6 * time.Second
+	return d
+}
+func ndCutTurn() *realtimestate.Turn {
+	t := realtimestate.NewTurn(1)
+	t.User = "旧故事请求"
+	t.Generated = "可信短句。未播尾巴。"
+	t.Sent = 24000
+	t.Completed = 12000
+	t.Cut = true
+	t.PlaybackBasis = "i2s_dma"
+	t.PlaybackFinal = true
+	t.MarkDrainDone()
+	t.Tracker.Add(map[string]any{"sentence_id": 1, "sentence_end": true, "text": "可信短句。", "words": []any{map[string]any{"text": "可信短句。", "begin_time": 0, "end_time": 200}}}, 500)
+	return t
+}
+func TestNativeContextRepairCompletedCutSameConnection(t *testing.T) {
+	f := ndRepairProvider(t, "multi")
+	d := ndRepairDriver(t, f)
+	defer d.Close()
+	if e := d.generate(context.Background(), 1, "", make([]byte, 3200), ndNoop); e != nil {
+		t.Fatal(e)
+	}
+	d.session = &Session{history: []*liveTurn{{turn: ndCutTurn()}}}
+	if e := d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop); e != nil {
+		t.Fatal(e)
+	}
+	if f.connections.Load() != 1 {
+		t.Fatal("completed-cut repair rebuilt and lost unrelated native audio context")
+	}
+	deleted := map[string]bool{}
+	creates := 0
+	marker := false
+	previous := "repair-user-1"
+	for _, v := range f.snapshot() {
+		switch v["type"] {
+		case "conversation.item.delete":
+			deleted[fmt.Sprint(v["item_id"])] = true
+		case "conversation.item.create":
+			creates++
+			if len(deleted) != 2 {
+				t.Fatal("replacement preceded all assistant item delete ACKs")
+			}
+			if v["previous_item_id"] != previous {
+				t.Fatal("replacement lost original user position")
+			}
+			item := object(v["item"])
+			previous = fmt.Sprint(item["id"])
+			content := item["content"].([]any)
+			text := fmt.Sprint(object(content[0])["text"])
+			if item["role"] == "assistant" && text != "可信短句。" {
+				t.Fatalf("unheard assistant restoration: %s", text)
+			}
+			if item["role"] == "system" {
+				marker = strings.Contains(text, "中断") && strings.Contains(text, "未知") && strings.Contains(text, "当前")
+			}
+		case "response.create":
+			if f.responses.Load() > 1 && len(deleted) > 0 && (creates != 2 || !marker) {
+				t.Fatal("new response preceded trusted state repair")
+			}
+		}
+	}
+	if len(deleted) != 2 || creates != 2 || !marker {
+		t.Fatal("missing all-item deletion, confirmed chunk or independent interruption marker")
+	}
+	if e := d.generate(context.Background(), 3, "", make([]byte, 3200), ndNoop); e != nil {
+		t.Fatal(e)
+	}
+	if f.connections.Load() != 1 {
+		t.Fatal("already repaired cut forced another rebuild")
+	}
+}
+func TestNativeContextRepairInflightCancelSameConnection(t *testing.T) {
+	f := ndRepairProvider(t, "inflight-multi")
+	d := ndRepairDriver(t, f)
+	defer d.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	heard := make(chan struct{}, 8)
+	go func() {
+		done <- d.generate(ctx, 1, "", make([]byte, 3200), func(kind string, _ []byte) error {
+			if kind == "text" {
+				heard <- struct{}{}
+			}
+			return nil
+		})
+	}()
+	<-f.ready
+	<-heard
+	<-heard
+	cancel()
+	if <-done == nil {
+		t.Fatal("cancellation reported successful normal generation")
+	}
+	d.session = &Session{history: []*liveTurn{{turn: ndCutTurn()}}}
+	if e := d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop); e != nil {
+		t.Fatal(e)
+	}
+	if f.connections.Load() != 1 {
+		t.Fatal("known cancelled terminal unnecessarily discarded native connection")
+	}
+	cancels := 0
+	for _, v := range f.snapshot() {
+		if v["type"] == "response.cancel" {
+			cancels++
+			if len(v) != 1 {
+				t.Fatal("cancel used fields outside the confirmed provider schema")
+			}
+		}
+	}
+	if cancels != 1 {
+		t.Fatalf("sent %d cancels, wanted exactly one", cancels)
+	}
+}
+func TestNativeContextRepairUncertainACKRebuildsWithState(t *testing.T) {
+	for _, mode := range []string{"missing-delete", "foreign-delete", "wrong-order", "wrong-role", "wrong-text", "missing-create"} {
+		t.Run(mode, func(t *testing.T) {
+			f := ndRepairProvider(t, mode)
+			d := ndRepairDriver(t, f)
+			defer d.Close()
+			if e := d.generate(context.Background(), 1, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatal(e)
+			}
+			d.session = &Session{history: []*liveTurn{{turn: ndCutTurn()}}}
+			if e := d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatal(e)
+			}
+			if f.connections.Load() != 2 || f.responses.Load() != 2 {
+				t.Fatal("uncertain repair did not rebuild once before new response")
+			}
+			marker := false
+			for _, v := range f.snapshot() {
+				if v["type"] == "conversation.item.create" {
+					item := object(v["item"])
+					if item["role"] == "system" {
+						marker = true
+					}
+				}
+			}
+			if !marker {
+				t.Fatal("fallback restored stale user request without interruption state")
+			}
+		})
+	}
+}
+func TestNativeContextRepairCancellationUncertainClosesWithoutRetry(t *testing.T) {
+	for _, mode := range []string{"inflight-missing-terminal", "inflight-foreign-terminal", "inflight-terminal-no-output"} {
+		t.Run(mode, func(t *testing.T) {
+			f := ndRepairProvider(t, mode)
+			d := ndRepairDriver(t, f)
+			defer d.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			heard := make(chan struct{}, 8)
+			go func() {
+				done <- d.generate(ctx, 1, "", make([]byte, 3200), func(kind string, _ []byte) error {
+					if kind == "text" {
+						heard <- struct{}{}
+					}
+					return nil
+				})
+			}()
+			<-f.ready
+			<-heard
+			cancel()
+			select {
+			case e := <-done:
+				if e == nil {
+					t.Fatal("uncertain cancellation accepted")
+				}
+			case <-time.After(4 * time.Second):
+				t.Fatal("cancel terminal wait unbounded")
+			}
+			ndEventually(t, func() bool { return f.closed.Load() == 1 })
+			if d.generate(context.Background(), 1, "", make([]byte, 3200), ndNoop) == nil {
+				t.Fatal("unknown original input retried")
+			}
+			if f.responses.Load() != 1 {
+				t.Fatal("failed cancellation auto retried original response")
+			}
+			d.session = &Session{history: []*liveTurn{{turn: ndCutTurn()}}}
+			if e := d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatalf("unknown cancellation blocked safe next input rebuild: %v", e)
+			}
+			marker := false
+			for _, v := range f.snapshot() {
+				if v["type"] == "conversation.item.create" && object(v["item"])["role"] == "system" {
+					marker = true
+				}
+			}
+			if !marker || f.connections.Load() != 2 || f.responses.Load() != 2 {
+				t.Fatal("unknown cancellation lost interruption state or retried old input")
+			}
+		})
+	}
+}
+
+func TestNativeContextRepairStateBindsTurnAndPlaybackPosition(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprint(complete), func(t *testing.T) {
+			f := ndRepairProvider(t, "")
+			d := ndRepairDriver(t, f)
+			defer d.Close()
+			if e := d.generate(context.Background(), 1, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatal(e)
+			}
+			turn := ndCutTurn()
+			if complete {
+				turn.Completed = turn.Sent
+				turn.Ended = true
+			}
+			d.session = &Session{history: []*liveTurn{{turn: turn}}}
+			if e := d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatal(e)
+			}
+			marker := ""
+			for _, v := range f.snapshot() {
+				if v["type"] == "conversation.item.create" {
+					item := object(v["item"])
+					if item["role"] == "system" {
+						marker = fmt.Sprint(object(item["content"].([]any)[0])["text"])
+					}
+				}
+			}
+			position := "500.00ms"
+			unknown := "unknown=true"
+			if complete {
+				position = "1000.00ms"
+				unknown = "unknown=false"
+			}
+			if !strings.Contains(marker, "回答编号1已中断") || !strings.Contains(marker, position) || !strings.Contains(marker, unknown) {
+				t.Fatalf("internal state lost turn, canonical position, or unknown flag: %s", marker)
+			}
+		})
+	}
+}
+
+func TestNativeContextRepairCloseDuringInitialSettings(t *testing.T) {
+	f := ndRepairProvider(t, "initial-wait")
+	d := ndRepairDriver(t, f)
+	done := make(chan error, 1)
+	go func() { done <- d.generate(context.Background(), 1, "", make([]byte, 3200), ndNoop) }()
+	<-f.ready
+	d.Close()
+	select {
+	case e := <-done:
+		if e == nil {
+			t.Fatal("shutdown during initial settings succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial shutdown did not unblock reader")
+	}
+	if f.responses.Load() != 0 {
+		t.Fatal("shutdown submitted a response")
+	}
+}
+
+func TestNativeContextRepairNextQuestionWaitsForCancelledProducer(t *testing.T) {
+	f := ndRepairProvider(t, "inflight-delayed-cancel")
+	d := ndRepairDriver(t, f)
+	defer d.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	heard := make(chan struct{}, 8)
+	go func() {
+		done <- d.generate(ctx, 1, "", make([]byte, 3200), func(kind string, _ []byte) error {
+			if kind == "text" {
+				heard <- struct{}{}
+			}
+			return nil
+		})
+	}()
+	<-heard
+	cancel()
+	<-f.cancelling
+	d.session = &Session{history: []*liveTurn{{turn: ndCutTurn()}}}
+	if e := d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop); e != nil {
+		t.Fatalf("interrupting question was rejected while prior producer settled: %v", e)
+	}
+	if <-done == nil {
+		t.Fatal("old cancelled generation succeeded")
+	}
+	if f.connections.Load() != 1 || f.responses.Load() != 2 {
+		t.Fatal("next question did not follow cancellation and repair on same session")
+	}
+}
+
+func TestNativeContextRepairFreezesUnfinishedOutputASRAfterSettle(t *testing.T) {
+	for _, mode := range []string{"", "foreign-delete"} {
+		t.Run(mode, func(t *testing.T) {
+			f := ndRepairProvider(t, mode)
+			d := ndRepairDriver(t, f)
+			defer d.Close()
+			if e := d.generate(context.Background(), 1, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatal(e)
+			}
+			turn := ndCutTurn()
+			turn.Generated = "可信短句。迟到短句。未播尾巴。"
+			asr := &OutputASR{Done: make(chan struct{})}
+			s := NewSession(nil, Config{}, t.TempDir(), nil)
+			defer s.cancel()
+			s.history = []*liveTurn{{turn: turn, asr: asr}}
+			d.session = s
+			next := &liveTurn{turn: realtimestate.NewTurn(2)}
+			done := make(chan error, 1)
+			started := time.Now()
+			go func() {
+				if _, e := s.settle(context.Background(), next); e != nil {
+					done <- e
+					return
+				}
+				done <- d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop)
+			}()
+			// ASR is intentionally unfinished beyond the real core's 1200ms
+			// settlement budget. No conversation mutation/new answer may precede it.
+			time.Sleep(200 * time.Millisecond)
+			for _, v := range f.snapshot() {
+				if v["type"] == "conversation.item.delete" || v["type"] == "conversation.item.create" {
+					t.Fatal("context mutated before core settlement")
+				}
+			}
+			if f.responses.Load() != 1 {
+				t.Fatal("new answer preceded core settlement")
+			}
+			if e := <-done; e != nil {
+				t.Fatal(e)
+			}
+			if time.Since(started) < 1100*time.Millisecond || closed(asr.Done) {
+				t.Fatal("fixture did not exercise unfinished output ASR after 1200ms")
+			}
+			markers := []string{}
+			collect := func(events []map[string]any) {
+				for _, v := range events {
+					if v["type"] != "conversation.item.create" {
+						continue
+					}
+					item := object(v["item"])
+					text := fmt.Sprint(object(item["content"].([]any)[0])["text"])
+					if item["role"] == "assistant" && strings.Contains(text, "迟到短句") {
+						t.Fatal("late ASR silently upgraded frozen context")
+					}
+					if item["role"] == "system" {
+						markers = append(markers, text)
+					}
+				}
+			}
+			collect(f.snapshot())
+			if len(markers) != 1 || !strings.Contains(markers[0], "output_asr_unfinished_at_settle") || !strings.Contains(markers[0], "unknown=true") {
+				t.Errorf("unfinished ASR was not explicitly frozen as unknown: %v", markers)
+			}
+			before := len(f.snapshot())
+			// This final arrives after the freeze boundary, then the ASR succeeds.
+			// A subsequent window rebuild must retain exactly the frozen state.
+			s.mu.Lock()
+			turn.Tracker.Add(map[string]any{"sentence_id": 2, "sentence_end": true, "text": "迟到短句。", "words": []any{map[string]any{"text": "迟到短句。", "begin_time": 210, "end_time": 300}}}, 1300)
+			s.mu.Unlock()
+			close(asr.Done)
+			d.audioSeconds = 180
+			if e := d.generate(context.Background(), 3, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatal(e)
+			}
+			collect(f.snapshot()[before:])
+			if len(markers) != 2 || markers[0] != markers[1] {
+				t.Fatalf("repair and rebuild did not share immutable evidence: %v", markers)
+			}
+		})
+	}
+}
+
+func TestNativeContextRepairRejectsUnsupportedContentParts(t *testing.T) {
+	for _, mode := range []string{"second-audio-part", "audio-index", "transcript-index", "transcript-delta-index", "part-index", "part-duplicate", "terminal-two", "item-added-two", "item-done-two", "created-two", "audio-done-index", "transcript-done-duplicate", "missing-index"} {
+		t.Run(mode, func(t *testing.T) {
+			f := ndRepairProvider(t, "content/"+mode)
+			d := ndRepairDriver(t, f)
+			defer d.Close()
+			text := ""
+			e := d.generate(context.Background(), 1, "", make([]byte, 3200), func(kind string, b []byte) error {
+				if kind == "text" {
+					text = string(b)
+				}
+				return nil
+			})
+			if e == nil {
+				t.Fatalf("unsupported same-item content was reported complete; final transcript=%q", text)
+			}
+			ndEventually(t, func() bool { return f.closed.Load() == 1 })
+			if d.generate(context.Background(), 1, "", make([]byte, 3200), ndNoop) == nil {
+				t.Fatal("unknown original response was retried")
+			}
+			d.session = &Session{history: []*liveTurn{{turn: ndCutTurn()}}}
+			if e := d.generate(context.Background(), 2, "", make([]byte, 3200), ndNoop); e != nil {
+				t.Fatalf("unsupported content prevented safe next-input rebuild: %v", e)
+			}
+			if f.connections.Load() != 2 || f.responses.Load() != 2 {
+				t.Fatal("unsupported content did not close then safely rebuild exactly once")
+			}
+		})
+	}
+}

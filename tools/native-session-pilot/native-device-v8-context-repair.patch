@@ -1,0 +1,289 @@
+--- a/internal/realtimelive/native_device_pilot_test.go
++++ b/internal/realtimelive/native_device_pilot_test.go
+@@ -46 +46,6 @@
+-	turnMu                            sync.Mutex // Exactly one writer and one reader; reject overlapping turns.
++	turnMu                            sync.Mutex      // Exactly one writer and one reader; reject overlapping turns.
++	activeParent                      context.Context // socketMu
++	activeDone                        chan struct{}   // socketMu
++	writeMu                           sync.Mutex
++	turns                             map[int64]*ndNativeTurn
++	playback                          map[int64]ndFrozenPlayback // turnMu + Session.mu; survives native reconnect
+@@ -300 +305 @@
+-	if e := ndWrite(ctx, c, map[string]any{"type": "session.update", "session": settings}); e != nil {
++	if e := d.write(ctx, c, map[string]any{"type": "session.update", "session": settings}); e != nil {
+@@ -356,0 +362 @@
++	d.turns = map[int64]*ndNativeTurn{}
+@@ -405 +411 @@
+-		if v.turn.ID >= d.floor && v.turn.Cut {
++		if v.turn.ID >= d.floor && v.turn.Cut && (d.turns[v.turn.ID] == nil || !d.turns[v.turn.ID].repaired) {
+@@ -411,0 +418,9 @@
++	retained := map[int64]bool{}
++	for _, v := range prior {
++		retained[v.turn.ID] = true
++	}
++	for turn := range d.playback {
++		if !retained[turn] {
++			delete(d.playback, turn)
++		}
++	}
+@@ -418,4 +433,6 @@
+-		ev := realtimestate.PlaybackEvidence(t)
+-		// An unmatched OutputASR observation is not a confirmed assistant prefix.
+-		if ev.SpokenText != nil && *ev.SpokenText != "" && (ev.TextSource == "native_transcript_full_playback" || ev.AlignedPrefix != nil) {
+-			out = append(out, ndRestore{"assistant", *ev.SpokenText, t.ID})
++		evidence := d.playbackSnapshot(v)
++		for _, segment := range evidence.played.Segments {
++			out = append(out, ndRestore{"assistant", segment.Text, t.ID})
++		}
++		if t.Cut {
++			out = append(out, ndRestore{"system", ndInterruptedState(t, evidence), t.ID})
+@@ -427 +443,0 @@
+-	c := d.socket()
+@@ -435,42 +451,5 @@
+-		itemID := "restore_" + randomID()
+-		kind := "input_text"
+-		if h.Role == "assistant" {
+-			kind = "output_text"
+-		}
+-		item := map[string]any{"id": itemID, "type": "message", "role": h.Role, "content": []any{map[string]any{"type": kind, "text": h.Text}}}
+-		event := map[string]any{"type": "conversation.item.create", "item": item}
+-		if previous != "" {
+-			event["previous_item_id"] = previous
+-		}
+-		if e := ndWrite(ctx, c, event); e != nil {
+-			return e
+-		}
+-		confirmed := false
+-		for range 64 {
+-			v, e := ndRead(ctx, c)
+-			if e != nil {
+-				return e
+-			}
+-			if v["type"] == "error" {
+-				return ndError("provider_restore_error")
+-			}
+-			if strings.HasPrefix(fmt.Sprint(v["type"]), "response.") {
+-				return ndError("foreign_response_during_restore")
+-			}
+-			if v["type"] == "conversation.item.created" {
+-				got := object(v["item"])
+-				content, contentOK := got["content"].([]any)
+-				if got["id"] != itemID || got["type"] != "message" || got["role"] != h.Role || !contentOK || len(content) != 1 || object(content[0])["type"] != kind || object(content[0])["text"] != h.Text {
+-					return ndError("restore_identity")
+-				}
+-				confirmed = true
+-				break
+-			}
+-			if strings.HasPrefix(fmt.Sprint(v["type"]), "conversation.item.") {
+-				return ndError("foreign_item_during_restore")
+-			}
+-		}
+-		if !confirmed {
+-			return ndError("restore_ack_missing")
+-		}
+-		previous = itemID
++		next, err := d.createTyped(ctx, d.socket(), h, previous)
++		if err != nil {
++			return err
++		}
++		previous = next
+@@ -484,4 +463,4 @@
+-	if !d.turnMu.TryLock() {
+-		return ndError("overlap")
+-	}
+-	defer d.turnMu.Unlock()
++	if err = d.enter(parent); err != nil {
++		return err
++	}
++	defer d.leave()
+@@ -516 +495 @@
+-	ctx, cancel := context.WithTimeout(parent, timeout)
++	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
+@@ -521 +500,7 @@
+-	stop := func() bool { return true }
++	var watch *ndCancelWatch
++	stop := func() {
++		if watch != nil {
++			watch.finish()
++		}
++	}
++	preserve := false
+@@ -535,2 +520,4 @@
+-			d.drop()
+-			if strings.Contains(tag, "identity") || strings.Contains(tag, "foreign") || strings.Contains(tag, "overlap") {
++			if !preserve {
++				d.drop()
++			}
++			if !preserve && parent.Err() == nil && (strings.Contains(tag, "identity") || strings.Contains(tag, "foreign") || strings.Contains(tag, "overlap")) {
+@@ -550,6 +537,10 @@
+-	if cut || d.audioSeconds+inputSeconds+60 >= 239 {
+-		reason := "interrupted_playback"
+-		if !cut {
+-			reason = "native_audio_window"
+-		}
+-		row["rebuild_reason"] = reason
++	if cut && d.socket() != nil {
++		if repairErr := d.repair(ctx, id); repairErr != nil {
++			row["repair_fallback"] = ndRepairError(repairErr)
++			d.drop()
++		} else {
++			row["same_session_context_repaired"] = true
++		}
++	}
++	if d.audioSeconds+inputSeconds+60 >= 239 {
++		row["rebuild_reason"] = "native_audio_window"
+@@ -564 +555,6 @@
+-		if err = d.open(ctx, rate); err != nil {
++		setupCtx, setupCancel := context.WithCancel(ctx)
++		setupStop := context.AfterFunc(parent, setupCancel)
++		err = d.open(setupCtx, rate)
++		setupStop()
++		setupCancel()
++		if err != nil {
+@@ -571 +567 @@
+-		stop = context.AfterFunc(ctx, func() { c.Close() })
++		watch = d.watch(parent, ctx, c)
+@@ -589 +585 @@
+-		stop = context.AfterFunc(ctx, func() { c.Close() })
++		watch = d.watch(parent, ctx, c)
+@@ -594,0 +591,3 @@
++	}
++	if parent.Err() != nil {
++		return parent.Err()
+@@ -603 +602 @@
+-		if err = ndWrite(ctx, c, map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm[off:min(off+640, len(pcm))])}); err != nil {
++		if err = d.write(ctx, c, map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm[off:min(off+640, len(pcm))])}); err != nil {
+@@ -607 +606 @@
+-	if err = ndWrite(ctx, c, map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
++	if err = d.write(ctx, c, map[string]any{"type": "input_audio_buffer.commit"}); err != nil {
+@@ -652,0 +652 @@
++			d.turns[id] = &ndNativeTurn{user: uid}
+@@ -661 +661 @@
+-	if err = ndWrite(ctx, c, map[string]any{"type": "response.create"}); err != nil {
++	if err = d.write(ctx, c, map[string]any{"type": "response.create"}); err != nil {
+@@ -668,0 +669 @@
++	partAdded, audioDone, transcriptDone := map[string]bool{}, map[string]bool{}, map[string]bool{}
+@@ -691,0 +693,8 @@
++		if strings.HasPrefix(kind, "response.audio.") || strings.HasPrefix(kind, "response.audio_transcript.") || strings.HasPrefix(kind, "response.content_part.") {
++			if !currentItems[ndID(v["item_id"])] {
++				return ndError("item_identity")
++			}
++			if e := ndZeroContentIndex(v); e != nil {
++				return e
++			}
++		}
+@@ -692,0 +702,12 @@
++		case "response.content_part.added":
++			iid := ndID(v["item_id"])
++			if partAdded[iid] {
++				return ndError("unsupported_content_parts")
++			}
++			partAdded[iid] = true
++		case "response.audio.done":
++			iid := ndID(v["item_id"])
++			if audioDone[iid] {
++				return ndError("unsupported_content_parts")
++			}
++			audioDone[iid] = true
+@@ -699,0 +721,4 @@
++			d.turns[id].response = r
++			d.writeMu.Lock()
++			watch.response = r
++			d.writeMu.Unlock()
+@@ -707,0 +733,3 @@
++			if e := ndSingleContent(item); e != nil {
++				return e
++			}
+@@ -713,0 +742 @@
++			d.turns[id].items = append(d.turns[id].items, iid)
+@@ -715,0 +745,3 @@
++			if e := ndSingleContent(object(v["item"])); e != nil {
++				return e
++			}
+@@ -724,0 +757,3 @@
++				if audioDone[iid] {
++					return ndError("unsupported_content_parts")
++				}
+@@ -739,2 +774,4 @@
+-				if e = emit("audio", b); e != nil {
+-					return e
++				if parent.Err() == nil {
++					if e = emit("audio", b); e != nil && parent.Err() == nil {
++						return e
++					}
+@@ -742,0 +780,6 @@
++				if transcriptDone[iid] {
++					return ndError("unsupported_content_parts")
++				}
++				if kind == "response.audio_transcript.done" {
++					transcriptDone[iid] = true
++				}
+@@ -765,2 +808,4 @@
+-				if e = emit("text", []byte(transcript)); e != nil {
+-					return e
++				if parent.Err() == nil {
++					if e = emit("text", []byte(transcript)); e != nil && parent.Err() == nil {
++						return e
++					}
+@@ -771,13 +816,2 @@
+-			if rid == "" || terminal["id"] != rid {
+-				return ndError("response_identity")
+-			}
+-			if output, present := terminal["output"]; present {
+-				list, ok := output.([]any)
+-				if !ok {
+-					return ndError("terminal_item_identity")
+-				}
+-				for _, item := range list {
+-					if !currentItems[ndID(object(item)["id"])] {
+-						return ndError("terminal_item_identity")
+-					}
+-				}
++			if e := d.terminal(watch, d.turns[id], terminal, currentItems); e != nil {
++				return e
+@@ -786,0 +821,5 @@
++			if parent.Err() != nil {
++				preserve = parent.Err() == context.Canceled && d.turns[id].terminal
++				row["cancel_terminal_confirmed"] = preserve
++				return parent.Err()
++			}
+@@ -799,0 +839,5 @@
++			if currentItems[iid] {
++				if e := ndSingleContent(item); e != nil {
++					return e
++				}
++			}
+@@ -833 +877 @@
+-			respond(w, 200, map[string]any{"ready": !stopping, "build": "native-device-pilot-20261114-v8", "target_device": ndOwner, "target_mac": ndMAC, "model": ndModel, "native_conversation": true, "active_sessions": count, "max_sessions": 1, "memory_enabled": false, "diagnostics": app.cfg.DiagnosticsDevice != ""})
++			respond(w, 200, map[string]any{"ready": !stopping, "build": "native-device-pilot-20261114-v9", "target_device": ndOwner, "target_mac": ndMAC, "model": ndModel, "native_conversation": true, "active_sessions": count, "max_sessions": 1, "memory_enabled": false, "diagnostics": app.cfg.DiagnosticsDevice != ""})
+--- a/internal/realtimelive/native_device_pilot_guard_test.go
++++ b/internal/realtimelive/native_device_pilot_guard_test.go
+@@ -95 +95 @@
+-				ws.WriteJSON(map[string]any{"type": "conversation.item.created", "item": v["item"]})
++				ws.WriteJSON(map[string]any{"type": "conversation.item.created", "item": v["item"], "previous_item_id": v["previous_item_id"]})
+@@ -116 +116 @@
+-					ws.WriteJSON(map[string]any{"type": "response.content_part.added", "response_id": rid, "item_id": "foreign-item", "part": map[string]any{"type": "audio"}})
++					ws.WriteJSON(map[string]any{"type": "response.content_part.added", "content_index": 0, "response_id": rid, "item_id": "foreign-item", "part": map[string]any{"type": "audio"}})
+@@ -122,2 +122,2 @@
+-				ws.WriteJSON(map[string]any{"type": "response.audio.delta", "response_id": sendRid, "item_id": item, "delta": base64.StdEncoding.EncodeToString(make([]byte, 2880))})
+-				ws.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "response_id": rid, "item_id": item, "transcript": "完整回答，不能猜测未播尾部。"})
++				ws.WriteJSON(map[string]any{"type": "response.audio.delta", "content_index": 0, "response_id": sendRid, "item_id": item, "delta": base64.StdEncoding.EncodeToString(make([]byte, 2880))})
++				ws.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "content_index": 0, "response_id": rid, "item_id": item, "transcript": "完整回答，不能猜测未播尾部。"})
+@@ -127,4 +127,8 @@
+-					ws.WriteJSON(map[string]any{"type": "response.audio.delta", "response_id": rid, "item_id": second, "delta": base64.StdEncoding.EncodeToString(make([]byte, 2880))})
+-					ws.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "response_id": rid, "item_id": second, "transcript": "第二段。"})
+-				}
+-				terminal := map[string]any{"id": rid, "status": "completed", "usage": map[string]any{"total_tokens": 8}}
++					ws.WriteJSON(map[string]any{"type": "response.audio.delta", "content_index": 0, "response_id": rid, "item_id": second, "delta": base64.StdEncoding.EncodeToString(make([]byte, 2880))})
++					ws.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "content_index": 0, "response_id": rid, "item_id": second, "transcript": "第二段。"})
++				}
++				output := []any{map[string]any{"id": item, "type": "message", "role": "assistant"}}
++				if mode == "multiple" {
++					output = append(output, map[string]any{"id": item + "-2", "type": "message", "role": "assistant"})
++				}
++				terminal := map[string]any{"id": rid, "status": "completed", "output": output, "usage": map[string]any{"total_tokens": 8}}
+@@ -551,2 +555,2 @@
+-	if count != 16 {
+-		t.Fatalf("restored %d turns, wanted latest16", count)
++	if count != 32 {
++		t.Fatalf("restored %d turns, wanted latest16 users plus interruption state", count)

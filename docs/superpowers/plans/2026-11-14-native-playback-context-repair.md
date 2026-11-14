@@ -13,7 +13,7 @@
 ## Task 1：固定派生环境和检查原生成语音项
 
 - [x] 核对正式PID/原Caddy/admin、原209来源、v8摘要及共享账本3/13；复制source到source-repair-v1并记录原清单，保留旧证据。
-- [ ] 准备仅显式env允许才连接的云端协议检查源码与fake保护测试；调用前持久intent、未知不重试、协议最多1、主要回答最多4，凭据仅云端LoadConfig。
+- [ ] 准备仅显式env允许才连接的云端协议检查源码与fake保护测试；调用前持久intent、未知不重试、两版补检合计协议最多2、主要回答总计最多4，凭据仅云端LoadConfig。
 - [ ] 检查两类真实生成assistant音频项：completed后delete/create/retrieve，以及生成中cancel→同response终态→delete/create。精确ACK/身份/顺序必须核对；后续仅允许已同步上下文的诊断回答，结果私有保存。
 - [ ] 失败明确降级，不以文档或合成typed项代替生成音频验证，不擅自增加探针。
 
@@ -30,11 +30,11 @@ Files: `internal/realtimestate/playback_segments.go`、`playback_segments_test.g
 
 Files: 隔离runner现有`native_device_pilot_test.go`与保护测试；Git在`tools/native-session-pilot/`保存相对固定v8的补丁、新增test-only源码和云端使用说明，不加入默认产品服务入口。
 
-- [ ] 先RED：completed后被Cut的回答在同连接替换；生成中取消终态后同连接复用；多assistant item全部处理；新response必须晚于final播放和deleted/created核对；未知ACK/身份/重排/超时关闭旧连接并可信重建；晚到输入ASR与重连身份隔离不退化。
-- [ ] 保存每个回答的response/item/user身份；每个连接单读者、单串行写路径，取消只执行一次，终态有界，不在ctx取消时无条件先关闭可修复连接。错误/预算/未知不自动重试原输入。
-- [ ] 用Task2证据替换被打断回答，独立system项表达中断/未知/当前请求优先，不把状态文字作为实际已播原话。正常轮次和其他历史保持。
-- [ ] 复用原重建退路，补同样中断状态，避免只留下旧user；不扩大到提示词专项纠错、语速/音色或固件。
-- [ ] 云端fake普通/race、实际相关包、构建和两阶段审查通过；完整来源清单绑定派生目录与二进制。
+- [x] 先RED：completed后被Cut的回答在同连接替换；生成中取消终态后同连接复用；多assistant item全部处理；新response必须晚于final播放和deleted/created核对；未知ACK/身份/重排/超时关闭旧连接并可信重建；晚到输入ASR与重连身份隔离不退化。
+- [x] 保存每个回答的response/item/user身份；每个连接单读者、单串行写路径，取消只执行一次，终态有界，不在ctx取消时无条件先关闭可修复连接。错误/预算/未知不自动重试原输入。
+- [x] 用Task2证据替换被打断回答，独立system项表达中断/未知/当前请求优先，不把状态文字作为实际已播原话。正常轮次和其他历史保持。
+- [x] 复用原重建退路，补同样中断状态，避免只留下旧user；不扩大到提示词专项纠错、语速/音色或固件。
+- [x] 云端fake普通/race、实际相关包、构建和两阶段审查通过；完整来源清单绑定派生目录与二进制。
 
 ## Task 4：隔离实机与交接
 

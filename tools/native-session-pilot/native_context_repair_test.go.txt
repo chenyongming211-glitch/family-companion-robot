@@ -1,0 +1,351 @@
+package realtimelive
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"familyrobot/internal/realtimestate"
+	"github.com/gorilla/websocket"
+)
+
+func ndInterruptedState(t *realtimestate.Turn, evidence ndFrozenPlayback) string {
+	played := evidence.played
+	return fmt.Sprintf("内部播放状态：本业务会话回答编号%d已中断；确认播放回执位置=%.2fms（24kHz，%d样本）；未知文字标志unknown=%t，完整播放标志complete=%t；ASR证据状态=%s。本次上下文证据已冻结，后到ASR不回填；完整播放标志只描述播放回执，不表示ASR完整。只有此回答保留的助手片段具有已播证据；未保留内容不得当作已经说过或任务完成。当前新请求优先；只有用户明确要求继续时才恢复旧任务。此状态本身不是助手说过的话。", t.ID, float64(played.PlayedSamples)/24, played.PlayedSamples, played.Unknown, played.Complete, evidence.reason)
+}
+
+type ndFrozenPlayback struct {
+	played realtimestate.PlayedSegments
+	reason string
+}
+
+// Called under Session.mu, after the core's existing bounded settle wait.
+// Cut evidence is immutable across both native repair and later reconnects.
+// OutputASR callbacks may continue recording observations; they cannot upgrade
+// this context snapshot after its explicit settlement/freeze boundary.
+func (d *nativeDevicePilot) playbackSnapshot(v *liveTurn) ndFrozenPlayback {
+	if evidence, ok := d.playback[v.turn.ID]; ok && v.turn.Cut {
+		return evidence
+	}
+	evidence := ndFrozenPlayback{played: realtimestate.ConfirmedPlayback(v.turn), reason: "output_asr_not_started"}
+	if v.asr != nil {
+		if !closed(v.asr.Done) {
+			evidence.played.Unknown = true
+			evidence.reason = "output_asr_unfinished_at_settle"
+		} else {
+			v.asr.mu.Lock()
+			failed := v.asr.failed
+			v.asr.mu.Unlock()
+			evidence.reason = "output_asr_settled"
+			if failed {
+				evidence.played.Unknown = true
+				evidence.reason = "output_asr_failed_at_settle"
+			}
+		}
+	}
+	if v.turn.Cut {
+		if d.playback == nil {
+			d.playback = map[int64]ndFrozenPlayback{}
+		}
+		d.playback[v.turn.ID] = evidence
+	}
+	return evidence
+}
+
+type ndNativeTurn struct {
+	user, response     string
+	items              []string
+	terminal, repaired bool
+}
+
+// The runner supports one audio content part per assistant item, while still
+// supporting multiple output items. Reject a wider shape before claiming a
+// complete transcript or attempting to repair history from its last part.
+func ndSingleContent(item map[string]any) error {
+	if value, present := item["content"]; present {
+		parts, ok := value.([]any)
+		if !ok || len(parts) > 1 {
+			return ndError("unsupported_content_parts")
+		}
+	}
+	return nil
+}
+func ndZeroContentIndex(event map[string]any) error {
+	value, ok := event["content_index"].(json.Number)
+	if !ok {
+		return ndError("unsupported_content_index")
+	}
+	index, err := value.Int64()
+	if err != nil || index != 0 {
+		return ndError("unsupported_content_index")
+	}
+	return nil
+}
+
+// A real interrupt can settle device playback before the cancelled provider
+// producer returns. Wait for that producer, while still rejecting overlap with
+// a live turn. socketMu publishes the owner and completion channel atomically.
+func (d *nativeDevicePilot) enter(parent context.Context) error {
+	if !d.turnMu.TryLock() {
+		d.socketMu.Lock()
+		active, done := d.activeParent, d.activeDone
+		d.socketMu.Unlock()
+		if active == nil || active.Err() == nil || done == nil {
+			return ndError("overlap")
+		}
+		timer := time.NewTimer(4 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-parent.Done():
+			return parent.Err()
+		case <-timer.C:
+			return ndError("cancel_settle_timeout")
+		case <-done:
+		}
+		if !d.turnMu.TryLock() {
+			return ndError("overlap")
+		}
+	}
+	d.socketMu.Lock()
+	d.activeParent = parent
+	d.activeDone = make(chan struct{})
+	d.socketMu.Unlock()
+	return nil
+}
+func (d *nativeDevicePilot) leave() {
+	d.socketMu.Lock()
+	d.turnMu.Unlock()
+	close(d.activeDone)
+	d.socketMu.Unlock()
+}
+
+// turnMu owns every read and conversation mutation. writeMu additionally
+// serializes the cancellation watcher with ordinary writes and terminal state.
+func (d *nativeDevicePilot) write(ctx context.Context, c *websocket.Conn, value any) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	return ndWrite(ctx, c, value)
+}
+
+type ndCancelWatch struct {
+	stop, exited chan struct{}
+	response     string // Protected by driver.writeMu.
+	terminal     bool   // Protected by driver.writeMu.
+}
+
+func (d *nativeDevicePilot) watch(parent, ctx context.Context, c *websocket.Conn) *ndCancelWatch {
+	w := &ndCancelWatch{stop: make(chan struct{}), exited: make(chan struct{})}
+	go func() {
+		defer close(w.exited)
+		select {
+		case <-w.stop:
+			return
+		case <-ctx.Done():
+			c.Close()
+			return
+		case <-parent.Done():
+		}
+		d.writeMu.Lock()
+		if w.terminal {
+			d.writeMu.Unlock()
+			return
+		}
+		// No identified active response, generation deadline, or shutdown: no
+		// safe cancellation transaction is possible; close rather than guess.
+		if w.response == "" || parent.Err() != context.Canceled {
+			d.writeMu.Unlock()
+			c.Close()
+			return
+		}
+		cancelCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := ndWrite(cancelCtx, c, map[string]any{"type": "response.cancel"})
+		d.writeMu.Unlock()
+		if err != nil {
+			cancel()
+			c.Close()
+			return
+		}
+		select {
+		case <-w.stop:
+		case <-cancelCtx.Done():
+			c.Close()
+		}
+		cancel()
+	}()
+	return w
+}
+func (w *ndCancelWatch) finish() { close(w.stop); <-w.exited }
+
+// No text from the input transcription is admitted here. Identity allowlisting
+// stays scoped to the current native connection, including repair transactions.
+func (d *nativeDevicePilot) mutationACK(ctx context.Context, c *websocket.Conn, kind string) (map[string]any, error) {
+	for range 64 {
+		v, e := ndRead(ctx, c)
+		if e != nil {
+			return nil, e
+		}
+		if d.delayedInputASR(v) {
+			continue
+		}
+		if v["type"] == kind {
+			return v, nil
+		}
+		return nil, ndError("repair_foreign_ack")
+	}
+	return nil, ndError("repair_ack_missing")
+}
+
+func (d *nativeDevicePilot) createTyped(ctx context.Context, c *websocket.Conn, h ndRestore, previous string) (string, error) {
+	if h.Role != "user" && h.Role != "assistant" && h.Role != "system" {
+		return "", ndError("restore_role")
+	}
+	kind := "input_text"
+	if h.Role == "assistant" {
+		kind = "output_text"
+	}
+	iid := "repair_" + randomID()
+	item := map[string]any{"id": iid, "type": "message", "role": h.Role, "content": []any{map[string]any{"type": kind, "text": h.Text}}}
+	event := map[string]any{"type": "conversation.item.create", "item": item}
+	if previous != "" {
+		event["previous_item_id"] = previous
+	}
+	if e := d.write(ctx, c, event); e != nil {
+		return "", e
+	}
+	v, e := d.mutationACK(ctx, c, "conversation.item.created")
+	if e != nil {
+		return "", e
+	}
+	got := object(v["item"])
+	content, ok := got["content"].([]any)
+	// The empty first-item position is represented by null or an empty string.
+	orderOK := v["previous_item_id"] == previous || previous == "" && v["previous_item_id"] == nil
+	if !orderOK || got["id"] != iid || got["type"] != "message" || got["role"] != h.Role || !ok || len(content) != 1 || object(content[0])["type"] != kind || object(content[0])["text"] != h.Text {
+		return "", ndError("repair_created_identity_or_order")
+	}
+	return iid, nil
+}
+
+// Session.generate invokes this only after Session.settle's drain/ASR wait.
+// Check final playback again while holding Session.mu before taking evidence.
+func (d *nativeDevicePilot) repair(ctx context.Context, id int64) error {
+	if d.session == nil {
+		return nil
+	}
+	type replacement struct {
+		native *ndNativeTurn
+		parts  []ndRestore
+	}
+	work := []replacement{}
+	s := d.session
+	s.mu.Lock()
+	for _, v := range s.history {
+		t := v.turn
+		if t == nil || v.media || !t.Cut || t.ID < d.floor || t.ID >= id {
+			continue
+		}
+		n := d.turns[t.ID]
+		if n != nil && n.repaired {
+			continue
+		}
+		if n == nil || !n.terminal || n.user == "" || n.response == "" || t.Sent > 0 && t.PlaybackBasis == "i2s_dma" && !t.PlaybackFinal || t.DrainTarget != nil && !closed(t.DrainDone) {
+			s.mu.Unlock()
+			return ndError("repair_unsettled_or_identity_unknown")
+		}
+		parts := []ndRestore{}
+		evidence := d.playbackSnapshot(v)
+		for _, segment := range evidence.played.Segments {
+			parts = append(parts, ndRestore{"assistant", segment.Text, t.ID})
+		}
+		parts = append(parts, ndRestore{"system", ndInterruptedState(t, evidence), t.ID})
+		work = append(work, replacement{n, parts})
+	}
+	s.mu.Unlock()
+	if len(work) == 0 {
+		return nil
+	}
+	c := d.socket()
+	repairCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// A timed-out Gorilla read is never reused. Closing here unblocks a withheld
+	// ACK, and the caller opens a clean typed rebuild before submitting new PCM.
+	stop := context.AfterFunc(repairCtx, func() {
+		if c != nil {
+			c.Close()
+		}
+	})
+	defer stop()
+	for _, w := range work {
+		for _, iid := range w.native.items {
+			if e := d.write(repairCtx, c, map[string]any{"type": "conversation.item.delete", "item_id": iid}); e != nil {
+				return e
+			}
+			v, e := d.mutationACK(repairCtx, c, "conversation.item.deleted")
+			if e != nil {
+				return e
+			}
+			if v["item_id"] != iid {
+				return ndError("repair_deleted_identity")
+			}
+		}
+		previous := w.native.user
+		total := 0
+		for _, part := range w.parts {
+			total += utf8.RuneCountInString(part.Text)
+			if total > 24000 {
+				return ndError("restore_text_limit")
+			}
+			next, e := d.createTyped(repairCtx, c, part, previous)
+			if e != nil {
+				return e
+			}
+			previous = next
+		}
+		w.native.repaired = true
+	}
+	return nil
+}
+
+func (d *nativeDevicePilot) terminal(w *ndCancelWatch, n *ndNativeTurn, v map[string]any, current map[string]bool) error {
+	if n.response == "" || v["id"] != n.response {
+		return ndError("response_identity")
+	}
+	_, certified := v["output"]
+	if output, present := v["output"]; present {
+		items, ok := output.([]any)
+		if !ok || len(items) != len(current) {
+			return ndError("terminal_item_identity")
+		}
+		seen := map[string]bool{}
+		for index, item := range items {
+			i := object(item)
+			iid := ndID(i["id"])
+			if !current[iid] || seen[iid] || iid != n.items[index] || i["type"] != "message" || i["role"] != "assistant" {
+				return ndError("terminal_item_identity")
+			}
+			if e := ndSingleContent(i); e != nil {
+				return e
+			}
+			seen[iid] = true
+		}
+	}
+	status := fmt.Sprint(v["status"])
+	if status != "completed" && status != "cancelled" {
+		return ndError("response_terminal")
+	}
+	d.writeMu.Lock()
+	w.terminal = true
+	n.terminal = certified
+	d.writeMu.Unlock()
+	return nil
+}
+
+func ndRepairError(e error) string {
+	if e != nil && strings.HasPrefix(e.Error(), "native_device_pilot_") {
+		return e.Error()
+	}
+	return "native_device_pilot_repair_unknown"
+}
