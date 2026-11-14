@@ -1,0 +1,150 @@
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -70,6 +70,7 @@
+     virtual bool SoftwareReference() const { return false; }
+     // Epoch/quarantine support is independent of the physical MR source.
+     virtual bool ManagedCapture() const { return SoftwareReference(); }
++    virtual bool PrepareAudioConnection() { return true; }
+     virtual bool ReferenceValid() const { return true; }
+     virtual void ReportReferenceFailure() {}
+     virtual bool RealtimeEligible() const { return ReferenceValid(); }
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -13,6 +13,7 @@
+ #include <freertos/event_groups.h>
+ 
+ #define WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT (1 << 0)
++#define WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT (1 << 1)
+ 
+ class WebsocketProtocol : public Protocol {
+ public:
+@@ -55,6 +56,7 @@
+     uint32_t playback_connection_ = 0, socket_connection_ = 0, playback_event_lease_ = 0;
+     family_robot::PlaybackIdentity playback_id_{};
+     uint64_t playback_first_ = 0;
++    uint32_t hello_waiting_connection_ = 0;
+     bool playback_negotiated_ = false, playback_receiving_ = false, playback_tracking_ = false;
+     bool playback_drain_negotiated_ = false;
+ #if CONFIG_CHICK_FACE_UI
+@@ -74,6 +76,7 @@
+     bool ResetPlaybackConnection(uint32_t expected = 0, uint32_t* closed_epoch = nullptr);
+     void NotifyPlaybackClosed(uint32_t connection);
+ 
++    void RejectServerHelloLocked(); // playback_mutex_ held
+     void ParseServerHello(const cJSON* root, uint32_t connection);
+     bool SendText(const std::string& text) override;
+     std::string GetHelloMessage();
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -108,6 +108,10 @@
+ 
+ bool WebsocketProtocol::OpenAudioChannel() {
+     if (!ResetPlaybackConnection()) return false;
++    if (!Board::GetInstance().GetAudioCodec()->PrepareAudioConnection()) {
++        SetError("音频异常", "请稍后重试，持续异常时重启");
++        return false;
++    }
+     Settings settings("websocket", false);
+     std::string url = settings.GetString("url");
+     std::string token = settings.GetString("token");
+@@ -120,7 +124,8 @@
+     // Reject before CreateWebSocket: this bounded transport is plain WS/v1 only.
+     if(version_!=1 || url.compare(0,5,"ws://")!=0)return false;
+ #endif
+-    xEventGroupClearBits(event_group_handle_,WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
++    xEventGroupClearBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT |
++                         WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT);
+     error_occurred_ = false;
+ 
+     auto network = Board::GetInstance().GetNetwork();
+@@ -146,6 +151,7 @@
+         std::lock_guard<std::mutex> lock(playback_mutex_);
+         connection = playback_connection_;
+         socket_connection_ = connection;
++        hello_waiting_connection_ = connection;
+ #if CONFIG_XMINI_C3_PCM
+         c3_current_connection_.store(connection);
+ #endif
+@@ -192,8 +198,25 @@
+ #endif
+         } else {
+             // Parse JSON data
+-            auto root = cJSON_ParseWithLength(data, len);
++            const char* json_end = nullptr;
++            auto root = cJSON_ParseWithLengthOpts(data, len, &json_end, false);
+             auto type = cJSON_GetObjectItem(root, "type");
++            if (root && json_end) {
++                while (json_end < data + len &&
++                       (*json_end == ' ' || *json_end == '\t' || *json_end == '\r' || *json_end == '\n')) ++json_end;
++            }
++            {
++                std::lock_guard<std::mutex> lock(playback_mutex_);
++                // Strict whole-frame validation belongs to the current hello
++                // wait. Established session messages retain their prior policy.
++                if (connection == playback_connection_ && hello_waiting_connection_ == connection &&
++                    (!root || json_end != data + len || !cJSON_IsString(type) ||
++                     std::strcmp(type->valuestring, "hello") != 0)) {
++                    RejectServerHelloLocked();
++                    cJSON_Delete(root);
++                    return;
++                }
++            }
+             if (cJSON_IsString(type)) {
+                 if (strcmp(type->valuestring, "hello") == 0) {
+                     ParseServerHello(root, connection);
+@@ -223,6 +246,14 @@
+     });
+ 
+     websocket_->OnDisconnected([this, connection]() {
++        {
++            // Check before NotifyPlaybackClosed retires this epoch. Old socket
++            // callbacks must never fail the next socket's hello wait.
++            std::lock_guard<std::mutex> lock(playback_mutex_);
++            if (connection != playback_connection_) return;
++            xEventGroupClearBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
++            xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT);
++        }
+ #if CONFIG_XMINI_C3_PCM
+         RequestC3PcmDisconnect(connection);
+ #else
+@@ -250,16 +281,31 @@
+ 
+     // Wait for server hello
+     EventBits_t bits =
+-        xEventGroupWaitBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT, pdTRUE,
++        xEventGroupWaitBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT |
++                            WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT, pdFALSE,
+                             pdFALSE, pdMS_TO_TICKS(10000));
+-    if (!(bits & WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT)
+-#if CONFIG_XMINI_C3_PCM
+-        || !PlaybackNegotiated()
+-#endif
+-        ) {
+-        ESP_LOGE(TAG, "Failed to receive server hello");
+-        SetError(Lang::Strings::SERVER_TIMEOUT);
+-        return false;
++    {
++        // Failure remains sticky until the next attempt. Recheck after waiting:
++        // a close may retire the epoch after the RTOS captured its return bits.
++        std::lock_guard<std::mutex> lock(playback_mutex_);
++        if (connection != playback_connection_ ||
++            (xEventGroupGetBits(event_group_handle_) & WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT) ||
++            !websocket_->IsConnected()) {
++            SetError(Lang::Strings::SERVER_ERROR);
++            return false;
++        }
++        if (!(bits & WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT)
++#if CONFIG_XMINI_C3_PCM
++            || !playback_negotiated_
++#endif
++            ) {
++            xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT);
++            ESP_LOGE(TAG, "Failed to receive server hello");
++            SetError(Lang::Strings::SERVER_TIMEOUT);
++            return false;
++        }
++        hello_waiting_connection_ = 0;
++        // Server hello accepted while holding the current connection lock.
+     }
+ 
+     if (on_audio_channel_opened_ != nullptr) {

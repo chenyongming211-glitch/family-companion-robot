@@ -73,6 +73,7 @@ public:
 #endif
     uint32_t PlaybackGeneration(){return generation;}
     bool PlaybackSupported(){return true;}
+    bool ManagedCapture(){return false;}
 };
 static AudioCodec codec;
 enum class PowerSaveLevel {LOW_POWER,PERFORMANCE};
@@ -133,7 +134,7 @@ public:
     std::unique_ptr<TestSocket> websocket_;
     void CloseAudioChannel(bool send_goodbye=true);
     mutable std::mutex playback_mutex_;
-    uint32_t playback_connection_=0,socket_connection_=0,playback_event_lease_=0;
+    uint32_t playback_connection_=0,socket_connection_=0,playback_event_lease_=0,hello_waiting_connection_=0;
     PlaybackIdentity playback_id_{};
     uint64_t playback_first_=0;
     bool playback_negotiated_=false,playback_receiving_=false,playback_tracking_=false,playback_drain_negotiated_=false;
@@ -141,6 +142,7 @@ public:
     std::function<void(std::unique_ptr<AudioStreamPacket>)> on_incoming_audio_;
     int server_sample_rate_=24000,server_frame_duration_=60,event_group_handle_=0;
     void ParseServerHello(const cJSON*,uint32_t);
+    void RejectServerHelloLocked();
     int sent=0;std::string last_text;void SendText(const std::string& s){++sent;last_text=s;}
     std::function<void(uint32_t)> on_audio_channel_closed_;
     void NotifyPlaybackClosed(uint32_t);uint32_t AudioChannelEpoch()const override;
@@ -167,7 +169,10 @@ public:
 #define ESP_LOGE(...) (void)0
 #define ESP_LOGI(...) (void)0
 #define WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT 1
+#define WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT 2
 static void xEventGroupSetBits(int,int) {}
+static int xEventGroupGetBits(int) {return 0;}
+static void xEventGroupClearBits(int,int) {}
 #include "playback_websocket.inc"
 #include "playback_application.inc"
 static std::unique_ptr<cJSON> tts(const char* state,double id=1,const char* session="s"){

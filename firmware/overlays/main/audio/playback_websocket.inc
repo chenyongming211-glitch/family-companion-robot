@@ -210,19 +210,29 @@ void WebsocketProtocol::SendAbortSpeaking(AbortReason reason) {
     Protocol::SendAbortSpeaking(reason);
 }
 
+void WebsocketProtocol::RejectServerHelloLocked() {
+    playback_negotiated_ = playback_drain_negotiated_ = false;
+    Application::GetInstance().GetAudioService().PreserveServerPlayback(false);
+    xEventGroupClearBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
+    xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT);
+}
+
 void WebsocketProtocol::ParseServerHello(const cJSON* root, uint32_t connection) {
+    std::lock_guard<std::mutex> playback_lock(playback_mutex_);
+    if (connection != playback_connection_ ||
+        (xEventGroupGetBits(event_group_handle_) & WEBSOCKET_PROTOCOL_SERVER_HELLO_FAILED_EVENT)) return;
     auto transport = cJSON_GetObjectItem(root, "transport");
     if (!cJSON_IsString(transport)) {
         ESP_LOGE(TAG, "Missing or non-string transport in server hello");
+        RejectServerHelloLocked();
         return;
     }
     if (strcmp(transport->valuestring, "websocket") != 0) {
         ESP_LOGE(TAG, "Unsupported transport: %s", transport->valuestring);
+        RejectServerHelloLocked();
         return;
     }
 
-    std::lock_guard<std::mutex> playback_lock(playback_mutex_);
-    if (connection != playback_connection_) return;
     auto session_id = cJSON_GetObjectItem(root, "session_id");
     if (cJSON_IsString(session_id)) {
         session_id_ = session_id->valuestring;
@@ -258,7 +268,8 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root, uint32_t connection)
        !cJSON_IsTrue(cJSON_GetObjectItem(features,"playback_progress_v1")) ||
        !cJSON_IsTrue(cJSON_GetObjectItem(features,"playback_drain_v1"))) {
         playback_negotiated_=playback_drain_negotiated_=false;
-        return; // event remains clear: channel never opens with a partial hello
+        RejectServerHelloLocked();
+        return; // a partial hello is a terminal failure
     }
 #endif
     playback_negotiated_ = playback_connection_ != 0 && playback_connection_ != UINT32_MAX && cJSON_IsString(session_id) &&
@@ -271,9 +282,27 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root, uint32_t connection)
         cJSON_IsTrue(cJSON_GetObjectItem(features,"face_expression_v1"));
 #endif
 #if CONFIG_XMINI_C3_PCM
-    if(!playback_negotiated_ || !playback_drain_negotiated_)return;
+    if(!playback_negotiated_ || !playback_drain_negotiated_) { RejectServerHelloLocked(); return; }
 #endif
+    if (Board::GetInstance().GetAudioCodec()->ManagedCapture()) {
+        const auto exact = [](const cJSON* value, int expected) {
+            return cJSON_IsNumber(value) && std::isfinite(value->valuedouble) && value->valuedouble == expected;
+        };
+        const auto* format = cJSON_GetObjectItem(audio_params, "format");
+        if (!playback_negotiated_ || !playback_drain_negotiated_ ||
+            !exact(cJSON_GetObjectItem(root, "version"), 1) || !cJSON_IsObject(audio_params) ||
+            !cJSON_IsString(format) || std::strcmp(format->valuestring, "opus") != 0 ||
+            !exact(cJSON_GetObjectItem(audio_params, "sample_rate"), 24000) ||
+            !exact(cJSON_GetObjectItem(audio_params, "channels"), 1) ||
+            !exact(cJSON_GetObjectItem(audio_params, "frame_duration"), 60)) {
+            RejectServerHelloLocked();
+            return;
+        }
+    }
     Application::GetInstance().GetAudioService().PreserveServerPlayback(playback_negotiated_);
+    // Receive-task validation completes the strict hello phase before the next
+    // ordered session frame, even when the opening task has not resumed yet.
+    hello_waiting_connection_ = 0;
     xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
 }
 

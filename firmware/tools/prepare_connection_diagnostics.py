@@ -96,9 +96,15 @@ def prepare_connection_diagnostics(tree):
             '        ConnectionDiagnostics::Mark(trace_attempt, ConnectionDiagnostics::Stage::HelloFailed);\n'
             '        return false;\n    }\n'
             '    ConnectionDiagnostics::Mark(trace_attempt, ConnectionDiagnostics::Stage::HelloSent);')
-    anchor = '        ESP_LOGE(TAG, "Failed to receive server hello");'
+    anchor = '            ESP_LOGE(TAG, "Failed to receive server hello");'
     replace(protocol, anchor,
-            '        ConnectionDiagnostics::Mark(trace_attempt, ConnectionDiagnostics::Stage::HelloTimeout, 10000);\n' + anchor)
-    anchor = '    if (on_audio_channel_opened_ != nullptr) {'
+            '            ConnectionDiagnostics::Mark(trace_attempt, ConnectionDiagnostics::Stage::HelloTimeout, 10000);\n' + anchor)
+    anchor = '        // Server hello accepted while holding the current connection lock.'
     replace(protocol, anchor,
-            '    ConnectionDiagnostics::Mark(trace_attempt, ConnectionDiagnostics::Stage::HelloReady);\n' + anchor)
+            '        ConnectionDiagnostics::Mark(trace_attempt, ConnectionDiagnostics::Stage::HelloReady);\n' + anchor)
+    anchor = ('            !websocket_->IsConnected()) {\n'
+              '            SetError(Lang::Strings::SERVER_ERROR);')
+    replace(protocol, anchor,
+            '            !websocket_->IsConnected()) {\n'
+            '            ConnectionDiagnostics::Mark(trace_attempt, ConnectionDiagnostics::Stage::HelloFailed);\n'
+            '            SetError(Lang::Strings::SERVER_ERROR);')
