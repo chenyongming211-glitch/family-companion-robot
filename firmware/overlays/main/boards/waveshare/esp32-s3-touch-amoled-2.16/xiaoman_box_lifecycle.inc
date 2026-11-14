@@ -14,25 +14,60 @@ XiaomanBoxCodec::~XiaomanBoxCodec() {
     if(playback_) {playback_->~PlaybackProgress();heap_caps_free(playback_);}
 }
 void XiaomanBoxCodec::InitializePlayback(int input_rate,int output_rate,bool reference) {
+    if(OutputInhibitError()!=ESP_OK) {
+        portENTER_CRITICAL(&mux_);FaultLocked(4,OutputInhibitError(),8);portEXIT_CRITICAL(&mux_);
+    } // phase 8: prior-reset PA hold could not be safely normalized
     auto* memory=heap_caps_malloc(sizeof(family_robot::PlaybackProgress),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     if(memory) playback_=new(memory) family_robot::PlaybackProgress;
     const auto tx_off=i2s_channel_disable(tx_handle_);
     const auto rx_off=i2s_channel_disable(rx_handle_);
+    int callback_result=ESP_OK;
     if(playback_ && tx_off==ESP_OK && rx_off==ESP_OK && reference && input_rate==24000 && output_rate==24000) {
         i2s_event_callbacks_t callbacks{};callbacks.on_sent=Sent;
-        callbacks_ok_=i2s_channel_register_event_callback(tx_handle_,&callbacks,this)==ESP_OK;
+        callback_result=i2s_channel_register_event_callback(tx_handle_,&callbacks,this);
+        callbacks_ok_=callback_result==ESP_OK;
     }
     const auto tx_on=i2s_channel_enable(tx_handle_);
     const auto rx_on=i2s_channel_enable(rx_handle_);
-    setup_failed_=!callbacks_ok_ || tx_on!=ESP_OK || rx_on!=ESP_OK;
-    if(setup_failed_) ReportReferenceFailure(); // Never fall back to ordinary Write.
+    setup_failed_=OutputInhibitError()!=ESP_OK || !callbacks_ok_ || tx_on!=ESP_OK || rx_on!=ESP_OK;
+    if(setup_failed_) {
+        // Fixed initialization phases: allocation, TX/RX disable, format,
+        // callback registration, TX/RX enable. Native is the actual SDK result.
+        const uint32_t detail=!playback_?1:tx_off!=ESP_OK?2:rx_off!=ESP_OK?3:
+            (!reference || input_rate!=24000 || output_rate!=24000)?4:!callbacks_ok_?5:tx_on!=ESP_OK?6:7;
+        const int native=detail==2?tx_off:detail==3?rx_off:detail==5?callback_result:
+            detail==6?tx_on:detail==7?rx_on:0;
+        portENTER_CRITICAL(&mux_);FaultLocked(4,native,detail);portEXIT_CRITICAL(&mux_);
+    } // Never fall back to ordinary Write.
 }
 void XiaomanBoxCodec::Start() {
     std::lock_guard<std::mutex> lock(lifecycle_);
+    if(!history_loaded_) {
+        history_loaded_=true;
+        family_robot::AudioFaultSnapshot previous;
+        if(family_robot::LoadAudioFaultSnapshot(previous)) {
+            fault_boot_=previous.boot==UINT32_MAX?1:previous.boot+1;
+#ifdef ESP_PLATFORM
+            ESP_LOGW("XiaomanBox", "previous audio fault boot=%u source=%u detail=%u at_us=%lld bytes=%u gap_us=%lld native=%ld",
+                unsigned(previous.boot),unsigned(previous.source),unsigned(previous.detail),
+                static_cast<long long>(previous.at_us),unsigned(previous.dma_bytes),
+                static_cast<long long>(previous.dma_gap_us),static_cast<long>(previous.native));
+#endif
+        }
+        portENTER_CRITICAL(&mux_);if(first_fault_.source)first_fault_.boot=fault_boot_;portEXIT_CRITICAL(&mux_);
+    }
     AudioCodec::Start(); // persisted volume must be loaded before either codec open
     PreparePlaybackHardware();
+    PersistFirstFault();
 }
-bool XiaomanBoxCodec::VerifyHardware() {
+bool XiaomanBoxCodec::VerifyHardware(uint32_t* detail,int32_t* native) {
+    // Fixed readback groups: TX/RX getter, channel shape/enabled, TX slots,
+    // TX format/clocks, RX format/clocks. No mutable SDK pointer escapes here.
+    const auto fail=[detail,native](uint32_t reason,int32_t result=0) {
+        if(detail)*detail=reason;
+        if(native)*native=result;
+        return false;
+    };
     uint32_t rate=24000;
 #if CONFIG_FAMILY_MUSIC_AUDITION
     if(music_active_)rate=music_rate_;
@@ -46,11 +81,12 @@ bool XiaomanBoxCodec::VerifyHardware() {
         unsigned(tx.total_dma_buf_size),unsigned(tx.bclk_hz),unsigned(tx.mclk_hz),
         rx.dir,rx.mode,rx.is_enabled,unsigned(rx.total_dma_buf_size),unsigned(rx.bclk_hz),unsigned(rx.mclk_hz));
 #endif
-    if(tx_result!=ESP_OK || rx_result!=ESP_OK ||
-       tx.dir!=I2S_DIR_TX || rx.dir!=I2S_DIR_RX || tx.mode!=I2S_COMM_MODE_STD || rx.mode!=I2S_COMM_MODE_TDM ||
+    if(tx_result!=ESP_OK)return fail(1,tx_result);
+    if(rx_result!=ESP_OK)return fail(2,rx_result);
+    if(tx.dir!=I2S_DIR_TX || rx.dir!=I2S_DIR_RX || tx.mode!=I2S_COMM_MODE_STD || rx.mode!=I2S_COMM_MODE_TDM ||
        tx.pair_chan!=rx_handle_ || rx.pair_chan!=tx_handle_ ||
        tx.is_enabled!=(output_enabled_ || input_enabled_) || rx.is_enabled!=input_enabled_ || !tx.mode_cfg || !rx.mode_cfg)
-        return false;
+        return fail(3);
     // IDF6.1 public readback is configured state/calculated clocks, not a
     // physical BCLK measurement. Read pointed-to configs only under lifecycle_.
     const auto& out=*static_cast<const i2s_std_config_t*>(tx.mode_cfg);
@@ -64,18 +100,26 @@ bool XiaomanBoxCodec::VerifyHardware() {
 #endif
     const int tx_slot=out.slot_cfg.slot_bit_width;
     if((tx_slot!=I2S_SLOT_BIT_WIDTH_16BIT && tx_slot!=I2S_SLOT_BIT_WIDTH_32BIT) ||
-       (input_enabled_ && tx_slot!=I2S_SLOT_BIT_WIDTH_32BIT))return false;
+       (input_enabled_ && tx_slot!=I2S_SLOT_BIT_WIDTH_32BIT))return fail(4);
     if(output_enabled_ && (tx.total_dma_buf_size!=2880 || out.clk_cfg.sample_rate_hz!=rate ||
        out.slot_cfg.data_bit_width!=I2S_DATA_BIT_WIDTH_16BIT || out.slot_cfg.slot_bit_width!=tx_slot ||
        out.slot_cfg.slot_mode!=I2S_SLOT_MODE_MONO || out.slot_cfg.slot_mask!=I2S_STD_SLOT_LEFT ||
-       tx.bclk_hz!=rate*2u*static_cast<unsigned>(tx_slot) || tx.mclk_hz!=rate*256u)) return false;
+       tx.bclk_hz!=rate*2u*static_cast<unsigned>(tx_slot) || tx.mclk_hz!=rate*256u)) return fail(5);
     if(input_enabled_ && (rx.total_dma_buf_size!=5760 || in.clk_cfg.sample_rate_hz!=rate ||
        in.slot_cfg.data_bit_width!=I2S_DATA_BIT_WIDTH_16BIT || in.slot_cfg.slot_bit_width!=I2S_SLOT_BIT_WIDTH_16BIT ||
        in.slot_cfg.slot_mode!=I2S_SLOT_MODE_STEREO || in.slot_cfg.slot_mask!=(I2S_TDM_SLOT0|I2S_TDM_SLOT1) ||
-       in.slot_cfg.total_slot!=4 || rx.bclk_hz!=rate*4u*16u || rx.mclk_hz!=rate*256u)) return false;
+       in.slot_cfg.total_slot!=4 || rx.bclk_hz!=rate*4u*16u || rx.mclk_hz!=rate*256u)) return fail(6);
     return true;
 }
-void XiaomanBoxCodec::FaultLocked(uint32_t source) {
+void XiaomanBoxCodec::FaultLocked(uint32_t source,int32_t native,uint32_t detail) {
+    if(!first_fault_.source) {
+        first_fault_.source=source;first_fault_.boot=fault_boot_;
+        first_fault_.detail=source==3 && playback_?static_cast<uint32_t>(playback_->HardwareFaultReason()):detail;
+        first_fault_.at_us=esp_timer_get_time();first_fault_.native=native;
+        first_fault_.dma_bytes=static_cast<uint32_t>(std::min(last_dma_bytes_,size_t(65536)));
+        first_fault_.dma_gap_us=last_dma_gap_us_;
+    }
+    recovery_probe_=false;
     accepting_=false;aec_ready_=UINT32_MAX;
     if(!faulted_) {fault_source_=source;faulted_=true;epochs_.Fault();}
     if(playback_) playback_->HardwareFault();
@@ -89,10 +133,11 @@ void XiaomanBoxCodec::Disarm() {
     portEXIT_CRITICAL(&mux_);
 }
 void XiaomanBoxCodec::Arm() {
-    const bool verified=VerifyHardware();
+    uint32_t detail=0;int32_t native=0;
+    const bool verified=VerifyHardware(&detail,&native);
     portENTER_CRITICAL(&mux_);
-    if(!verified || setup_failed_ || !callbacks_ok_ || output_generation_==UINT32_MAX) FaultLocked(1);
-    else accepting_=output_enabled_ && input_enabled_ && !faulted_;
+    if(!verified || setup_failed_ || !callbacks_ok_ || output_generation_==UINT32_MAX) FaultLocked(1,native,detail);
+    else {accepting_=output_enabled_ && input_enabled_ && !faulted_;if(accepting_)once_ready_=true;}
     portEXIT_CRITICAL(&mux_);
 }
 bool XiaomanBoxCodec::PreparePlaybackHardware() {
@@ -147,6 +192,7 @@ bool XiaomanBoxCodec::InputData(std::vector<int16_t>& data) {
     if(report)ESP_LOGE("XiaomanBox", "capture blocked source=%u dma_bytes=%u dma_gap_us=%lld",
         unsigned(source),unsigned(bytes),static_cast<long long>(gap));
 #endif
+    PersistFirstFault();
     if(!input_enabled_ || ReferenceFaulted()) return false;
     // callback_refill's checked Box Read returns zero on codec-device failure.
 #ifdef ESP_PLATFORM
@@ -168,7 +214,7 @@ bool XiaomanBoxCodec::InputData(std::vector<int16_t>& data) {
     if(probe)ESP_LOGI("XiaomanBox", "input read end n=%u ok=%d capture=%u current=%u",
         unsigned(read_probe_count_),read,unsigned(generation),unsigned(CaptureGeneration()));
 #endif
-    if(!read) ReportReferenceFailure();
+    if(!read) {ReportReferenceFailure();PersistFirstFault();}
     return read && generation==CaptureGeneration();
 }
 bool XiaomanBoxCodec::PlaybackSupported() const {

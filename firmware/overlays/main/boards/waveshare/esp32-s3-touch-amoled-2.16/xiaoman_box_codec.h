@@ -3,6 +3,7 @@
 #if CONFIG_WAVESHARE_XIAOMAN_REALTIME
 #include "codecs/box_audio_codec.h"
 #include "experiment_gate.h"
+#include "audio_fault.h"
 
 // Hardware MR remains ES7210 input, including the physical DAC reference.
 // Only TX ownership changes: completed descriptors are refilled by the ISR.
@@ -13,6 +14,8 @@ public:
                     gpio_num_t pa, uint8_t dac, uint8_t adc, bool reference);
     ~XiaomanBoxCodec() override;
     void Start() override;
+    bool PrepareAudioConnection() override;
+    void PollAudioFault() override;
     bool InputData(std::vector<int16_t>& data) override;
     void OutputData(std::vector<int16_t>& data) override;
     void EnableInput(bool enable) override;
@@ -49,13 +52,14 @@ public:
 #endif
 private:
     void InitializePlayback(int input_rate, int output_rate, bool reference);
-    bool VerifyHardware(); // lifecycle_ held: mode_cfg points into mutable driver state
+    bool VerifyHardware(uint32_t* detail=nullptr,int32_t* native=nullptr); // lifecycle_ held: mode_cfg points into mutable driver state
     bool PreparePlaybackHardware(); // lifecycle_ held, before Start creates its record
     void Disarm();
     void Arm();
     bool SubmitOutput(std::vector<int16_t>& pcm,family_robot::PlaybackIdentity id,
                       uint64_t first,uint32_t generation);
-    void FaultLocked(uint32_t source=5); // mux_ held, ISR-safe scalar state only
+    void FaultLocked(uint32_t source=5, int32_t native=0, uint32_t detail=0); // mux_ held, ISR-safe scalar state only
+    void PersistFirstFault(); // lifecycle_ held, muted before any Flash write
     static bool Sent(i2s_chan_handle_t, i2s_event_data_t*, void*);
     bool Complete(i2s_event_data_t* event);
     mutable portMUX_TYPE mux_=portMUX_INITIALIZER_UNLOCKED;
@@ -66,6 +70,10 @@ private:
     bool callbacks_ok_=false, setup_failed_=false, accepting_=false;
     bool faulted_=false, capture_active_=false;
     uint32_t fault_source_=0;
+    family_robot::AudioFaultSnapshot first_fault_;
+    bool once_ready_=false, recovery_attempted_=false, recovery_probe_=false;
+    bool fault_saved_=false, history_loaded_=false;
+    uint32_t probe_callbacks_=0, fault_boot_=1;
     size_t last_dma_bytes_=0;
     int64_t last_dma_us_=0, last_dma_gap_us_=0;
     mutable bool fault_logged_=false;

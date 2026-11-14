@@ -1,4 +1,5 @@
 #include "playback_progress.h"
+#include "audio_fault.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -40,6 +41,7 @@ struct i2s_chan_info_t {
 };
 struct Channel {
     bool enabled=true;
+    int get_result=0;
     i2s_event_callbacks_t callbacks{};
     void* argument=nullptr;
     i2s_chan_info_t info{};
@@ -48,12 +50,27 @@ static int64_t now_us=1000000;
 static std::function<void()> delay_hook;
 static int64_t esp_timer_get_time() { return now_us; }
 static void vTaskDelay(int) { now_us+=10000; if(delay_hook)delay_hook(); }
+static int raw_reads=0,raw_read_timeout=0,reopens=0,saves=0,loads=0;
+static bool raw_read_fails=false,raw_short=false,store_fails=false;
+static family_robot::AudioFaultSnapshot saved_fault{};
+static std::function<void()> save_hook,read_hook,reopen_hook,box_read_hook,unmute_hook;
+namespace family_robot {
+[[maybe_unused]] static bool LoadAudioFaultSnapshot(AudioFaultSnapshot& s) {++loads;s=saved_fault;return ValidateAudioFaultSnapshot(s);}
+[[maybe_unused]] static bool SaveAudioFaultSnapshot(const AudioFaultSnapshot& s) {++saves;if(save_hook)save_hook();if(store_fails)return false;saved_fault=s;return true;}
+}
+[[maybe_unused]] static int i2s_channel_read(Channel*,void* data,size_t length,size_t* read,unsigned timeout) {
+    ++raw_reads;raw_read_timeout=timeout;if(read_hook)read_hook();
+    std::memset(data,42,length);*read=raw_short?length-2:length;return raw_read_fails?-1:ESP_OK;
+}
+#define pdMS_TO_TICKS(n) (n)
+static int pa_initialization_error=0;
+static int tx_disable_error=0,rx_disable_error=0,tx_enable_error=0,rx_enable_error=0;
 static bool allocation_fails=false,registration_fails=false,read_fails=false;
 static void* heap_caps_malloc(size_t size,int) { return allocation_fails?nullptr:std::malloc(size); }
 static void heap_caps_free(void* p) { std::free(p); }
-static int i2s_channel_disable(Channel* c) { c->enabled=false; return ESP_OK; }
-static int i2s_channel_enable(Channel* c) { c->enabled=true; return ESP_OK; }
-static int i2s_channel_get_info(Channel* c,i2s_chan_info_t* i) { *i=c->info;i->is_enabled=c->enabled;return ESP_OK; }
+static int i2s_channel_disable(Channel* c) {const auto error=c->info.dir==I2S_DIR_TX?tx_disable_error:rx_disable_error;if(error)return error;c->enabled=false;return ESP_OK;}
+static int i2s_channel_enable(Channel* c) {const auto error=c->info.dir==I2S_DIR_TX?tx_enable_error:rx_enable_error;if(error)return error;c->enabled=true;return ESP_OK;}
+static int i2s_channel_get_info(Channel* c,i2s_chan_info_t* i) { *i=c->info;i->is_enabled=c->enabled;return c->get_result; }
 static int i2s_channel_register_event_callback(Channel* c,i2s_event_callbacks_t* cb,void* arg) {
     assert(!c->enabled);if(registration_fails)return -1;c->callbacks=*cb;c->argument=arg;return ESP_OK;
 }
@@ -62,6 +79,8 @@ public:
     enum class PlaybackOp { Connect,Start,Admit,Release,Seal,Interrupt,Invalidate,Reset };
     virtual ~AudioCodec()=default;
     virtual void Start() { volume_loaded=true; }
+    virtual bool PrepareAudioConnection() {return true;}
+    virtual void PollAudioFault() {}
     virtual bool InputData(std::vector<int16_t>&) { return true; }
     virtual void OutputData(std::vector<int16_t>&) {}
     virtual bool PlaybackSupported() const {return false;}
@@ -119,30 +138,35 @@ public:
         output_disable_pending_=!enabled&&input_enabled_;
         tx.enabled=enabled||output_disable_pending_;++output_changes;
     }
-    bool InputData(std::vector<int16_t>& data)override {if(read_fails)return false;std::fill(data.begin(),data.end(),17);return true;}
+    bool InputData(std::vector<int16_t>& data)override {if(box_read_hook)box_read_hook();if(read_fails)return false;std::fill(data.begin(),data.end(),17);return true;}
+    int input_sample_rate()const{return input_sample_rate_;}
+    int input_channels()const{return 2;}
+    bool input_enabled()const{return input_enabled_;}
+    void ResetDiagnosticStream(int){}
+    void RecordDiagnostic(int,const int16_t*,size_t,int,uint32_t){}
     bool input_enabled_=false,output_enabled_=false;
     bool output_disable_pending_=false;
     Channel tx,rx; Channel *tx_handle_=&tx,*rx_handle_=&rx;
     i2s_std_config_t standard; i2s_tdm_config_t tdm;
-    int input_changes=0,output_changes=0;
-#if CONFIG_FAMILY_MUSIC_AUDITION
-    bool reopen_fails=false,mute_fails=false,muted=false;
+    int input_changes=0,output_changes=0,unmute_calls=0;
+    bool reopen_fails=false,mute_fails=false,unmute_fails=false,muted=false;
     int output_sample_rate_=24000,input_sample_rate_=24000;
+    int OutputInhibitError() const {return pa_initialization_error;}
     bool ReopenDuplexForMusic(int rate) {
-        if(reopen_fails)return false;
+        ++reopens;if(reopen_hook)reopen_hook();if(reopen_fails)return false;
         standard.clk_cfg.sample_rate_hz=tdm.clk_cfg.sample_rate_hz=rate;
         tx.info.bclk_hz=rx.info.bclk_hz=rate*64;
         tx.info.mclk_hz=rx.info.mclk_hz=rate*256;
         input_enabled_=output_enabled_=tx.enabled=rx.enabled=true;
         return true;
     }
-    bool MuteMusicOutput(bool mute){if(mute_fails)return false;muted=mute;return true;}
-#endif
+    bool MuteMusicOutput(bool mute){if(!mute){++unmute_calls;if(unmute_hook)unmute_hook();}if(mute_fails || (!mute && unmute_fails))return false;muted=mute;return true;}
 };
 #include "xiaoman_box_codec.h"
 #include "xiaoman_box_lifecycle.inc"
 #include "xiaoman_box_playback.inc"
 #include "xiaoman_box_dma.inc"
+#include "xiaoman_box_recovery.inc"
 #if CONFIG_FAMILY_MUSIC_AUDITION
 #include "xiaoman_box_music.inc"
 #endif

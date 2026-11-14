@@ -5,6 +5,7 @@
 #include <esp_timer.h>
 #ifdef ESP_PLATFORM
 #include <esp_log.h>
+#include "audio_fault_storage.h"
 #endif
 #include <algorithm>
 #include <cstring>
@@ -15,6 +16,7 @@
 #include "xiaoman_box_lifecycle.inc"
 #include "xiaoman_box_playback.inc"
 #include "xiaoman_box_dma.inc"
+#include "xiaoman_box_recovery.inc"
 #if CONFIG_FAMILY_MUSIC_AUDITION
 #include "xiaoman_box_music.inc"
 #endif

@@ -212,6 +212,13 @@
          std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
 --- a/main/audio/codecs/box_audio_codec.cc
 +++ b/main/audio/codecs/box_audio_codec.cc
+@@ -12,3 +12,6 @@
+                              int reference_gain_channel, float reference_gain, bool callback_refill) {
+     callback_refill_ = callback_refill;
++#if CONFIG_FAMILY_MUSIC_AUDITION || CONFIG_WAVESHARE_XIAOMAN_REALTIME
++    if(callback_refill_)InitializeOutputInhibit(pa_pin);
++#endif
+     duplex_ = true;                              // 是否双工
 @@ -187,6 +187,7 @@
  }
  
@@ -220,15 +227,45 @@
      ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, volume));
      AudioCodec::SetOutputVolume(volume);
  }
-@@ -261,3 +262,35 @@
+@@ -261,3 +262,65 @@
      }
      return samples;
  }
 +
-+#if CONFIG_FAMILY_MUSIC_AUDITION
++#if CONFIG_FAMILY_MUSIC_AUDITION || CONFIG_WAVESHARE_XIAOMAN_REALTIME
++bool BoxAudioCodec::InitializeOutputInhibit(gpio_num_t pin) {
++    pa_pin_=pin;
++    if(pin<0) {output_inhibit_error_=ESP_ERR_INVALID_ARG;return false;}
++    // A pad hold can survive a software reset. Program LOW before releasing it;
++    // normal codec startup retains its original PA enable timing thereafter.
++    output_inhibit_error_=gpio_set_level(pin,0);
++    if(output_inhibit_error_==ESP_OK)output_inhibit_error_=gpio_set_direction(pin,GPIO_MODE_OUTPUT);
++    if(output_inhibit_error_==ESP_OK)output_inhibit_error_=gpio_hold_dis(pin);
++    return output_inhibit_error_==ESP_OK;
++}
++bool BoxAudioCodec::SetOutputInhibit(bool inhibit) {
++    if(pa_pin_<0) {output_inhibit_error_=ESP_ERR_INVALID_ARG;return false;}
++    int result=gpio_set_level(pa_pin_,inhibit?0:1);
++    if(result==ESP_OK)result=inhibit?gpio_hold_en(pa_pin_):gpio_hold_dis(pa_pin_);
++    if(result==ESP_OK)return true;
++    output_inhibit_error_=result;
++    // A failed release must leave the pending output LOW, even while held.
++    gpio_set_level(pa_pin_,0);gpio_hold_en(pa_pin_);
++    return false;
++}
 +bool BoxAudioCodec::MuteMusicOutput(bool mute) {
 +    std::lock_guard<std::mutex> lock(data_if_mutex_);
-+    return esp_codec_dev_set_out_mute(output_dev_,mute)==ESP_CODEC_DEV_OK;
++    if(mute && !SetOutputInhibit(true))return false;
++    const int result=esp_codec_dev_set_out_mute(output_dev_,mute);
++    uint8_t reg=0;
++    // Pinned esp_codec_dev/ES8311 mute APIs swallow register-write failures.
++    // PA hold covers SDK enable's temporary PA-high/unmute before cache replay.
++    if(result!=ESP_CODEC_DEV_OK || !out_ctrl_if_ ||
++       out_ctrl_if_->read_reg(out_ctrl_if_,0x31,1,&reg,1)!=ESP_CODEC_DEV_OK ||
++       (reg&0x60)!=(mute?0x60:0)) {
++        SetOutputInhibit(true);return false;
++    }
++    return mute || SetOutputInhibit(false);
 +}
 +bool BoxAudioCodec::ReopenDuplexForMusic(int rate) {
 +    if(rate!=24000 && rate!=48000)return false;
@@ -258,12 +295,17 @@
 +#endif
 --- a/main/audio/codecs/box_audio_codec.h
 +++ b/main/audio/codecs/box_audio_codec.h
-@@ -30,6 +30,11 @@
+@@ -30,6 +30,16 @@
      virtual int Read(int16_t* dest, int samples) override;
      virtual int Write(const int16_t* data, int samples) override;
  
-+#if CONFIG_FAMILY_MUSIC_AUDITION
++#if CONFIG_FAMILY_MUSIC_AUDITION || CONFIG_WAVESHARE_XIAOMAN_REALTIME
++    gpio_num_t pa_pin_=GPIO_NUM_NC;
++    int output_inhibit_error_=ESP_OK;
++    bool InitializeOutputInhibit(gpio_num_t pin);
++    bool SetOutputInhibit(bool inhibit);
 +protected:
++    int OutputInhibitError() const {return output_inhibit_error_;}
 +    bool ReopenDuplexForMusic(int rate);
 +    bool MuteMusicOutput(bool mute);
 +#endif

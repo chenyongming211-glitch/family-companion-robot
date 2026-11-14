@@ -1,0 +1,17 @@
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -71,6 +71,7 @@
+     // Epoch/quarantine support is independent of the physical MR source.
+     virtual bool ManagedCapture() const { return SoftwareReference(); }
+     virtual bool PrepareAudioConnection() { return true; }
++    virtual void PollAudioFault() {}
+     virtual bool ReferenceValid() const { return true; }
+     virtual void ReportReferenceFailure() {}
+     virtual bool RealtimeEligible() const { return ReferenceValid(); }
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -101,3 +101,4 @@
+ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
++    codec_->PollAudioFault();
+ #if CONFIG_WAVESHARE_XIAOMAN_REALTIME && defined(ESP_PLATFORM)
+     static unsigned diag_calls=0;

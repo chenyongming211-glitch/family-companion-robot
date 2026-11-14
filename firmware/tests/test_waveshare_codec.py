@@ -12,6 +12,12 @@ BOARD = FIRMWARE/'overlays/main/boards/waveshare/esp32-s3-touch-amoled-2.16'
 
 class WaveshareCodecTests(unittest.TestCase):
     def test_production_adapter_lifecycle_and_physical_completion(self):
+        self.run_host("waveshare_codec_host.cc")
+
+    def test_production_once_per_boot_recovery(self):
+        self.run_host("waveshare_recovery_host.cc", ["-DCONFIG_FAMILY_MUSIC_AUDITION=1"])
+
+    def run_host(self, source, extra=()):
         self.assertTrue((BOARD/'xiaoman_box_codec.h').is_file(), 'Waveshare adapter is missing')
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -24,7 +30,7 @@ class WaveshareCodecTests(unittest.TestCase):
                 '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                 '-DCONFIG_CHICK_FACE_UI=1',
                 '-I', str(work), '-I', str(BOARD), '-I', str(FIRMWARE/'overlays/main/audio'),
-                str(FIRMWARE/'tests/waveshare_codec_host.cc'), '-o', str(binary)],
+                str(FIRMWARE/'tests'/source), '-o', str(binary), *extra],
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             environment = dict(os.environ, ASAN_OPTIONS='halt_on_error=1:abort_on_error=1',
