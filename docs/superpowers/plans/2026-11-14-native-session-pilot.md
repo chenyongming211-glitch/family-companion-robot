@@ -1,5 +1,7 @@
 # 原生连续会话隔离对照执行计划
 
+**最新状态（2026-11-14）：** 用户已要求“现在先整理方案，先不要开发”。本计划暂停执行，禁止继续写实验/产品代码、运行测试或发起模型探针。已准备200项来源证明、9条合成输入与隔离客户端；真实提供方意图/结果均为0，语音ASR核对和内容对照尚未执行。没有生产部署或固件改动。待用户后续明确恢复时，先核对本计划与[最终建议方案](../specs/2026-11-14-dialogue-reliability-recovery-design.md)再执行，旧批准不覆盖本次暂停要求。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to execute task-by-task. Follow user-required main directly; no branches/worktrees. All runtime tests/API probes run on cloud.
 
 **Goal:** 用真实且核对过的合成语音，判断同一模型的原生连续会话是否改善当前对话问题，并验证取消/上下文/旁路记录边界；不发布生产改动。
