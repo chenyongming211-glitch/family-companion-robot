@@ -1,6 +1,6 @@
 # 原生会话已播对齐与中断状态优化记录
 
-状态：用户已批准实施，分段证据、原生中断修复及旁路审计已实现并完成云端检查/审查；真实生成语音的取消、删除、原位置补回及文字读取门控已通过，补充缺项读取仍为unknown，不证明提供方内部记忆绝对抹除。共享账本累计5/8协议、17/48主回答intent。v4临时窗口未收到新微雪会话，已恢复原入口并停止隔离实例/采集；实机效果未覆盖，不记现场验收通过。正式Voice/管理、微雪固件和真实记忆保持。
+状态：用户已批准实施，分段证据、原生中断修复及旁路审计已实现并完成云端检查/审查；真实协议门控通过，补充缺项读取及提供方内部抹除仍unknown。v4无新输入后已恢复；v5完成一段实机，7个provider completed回答保持同一原生连接、2次同连接中断修正，用户反馈改善，但仍有播放断续和回答中途转聆听，整体未验收。现累计5/8协议、26/48主回答intent；v5也已恢复原入口、停止实例/采集。正式Voice/管理与固件保持；用户另一次正式旧服务会话自然更新了原记忆，隔离v5仍memory=false，不把它写成原记忆全程不变。
 
 依据：[设计](../superpowers/specs/2026-11-14-native-playback-context-repair-design.md)、[执行计划](../superpowers/plans/2026-11-14-native-playback-context-repair.md)。只落实已播分段证据与中断恢复，不恢复耳机直连/枚举矩阵，不改固件或放宽600ms信用/播放超时。
 
@@ -46,7 +46,7 @@ fake与审查已修正服务端事件ID审计、官方type-only取消、终态�
 
 既有结果审计新增有界`playback_sync`，复制原native SID、response/user/全部assistant item身份，canonical已播样本、真正用于修正/重建的冻结片段与时间，以及unknown/complete/ASR reason；该快照不是提供方送达ACK。仍使用原deferred append，无新增关键路径I/O。新增RED→GREEN/race检查覆盖同连接、mutation失败重建、迟到ASR与后续重建，核对审计文字和实际插入文字一致；已修正或旧连接Cut不重复列入当前审计。云端证据`driver-red-08-audit.log`、`driver-green-09-audit.log`、`driver-race-04-audit.log`保留。
 
-## 收尾、待验与体积
+## v4收尾、待验与体积（后续v5见下文）
 
 - 分段、runner和新增审计均完成规格/质量审查；审计增量后重新冻结214项来源/支持输入，检查前后不变。普通/race各有736项测试通过（306顶层），3项原有按需测试跳过；两个相关包、vet/build全部通过。最新二进制SHA`f60b04dbd24d0bdd32d732f43a9cccdb3470c50e6d6370d75667907d6670133d`，旧二进制及测试记录保留。
 - 最新runner/helper/guard摘要绑定`tools/native-session-pilot/runner-v9.sha256`。私有`pilot-compiled-inventory-v9-audit.json`的214项是来源/支持输入数，含测试、配置与支持，不能称实际编译文件数量；隐藏probe独立记录。
@@ -55,3 +55,27 @@ fake与审查已修正服务端事件ID审计、官方type-only取消、终态�
 - v4 `restore verified`，原Caddy文件SHA`adb6222394b10c444c5d563b241afc87be39aa17fb00d5bce2c4f2d22653f115`及admin恢复；仅停止本轮PID856040，MainPID0，串口及云端观察均已退出。正式VoicePID732503/SHA dcd233c8、管理PID635398/SHA6afbdc98及保护配置保持，Voice ready/memory_ready、active0/2、诊断false；见`cleanup-v1.json`、`route-restore-v4.log`及stop记录。
 - 用户方便时仍需验证换话题、暂停/继续，核对真实`playback_sync`与硬件回执。下次须在当前基线上创建独立新分流意图，不复用已消费v4或重试原输入；仍用全局5/17起的原账本。本轮未修改输入回声/AEC规则，不能将此项优化当作所有不顺畅问题已解决。
 - 固件仍2.5.4，app3,534,368B/每槽余70,112B，本轮固件新增0B；克隆样本仍未收到，本轮不创建音色。
+
+## 用户后续反馈：21:41旧服务播放停滞
+
+用户随后回复“说话断断续续，然后就停了”。核对正式服务和Caddy时间：v4已在此之前恢复；21:41:07–21:41:38这条新连接实际进入正式`self-echo-20261114-fddfc11`，不是优化版v9。原v4窗口仍为零新会话，不能把此次反馈记为优化版的实机成败。
+
+该轮识别“介绍一下自己”，没有新插话事件。模型生成正常completed：3,251ms内交付370,560个24k样本（15.44秒），首PCM1,054ms。设备回执原始最大111,360样本（4.64秒），核心向下量化至110,880（4.62秒）；已发送125,280（5.22秒），恰好耗尽600ms信用。最后递增回执后5.001秒触发`generation_failed`/interrupt，再等待3.001秒以`drain_timeout`关闭。
+
+这里`generation_failed`是发送循环的通用错误标签，不能解释成模型生成失败。直接触发链为已播回执停滞→发送信用耗尽→既有超时关闭。回执多次延迟成批到达；仅凭这些记录还无法分开设备I2S停顿、无线/TCP延迟或收发阻塞。记忆写入为异步合并任务，不能只凭同时出现的`memory_write`就归因其阻塞。现场串口未覆盖此21:41时段，不补造硬件证据。
+
+私有`ops/repair-v1/formal-followup-v1.json`绑定这条正式会话的事件/元数据摘要和关键时间线；这是用户主动进入正式旧服务的一轮，单列，不伪造隔离runner intent。共享隔离账本仍5/17。为下一次核对，另建独立v5分流准备/新PID proof，复用同一已验证binary并同时采集被动串口、隔离音频标量与无payload的TCP统计；没有重跑协议检查、修改固件或放宽窗口/超时。v5收尾结果另记，不复用已消费v4。
+
+## v5实机：同连接修正有正例，播放与误输入仍待定位
+
+独立prepared v5使用同一已审operator，manifest SHA`c14447e48d56afa899a17daff04d8a0f689b1fbe3c52400ecb279acf6f763a54`；新PID860725、proof SHA`2ded2a12bdc46bc222f71fa3aa5a089ab4e722ebde3f5da55015a6ccc7f2591d`，binary及214项来源未改。实机21:51:31–21:53:41产生9个primary intent，累计5/26，账本SHA`9ce0ad5bb1f262509fc790d739ced1684534975b417e6494c6ef6c460215c70e`。首轮“嗯”刚提交即被下一句打断，尚无response身份/音频，保守关闭旧连接后重建；这条`read_unknown`不退款，也不单独归为提供方故障。末轮在零下发时transport_lost取消，闭合原因未取得用户确认，不冒充完整回答。其余7条provider completed保持同一native SID；7次硬件终态含5次完整played、2次被打断drained，无turn_error或drain_timeout。完整played不等于全程流畅。
+
+本轮两次`same_session_context_repaired=true`。故事生成24.72秒，最终硬件已播13.02秒，冻结5个能独立确认的短句并明确unknown；下一问自我介绍直接回答新问题，沿用同一native SID。地理回答中断后，也在同连接修正后续聊。`playback_sync`绑定旧SID/response/user/item与冻结文字/时间，不把所有13.02秒都说成已逐字对齐。用户反馈“比之前好多了”，但明确指出开头断续及尚未说完就进入聆听；暂停后恢复原故事没有单独覆盖，不能据此完成整体验收。
+
+播放断续取得同期证据：设备公网TCP连接累计重传21,587B（发送258,191B），多个约0.5–1.5秒回执间隔与重传邻近；另有4.089秒回执间隔。最长间隔内，音频接收帧停在1389，3.896秒后突增至1461；当时输入队列无积压、append无错误，Caddy公网TCP与本地转发的bytes_received也同时不变，随后一起增长。支持停顿在微雪收发/外部网络入口一侧，尚不能分开设备WebSocket任务、Wi-Fi和ISP，不能仅凭下行重传就指定路由器为唯一根因。Go未在此窗口积压输入；也没有证据将其归为模型生成慢。私有`field-playback-network-v1.json`、`field-long-gap-network-v1.json`及`audio-diagnostics.jsonl`分别保留。
+
+输入侧有一次空转写已被拒绝，未打断故事；地理回答尚未播完时，预览/最终识别“没有啊”触发打断。用户确认其感受是回答中途转聆听，但对是否说过“没有啊”回复“记不清了”，因此该次打断的真人/误输入来源仍unknown；环境声、人声误识别或设备自收音不能只靠转写区分。本轮未调整VAD/回声/AEC规则，不能宣布自动聆听问题已解决。输入轮次仍是原Omni监听与server_vad，并非本轮验证了smart_turn_v2。
+
+同期被动串口643,191B、9,767行，SHA`2115aa393b064140a30270d7f4a777ef3ec6b6b8dedcf22ebc2ccebef46ee65f`；未写设备或修改串口设置。AFE empty/fetch告警在早前待机及正常工作采集也大量存在，不能单独当本次卡顿根因。原音未持久保存。
+
+v5 `restore verified`，Caddy文件/admin回原值；只停止本轮PID860725，MainPID0，两个采集均已退出。正式Voice732503、管理635398/保护配置保持，ready/memory_ready、active0/2、诊断false；固件2.5.4/app3,534,368B不变、新增0B。私有`field-repair-summary-v1.json` SHA`640fb57ef3c25f5224bc493628b881c22d863a127760c4850dd5c6107876a5c9`、`cleanup-v2.json` SHA`90f9b8258ca1a6f69dfea1d508ea9067c687f5acec2bbe40ff5c321f04fafc1b`绑定本轮。后续继续同一5/26账本，不重跑旧协议或复用已消费分流意图。
