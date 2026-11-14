@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import unittest
+import urllib.request
 import test_realtime_default as defaults
 
 class CodecOutputInhibitTests(unittest.TestCase):
@@ -13,13 +14,26 @@ class CodecOutputInhibitTests(unittest.TestCase):
 
     def test_real_sdk_reopen_cannot_escape_pa_inhibit(self):
         prepared = self.source/'managed_components/espressif__esp_codec_dev'
-        fallback = prepared if prepared.is_dir() else defaults.FIRMWARE/'.cache/codec-dev'
-        component = Path(os.environ.get('FIRMWARE_CODEC_COMPONENT', str(fallback)))
+        cache = defaults.FIRMWARE/'.cache/codec-dev'
+        explicit = os.environ.get('FIRMWARE_CODEC_COMPONENT')
+        fallback = prepared if prepared.is_dir() else cache
+        component = Path(explicit) if explicit else fallback
         texts = []
         for relative, digest in [
             ('device/es8311/es8311.c','0da6374b8b3bb1dea81b2d2077c2f95683bfb39077086e162f5a1bc98749ca67'),
             ('esp_codec_dev.c','fc9fafbb591cb3509ac0b4b51445c18b75b90bf0063e3917a951983d28c6153b')]:
             path = component/relative
+            if not path.is_file() and not explicit and component == cache:
+                # Same immutable repository commit as esp_codec_dev1.6.2's
+                # repository_info, with the actual release bytes pinned below.
+                url = ('https://raw.githubusercontent.com/espressif/esp-adf/'
+                       'af7b72fb2b73d4f513d3cede01c13518ab216735/components/esp_codec_dev/' + relative)
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    raw = response.read(256 * 1024 + 1)
+                self.assertLessEqual(len(raw), 256 * 1024)
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), digest)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
             self.assertTrue(path.is_file(), 'configure the existing pinned FIRMWARE_CODEC_COMPONENT fixture')
             raw = path.read_bytes()
             self.assertEqual(hashlib.sha256(raw).hexdigest(), digest)
