@@ -71,6 +71,27 @@ robot.songguoxue.com {
 	handle @family_runtime {
 		import onboarding_backend
 	}
+	@family_firmware {
+		method GET POST
+		path_regexp family_firmware ^/api/family/device-firmware/dev_[a-f0-9]{32}$
+	}
+	handle @family_firmware {
+		import onboarding_backend
+	}
+	@device_firmware_report {
+		method POST
+		path /api/device/firmware
+	}
+	handle @device_firmware_report {
+		import onboarding_backend
+	}
+	@device_firmware_download {
+		method GET
+		path_regexp device_firmware_download ^/api/device/firmware/ota_[a-f0-9]{32}$
+	}
+	handle @device_firmware_download {
+		import onboarding_backend
+	}
 	@device_state {
 		method POST
 		path /api/device/state

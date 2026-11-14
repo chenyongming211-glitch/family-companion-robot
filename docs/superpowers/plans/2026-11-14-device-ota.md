@@ -44,12 +44,12 @@ phase：checking/ready/busy/downloading/restarting/failed。ready仅本机启动
 
 **Files:** 新`internal/management/firmware*.go`及测试；改`server.go/onboarding.go`最小分派、`cmd/management`命令与参数；必要audit分类。
 
-- [ ] 先写HTTP RED：上述新路由当前404；有权限账号可查询并创建，其他家庭/只读拒绝，重启加载任务保持，重复/过期/旧boot/撤权/损坏存储不误确认。
-- [ ] 实现私有FirmwareRoot及同步/原子持久文件：`releases/fw_SHA/{manifest.json,app.bin}`、`devices/dev_ID.json`。有限发布数量与总量，不删历史事务，不跟随符号链接；无root时返回能力不可用，旧端点保持。
-- [ ] 发布CLI只接云端固定app/分区/元数据。验证ESP32-S3镜像、xiaozhi项目、实际版本/ELF/APP SHA、精确布局及两槽容量；版本发布后不可变，历史来源白名单用于首次引导。运行期只下发已封存验证的镜像。
-- [ ] 家庭/内部接口复用runtimeScopePermission，admin不绕过授权；创建、派发、下载、确认前刷新当前配置/绑定，审计请求和结果。持久任务有期限，不在超时后隐式重试。
-- [ ] 设备轮询/下载认证，boot/seq去旧；有新boot且目标ELF匹配的ready才confirmed。旧bootstrap仅对明确任务和匹配已知基线ELF/完整分区元数据发放一次；无任务继续不返回firmware。使用实际镜像版本正常比较，不永久force。
-- [ ] 云端Go定向普通/race、既有onboarding/runtime/审计回归GREEN；独立规格/质量审查后提交。
+- [x] 先写HTTP RED：上述新路由当前404；有权限账号可查询并创建，其他家庭/只读拒绝，重启加载任务保持，重复/过期/旧boot/撤权/损坏存储不误确认。
+- [x] 实现私有FirmwareRoot及同步/原子持久文件：`releases/fw_SHA/{manifest.json,app.bin}`、`devices/dev_ID.json`。有限发布数量与总量，不删历史事务，不跟随符号链接；无root时返回能力不可用，旧端点保持。
+- [x] 发布CLI只接云端固定app/分区/元数据。验证ESP32-S3镜像、xiaozhi项目、实际版本/ELF/APP SHA、精确布局及两槽容量；版本发布后不可变，历史来源白名单用于首次引导。运行期只下发已封存验证的镜像。
+- [x] 家庭/内部接口复用runtimeScopePermission，admin不绕过授权；创建、派发、下载、确认前刷新当前配置/绑定，审计请求和结果。持久任务有期限，不在超时后隐式重试。
+- [x] 设备轮询/下载认证，boot/seq去旧；有新boot且目标ELF匹配的ready才confirmed。旧bootstrap仅对明确任务和匹配已知基线ELF/完整分区元数据发放一次；无任务继续不返回firmware。使用实际镜像版本正常比较，不永久force。
+- [x] 云端Go完整普通451项、相关race189项通过（按UID拆分权限测试）；独立规格/质量审查PASS，提交73db540。见本轮验证，非服务已部署。
 
 示例测试入口（云端源快照内）：
 
@@ -62,12 +62,12 @@ go test -race ./internal/management ./cmd/management -run 'Firmware' -count=1
 
 **Files:** 新`firmware/overlays/onboarding/family_ota*`、对应主机夹具/测试、共用OTA/应用补丁或准备接缝；改`family_control.cc/prepare_onboarding.py`最小worker调用。实际版本升为2.5.3，确保ESP app描述与发布相同。
 
-- [ ] 用实际生成OTA/应用方法建立RED：碎片读取、错误URL/状态码/长度/摘要/容量/镜像身份、忙/重复/旧任务、自检失败与未确认不能成功。
-- [ ] 同一控制worker在激活联网后顺带轮询新端点，复用boot和现有HTTP资源；不改变旧控制命令解析。升级本身由一个有界、非重复的临时执行任务完成，主任务继续处理UI和心跳；正常态无新增常驻任务。
-- [ ] 应用线程再次核对idle、无音乐/捕获/控制占用后预留升级，失去资格明确失败；停止旧音频/播放代次。只允许匹配该任务的固定HTTPS URL进入工厂OTA路径，旁路任意URL不能绕过校验。
-- [ ] 4KiB流式下载，现有mbedTLS SHA256，验证实际备用槽/精确长度/预期hash/ESP app身份，错误中止handle、释放资源、恢复音频。通过后才设置启动槽并重启。超时有界，不无限循环或自动重试。
-- [ ] 工厂S3的旧MarkCurrentVersionValid接缝改为等待本地健康，复用生命周期/已有tick确认主任务和新鲜音频DMA/输入；规定期限未通过则调用既有invalid+rollback，不提前确认。网络报到失败不能被当作镜像已确认；新报告由本地有效状态决定。
-- [ ] 云端真实代码提取的ASan/UBSan GREEN，音频/协议/时钟/音乐/控制回归；独立规格/质量审查后提交。
+- [x] 用实际生成OTA/应用方法建立RED：碎片读取、错误URL/状态码/长度/摘要/容量/镜像身份、忙/重复/旧任务、自检失败与未确认不能成功。
+- [x] 同一控制worker在激活联网后顺带轮询新端点，复用boot和现有HTTP资源；不改变旧控制命令解析。升级本身由一个有界、非重复的临时执行任务完成，主任务继续处理UI和心跳；正常态无新增常驻任务。
+- [x] 应用线程再次核对idle、无音乐/捕获/控制占用后预留升级，失去资格明确失败；停止旧音频/播放代次。只允许匹配该任务的固定HTTPS URL进入工厂OTA路径，旁路任意URL不能绕过校验。
+- [x] 4KiB流式下载，现有mbedTLS SHA256，验证实际备用槽/精确长度/预期hash/ESP app身份，错误中止handle、释放资源、恢复音频。通过后才设置启动槽并重启。超时有界，不无限循环或自动重试。
+- [x] 工厂S3的旧MarkCurrentVersionValid接缝改为等待本地健康，复用生命周期/已有tick确认主任务和新鲜音频DMA/输入；规定期限未通过则调用既有invalid+rollback，不提前确认。网络报到失败不能被当作镜像已确认；新报告由本地有效状态决定。
+- [x] 云端真实代码提取的ASan/UBSan GREEN，音频/协议/时钟/音乐/控制回归；独立规格/质量审查后提交。
 
 ```sh
 python3 firmware/tools/run_host_tests.py --archive /path/to/locked/xiaozhi-v2.5.2.tar.gz
@@ -77,17 +77,17 @@ python3 firmware/tools/run_host_tests.py --archive /path/to/locked/xiaozhi-v2.5.
 
 **Files:** 新`web/management/src/components/FirmwareUpgrade.vue`和小型controller，改`types.ts/remote-api.ts/api.ts/pages/CorePages.vue`；对应隔离测试。
 
-- [ ] RED：真实API解析、手动确认后才POST、重复点击、设备切换/退出/隐藏、超时未知、只读/离线、旧端需重启提示、只有confirmed成功。
-- [ ] GET展示当前实际身份与候选版本/大小/来源，确认步骤说明升级期间暂不可对话；POST只发releaseId+boot，不接受URL。单一状态区域展示设备回执，失败/未知不自动重试。
-- [ ] 复用现有页面和请求代次；持久任务重新进入页面仍能查看，切换设备的旧请求不覆盖新状态。
-- [ ] 云端网页测试/类型/构建GREEN；独立规格/质量审查后提交。
+- [x] RED：真实API解析、手动确认后才POST、重复点击、设备切换/退出/隐藏、超时未知、只读/离线、旧端需重启提示、只有confirmed成功。
+- [x] GET展示当前实际身份与候选版本/大小/来源，确认步骤说明升级期间暂不可对话；POST只发releaseId+boot，不接受URL。单一状态区域展示设备回执，失败/未知不自动重试。
+- [x] 复用现有页面和请求代次；持久任务重新进入页面仍能查看，切换设备的旧请求不覆盖新状态。
+- [x] 云端网页测试/类型/构建GREEN；独立规格/质量审查后提交。
 
 ## Task 4：整包、发布与微雪实机
 
 **Files:** `deploy/onboarding/Caddyfile`最小必要白名单；部署模板FirmwareRoot路径；本轮验证/交接；云端私有执行器不入Git。
 
-- [ ] 冻结输入到新的云端目录，复用前先验证原生缓存与音频候选2010项派生一致。重新准备固定源码/工厂来源后再顺序同步，不重写运行中的脚本。
-- [ ] 完整Go相关普通/race与网页/固件支持目标检查，完整独立审查；Waveshare原生编译、最终322+输入/Git/派生/编译/依赖/SDK来源证明，app新增≤16384B且余≥65536B。
+- [x] 冻结输入到新的云端目录，复用前先验证原生缓存与音频候选2010项派生一致。重新准备固定源码/工厂来源后再顺序同步，不重写运行中的脚本。
+- [x] 完整Go相关普通/race与网页/固件支持目标检查，完整独立审查；Waveshare原生编译、最终322+输入/Git/派生/编译/依赖/SDK来源证明，app新增≤16384B且余≥65536B。
 - [ ] 从已验证实际运行管理release来源叠本任务差异，保留未部署/运行差异；准备可审阅的管理exe、static、私有固件目录及必要Caddy白名单，不修改Voice服务/记录/配置身份。实际部署前保护摘要，原事务/失败不删除或当成新基线。
 - [ ] 云端隔离真实API/浏览器两端验证确认与权限，核对生成app后封存发布。main提交推送，实际服务按最小范围发布并核对健康/产物/旧数据保护；不把Actions或模拟客户端成绩冒充实机。
 - [ ] 微雪精确身份、实际空闲、当前镜像/分区兼容及恢复资料核对后，优先旧bootstrap一次性OTA引导。需要人工重启时采集就绪再请求一次；不伪造初始boot或跳过基线校验。
