@@ -4,6 +4,7 @@
 #include "codecs/box_audio_codec.h"
 #include "experiment_gate.h"
 #include "audio_fault.h"
+#include <atomic>
 
 // Hardware MR remains ES7210 input, including the physical DAC reference.
 // Only TX ownership changes: completed descriptors are refilled by the ISR.
@@ -15,6 +16,11 @@ public:
     ~XiaomanBoxCodec() override;
     void Start() override;
     bool PrepareAudioConnection() override;
+    bool FirmwareHealthy() override;
+    bool FirmwareAvailable() const override;
+    bool PauseForFirmware() override;
+    bool ResumeAfterFirmware() override;
+    bool FinishFirmwareResume() override;
     void PollAudioFault() override;
     bool InputData(std::vector<int16_t>& data) override;
     void OutputData(std::vector<int16_t>& data) override;
@@ -78,6 +84,9 @@ private:
     int64_t last_dma_us_=0, last_dma_gap_us_=0;
     mutable bool fault_logged_=false;
     uint32_t read_probe_count_=0;
+    std::atomic<bool> firmware_paused_{false}, firmware_restoring_{false};
+    uint32_t firmware_dma_count_=0,input_generation_=UINT32_MAX;
+    int64_t input_success_us_=0;
 #if CONFIG_FAMILY_MUSIC_AUDITION
     bool music_active_=false;
     uint32_t music_rate_=24000;

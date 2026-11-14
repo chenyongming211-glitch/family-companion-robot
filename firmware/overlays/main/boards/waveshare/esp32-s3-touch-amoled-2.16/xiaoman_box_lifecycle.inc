@@ -127,6 +127,7 @@ void XiaomanBoxCodec::FaultLocked(uint32_t source,int32_t native,uint32_t detail
 void XiaomanBoxCodec::Disarm() {
     portENTER_CRITICAL(&mux_);
     accepting_=false;aec_ready_=UINT32_MAX;epochs_.HardwareChange();
+    input_success_us_=0;input_generation_=UINT32_MAX;firmware_dma_count_=0;
     if(!faulted_) {last_dma_us_=last_dma_gap_us_=0;last_dma_bytes_=0;}
     if(output_generation_!=UINT32_MAX) ++output_generation_;
     if(playback_) {playback_->HardwareFault();playback_->HardwareReset();}
@@ -141,7 +142,7 @@ void XiaomanBoxCodec::Arm() {
     portEXIT_CRITICAL(&mux_);
 }
 bool XiaomanBoxCodec::PreparePlaybackHardware() {
-    if(ReferenceFaulted() || !callbacks_ok_) return false;
+    if(firmware_paused_ || firmware_restoring_ || ReferenceFaulted() || !callbacks_ok_) return false;
     if(!input_enabled_ || !output_enabled_) {
         Disarm();
         // Hardware MR clock negotiation requires ADC open before the mono DAC.
@@ -153,6 +154,7 @@ bool XiaomanBoxCodec::PreparePlaybackHardware() {
 }
 void XiaomanBoxCodec::EnableInput(bool enable) {
     std::lock_guard<std::mutex> lock(lifecycle_);
+    if(firmware_paused_ || firmware_restoring_)return;
 #if CONFIG_FAMILY_MUSIC_AUDITION
     if(music_active_)return;
 #endif
@@ -168,6 +170,7 @@ void XiaomanBoxCodec::EnableInput(bool enable) {
 }
 void XiaomanBoxCodec::EnableOutput(bool enable) {
     std::lock_guard<std::mutex> lock(lifecycle_);
+    if(firmware_paused_ || firmware_restoring_)return;
 #if CONFIG_FAMILY_MUSIC_AUDITION
     if(music_active_)return;
 #endif
@@ -176,6 +179,7 @@ void XiaomanBoxCodec::EnableOutput(bool enable) {
 }
 bool XiaomanBoxCodec::InputData(std::vector<int16_t>& data) {
     std::lock_guard<std::mutex> lock(lifecycle_);
+    if(firmware_paused_)return false;
 #if CONFIG_FAMILY_MUSIC_AUDITION
     if(music_active_)return false;
 #endif
@@ -215,7 +219,11 @@ bool XiaomanBoxCodec::InputData(std::vector<int16_t>& data) {
         unsigned(read_probe_count_),read,unsigned(generation),unsigned(CaptureGeneration()));
 #endif
     if(!read) {ReportReferenceFailure();PersistFirstFault();}
-    return read && generation==CaptureGeneration();
+    portENTER_CRITICAL(&mux_);
+    const bool current=read && generation==epochs_.capture();
+    if(current && accepting_ && !faulted_){input_success_us_=esp_timer_get_time();input_generation_=generation;}
+    portEXIT_CRITICAL(&mux_);
+    return current;
 }
 bool XiaomanBoxCodec::PlaybackSupported() const {
     // Negotiable capability survives intentional power idle. Start separately

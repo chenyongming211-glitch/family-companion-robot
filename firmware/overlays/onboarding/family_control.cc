@@ -1,6 +1,7 @@
 #include "family_control_state.h"
 #include "family_control_protocol.h"
 #include "family_onboarding.h"
+#include "family_ota.h"
 #include "application.h"
 #include "board.h"
 #include "audio_codec.h"
@@ -25,7 +26,7 @@ std::mutex mutex;
 State state;
 SemaphoreHandle_t signal=nullptr;
 uint64_t wanted=0,completed=0;
-bool snapshot_queued=false;
+bool snapshot_queued=false,firmware_reserved=false;
 int volume=-1,brightness=-1;
 uint64_t Now(){return static_cast<uint64_t>(esp_timer_get_time()/1000);}
 bool Snapshot() {
@@ -37,7 +38,7 @@ bool Snapshot() {
         snapshot_queued=false;
         if(job!=wanted||!online)return;
         auto& board=Board::GetInstance();auto codec=board.GetAudioCodec();auto light=board.GetBacklight();
-        if(auto command=state.Take(Now())) {
+        if(!firmware_reserved)if(auto command=state.Take(Now())) {
             if(command->field==Field::Volume&&codec)codec->SetOutputVolume(command->value);
             if(command->field==Field::Brightness&&light)light->SetBrightness(command->value,true);
         }
@@ -58,11 +59,24 @@ esp_err_t Event(esp_http_client_event_t* event) {
     }
     return ESP_OK;
 }
+void PollFirmware(esp_http_client_handle_t http,Response& response,const std::string& boot,uint64_t seq) {
+    uint64_t revision=0;auto body=FamilyOta::Report(boot,seq,&revision);if(body.empty())return;
+    esp_http_client_set_url(http,FamilyOta::Endpoint);
+    response.body.clear();response.overflow=false;
+    esp_http_client_set_header(http,"Content-Type","application/json");
+    esp_http_client_set_post_field(http,body.c_str(),body.size());
+    const auto received_at=Now();
+    const auto result=esp_http_client_perform(http);
+    const auto status=esp_http_client_get_status_code(http);
+    esp_http_client_set_post_field(http,nullptr,0);
+    if(result==ESP_OK && status==200 && !response.overflow)FamilyOta::Receive(response.body,received_at,revision);
+    esp_http_client_set_url(http,Endpoint);
+}
 void Worker(void*) {
     uint8_t random[16];esp_fill_random(random,sizeof(random));
     const char digits[]="0123456789abcdef";std::string boot;boot.reserve(32);
     for(auto byte:random){boot+=digits[byte>>4];boot+=digits[byte&15];}
-    uint64_t seq=0;unsigned failures=0;Response response;
+    uint64_t seq=0,firmware_seq=0;unsigned failures=0;Response response;
     esp_http_client_config_t config{};
     config.url=Endpoint;config.crt_bundle_attach=esp_crt_bundle_attach;
     config.timeout_ms=5000;config.disable_auto_redirect=true;config.buffer_size=2048;config.buffer_size_tx=2048;
@@ -91,16 +105,26 @@ void Worker(void*) {
             Command command;
             valid=result==ESP_OK&&status==200&&!response.overflow&&ParseResponse(response.body,command);
             if(valid&&!command.id.empty()&&online) {
-                {std::lock_guard<std::mutex> guard(mutex);state.Offer(command,Now());}
+                {std::lock_guard<std::mutex> guard(mutex);if(!firmware_reserved)state.Offer(command,Now());}
                 Snapshot();
             }
         }
+        if(valid)PollFirmware(http,response,boot,++firmware_seq);
         if(!valid){esp_http_client_close(http);failures=failures<3?failures+1:3;}else failures=0;
         const unsigned delay=failures==0?5:failures==1?10:failures==2?20:30;
         for(unsigned i=0;i<delay&&online;++i)vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 }
+bool FirmwareBusy() {
+    std::lock_guard<std::mutex> guard(mutex);return !state.Current().id.empty() && !state.HasAck();
+}
+bool ReserveFirmware() {
+    std::lock_guard<std::mutex> guard(mutex);
+    if(firmware_reserved || (!state.Current().id.empty()&&!state.HasAck()))return false;
+    firmware_reserved=true;return true;
+}
+void ReleaseFirmware() {std::lock_guard<std::mutex> guard(mutex);firmware_reserved=false;}
 void Connected(bool connected) {
     online=connected;
     if(!connected||!FamilyOnboarding::Activated()||started.exchange(true))return;

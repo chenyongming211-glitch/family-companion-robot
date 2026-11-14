@@ -13,7 +13,10 @@ bool XiaomanBoxCodec::Complete(i2s_event_data_t* event) {
         // PlaybackProgress then fills that exact descriptor with the next PCM.
         playback_->Complete(static_cast<int16_t*>(event->dma_buf),240,now);
         if(!playback_->HardwareHealthy())FaultLocked(3);
-        else if(recovery_probe_ && probe_callbacks_<12)++probe_callbacks_;
+        else {
+            if(recovery_probe_ && probe_callbacks_<12)++probe_callbacks_;
+            if(accepting_ && firmware_dma_count_<12)++firmware_dma_count_;
+        }
     }
     if(event && event->dma_buf && !accepting_)std::memset(event->dma_buf,0,event->size);
     portEXIT_CRITICAL_ISR(&mux_);return false;

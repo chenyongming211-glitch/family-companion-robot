@@ -27,6 +27,8 @@ void XiaomanBoxCodec::PollAudioFault() {
     if(lock.owns_lock())PersistFirstFault(); // busy: the next read entry retries
 }
 bool XiaomanBoxCodec::PrepareAudioConnection() {
+    portENTER_CRITICAL(&mux_);const bool firmware=firmware_paused_ || firmware_restoring_;portEXIT_CRITICAL(&mux_);
+    if(firmware)return false;
 #if CONFIG_FAMILY_MUSIC_AUDITION
     if(MusicActive())return false;
 #endif

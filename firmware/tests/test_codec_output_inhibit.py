@@ -42,13 +42,17 @@ class CodecOutputInhibitTests(unittest.TestCase):
         constructor = defaults.method(body, 'BoxAudioCodec::BoxAudioCodec(')
         self.assertIn('if(callback_refill_)InitializeOutputInhibit(pa_pin);', constructor)
         self.assertLess(constructor.index('InitializeOutputInhibit'), constructor.index('CreateDuplexChannels'))
-        signatures = ['bool BoxAudioCodec::MuteMusicOutput(', 'bool BoxAudioCodec::ReopenDuplexForMusic(']
+        signatures = ['bool BoxAudioCodec::LockDuplex(', 'bool BoxAudioCodec::CloseDuplexForFirmware(', 'bool BoxAudioCodec::MuteMusicOutput(', 'bool BoxAudioCodec::ReopenDuplexForMusic(']
         signatures += ['bool BoxAudioCodec::InitializeOutputInhibit(', 'bool BoxAudioCodec::SetOutputInhibit(']
         program = (defaults.FIRMWARE/'tests/codec_output_inhibit_host.cc').read_text()
         program = program.replace('// ACTUAL_ES8311_METHODS', '\n'.join(defaults.method(texts[0], s) for s in [
             'static int es8311_set_mute(', 'static void es8311_pa_power(', 'static int es8311_enable(']))
+        close = defaults.method(texts[1], 'int esp_codec_dev_close(')
+        # The SDK is C. Hoist two pointer declarations only for C++'s stricter
+        # goto rule; their assignments and every executed statement stay intact.
+        close=close.replace('    codec_dev_t *dev = (codec_dev_t *)handle;', '    const audio_codec_if_t *codec;\n    const audio_codec_data_if_t *data_if;\n    codec_dev_t *dev = (codec_dev_t *)handle;').replace('    const audio_codec_if_t *codec = dev->codec_if;', '    codec = dev->codec_if;').replace('    const audio_codec_data_if_t *data_if = dev->data_if;', '    data_if = dev->data_if;')
         program = program.replace('// ACTUAL_DEVICE_METHODS', '\n'.join(defaults.method(texts[1], s) for s in [
-            'int esp_codec_dev_set_out_mute(', 'static void _update_codec_setting(', 'int esp_codec_dev_open(']))
+            'int esp_codec_dev_set_out_mute(', 'static void _update_codec_setting(', 'int esp_codec_dev_open('])+'\n'+close)
         program = program.replace('// PRODUCTION_BOX_METHODS', '\n'.join(defaults.method(body, s) for s in signatures))
         source = self.work/'output-inhibit.cc';binary = self.work/'output-inhibit'
         source.write_text(program)

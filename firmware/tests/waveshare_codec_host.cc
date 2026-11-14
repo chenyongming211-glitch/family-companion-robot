@@ -80,6 +80,11 @@ public:
     virtual ~AudioCodec()=default;
     virtual void Start() { volume_loaded=true; }
     virtual bool PrepareAudioConnection() {return true;}
+    virtual bool FirmwareHealthy(){return false;}
+    virtual bool FirmwareAvailable() const{return false;}
+    virtual bool PauseForFirmware(){return false;}
+    virtual bool ResumeAfterFirmware(){return false;}
+    virtual bool FinishFirmwareResume(){return false;}
     virtual void PollAudioFault() {}
     virtual bool InputData(std::vector<int16_t>&) { return true; }
     virtual void OutputData(std::vector<int16_t>&) {}
@@ -149,10 +154,11 @@ public:
     Channel tx,rx; Channel *tx_handle_=&tx,*rx_handle_=&rx;
     i2s_std_config_t standard; i2s_tdm_config_t tdm;
     int input_changes=0,output_changes=0,unmute_calls=0;
-    bool reopen_fails=false,mute_fails=false,unmute_fails=false,muted=false;
+    bool reopen_fails=false,mute_fails=false,unmute_fails=false,muted=false,close_fails=false;
+    bool CloseDuplexForFirmware(){if(close_fails)return false;input_enabled_=output_enabled_=tx.enabled=rx.enabled=false;return true;}
     int output_sample_rate_=24000,input_sample_rate_=24000;
     int OutputInhibitError() const {return pa_initialization_error;}
-    bool ReopenDuplexForMusic(int rate) {
+    bool ReopenDuplexForMusic(int rate,bool=false) {
         ++reopens;if(reopen_hook)reopen_hook();if(reopen_fails)return false;
         standard.clk_cfg.sample_rate_hz=tdm.clk_cfg.sample_rate_hz=rate;
         tx.info.bclk_hz=rx.info.bclk_hz=rate*64;
@@ -160,13 +166,14 @@ public:
         input_enabled_=output_enabled_=tx.enabled=rx.enabled=true;
         return true;
     }
-    bool MuteMusicOutput(bool mute){if(!mute){++unmute_calls;if(unmute_hook)unmute_hook();}if(mute_fails || (!mute && unmute_fails))return false;muted=mute;return true;}
+    bool MuteMusicOutput(bool mute,bool=false){if(!mute){++unmute_calls;if(unmute_hook)unmute_hook();}if(mute_fails || (!mute && unmute_fails))return false;muted=mute;return true;}
 };
 #include "xiaoman_box_codec.h"
 #include "xiaoman_box_lifecycle.inc"
 #include "xiaoman_box_playback.inc"
 #include "xiaoman_box_dma.inc"
 #include "xiaoman_box_recovery.inc"
+#include "xiaoman_box_firmware.inc"
 #if CONFIG_FAMILY_MUSIC_AUDITION
 #include "xiaoman_box_music.inc"
 #endif

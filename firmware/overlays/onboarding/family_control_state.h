@@ -40,4 +40,7 @@ public:
     const Command& Current()const{return command_;}
 };
 void Connected(bool connected);
+bool FirmwareBusy();
+bool ReserveFirmware();
+void ReleaseFirmware();
 }

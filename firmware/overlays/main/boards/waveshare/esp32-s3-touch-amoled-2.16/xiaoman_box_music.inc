@@ -5,6 +5,7 @@ bool XiaomanBoxCodec::MusicActive() const {
 }
 bool XiaomanBoxCodec::BeginMusic(int rate) {
     std::lock_guard<std::mutex> lock(lifecycle_);
+    if(firmware_paused_ || firmware_restoring_)return false;
     if((rate!=24000 && rate!=48000) || music_active_ || ReferenceFaulted() || PlaybackBusy())return false;
     portENTER_CRITICAL(&mux_);music_active_=true;music_rate_=rate;portEXIT_CRITICAL(&mux_);
     const bool muted=MuteMusicOutput(true);

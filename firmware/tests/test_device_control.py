@@ -71,11 +71,12 @@ void esp_fill_random(uint8_t* data,size_t length){std::memset(data,1,length);}
 namespace FamilyOnboarding{std::string Key(){return "synthetic";}bool Activated(){return true;}}
 namespace SystemInfo{std::string GetMacAddress(){return "02:00:00:00:00:01";}}
 struct Command{std::string id;};struct State{void Offer(Command,uint64_t){}};State state;
-std::mutex mutex;std::atomic<bool> online{true},started{true};int volume=25,brightness=50;
+std::mutex mutex;bool firmware_reserved=false;std::atomic<bool> online{true},started{true};int volume=25,brightness=50;
 constexpr const char* Endpoint="https://fixture.invalid/api/device/state";
 uint64_t Now(){return 100;}bool Snapshot(){return true;}
 std::string Report(const std::string&,uint64_t seq,int,int,State&){return "{\"seq\":"+std::to_string(seq)+"}";}
 bool ParseResponse(const std::string&,Command&){return true;}
+void PollFirmware(Client*,Response&,const std::string&,uint64_t){}
 '''+worker+r'''
 int main(){try{Worker(nullptr);}catch(Done&){assert(requests==3);return 0;}return 1;}
 '''
@@ -99,7 +100,7 @@ int main(){try{Worker(nullptr);}catch(Done&){assert(requests==3);return 0;}retur
 #include <mutex>
 #include <vector>
 using namespace FamilyControl;
-std::mutex mutex;State state;bool online=true,snapshot_queued=false;
+std::mutex mutex;State state;bool online=true,snapshot_queued=false,firmware_reserved=false;
 uint64_t wanted=0,completed=0;int volume=-1,brightness=-1,signal=1;
 bool notified=false;constexpr int pdTRUE=1;
 #define pdMS_TO_TICKS(value) (value)
@@ -152,3 +153,41 @@ int main(){
             result=subprocess.run([str(binary)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stdout.strip(),'ok')
+
+    def test_actual_firmware_reservation_excludes_pending_and_late_control(self):
+        from test_onboarding_lifecycle import function
+        root=Path(__file__).resolve().parents[1];source=(root/'overlays/onboarding/family_control.cc').read_text()
+        harness=r'''
+#include "family_control_state.h"
+#include <cassert>
+#include <functional>
+#include <mutex>
+#include <vector>
+using namespace FamilyControl;
+std::mutex mutex;State state;bool online=true,snapshot_queued=false,firmware_reserved=false;
+uint64_t wanted=0,completed=0;int volume=60,brightness=40,signal=1,applied=0;
+bool notified=false;constexpr int pdTRUE=1;
+#define pdMS_TO_TICKS(value) (value)
+int xSemaphoreTake(int,int){bool old=notified;notified=false;return old?1:0;}void xSemaphoreGive(int){notified=true;}
+uint64_t Now(){return 100;}
+struct Codec{void SetOutputVolume(int){++applied;}int output_volume(){return 60;}};
+struct Light{void SetBrightness(int,bool){++applied;}int brightness(){return 40;}};
+struct Board{static Board& GetInstance(){static Board b;return b;}Codec* GetAudioCodec(){static Codec c;return &c;}Light* GetBacklight(){static Light l;return &l;}};
+struct Application{static Application& GetInstance(){static Application a;return a;}void Schedule(std::function<void()> fn){fn();}};
+'''+function(source,'bool Snapshot() {')+'\nnamespace FamilyControl {\n'+'\n'.join(function(source,signature) for signature in ['bool FirmwareBusy() {','bool ReserveFirmware() {','void ReleaseFirmware() {'])+r'''
+}
+int main(){
+ Command c{"cmd_"+std::string(32,'a'),Field::Brightness,90};assert(state.Offer(c,100));assert(FirmwareBusy()&&!ReserveFirmware());
+ assert(Snapshot()&&applied==1&&!state.HasAck()); // pending hardware fade
+ assert(!ReserveFirmware());state.Observe(60,90,100);assert(ReserveFirmware());
+ c.id[4]='b';assert(state.Offer(c,100)); // deliberately inject an already queued late command
+ assert(Snapshot()&&applied==1&&firmware_reserved); // the main callback cannot apply it
+ ReleaseFirmware();assert(Snapshot()&&applied==2);
+}
+'''
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'lease.cc';binary=Path(folder)/'lease';path.write_text(harness)
+            built=subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror','-I'+str(root/'overlays/onboarding'),str(path),'-o',str(binary)],capture_output=True,text=True)
+            self.assertEqual(built.returncode,0,built.stderr)
+            result=subprocess.run([str(binary)],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)

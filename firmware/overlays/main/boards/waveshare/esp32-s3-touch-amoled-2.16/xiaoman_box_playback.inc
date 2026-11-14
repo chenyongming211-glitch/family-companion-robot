@@ -56,7 +56,7 @@ bool XiaomanBoxCodec::SubmitOutput(std::vector<int16_t>& pcm,family_robot::Playb
         const auto level=family_robot::OrbPcmLevel(pcm.data()+offset,n);
 #endif
         portENTER_CRITICAL(&mux_);
-        const bool current=playback_ && accepting_ && !faulted_ && generation!=UINT32_MAX && generation==output_generation_;
+        const bool current=playback_ && accepting_ && !firmware_paused_ && !firmware_restoring_ && !faulted_ && generation!=UINT32_MAX && generation==output_generation_;
         const auto result=current?playback_->Submit(id,first+offset,pcm.data()+offset,n
 #if CONFIG_CHICK_FACE_UI
             ,level

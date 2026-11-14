@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <mutex>
 #include <functional>
+#include <future>
 constexpr int ESP_ERR_INVALID_ARG=-1;
 constexpr int ESP_OK=0,ESP_CODEC_DEV_OK=0,ESP_CODEC_DEV_INVALID_ARG=-1,ESP_CODEC_DEV_WRONG_STATE=-2,
  ESP_CODEC_DEV_NOT_SUPPORT=-3,ESP_CODEC_DEV_DRV_ERR=-4,ESP_CODEC_DEV_WRITE_FAIL=-5;
@@ -60,9 +61,10 @@ struct audio_codec_data_if_t{
 struct SoftwareVolume{
  void(*set_vol)(SoftwareVolume*,float)=nullptr;
  void(*open)(SoftwareVolume*,esp_codec_dev_sample_info_t*,int)=nullptr;
+ void(*close)(SoftwareVolume*)=nullptr;
 };
 struct codec_dev_t{
- bool input_opened=false,output_opened=false;int dev_caps=0;audio_codec_if_t* codec_if=nullptr;
+ bool input_opened=false,output_opened=false,disable_when_closed=true;void* mirror=nullptr;int dev_caps=0;audio_codec_if_t* codec_if=nullptr;
  audio_codec_data_if_t* data_if=nullptr;int volume=70;bool muted=false;int mic_gain=30;bool mic_muted=false;
  SoftwareVolume* sw_vol=nullptr;bool sw_vol_alloced=false;int vol_curve=0;
 };
@@ -74,11 +76,8 @@ static SoftwareVolume* audio_codec_new_sw_vol(){assert(false);return nullptr;}
 static int esp_codec_dev_set_out_vol(codec_dev_t*,int){return 0;}
 static int esp_codec_dev_set_in_gain(codec_dev_t*,int){return 0;}
 static int esp_codec_dev_set_in_mute(codec_dev_t*,bool){return 0;}
+static void codec_dev_mirror_deinit(void*){}
 // ACTUAL_DEVICE_METHODS
-static int esp_codec_dev_close(codec_dev_t* d){
- if(d->codec_if)d->codec_if->enable(d->codec_if,false);
- d->input_opened=d->output_opened=false;return 0;
-}
 static int esp_codec_dev_set_in_channel_gain(codec_dev_t*,unsigned,float){return 0;}
 struct BoxAudioCodec {
  std::mutex data_if_mutex_;codec_dev_t* output_dev_;codec_dev_t* input_dev_;
@@ -86,10 +85,13 @@ struct BoxAudioCodec {
  bool input_enabled_=true,output_enabled_=true,input_reference_=true;
  int reference_gain_channel_=-1,output_volume_=70;float input_gain_=30,reference_gain_=0;
  gpio_num_t pa_pin_=46;int output_inhibit_error_=0;
- bool ReopenDuplexForMusic(int);bool MuteMusicOutput(bool);
+ bool LockDuplex(std::unique_lock<std::mutex>&,bool);bool CloseDuplexForFirmware();bool ReopenDuplexForMusic(int,bool=false);bool MuteMusicOutput(bool,bool=false);
  // Optional additions are defined by actual production methods after RED.
  bool InitializeOutputInhibit(gpio_num_t);bool SetOutputInhibit(bool);
 };
+static int64_t clock_us=1000;
+static int64_t esp_timer_get_time(){return clock_us;}
+static void vTaskDelay(int){clock_us+=1000;}
 // PRODUCTION_BOX_METHODS
 int main(){
  audio_codec_es8311_t es;es.base.mute=es8311_set_mute;es.base.enable=es8311_enable;
@@ -103,7 +105,9 @@ int main(){
  assert(box.ReopenDuplexForMusic(24000));
  assert(!exposed&&"actual SDK open temporarily unmutes and enables PA during recovery");
  assert(held&&!pad()&&"PA inhibition must survive actual SDK close/open");
- assert(box.MuteMusicOutput(false)&&!held&&pad());
+ assert(box.CloseDuplexForFirmware()&&held&&!pad()&&!box.input_enabled_&&!box.output_enabled_);
+ assert(box.ReopenDuplexForMusic(24000,true));
+ assert(box.MuteMusicOutput(false,true)&&!held&&pad());
  // The real two-layer mute API hides register writes that fail. Guard readback must not.
  write_error=true;exposed=false;
  assert(!box.MuteMusicOutput(true)&&held&&!pad());write_error=false;
@@ -121,5 +125,11 @@ int main(){
  held=true;held_level=false;pending_level=true;gpio_error=2;
  assert(!box.InitializeOutputInhibit(46)&&held&&!pad()&&box.output_inhibit_error_==-32);
  gpio_error=0;assert(box.InitializeOutputInhibit(46)&&!held&&!pad());
- puts("Actual pinned SDK PA/unmute sequence and swallowed errors remain inhibited");
+ std::promise<void> entered,release;auto wait=release.get_future();
+ auto held_lock=std::async(std::launch::async,[&]{std::lock_guard<std::mutex> lock(box.data_if_mutex_);entered.set_value();wait.wait();});
+ entered.get_future().wait();const auto began=clock_us;
+ assert(!box.MuteMusicOutput(true,true)&&clock_us-began==200000);
+ assert(!box.CloseDuplexForFirmware());assert(!box.ReopenDuplexForMusic(24000,true));
+ release.set_value();held_lock.get();
+ puts("Actual pinned SDK PA/unmute sequence, checked close and bounded ownership remain inhibited");
 }

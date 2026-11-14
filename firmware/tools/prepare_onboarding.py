@@ -9,6 +9,10 @@ def prepare_connection_diagnostics(tree):
     spec=importlib.util.spec_from_file_location('connection_diagnostics',FIRMWARE/'tools/prepare_connection_diagnostics.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     module.prepare_connection_diagnostics(tree)
+def prepare_ota(tree):
+    spec=importlib.util.spec_from_file_location("factory_ota",FIRMWARE/"tools/prepare_ota.py")
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    module.prepare_ota(tree)
 def replace(path, old, new):
     text=path.read_text()
     if text.count(old)!=1: raise ValueError('source anchor mismatch: '+path.name)
@@ -72,9 +76,9 @@ def main():
         subprocess.run(['git','apply',str(path)],cwd=tree,check=True)
     for name in ['protocomm_ble_framing.h','protocomm_ble_framed_transport.inc']:
         shutil.copyfile(FIRMWARE/'overlays/onboarding'/name,components/'protocomm/src/transports'/name)
-    for name in ['family_onboarding.h','family_onboarding.cc','family_control.cc','family_control_state.h','family_control_protocol.h','family_setup_state.h','family_setup_view.h','family_setup_view.cc','family_setup_font.h','family_setup_font.c','connection_trace.h','connection_trace_network.h']:
+    for name in ['family_onboarding.h','family_onboarding.cc','family_control.cc','family_control_state.h','family_control_protocol.h','family_ota.h','family_ota.cc','family_ota_protocol.h','family_ota_download.inc','family_ota_runtime.inc','family_ota_application.inc','family_setup_state.h','family_setup_view.h','family_setup_view.cc','family_setup_font.h','family_setup_font.c','connection_trace.h','connection_trace_network.h']:
         shutil.copyfile(FIRMWARE/'overlays/onboarding'/name,tree/'main'/name)
-    replace(tree/'main/CMakeLists.txt','            "ota.cc"','            "ota.cc"\n            "family_onboarding.cc"\n            "family_control.cc"\n            "family_setup_view.cc"\n            "family_setup_font.c"')
+    replace(tree/'main/CMakeLists.txt','            "ota.cc"','            "ota.cc"\n            "family_onboarding.cc"\n            "family_control.cc"\n            "family_ota.cc"\n            "family_setup_view.cc"\n            "family_setup_font.c"')
     replace(tree/'main/CMakeLists.txt','                    PRIV_REQUIRES','                    PRIV_REQUIRES\n                        network_provisioning\n                        esp_http_client\n                        esp_wifi\n                        bt')
     replace(tree/'main/idf_component.yml', 'dependencies:\n', 'dependencies:\n  espressif/esp_jpeg: ==1.3.1\n  espressif/iot_usbh_cdc: ==3.1.0\n')
     replace(tree/'main/display/display.h','    virtual void SetStatus(const char* status);',
@@ -100,6 +104,7 @@ def main():
     prepare_configure_replay(tree)
     prepare_voice_boot(tree)
     prepare_connection_diagnostics(tree)
+    prepare_ota(tree)
     board=tree/'main/boards/common/wifi_board.cc'
     replace(board,'#include "wifi_board.h"','#include "wifi_board.h"\n#include "family_onboarding.h"')
     replace(board,'void WifiBoard::StartNetwork() {','void WifiBoard::StartNetwork() {\n    if (FamilyOnboarding::Present()) {\n        FamilyOnboarding::Start([this](bool connected) {\n            in_config_mode_ = !FamilyOnboarding::Activated();\n            if (network_event_callback_) network_event_callback_(connected ? NetworkEvent::Connected : NetworkEvent::Disconnected, "");\n        });\n        return;\n    }')
@@ -128,5 +133,5 @@ def main():
     dependencies = FIRMWARE/'dependencies.onboarding.lock'
     if hashlib.sha256(dependencies.read_bytes()).hexdigest() != dependencies.with_name(dependencies.name+'.sha256').read_text().strip(): raise ValueError('onboarding dependency lock mismatch')
     shutil.copyfile(dependencies, tree/'dependencies.lock')
-    (tree/'.family-onboarding-source.json').write_text(json.dumps({'lock_sha256':hashlib.sha256((FIRMWARE/'onboarding.lock.json').read_bytes()).hexdigest(),'target':'esp32s3','new_factory_full_flash_only': True,'physical_validation':'not_run', 'inputs': {str(p.relative_to(FIRMWARE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted([*list((FIRMWARE/'overlays/onboarding').glob('*')), *list((FIRMWARE/'patches/onboarding').glob('*.patch')), pathlib.Path(__file__).resolve(), FIRMWARE/'tools/prepare_connection_diagnostics.py', dependencies]) if p.is_file()}},indent=2)+'\n')
+    (tree/'.family-onboarding-source.json').write_text(json.dumps({'lock_sha256':hashlib.sha256((FIRMWARE/'onboarding.lock.json').read_bytes()).hexdigest(),'target':'esp32s3','new_factory_full_flash_only': True,'physical_validation':'not_run', 'inputs': {str(p.relative_to(FIRMWARE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted([*list((FIRMWARE/'overlays/onboarding').glob('*')), *list((FIRMWARE/'patches/onboarding').glob('*.patch')), pathlib.Path(__file__).resolve(), FIRMWARE/'tools/prepare_connection_diagnostics.py', FIRMWARE/'tools/prepare_ota.py', dependencies]) if p.is_file()}},indent=2)+'\n')
 if __name__=='__main__': main()

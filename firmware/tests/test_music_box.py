@@ -6,7 +6,7 @@ class MusicBoxTests(unittest.TestCase):
     def setUpClass(cls):defaults.RealtimeDefaultTests.setUpClass.__func__(cls)
     def test_volume_serializes_with_profile_and_voice_rates_stay_fixed(self):
         body=(self.source/'main/audio/codecs/box_audio_codec.cc').read_text()
-        methods='\n'.join(defaults.method(body,s) for s in ['bool BoxAudioCodec::ReopenDuplexForMusic(', 'void BoxAudioCodec::SetOutputVolume('])
+        methods='\n'.join(defaults.method(body,s) for s in ['bool BoxAudioCodec::LockDuplex(', 'bool BoxAudioCodec::ReopenDuplexForMusic(', 'void BoxAudioCodec::SetOutputVolume('])
         source=self.work/'music-box.cc';binary=self.work/'music-box'
         source.write_text((defaults.FIRMWARE/'tests/music_box_host.cc').read_text().replace('// PRODUCTION_BOX_METHODS',methods))
         result=subprocess.run(['c++','-std=c++20','-pthread','-Wall','-Wextra','-Werror',

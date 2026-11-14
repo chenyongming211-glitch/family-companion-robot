@@ -5,6 +5,7 @@
 #include <future>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 constexpr int ESP_CODEC_DEV_OK=0;
 #define ESP_CODEC_DEV_MAKE_CHANNEL_MASK(n) (1u<<(n))
 #define ESP_ERROR_CHECK(x) do{if((x)!=0)throw std::runtime_error("codec closed");}while(0)
@@ -27,8 +28,10 @@ struct BoxAudioCodec:AudioCodec{
  bool input_enabled_=true,output_enabled_=true,input_reference_=true;
  int input_sample_rate_=24000,output_sample_rate_=24000,reference_gain_channel_=-1;
  float input_gain_=30,reference_gain_=0;
- bool ReopenDuplexForMusic(int);void SetOutputVolume(int);
+ bool LockDuplex(std::unique_lock<std::mutex>&,bool);bool ReopenDuplexForMusic(int,bool=false);void SetOutputVolume(int);
 };
+static int64_t esp_timer_get_time(){return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+static void vTaskDelay(int){std::this_thread::yield();}
 // PRODUCTION_BOX_METHODS
 int main(){
  using namespace std::chrono_literals;

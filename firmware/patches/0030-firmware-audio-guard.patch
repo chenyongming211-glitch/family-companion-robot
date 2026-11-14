@@ -1,0 +1,79 @@
+--- a/main/audio/audio_codec.h
++++ b/main/audio/audio_codec.h
+@@ -72,6 +72,11 @@
+     virtual bool ManagedCapture() const { return SoftwareReference(); }
+     virtual bool PrepareAudioConnection() { return true; }
+     virtual void PollAudioFault() {}
++    virtual bool FirmwareAvailable() const {return false;}
++    virtual bool FirmwareHealthy() {return false;}
++    virtual bool PauseForFirmware() {return false;}
++    virtual bool ResumeAfterFirmware() {return false;}
++    virtual bool FinishFirmwareResume() {return false;}
+     virtual bool ReferenceValid() const { return true; }
+     virtual void ReportReferenceFailure() {}
+     virtual bool RealtimeEligible() const { return ReferenceValid(); }
+--- a/main/audio/codecs/box_audio_codec.h
++++ b/main/audio/codecs/box_audio_codec.h
+@@ -37,8 +37,10 @@
+     bool SetOutputInhibit(bool inhibit);
+ protected:
+     int OutputInhibitError() const {return output_inhibit_error_;}
+-    bool ReopenDuplexForMusic(int rate);
+-    bool MuteMusicOutput(bool mute);
++    bool ReopenDuplexForMusic(int rate,bool bounded=false);
++    bool CloseDuplexForFirmware();
++    bool LockDuplex(std::unique_lock<std::mutex>& lock,bool bounded);
++    bool MuteMusicOutput(bool mute,bool bounded=false);
+ #endif
+ public:
+     BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int output_sample_rate,
+--- a/main/audio/codecs/box_audio_codec.cc
++++ b/main/audio/codecs/box_audio_codec.cc
+@@ -1,6 +1,8 @@
+ #include "box_audio_codec.h"
+ 
+ #include <esp_log.h>
++#include <esp_timer.h>
++#include <freertos/task.h>
+ #include <driver/i2c_master.h>
+ #include <driver/i2s_tdm.h>
+ 
+@@ -287,8 +289,15 @@
+     gpio_set_level(pa_pin_,0);gpio_hold_en(pa_pin_);
+     return false;
+ }
+-bool BoxAudioCodec::MuteMusicOutput(bool mute) {
+-    std::lock_guard<std::mutex> lock(data_if_mutex_);
++bool BoxAudioCodec::LockDuplex(std::unique_lock<std::mutex>& lock,bool bounded) {
++    if(!bounded){lock.lock();return true;}
++    const auto began=esp_timer_get_time();
++    while(!lock.try_lock()){if(esp_timer_get_time()-began>=200000)return false;vTaskDelay(1);}
++    return true;
++}
++bool BoxAudioCodec::MuteMusicOutput(bool mute,bool bounded) {
++    std::unique_lock<std::mutex> lock(data_if_mutex_,std::defer_lock);
++    if(!LockDuplex(lock,bounded))return false;
+     if(mute && !SetOutputInhibit(true))return false;
+     const int result=esp_codec_dev_set_out_mute(output_dev_,mute);
+     uint8_t reg=0;
+@@ -301,9 +310,18 @@
+     }
+     return mute || SetOutputInhibit(false);
+ }
+-bool BoxAudioCodec::ReopenDuplexForMusic(int rate) {
++bool BoxAudioCodec::CloseDuplexForFirmware() {
++    std::unique_lock<std::mutex> lock(data_if_mutex_,std::defer_lock);
++    if(!LockDuplex(lock,true))return false;
++    const int out_closed=esp_codec_dev_close(output_dev_);
++    const int in_closed=esp_codec_dev_close(input_dev_);
++    input_enabled_=output_enabled_=false;
++    return out_closed==ESP_CODEC_DEV_OK && in_closed==ESP_CODEC_DEV_OK;
++}
++bool BoxAudioCodec::ReopenDuplexForMusic(int rate,bool bounded) {
+     if(rate!=24000 && rate!=48000)return false;
+-    std::lock_guard<std::mutex> lock(data_if_mutex_);
++    std::unique_lock<std::mutex> lock(data_if_mutex_,std::defer_lock);
++    if(!LockDuplex(lock,bounded))return false;
+     const int out_closed=esp_codec_dev_close(output_dev_);
+     const int in_closed=esp_codec_dev_close(input_dev_);
+     input_enabled_=output_enabled_=false;
