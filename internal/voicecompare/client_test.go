@@ -106,12 +106,16 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 	out := func(typ string, index int, words any) map[string]any {
 		return map[string]any{"type": typ, "original_text": text, "sentence": map[string]any{"index": index, "words": words}}
 	}
-	taskEvent(c, id, "result-generated", out("sentence-begin", 0, []any{}))
+	provisional := []any{}
+	if mode == "early-timestamps" {
+		provisional = []any{map[string]any{"text": string([]rune(text)[0]), "begin_index": 0, "end_index": 1, "begin_time": 0, "end_time": 1000}}
+	}
+	taskEvent(c, id, "result-generated", out("sentence-begin", 0, provisional))
 	if mode == "late-metadata" {
 		_ = c.WriteMessage(websocket.BinaryMessage, make([]byte, 9600))
 		return
 	}
-	taskEvent(c, id, "result-generated", out("sentence-synthesis", 0, []any{}))
+	taskEvent(c, id, "result-generated", out("sentence-synthesis", 0, provisional))
 	if mode == "metadata-without-pcm" {
 		taskEvent(c, id, "task-finished", nil)
 		return
@@ -143,6 +147,36 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 			usage["characters"] = nil
 		}
 		taskEvent(c, id, "task-finished", nil, usage)
+	}
+}
+
+func TestTTSUsesFinalWordsInsteadOfProvisionalTimestamps(t *testing.T) {
+	url := wsFixture(t, func(c *websocket.Conn) { ttsFixture(t, c, "early-timestamps") })
+	r, err := fixtureClient(url).Run(context.Background(), "tts", "", nil, "早上好。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.PCM) != 9600 || len(r.Words) != 1 || r.Words[0].Text != "早上好。" || r.Words[0].EndMS != 200 {
+		t.Fatalf("did not retain only the verified final timestamps: %+v", r.Words)
+	}
+}
+
+func TestRejectedTTSKeepsReceivedMetadataForDiagnosis(t *testing.T) {
+	url := wsFixture(t, func(c *websocket.Conn) { ttsFixture(t, c, "out-of-range") })
+	c := fixtureClient(url)
+	found := false
+	c.RecordEvent = func(raw json.RawMessage) error {
+		if !json.Valid(raw) {
+			t.Error("recorded non-JSON audio")
+		}
+		if strings.Contains(string(raw), `"type":"sentence-end"`) && strings.Contains(string(raw), `"end_time":201`) {
+			found = true
+		}
+		return nil
+	}
+	r, err := c.Run(context.Background(), "tts", "", nil, "你好。")
+	if err == nil || !found || len(r.Words) != 0 || len(r.PCM) != 0 {
+		t.Fatalf("failed metadata was lost or trusted: found=%v words=%v err=%v", found, r.Words, err)
 	}
 }
 
@@ -252,6 +286,55 @@ func TestTimestampWordsKeepExactSourceSeparators(t *testing.T) {
 		}
 		if got := ConfirmedText(words, 4800, 0); got != text {
 			t.Errorf("source formatting changed: got %q want %q", got, text)
+		}
+	}
+}
+
+func TestTimestampNormalizationOnlyAllowsTerminalFormatting(t *testing.T) {
+	for _, tc := range []struct {
+		source, reported string
+		reject           bool
+	}{
+		{"阳光正好，", "阳光正好。", false},
+		{"心情也美美哒～", "心情也美美哒~", false},
+		{"你，好", "你。好", true},
+		{"你～好", "你~好", true},
+		{"阳光正好，", "阳关正好。", true},
+	} {
+		var raw []timestampWord
+		for i, r := range []rune(tc.reported) {
+			b, e, begin, end := int64(i), int64(i+1), int64(i*100), int64((i+1)*100)
+			raw = append(raw, timestampWord{Text: string(r), BeginIndex: &b, EndIndex: &e, Begin: &begin, End: &end})
+		}
+		duration := int64(len(raw) * 100)
+		words, err := validateWords(tc.source, raw, duration)
+		if tc.reject {
+			if err == nil {
+				t.Fatalf("accepted changed content: %q", tc.reported)
+			}
+		} else if err != nil || ConfirmedText(words, duration*24, 0) != tc.source {
+			t.Fatalf("terminal comma lost: words=%+v err=%v", words, err)
+		}
+	}
+}
+
+func TestTimestampKeepsTrailingToneMarkWithoutDroppingWords(t *testing.T) {
+	for _, source := range []string{"你好～", "你好~", "你～好", "你好元"} {
+		var raw []timestampWord
+		for i, r := range []rune(source) {
+			if r != '你' && r != '好' {
+				continue
+			}
+			b, e, begin, end := int64(i), int64(i+1), int64(len(raw)*100), int64((len(raw)+1)*100)
+			raw = append(raw, timestampWord{Text: string(r), BeginIndex: &b, EndIndex: &e, Begin: &begin, End: &end})
+		}
+		words, err := validateWords(source, raw, 200)
+		if source == "你好～" || source == "你好~" {
+			if err != nil || ConfirmedText(words, 4800, 0) != source {
+				t.Fatalf("trailing tone mark lost: words=%+v err=%v", words, err)
+			}
+		} else if err == nil {
+			t.Fatalf("missing interior symbol or word accepted: %q", source)
 		}
 	}
 }
@@ -436,8 +519,16 @@ func nativeFixture(t *testing.T, c *websocket.Conn, bad string) {
 	if bad == "input-format-ack" {
 		update["audio"].(map[string]any)["input"].(map[string]any)["format"].(map[string]any)["sample_rate"] = 24000
 	}
-	if bad == "missing-null-ack" {
+	if bad == "omitted-disabled" {
+		delete(update, "turn_detection")
 		delete(update, "input_audio_transcription")
+		delete(update, "tools")
+	}
+	if bad == "turn-ack" {
+		update["turn_detection"] = map[string]any{"type": "server_vad"}
+	}
+	if bad == "tools-ack" {
+		update["tools"] = []any{map[string]any{"type": "function"}}
 	}
 	ack := map[string]any{"type": "session.updated", "session": update}
 	if bad == "missing-ack" {
@@ -471,6 +562,17 @@ func nativeFixture(t *testing.T, c *websocket.Conn, bad string) {
 		t.Error("missing response.create after committed ACK")
 	}
 	_ = c.WriteJSON(map[string]any{"type": "response.created", "response": map[string]any{"id": "r1"}})
+	assistantID := ""
+	if bad == "assistant-item" || bad == "wrong-assistant-item" || bad == "metadata-only-output" || bad == "wrong-output-text" {
+		assistantID = "a1"
+		item := map[string]any{"id": assistantID, "type": "message", "role": "assistant", "content": []any{}}
+		if bad == "wrong-assistant-item" {
+			item["id"] = "other"
+		}
+		_ = c.WriteJSON(map[string]any{"type": "response.output_item.added", "response_id": "r1", "output_index": 0, "item": item})
+		item["id"] = assistantID
+		_ = c.WriteJSON(map[string]any{"type": "conversation.item.created", "item": item})
+	}
 	id := "r1"
 	if bad == "wrong-response" {
 		id = "other"
@@ -480,6 +582,14 @@ func nativeFixture(t *testing.T, c *websocket.Conn, bad string) {
 		return
 	}
 	_ = c.WriteJSON(map[string]any{"type": "response.text.done", "response_id": id, "text": "你好。"})
+	content := map[string]any{"type": "text", "text": "你好。"}
+	if bad == "metadata-only-output" || bad == "wrong-output-text" {
+		delete(content, "text")
+		if bad == "wrong-output-text" {
+			content["text"] = "不同的正文"
+		}
+		_ = c.WriteJSON(map[string]any{"type": "response.output_item.done", "response_id": "r1", "output_index": 0, "item": map[string]any{"id": assistantID, "type": "message", "role": "assistant", "content": []any{content}}})
+	}
 	status := "completed"
 	if bad == "incomplete" {
 		status = "incomplete"
@@ -491,18 +601,18 @@ func nativeFixture(t *testing.T, c *websocket.Conn, bad string) {
 	if bad == "bad-usage" {
 		usage["input_tokens"] = nil
 	}
-	_ = c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "r1", "status": status, "usage": usage, "output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "你好。"}}}}}})
+	_ = c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "r1", "status": status, "usage": usage, "output": []any{map[string]any{"id": assistantID, "type": "message", "role": "assistant", "content": []any{content}}}}})
 }
 
 func TestNativeTextOnlyThenSameTTS(t *testing.T) {
-	for _, bad := range []string{"", "defaults", "audio", "wrong-response", "incomplete", "audio-ack", "search-ack", "tokens-ack", "asr-ack", "missing-null-ack", "input-format-ack", "missing-ack", "unknown-usage", "bad-usage"} {
+	for _, bad := range []string{"", "defaults", "omitted-disabled", "assistant-item", "wrong-assistant-item", "metadata-only-output", "wrong-output-text", "audio", "wrong-response", "incomplete", "audio-ack", "search-ack", "tokens-ack", "asr-ack", "turn-ack", "tools-ack", "input-format-ack", "missing-ack", "unknown-usage", "bad-usage"} {
 		t.Run(bad, func(t *testing.T) {
 			c := fixtureClient(wsFixture(t, func(c *websocket.Conn) { ttsFixture(t, c, "") }))
 			c.RealtimeURL = wsFixture(t, func(c *websocket.Conn) { nativeFixture(t, c, bad) })
 			var stages []string
 			c.BeforeCall = func(stage string, _ float64) error { stages = append(stages, stage); return nil }
 			r, err := c.Run(context.Background(), "native", "简短回答", make([]byte, 3200), "")
-			if bad != "" && bad != "defaults" {
+			if bad != "" && bad != "defaults" && bad != "omitted-disabled" && bad != "assistant-item" && bad != "metadata-only-output" {
 				if err == nil || len(r.PCM) > 0 {
 					t.Error("accepted invalid native reply")
 				}

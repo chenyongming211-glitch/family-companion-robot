@@ -36,7 +36,7 @@ func splitClauses(text string) []string {
 
 func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte, words []Word, call Call, err error) {
 	// Each clause has <=64 runes (<=128 billable characters): v3 Flash <=¥0.0128.
-	call, err = c.call(ctx, "tts", .02, func(usage *map[string]any) error {
+	call, err = c.call(ctx, "tts", .015, func(usage *map[string]any) error {
 		s, e := c.dial(ctx, c.InferenceURL)
 		if e != nil {
 			return e
@@ -90,9 +90,8 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 				if started {
 					return errors.New("unexpected second TTS sentence")
 				}
-				if len(out.Sentence.Words) != 0 {
-					return errors.New("unexpected early TTS word timestamps")
-				}
+				// Begin/stream events may carry changing provisional timestamps.
+				// Only sentence-end words are validated and used for playback mapping.
 				if out.Original != text {
 					return fmt.Errorf("TTS original text mismatch: requested=%q received=%q", text, out.Original)
 				}
@@ -105,9 +104,6 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 			}
 			switch out.Type {
 			case "sentence-synthesis":
-				if len(out.Sentence.Words) != 0 {
-					return errors.New("unexpected early word timestamps")
-				}
 				kind, b, e := s.read()
 				if e != nil {
 					return e
@@ -161,14 +157,25 @@ func validateWords(text string, raw []timestampWord, durationMS int64) ([]Word, 
 			return nil, errors.New("missing timestamp field")
 		}
 		b, e := *w.BeginIndex, *w.EndIndex
-		if b < position || e <= b || e > int64(len(source)) || !ignorable(source[position:b]) || string(source[b:e]) != w.Text || *w.Begin < last || *w.End <= *w.Begin || *w.End > durationMS {
-			return nil, errors.New("invalid or incomplete TTS timestamps")
+		// Finishing a comma-ended task may label only its final comma as a period.
+		// Preserve the source punctuation; lexical text and all timing checks stay exact.
+		terminalFormat := false
+		if b >= 0 && e == int64(len(source)) && e == b+1 {
+			terminalFormat = strings.ContainsRune("，,", source[b]) && (w.Text == "。" || w.Text == ".") || strings.ContainsRune("～~", source[b]) && (w.Text == "～" || w.Text == "~")
+		}
+		if b < position || e <= b || e > int64(len(source)) || !ignorable(source[position:b]) || string(source[b:e]) != w.Text && !terminalFormat || *w.Begin < last || *w.End <= *w.Begin || *w.End > durationMS {
+			detail, _ := json.Marshal(w)
+			return nil, fmt.Errorf("invalid or incomplete TTS timestamps: duration_ms=%d position=%d last_end_ms=%d word=%s source=%q", durationMS, position, last, detail, text)
 		}
 		words = append(words, Word{Text: string(source[position:e]), BeginMS: *w.Begin, EndMS: *w.End})
 		position, last = e, *w.End
 	}
-	if !ignorable(source[position:]) {
-		return nil, errors.New("TTS timestamp text coverage missing")
+	for _, r := range source[position:] {
+		// A trailing tone mark has no separate spoken word; retain it in the source.
+		// Interior symbols still pass through the stricter gap check above.
+		if r != '～' && r != '~' && !unicode.IsSpace(r) && !unicode.IsPunct(r) {
+			return nil, errors.New("TTS timestamp text coverage missing")
+		}
 	}
 	words[len(words)-1].Text += string(source[position:])
 	return words, nil

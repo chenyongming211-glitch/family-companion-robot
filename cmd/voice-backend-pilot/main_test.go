@@ -85,6 +85,36 @@ func TestEachBackendRunsAtMostOnce(t *testing.T) {
 	}
 }
 
+func TestNewDatedPhaseRetainsGlobalLimits(t *testing.T) {
+	if !validAttempt("quiet-voice-20261115/native-v1") {
+		t.Fatal("current diagnostic phase rejected")
+	}
+	if !validAttempt("quiet-voice-20261115-verify/native-v1") {
+		t.Fatal("separately approved verification phase rejected")
+	}
+	if !validAttempt("quiet-voice-20261115-final/native-v1") || validAttempt("quiet-voice-20261399-final/native-v1") {
+		t.Fatal("named phase validation failed")
+	}
+	p := filepath.Join(t.TempDir(), "attempts.jsonl")
+	if err := os.WriteFile(p, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, attempt := range []string{"quiet-voice-20261114/native-v1", "quiet-voice-20261115/native-v1", "quiet-voice-20261115-verify/native-v1"} {
+		if err := reserveGlobal(p, "native", attempt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := reserveGlobal(p, "native", "quiet-voice-20261115/native-v2"); err == nil {
+		t.Fatal("current phase native quota bypassed")
+	}
+	if err := os.WriteFile(p, []byte(strings.Repeat("{\"event\":\"intent\",\"stage\":\"protocol\",\"attempt\":\"old\"}\n", 8)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := reserveGlobal(p, "tts", "quiet-voice-20261115/tts-v1"); err == nil {
+		t.Fatal("new phase reset global protocol limit")
+	}
+}
+
 func TestBudgetCorruptionFailsClosed(t *testing.T) {
 	for _, body := range []string{"broken\n", `{"event":"intent","reserved_microyuan":100000}`} {
 		p := filepath.Join(t.TempDir(), "cost.jsonl")

@@ -120,6 +120,7 @@ func reserveGlobal(path, backend, attempt string) error {
 	if backend == "tts" {
 		stage, limit, ownLimit = "protocol", 8, 2
 	}
+	phase := strings.SplitN(attempt, "/", 2)[0] + "/"
 	return lockedLedger(path, false, func(rows []map[string]any) (map[string]any, error) {
 		count, own := 0, 0
 		for _, r := range rows {
@@ -135,7 +136,7 @@ func reserveGlobal(path, backend, attempt string) error {
 			}
 			if r["stage"] == stage {
 				count++
-				if strings.HasPrefix(id, "quiet-voice-20261114/") {
+				if strings.HasPrefix(id, phase) {
 					if stage == "primary" && r["backend"] != "native" && r["backend"] != "cascade" {
 						return nil, errors.New("attempt_backend_unknown")
 					}

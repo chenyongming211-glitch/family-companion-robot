@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -15,11 +16,12 @@ import (
 )
 
 type outputItem struct {
+	ID      string `json:"id"`
 	Type    string `json:"type"`
 	Role    string `json:"role"`
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type string  `json:"type"`
+		Text *string `json:"text"`
 	} `json:"content"`
 }
 
@@ -27,10 +29,17 @@ func validTextItem(item outputItem, text string, complete bool) bool {
 	if item.Type != "message" || item.Role != "assistant" || len(item.Content) > 1 || complete && len(item.Content) != 1 {
 		return false
 	}
-	return len(item.Content) == 0 || item.Content[0].Type == "text" && (!complete || item.Content[0].Text == text)
+	return len(item.Content) == 0 || item.Content[0].Type == "text" && (!complete || item.Content[0].Text == nil || *item.Content[0].Text == text)
 }
 
 func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text string, call Call, err error) {
+	var ev event
+	defer func() {
+		if err != nil && ev.Type != "" {
+			b, _ := json.Marshal(ev)
+			err = fmt.Errorf("%w; last_native_event=%s", err, b) // Private CLI result only.
+		}
+	}()
 	// max_tokens truncates returned output, not internal generation or billing.
 	// Reserve for up to 65,536 generated text tokens plus bounded audio/prompt.
 	call, err = c.call(ctx, "native", .4, func(usage *map[string]any) error {
@@ -39,7 +48,7 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 			return e
 		}
 		defer s.close()
-		ev, e := s.event()
+		ev, e = s.event()
 		if e != nil {
 			return e
 		}
@@ -77,17 +86,23 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 		if e = s.send(map[string]any{"type": "response.create", "response": map[string]any{"modalities": []string{"text"}, "instructions": prompt}}); e != nil {
 			return e
 		}
-		id, delta := "", ""
+		id, delta, assistantID := "", "", ""
 		done := false
 		for {
 			ev, e = s.event()
 			if e != nil {
 				return e
 			}
-			if ev.Type == "conversation.item.created" && id == "" {
-				if !validAudioInput(ev.Item) {
-					return errors.New("unexpected native input item")
+			if ev.Type == "conversation.item.created" {
+				if validAudioInput(ev.Item) {
+					continue
 				}
+				var item outputItem
+				if id == "" || done || json.Unmarshal(ev.Item, &item) != nil || item.ID == "" || assistantID != "" && item.ID != assistantID || !validTextItem(item, text, false) {
+					return errors.New("unexpected native conversation item")
+				}
+				// Conversation events have no response_id; bind their item ID instead.
+				assistantID = item.ID
 				continue
 			}
 			if ev.Type == "response.created" {
@@ -123,8 +138,11 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 			case "response.output_item.added", "response.output_item.done":
 				var item outputItem
 				complete := ev.Type == "response.output_item.done"
-				if json.Unmarshal(ev.Item, &item) != nil || !validTextItem(item, text, complete) || complete && !done {
+				if json.Unmarshal(ev.Item, &item) != nil || assistantID != "" && item.ID != assistantID || !validTextItem(item, text, complete) || complete && !done {
 					return errors.New("invalid native output item")
+				}
+				if assistantID == "" && item.ID != "" {
+					assistantID = item.ID
 				}
 			case "response.content_part.added", "response.content_part.done":
 				var p struct{ Type, Text string }
@@ -141,7 +159,7 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 					return errors.New("invalid native terminal")
 				}
 				*usage = v.Usage
-				if v.ID != id || v.Status != "completed" || !done || len(v.Output) != 1 || !validTextItem(v.Output[0], text, true) {
+				if v.ID != id || v.Status != "completed" || !done || len(v.Output) != 1 || assistantID != "" && v.Output[0].ID != assistantID || !validTextItem(v.Output[0], text, true) {
 					return errors.New("incomplete native terminal")
 				}
 				return nil
@@ -174,6 +192,13 @@ func requestedFieldsMatch(got, want any) bool {
 		}
 		for key, value := range fields {
 			v, present := actual[key]
+			// The provider omits explicitly disabled optional settings in its ACK.
+			if !present && (value == nil && (key == "turn_detection" || key == "input_audio_transcription")) {
+				continue
+			}
+			if empty, ok := value.([]any); !present && key == "tools" && ok && len(empty) == 0 {
+				continue
+			}
 			if !present || !requestedFieldsMatch(v, value) {
 				return false
 			}

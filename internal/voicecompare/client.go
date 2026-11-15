@@ -39,6 +39,7 @@ type Client struct {
 	Key, RealtimeURL, InferenceURL, TextURL, TTSModel, Voice string
 	BeforeCall                                               func(stage string, reserveYuan float64) error
 	AfterCall                                                func(stage string, usage map[string]any, err error) error
+	RecordEvent                                              func(json.RawMessage) error
 }
 
 func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byte, text string) (Result, error) {
@@ -223,6 +224,7 @@ type socket struct {
 	*websocket.Conn
 	stop         func() bool
 	count, total int
+	record       func(json.RawMessage) error
 }
 
 func (c Client) dial(ctx context.Context, endpoint string) (*socket, error) {
@@ -241,7 +243,7 @@ func (c Client) dial(ctx context.Context, endpoint string) (*socket, error) {
 	}
 	_ = conn.SetReadDeadline(deadline)
 	_ = conn.SetWriteDeadline(deadline)
-	return &socket{Conn: conn, stop: context.AfterFunc(ctx, func() { _ = conn.Close() })}, nil
+	return &socket{Conn: conn, stop: context.AfterFunc(ctx, func() { _ = conn.Close() }), record: c.RecordEvent}, nil
 }
 
 func (s *socket) close() { s.stop(); _ = s.Conn.Close() }
@@ -288,7 +290,15 @@ func (s *socket) event() (event, error) {
 	if err != nil {
 		return ev, err
 	}
-	if k != websocket.TextMessage || json.Unmarshal(b, &ev) != nil {
+	if k != websocket.TextMessage || !json.Valid(b) {
+		return ev, errors.New("invalid provider event")
+	}
+	if s.record != nil {
+		if err = s.record(json.RawMessage(b)); err != nil {
+			return ev, errors.New("provider event recording failed")
+		}
+	}
+	if json.Unmarshal(b, &ev) != nil {
 		return ev, errors.New("invalid provider event")
 	}
 	return ev, nil

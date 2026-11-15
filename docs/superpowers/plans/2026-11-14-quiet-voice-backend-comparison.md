@@ -1,5 +1,7 @@
 # 静默双链路验证：最小实现计划
 
+**2026-11-15续测结果：** 用户已在现场并明确继续必要测试，费用要求指成品长期API成本；下文休息/1元停止门槛为原始执行阶段。TTS与原生协议已按真实事件修正，云端77项/race/vet/build通过，A/B单轮文件链路均completed。历史失败/未知保留，未播放或连接设备。最新见[续测证据](../../verification/2026-11-15-tts-metadata-compatibility.md)，下一步按[固定TTS微雪播放计划](2026-11-15-fixed-tts-waveshare-playback.md)执行。
+
 > **For agentic workers:** 使用 superpowers:subagent-driven-development 实施；直接 main，不创建分支或 worktree。用户已授权按修订方案开发，但正在休息，禁止任何设备连接、播放、开麦、路由分流和正式服务变更。所有运行测试、依赖和真实提供方调用仅在云端。
 
 **Goal:** 提供不带播放或服务入口的云端命令，验证 TTS 文字时间戳，并使用同一 TTS 静默比较原生文字回答与 ASR＋文字 LLM。

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,7 +42,7 @@ func run(args []string, stdout io.Writer) error {
 	ledger := f.String("ledger", "", "existing shared protocol/primary attempt ledger")
 	budgetFile := f.String("budget-file", "", "shared private API reservation ledger")
 	budgetFen := f.Int("budget-fen", 100, "whole quiet phase ceiling, at most 100 fen")
-	attempt := f.String("attempt", "", "unique quiet-voice-20261114/... attempt; never reused")
+	attempt := f.String("attempt", "", "unique approved quiet-voice dated-phase attempt; never reused")
 	model := f.String("tts-model", "cosyvoice-v3-flash", "explicit actual TTS model")
 	voice := f.String("voice", "longanyang", "timestamp-capable voice belonging to this TTS model")
 	if f.Parse(args) != nil || f.NArg() != 0 {
@@ -88,13 +89,34 @@ func run(args []string, stdout io.Writer) error {
 	if err = os.Mkdir(*out, 0700); err != nil {
 		return errors.New("output_must_be_new")
 	}
+	events, err := os.OpenFile(filepath.Join(*out, "events.jsonl"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return errors.New("event_record_create_failed")
+	}
+	defer events.Close()
 	if err = reserveGlobal(*ledger, *backend, *attempt); err != nil {
 		return err
 	}
 	u.Path, u.RawQuery = "/compatible-mode/v1/chat/completions", ""
 	u.Scheme = "https"
+	eventBytes := 0
 	client := voicecompare.Client{
 		Key: cfg.Key, RealtimeURL: cfg.URL, InferenceURL: cfg.ASRURL, TextURL: u.String(), TTSModel: *model, Voice: *voice,
+		RecordEvent: func(raw json.RawMessage) error {
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, raw); err != nil {
+				return err
+			}
+			eventBytes += compact.Len() + 1
+			if eventBytes > 8<<20 {
+				return errors.New("event_record_limit")
+			}
+			compact.WriteByte('\n')
+			if _, err := events.Write(compact.Bytes()); err != nil {
+				return err
+			}
+			return events.Sync()
+		},
 		BeforeCall: func(stage string, reserve float64) error {
 			return reserveBudget(*budgetFile, stage, reserve, *budgetFen)
 		},
@@ -150,7 +172,15 @@ func validPaths(values ...string) bool {
 }
 
 func validAttempt(s string) bool {
-	if !strings.HasPrefix(s, "quiet-voice-20261114/") || len(s) > 120 || len(s) < 23 {
+	phase, name, ok := strings.Cut(s, "/")
+	date := strings.TrimPrefix(phase, "quiet-voice-")
+	if !ok || !strings.HasPrefix(phase, "quiet-voice-") || len(date) < 8 || name == "" || len(s) > 120 {
+		return false
+	}
+	if _, err := time.Parse("20060102", date[:8]); err != nil {
+		return false
+	}
+	if len(date) > 8 && (date[8] != '-' || len(date) == 9) {
 		return false
 	}
 	for _, r := range s {
