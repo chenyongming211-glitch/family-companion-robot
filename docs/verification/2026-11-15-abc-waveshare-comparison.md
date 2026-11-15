@@ -2,7 +2,7 @@
 
 日期：2026-11-15。用户明确要求将A、B、C一起对比，按[最小接入计划](../superpowers/plans/2026-11-15-abc-waveshare-comparison.md)执行。
 
-**当前：三链路接入、云端检查及规格/质量复核已通过，现场入口尚未开放。** A/B上午各一条云端成功结果、C下午四轮设备结果为此前独立证据，不能算作本次三路同条件对比完成。正在等待用户本轮现场就绪回复，未启动临时实例或apply路由。
+**当前：三链路接入、云端检查及规格/质量复核已通过，第一段A现场窗口已于14:44:29单次开放，约14:53:29自动收尾。** 开启及首次后续核对均没有设备会话或本轮样本，B/C尚未开放；实时状态和结果以云端apply/restore及records为准。A/B上午各一条云端成功结果、C下午四轮设备结果为此前独立证据，不能算作本次三路同条件对比完成。
 
 ## 实际路线与共同条件
 
@@ -26,9 +26,9 @@ B在本次最小接入中保留公共输入监听，同时另调用Fun-ASR-Realt
 
 来源：[Omni3.8](https://help.aliyun.com/zh/model-studio/qwen3-8-omni-flash-realtime)、[CosyVoice v3 Flash](https://help.aliyun.com/zh/model-studio/cosyvoice-v3-flash)、[百炼价格表](https://help.aliyun.com/zh/model-studio/model-pricing)。
 
-## 当前保护准备
+## 开窗前保护准备
 
-私有证据根`/home/ubuntu/abc-voice-compare-20261115/`。正式2进程、7份受保护配置与健康已冻结，A路由仅prepare、没有apply。复用固定SHA的原路由操作器，更新三路线health契约后每路18项合成保护检查通过；模型标签将在冻结来源/二进制时再次核对。没有真实模型或设备调用。
+私有证据根`/home/ubuntu/abc-voice-compare-20261115/`。开窗前正式2进程、7份受保护配置与健康已冻结，A路由当时仅prepare、没有apply。复用固定SHA的原路由操作器，更新三路线health契约后每路18项合成保护检查通过；模型标签已在冻结来源/二进制时再次核对。准备阶段没有真实模型或设备调用。
 
 历史账本协议9/主回答38保持；本次最多新增12主回答，每路线4，累计至50。旧工具默认48未改，历史失败/未知全部保留，新阶段上限不代表人民币扣费上限。接入、云端检查、实际A、B、C现场结果及结束恢复分别以新证据记录，未测不算通过。
 
@@ -48,4 +48,4 @@ B在本次最小接入中保留公共输入监听，同时另调用Fun-ASR-Realt
 
 最终现场binary `abc-pilot.test` SHA29f224176fdd02cb88c8df7410a993cc508a699feff31935fbeb195ae12e39c0；未部署的正式CLI candidate SHA1ec99f35ed2fec8cbc0c34f42c3bc7c4ffc8f408c71f24fce5ed70eef008c493。私有根下final-tests.jsonl、final-race.jsonl、final-verification-summary.json、final-compilation-input-check.json及dev/保留完整证据，二进制和原始数据不入Git。
 
-接下来的现场顺序A→B→C，每条重新核对source/binary/PID/health proof，单次apply并在第四答硬件结算后停止/restore。当前没有任何一条本轮现场结果，不报告三链路已测完或费用排名。
+现场顺序A→B→C，每条重新核对source/binary/PID/health proof，单次apply并在第四答硬件结算后停止/restore。第一A窗口已绑定binary29f22417、来源/控制器SHA、PID1146868及exact health；启动/首次核对active_sessions=0，用户已收到四轮说明。未取得样本不能报告A通过；B/C未开始，不报告三链路已测完或费用排名。窗口过期后续测须先核对restore，再fresh prepare/proof/intent，不复用已消费A-v1。
