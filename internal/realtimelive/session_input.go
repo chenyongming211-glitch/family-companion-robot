@@ -188,16 +188,50 @@ func (s *Session) previewInput(event map[string]any) error {
 	}
 	// The provider's text and stash can be stable and unstable continuations.
 	// Compare their complete content; a matching field cannot hide new words.
-	if s.suspectedOpeningEchoLocked(p, preview, time.Now()) {
+	now := time.Now()
+	if s.suspectedOpeningEchoLocked(p, preview, now) {
 		s.mu.Unlock()
 		return nil
+	}
+	var openingCheck map[string]any
+	// Snapshot only short, unheld previews before interruption changes output
+	// ownership. This private diagnostic never feeds the guard or turn history.
+	short, normalized := true, 0
+	for _, r := range preview {
+		if !unicode.IsSpace(r) && !unicode.IsPunct(r) {
+			normalized++
+			if normalized > 9 {
+				short = false
+				break
+			}
+		}
+	}
+	if rt := s.output; rt != nil && short {
+		input, generated := echoOpeningRunes(preview), echoOpeningRunes(rt.turn.Generated)
+		var age any
+		if !rt.lastPlaybackProgress.IsZero() {
+			age = now.Sub(rt.lastPlaybackProgress).Milliseconds()
+		}
+		_, device := s.wire.(*xiaozhiWire)
+		openingCheck = map[string]any{
+			"input_opening": string(input), "generated_opening": string(generated),
+			"reference_present": len(generated) > 0, "same_output": rt == p.outputAtStart,
+			"active_output":   s.activeOutputLocked(),
+			"owner_eligible":  s.ownerErr == nil && diagnosticDevicePattern.MatchString(s.rec.owner.DeviceID),
+			"client_eligible": s.rec.owner.ClientType == "xiaozhi" && device,
+			"output_id":       rt.turn.ID, "completed": rt.turn.Completed, "progress_age_ms": age,
+		}
 	}
 	p.hadPreview = true
 	s.mu.Unlock()
 	if err := s.interruptInput(nil, "provider_asr_preview", p); err != nil {
 		return err
 	}
-	return s.record("input_preview", map[string]any{"id": p.id, "chars": chars, "item_scope": "current", "confirmed": true})
+	fields := map[string]any{"id": p.id, "chars": chars, "item_scope": "current", "confirmed": true}
+	if openingCheck != nil {
+		fields["opening_echo_check"] = openingCheck
+	}
+	return s.record("input_preview", fields)
 }
 
 func (s *Session) finishInput(event map[string]any) error {

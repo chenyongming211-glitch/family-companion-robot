@@ -483,3 +483,106 @@ func TestInputEchoRejectsWithoutTextToolsOrMemorySideEffects(t *testing.T) {
 		t.Error("missing text-free echo rejection reason")
 	}
 }
+
+func TestInputPreviewOpeningDiagnosticIsBoundedAndDoesNotChangeAdmission(t *testing.T) {
+	for _, name := range []string{"missing_reference", "zero_progress", "nine_runes", "long_preview", "held", "ineligible"} {
+		t.Run(name, func(t *testing.T) {
+			r := newAdmissionRig(t, func(s *Session) {
+				s.rec = recorder{dir: s.directory, owner: Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}}
+			})
+			reference, preview := "ABCDEFGHIJK_private_reference_tail", " STOP?! "
+			switch name {
+			case "missing_reference":
+				reference = ""
+				preview = "我叫小"
+			case "nine_runes":
+				reference = "一二三四五六七八九十_private_reference_tail"
+				preview = "一二三四五六七八九"
+			case "long_preview":
+				preview = "一二三四五六七八九十"
+			case "held":
+				reference = "好的_private_reference_tail"
+				preview = "好"
+			}
+			old := echoOutput(t, r, reference, 19)
+			if name != "zero_progress" {
+				if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "ineligible" {
+				r.s.mu.Lock()
+				r.s.ownerErr = errors.New("synthetic_owner_error")
+				r.s.rec.owner.ClientType = "synthetic_other"
+				r.s.mu.Unlock()
+			}
+			r.start(t, "diagnostic")
+			r.preview(t, "diagnostic", "text", preview)
+			r.sync(t)
+			r.s.mu.Lock()
+			if old.turn.Generated != reference || len(r.s.history) != 1 || old.turn.User != "" || r.primary.Load() != 0 || r.selector.Load() != 0 {
+				t.Error("diagnostic changed history or model/tool admission")
+			}
+			if name == "held" {
+				if old.turn.Cut || r.s.output != old {
+					t.Error("held opening changed policy")
+				}
+			} else {
+				if !old.turn.Cut || r.s.output != nil {
+					t.Error("real preview no longer interrupts")
+				}
+			}
+			r.s.mu.Unlock()
+			raw, err := os.ReadFile(filepath.Join(r.s.directory, "events.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			previews := 0
+			for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+				var event map[string]any
+				if err = json.Unmarshal([]byte(line), &event); err != nil {
+					t.Fatal(err)
+				}
+				if event["event"] != "input_preview" {
+					continue
+				}
+				previews++
+				check := object(event["opening_echo_check"])
+				if name == "long_preview" {
+					if len(check) != 0 {
+						t.Error("long preview received opening diagnostic")
+					}
+					continue
+				}
+				if len(check) == 0 {
+					t.Fatal("unheld short preview omitted frozen opening diagnostic")
+				}
+				input, _ := check["input_opening"].(string)
+				generated, _ := check["generated_opening"].(string)
+				if input != string(echoOpeningRunes(preview)) || generated != string(echoOpeningRunes(reference)) || len([]rune(input)) > 9 || len([]rune(generated)) > 9 || strings.Contains(string(line), "private_reference_tail") {
+					t.Error("opening diagnostic leaked unbounded or unnormalized text")
+				}
+				eligible := name != "ineligible"
+				if check["reference_present"] != (reference != "") || check["same_output"] != true || check["active_output"] != true || check["owner_eligible"] != eligible || check["client_eligible"] != eligible || check["output_id"] != float64(old.turn.ID) {
+					t.Error("decision snapshot lost pre-interruption state", check)
+				}
+				if name == "zero_progress" {
+					if check["progress_age_ms"] != nil || check["completed"] != float64(0) {
+						t.Error("missing progress was invented")
+					}
+				} else {
+					if _, ok := check["progress_age_ms"].(float64); !ok || check["completed"] != float64(12960) {
+						t.Error("playback snapshot missing", check)
+					}
+				}
+			}
+			if name == "held" {
+				if previews != 0 {
+					t.Error("held preview was newly admitted")
+				}
+			} else if previews != 1 {
+				t.Error("unheld preview changed event count", previews)
+			}
+		})
+	}
+}

@@ -20,7 +20,7 @@ func splitClauses(text string) []string {
 		b.WriteRune(r)
 		n++
 		numericSeparator := (r == '.' || r == ',') && i > 0 && i+1 < len(runes) && unicode.IsDigit(runes[i-1]) && unicode.IsDigit(runes[i+1])
-		if strings.ContainsRune("，。！？；,.!?;\n", r) && !numericSeparator || n == 64 {
+		if strings.ContainsRune("，。！？；,.!?;～~\n", r) && !numericSeparator || n == 64 {
 			if strings.TrimSpace(b.String()) != "" {
 				parts = append(parts, b.String())
 			}

@@ -104,7 +104,13 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 		return
 	}
 	out := func(typ string, index int, words any) map[string]any {
-		return map[string]any{"type": typ, "original_text": text, "sentence": map[string]any{"index": index, "words": words}}
+		original := text
+		if mode == "wave-boundary" {
+			if i := strings.IndexAny(text, "～~"); i >= 0 {
+				original = text[:i] + string([]rune(text[i:])[0])
+			}
+		}
+		return map[string]any{"type": typ, "original_text": original, "sentence": map[string]any{"index": index, "words": words}}
 	}
 	provisional := []any{}
 	if mode == "early-timestamps" {
@@ -122,6 +128,10 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 	}
 	_ = c.WriteMessage(websocket.BinaryMessage, make([]byte, 9600))
 	word := map[string]any{"text": strings.TrimRight(text, "。！？"), "begin_index": 0, "end_index": len([]rune(text)) - 1, "begin_time": 0, "end_time": 200}
+	if mode == "wave-boundary" {
+		lexical := strings.TrimRight(text, "。！？～~，,")
+		word["text"], word["end_index"] = lexical, len([]rune(lexical))
+	}
 	words := []any{word}
 	index := 0
 	switch mode {
@@ -147,6 +157,41 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 			usage["characters"] = nil
 		}
 		taskEvent(c, id, "task-finished", nil, usage)
+	}
+}
+
+func TestSplitClausesKeepsWaveBoundaries(t *testing.T) {
+	for _, mark := range []string{"～", "~"} {
+		text := "你的家庭陪伴助手" + mark + "喜欢聊天、讲故事，"
+		parts := splitClauses(text)
+		if len(parts) != 2 || parts[0] != "你的家庭陪伴助手"+mark || parts[1] != "喜欢聊天、讲故事，" || strings.Join(parts, "") != text {
+			t.Fatalf("provider sentence boundary was not preserved: %q", parts)
+		}
+	}
+}
+
+func TestTTSWaveBoundariesKeepFullTextAndStrictIdentity(t *testing.T) {
+	for _, text := range []string{"你的家庭陪伴助手～喜欢聊天、讲故事，", "你的家庭陪伴助手～爱聊天、懂生活，", "你的家庭陪伴助手～会聊天、记事、提醒，", "你的家庭陪伴助手~喜欢聊天、讲故事，"} {
+		t.Run(text, func(t *testing.T) {
+			url := wsFixture(t, func(c *websocket.Conn) { ttsFixture(t, c, "wave-boundary") })
+			client := fixtureClient(url)
+			result, err := client.Run(context.Background(), "tts", "", nil, text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var covered strings.Builder
+			for _, word := range result.Words {
+				covered.WriteString(word.Text)
+			}
+			if result.Text != text || covered.String() != text || len(result.Calls) != 2 || len(result.PCM) != 19200 || len(result.Words) != 2 || result.Words[1].BeginMS != 200 || result.Words[1].EndMS != 400 {
+				t.Fatal("split tasks lost text, symbols or sample offsets")
+			}
+			// Directly submitting a multi-sentence task must still reject the
+			// provider's first-sentence prefix; no identity check was relaxed.
+			if _, _, _, err = client.tts(context.Background(), text, 24000*2*30); err == nil || !strings.Contains(err.Error(), "original text mismatch") {
+				t.Fatal("arbitrary original-text prefix was accepted")
+			}
+		})
 	}
 }
 

@@ -33,7 +33,7 @@ import (
 )
 
 const abcAllow = "waveshare-abc-20261115"
-const abcBuild = "abc-comparison-20261115-v1"
+const abcBuild = "abc-comparison-20261115-v2"
 const abcMAC = "44:bd:8d:79:1f:e8"
 const abcOwner = "dev_ce26243f0d2f0b8019bfe45796307b48"
 const abcPhase = "abc-compare-20261115/"
@@ -176,7 +176,7 @@ func abcReserve(ctx context.Context, path, route, sid string, id int64) error {
 	if e = scan.Err(); e != nil {
 		return e
 	}
-	if primary >= 50 || phase >= 12 || own >= 4 {
+	if primary >= 74 || phase >= 36 || own >= 12 {
 		return errors.New("abc_primary_limit")
 	}
 	if e = ctx.Err(); e != nil {
@@ -692,27 +692,27 @@ func TestABCGateRouteAndScope(t *testing.T) {
 func TestABCPersistentPrimaryCapsAndUnknown(t *testing.T) {
 	path := abcLedger(t, 38)
 	for _, route := range []string{"A", "B", "C"} {
-		for id := int64(1); id <= 4; id++ {
+		for id := int64(1); id <= 12; id++ {
 			if e := abcReserve(context.Background(), path, route, abcTestSID, id); e != nil {
 				t.Fatal(e)
 			}
 		}
-		if abcReserve(context.Background(), path, route, abcTestSID, 5) == nil {
+		if abcReserve(context.Background(), path, route, abcTestSID, 13) == nil {
 			t.Fatal("route cap bypassed")
 		}
 	}
 	if abcReserve(context.Background(), path, "A", abcTestSID, 1) == nil {
 		t.Fatal("unknown attempt reused")
 	}
-	if abcReserve(context.Background(), path, "C", abcTestSID, 6) == nil {
+	if abcReserve(context.Background(), path, "C", abcTestSID, 14) == nil {
 		t.Fatal("phase cap bypassed")
 	}
-	path = abcLedger(t, 49)
+	path = abcLedger(t, 73)
 	if e := abcReserve(context.Background(), path, "B", abcTestSID, 1); e != nil {
 		t.Fatal(e)
 	}
 	if abcReserve(context.Background(), path, "C", abcTestSID, 2) == nil {
-		t.Fatal("global50 bypassed")
+		t.Fatal("global74 bypassed")
 	}
 	for _, raw := range []string{"{}\n", "{bad}\n", `{"event":"intent","stage":"primary","attempt":"old"}`, "{\"event\":\"intent\",\"stage\":\"other\",\"attempt\":\"old\"}\n"} {
 		path = abcLedger(t, 0)
@@ -1022,7 +1022,7 @@ func TestABCComparisonPilotServe(t *testing.T) {
 			s.failReason("abc_metadata_failed")
 			return
 		}
-		timer := time.AfterFunc(180*time.Second, func() { s.failReason("abc_session_timeout") })
+		timer := time.AfterFunc(480*time.Second, func() { s.failReason("abc_session_timeout") })
 		_ = s.Run()
 		timer.Stop()
 		if e := pilot.finish(s); e != nil {
