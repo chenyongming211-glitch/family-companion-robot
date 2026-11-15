@@ -1,0 +1,1359 @@
+// Cloud-only opt-in A/B/C verification asset. Copy explicitly to
+// internal/realtimelive/abc_comparison_pilot_test.go. Never a product entry point.
+package realtimelive
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"familyrobot/internal/realtimeaudio"
+	"familyrobot/internal/realtimestate"
+	"familyrobot/internal/voicecompare"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"github.com/gorilla/websocket"
+)
+
+const abcAllow = "waveshare-abc-20261115"
+const abcBuild = "abc-comparison-20261115-v1"
+const abcMAC = "44:bd:8d:79:1f:e8"
+const abcOwner = "dev_ce26243f0d2f0b8019bfe45796307b48"
+const abcPhase = "abc-compare-20261115/"
+const abcTestSID = "0123456789abcdef0123456789abcdef"
+
+type abcRun func(context.Context, string, string, []byte, string) (voicecompare.Result, error)
+type abcSource struct {
+	Text               string
+	Words              []voicecompare.Word
+	Samples, Lookahead int64
+}
+type abcPilot struct {
+	route, ledger string
+	client        voicecompare.Client
+	run           abcRun
+	mu            sync.Mutex
+	sources       map[int64]abcSource
+}
+type abcBoundary struct {
+	Completed, Sent   int64
+	Cut, Ended, Final bool
+	Basis             string
+}
+type abcAlignment struct {
+	SourcePlayed int64  `json:"source_played_samples"`
+	Prefix       string `json:"confirmed_text"`
+	Unknown      bool   `json:"unknown_tail"`
+	Full         bool   `json:"full_text_confirmed"`
+	Hardware     bool   `json:"hardware_evidence"`
+}
+
+func abcScope(allow, route string) error {
+	if allow != abcAllow || route != "A" && route != "B" && route != "C" {
+		return errors.New("abc_explicit_route_required")
+	}
+	return nil
+}
+
+// Only private intent/result files receive provider errors. Keep cancellation
+// distinct and bound diagnostics that may contain a provider's rejected text.
+func abcPrivateFailure(err error) any {
+	if err == nil {
+		return nil
+	}
+	reason := "failed_or_unknown"
+	if errors.Is(err, context.Canceled) {
+		reason = "cancelled"
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		reason = "deadline_exceeded"
+	}
+	text := []rune(err.Error())
+	return map[string]any{"reason": reason, "message": string(text[:min(2048, len(text))]), "truncated": len(text) > 2048}
+}
+
+// Consume the existing append-only journal. All pending/failed/unknown intents
+// count forever; result rows never refund them. The lock and fsync precede calls.
+func abcReserve(ctx context.Context, path, route, sid string, id int64) error {
+	if abcScope(abcAllow, route) != nil || len(sid) != 32 || id <= 0 {
+		return errors.New("abc_invalid_attempt")
+	}
+	if _, e := hex.DecodeString(sid); e != nil {
+		return errors.New("abc_invalid_session")
+	}
+	if e := ctx.Err(); e != nil {
+		return e
+	}
+	f, e := os.OpenFile(path, os.O_RDWR|os.O_APPEND|syscall.O_NOFOLLOW, 0600)
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+		return e
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	st, e := f.Stat()
+	if e != nil {
+		return e
+	}
+	if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Size() > 8<<20 {
+		return errors.New("abc_invalid_ledger")
+	}
+	if st.Size() > 0 {
+		var tail [1]byte
+		if _, e = f.ReadAt(tail[:], st.Size()-1); e != nil || tail[0] != '\n' {
+			return errors.New("abc_ledger_tail_unknown")
+		}
+	}
+	attempt := fmt.Sprintf("%s%s/%s/turn-%d", abcPhase, route, sid, id)
+	primary, phase, own := 0, 0, 0
+	seen := map[string]bool{}
+	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 4096), 1<<20)
+	for scan.Scan() {
+		var row map[string]any
+		if json.Unmarshal(scan.Bytes(), &row) != nil {
+			return errors.New("abc_ledger_corrupt")
+		}
+		event, ok := row["event"].(string)
+		if !ok || event != "intent" && event != "result" {
+			return errors.New("abc_ledger_event_unknown")
+		}
+		if event == "result" {
+			prior, ok := row["attempt"].(string)
+			if !ok || !seen[prior] || row["stage"] != "primary" && row["stage"] != "protocol" {
+				return errors.New("abc_result_history_unknown")
+			}
+			continue
+		}
+		prior, ok := row["attempt"].(string)
+		if !ok || prior == "" || seen[prior] || prior == attempt {
+			return errors.New("abc_duplicate_or_unknown")
+		}
+		seen[prior] = true
+		switch row["stage"] {
+		case "protocol":
+		case "primary":
+			primary++
+		default:
+			return errors.New("abc_ledger_stage_unknown")
+		}
+		if strings.HasPrefix(prior, abcPhase) {
+			parts := strings.Split(strings.TrimPrefix(prior, abcPhase), "/")
+			if len(parts) != 3 || abcScope(abcAllow, parts[0]) != nil || len(parts[1]) != 32 || !strings.HasPrefix(parts[2], "turn-") || row["stage"] != "primary" {
+				return errors.New("abc_phase_history_unknown")
+			}
+			if _, e = hex.DecodeString(parts[1]); e != nil {
+				return errors.New("abc_phase_history_unknown")
+			}
+			var turn int64
+			if _, e = fmt.Sscanf(parts[2], "turn-%d", &turn); e != nil || turn <= 0 || fmt.Sprintf("turn-%d", turn) != parts[2] {
+				return errors.New("abc_phase_history_unknown")
+			}
+			phase++
+			if parts[0] == route {
+				own++
+			}
+		}
+	}
+	if e = scan.Err(); e != nil {
+		return e
+	}
+	if primary >= 50 || phase >= 12 || own >= 4 {
+		return errors.New("abc_primary_limit")
+	}
+	if e = ctx.Err(); e != nil {
+		return e
+	}
+	raw, e := json.Marshal(map[string]any{"event": "intent", "stage": "primary", "attempt": attempt, "backend": "abc-" + route, "state": "outcome_unknown", "at": time.Now().UTC().Format(time.RFC3339Nano)})
+	if e != nil {
+		return e
+	}
+	raw = append(raw, '\n')
+	n, e := f.Write(raw)
+	if e != nil {
+		return e
+	}
+	if n != len(raw) {
+		return io.ErrShortWrite
+	}
+	return f.Sync()
+}
+func abcAdmit(s *Session) error {
+	w, ok := s.wire.(*xiaozhiWire)
+	if s.ownerErr != nil || s.rec.owner.DeviceID != abcOwner || s.rec.owner.ClientType != "xiaozhi" || !ok || w.pcm {
+		return errors.New("abc_target_opus_required")
+	}
+	return nil
+}
+func abcModel(route string) string {
+	if route == "B" {
+		return "qwen-plus"
+	}
+	return "qwen3.8-omni-flash-realtime"
+}
+func abcHealth(s *Server, route string) map[string]any {
+	s.mu.Lock()
+	active, ready := len(s.leases), !s.stopping && s.initErr == nil
+	s.mu.Unlock()
+	tts, voice, mode, inputASR := "cosyvoice-v3-flash", "longanyang", "buffered_complete_tts", "none"
+	if route == "B" {
+		inputASR = "fun-asr-realtime"
+	}
+	if route == "C" {
+		tts, voice, mode = "native", s.cfg.Voice, "native_streaming"
+	}
+	return map[string]any{"ready": ready, "build": abcBuild, "route": route, "primary_model": abcModel(route), "model": abcModel(route), "input_asr_model": inputASR, "common_input_listener": "qwen3-asr-flash-realtime", "output_asr_model": "fun-asr-realtime", "tts_model": tts, "voice": voice, "mode": mode, "target_device": abcOwner, "target_mac": abcMAC, "transport": "opus", "max_sessions": s.cfg.MaxSessions, "active_sessions": active, "native_conversation": false, "memory_enabled": s.cfg.MemoryEnabled, "diagnostics": s.cfg.DiagnosticsDevice != "", "parallel_planning": s.cfg.ParallelPlanning, "music_online": s.cfg.Music != nil || s.cfg.MusicForDevice != nil, "expressions": s.cfg.ExpressionsEnabled, "tools": len(s.cfg.Tools) > 0, "speaker": s.cfg.Speaker != nil, "search": s.cfg.Search != nil && *s.cfg.Search, "output_asr": true}
+}
+func abcHandler(s *Server, route string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, e := net.SplitHostPort(r.RemoteAddr)
+		ip := net.ParseIP(host)
+		if e != nil || ip == nil || !ip.IsLoopback() {
+			w.WriteHeader(403)
+			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/healthz" {
+			respond(w, 200, abcHealth(s, route))
+			return
+		}
+		if r.Method != "GET" || r.URL.Path != "/xiaozhi/v1/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Device-Id") != abcMAC {
+			w.WriteHeader(403)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+func abcPrompt(s *Session, id int64) (string, error) {
+	if s.product == nil || s.product.Name() == "" {
+		return "", errors.New("abc_product_required")
+	}
+	type prior struct {
+		User     string  `json:"user"`
+		Spoken   *string `json:"assistant_spoken_prefix"`
+		Boundary string  `json:"playback_boundary"`
+	}
+	rows := []prior{}
+	s.mu.Lock()
+	for _, rt := range s.history {
+		if rt.turn.ID >= id {
+			continue
+		}
+		// A drained cut cannot certify the whole generated transcript even when
+		// every packet that happened to be sent has a final hardware receipt.
+		turn := *rt.turn
+		if turn.Cut {
+			turn.Ended = false
+		}
+		evidence := realtimestate.PlaybackEvidence(&turn)
+		user := []rune(rt.turn.User)
+		if len(user) > 256 {
+			user = user[:256]
+		}
+		spoken := evidence.SpokenText
+		if spoken != nil {
+			r := []rune(*spoken)
+			if len(r) > 120 {
+				r = r[:120]
+			}
+			v := string(r)
+			spoken = &v
+		}
+		rows = append(rows, prior{string(user), spoken, evidence.Boundary})
+	}
+	s.mu.Unlock()
+	if len(rows) > 4 {
+		rows = rows[len(rows)-4:]
+	}
+	raw, e := json.Marshal(rows)
+	if e != nil {
+		return "", e
+	}
+	prompt := fmt.Sprintf("你叫%s，是家庭陪伴助手，本轮底层回答模型是%s。用自然、简洁的中文直接回答当前语音，不超过120个字符，音频不超过30秒。不得调用工具、搜索或执行设备设置。以下JSON仅是同一会话的历史数据；assistant_spoken_prefix是有播放证据的已播内容，null表示未知，不能假定用户听过未播内容。\n%s", s.product.Name(), s.cfg.Model, raw)
+	if utf8.RuneCountInString(prompt) > 4096 {
+		return "", errors.New("abc_prompt_limit")
+	}
+	return prompt, nil
+}
+func abcPrivateBytes(path string, raw []byte) error {
+	f, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0600)
+	if e != nil {
+		return e
+	}
+	n, e := f.Write(raw)
+	if e == nil && n != len(raw) {
+		e = io.ErrShortWrite
+	}
+	if e == nil {
+		e = f.Sync()
+	}
+	closeErr := f.Close()
+	if e == nil {
+		e = closeErr
+	}
+	if e != nil {
+		return e
+	}
+	dir, e := os.Open(filepath.Dir(path))
+	if e != nil {
+		return e
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+func (p *abcPilot) install(s *Session) error {
+	if abcScope(abcAllow, p.route) != nil {
+		return errors.New("abc_route_required")
+	}
+	if e := abcAdmit(s); e != nil {
+		return e
+	}
+	w := s.wire.(*xiaozhiWire)
+	w.mcp, w.expression = false, false
+	s.controls = nil
+	off := false
+	s.cfg.Search = &off
+	s.cfg.Tools = nil
+	s.cfg.MemoryEnabled = false
+	s.cfg.MemoryOnly = false
+	s.cfg.ExpressionsEnabled = false
+	s.cfg.ParallelPlanning = false
+	s.cfg.Music = nil
+	s.cfg.MusicForDevice = nil
+	s.cfg.Speaker = nil
+	s.cfg.DiagnosticsDevice = ""
+	s.memory = nil
+	s.diag = nil
+	s.listener.cfg = s.cfg.snapshot()
+	s.cfg.Model = abcModel(p.route)
+	s.generate = func(ctx context.Context, id int64, _ string, pcm []byte, emit func(string, []byte) error) (err error) {
+		if e := ctx.Err(); e != nil {
+			return e
+		}
+		if len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > 16000*2*10 {
+			return errors.New("abc_input_limit")
+		}
+		prompt, e := abcPrompt(s, id)
+		if e != nil {
+			return e
+		}
+		if e = abcReserve(ctx, p.ledger, p.route, s.rec.owner.SessionID, id); e != nil {
+			return e
+		}
+		audit, e := newIntent(s.directory, "abc-primary", false)
+		if e != nil {
+			return e
+		}
+		if e = audit.update(map[string]any{"route": p.route, "turn": id, "model": abcModel(p.route), "mode": abcHealthMode(p.route), "state": "outcome_unknown", "input_samples": len(pcm) / 2, "input_sample_rate": 16000, "usage_state": "unknown"}); e != nil {
+			return e
+		}
+		defer func() {
+			state := "completed"
+			if err != nil {
+				state = "failed_cancelled_or_unknown"
+			}
+			err = errors.Join(err, audit.update(map[string]any{"state": state, "error": abcPrivateFailure(err)}))
+		}()
+		token := fmt.Sprintf("%s-turn-%d-%s", p.route, id, randomID())
+		if e = abcPrivateBytes(filepath.Join(s.directory, "abc-input-"+token+".pcm"), pcm); e != nil {
+			return e
+		}
+		if e = ctx.Err(); e != nil {
+			return e
+		}
+		if e = emit("ready", nil); e != nil {
+			return e
+		}
+		if p.route == "C" {
+			received, textChars, tooLong := 0, 0, false
+			err = s.generateNative(ctx, id, prompt, pcm, func(kind string, value []byte) error {
+				if e := ctx.Err(); e != nil {
+					return e
+				}
+				if kind == "pcm" || kind == "audio" {
+					received += len(value) / 2
+					if received > 24000*30 {
+						tooLong = true
+						return errors.New("abc_native_output_limit")
+					}
+				}
+				if kind == "text" {
+					textChars = utf8.RuneCount(value)
+					if textChars > 120 {
+						tooLong = true
+						return errors.New("abc_native_text_limit")
+					}
+				}
+				return emit(kind, value)
+			})
+			err = errors.Join(err, audit.update(map[string]any{"received_samples": received, "sample_rate": 24000, "text_characters": textChars, "overlong": tooLong, "usage_source": "live_native_turn_audit", "usage_state": "see_native_audit"}))
+			return err
+		}
+		client := p.client
+		events, e := os.OpenFile(filepath.Join(s.directory, "abc-events-"+token+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0600)
+		if e != nil {
+			return e
+		}
+		defer events.Close()
+		eventBytes := 0
+		client.RecordEvent = func(raw json.RawMessage) error {
+			var compact bytes.Buffer
+			if e := json.Compact(&compact, raw); e != nil {
+				return e
+			}
+			eventBytes += compact.Len() + 1
+			if eventBytes > 8<<20 {
+				return errors.New("abc_provider_event_limit")
+			}
+			compact.WriteByte('\n')
+			n, e := events.Write(compact.Bytes())
+			if e != nil {
+				return e
+			}
+			if n != compact.Len() {
+				return io.ErrShortWrite
+			}
+			return events.Sync()
+		}
+		callIndex := 0
+		var current *intent
+		client.BeforeCall = func(stage string, reserve float64) error {
+			if e := ctx.Err(); e != nil {
+				return e
+			}
+			callIndex++
+			var e error
+			current, e = newIntent(s.directory, "abc-api", false)
+			if e != nil {
+				return e
+			}
+			models := map[string]string{"native": "qwen3.8-omni-flash-realtime", "asr": "fun-asr-realtime", "llm": "qwen-plus", "tts": "cosyvoice-v3-flash"}
+			return current.update(map[string]any{"route": p.route, "turn": id, "api_stage": stage, "model": models[stage], "call_index": callIndex, "reserve_yuan_estimate": reserve, "state": "submission_outcome_unknown", "usage_state": "unknown"})
+		}
+		client.AfterCall = func(stage string, usage map[string]any, callErr error) error {
+			if current == nil {
+				return errors.New("abc_api_intent_missing")
+			}
+			state, usageState := "completed", "known"
+			if callErr != nil {
+				state = "failed_cancelled_or_unknown"
+				usageState = "reported_partial_or_unknown"
+			}
+			if usage == nil {
+				usageState = "unknown"
+			}
+			return current.update(map[string]any{"api_stage": stage, "state": state, "usage_state": usageState, "usage": usage, "error": abcPrivateFailure(callErr)})
+		}
+		// The client already validates provider events and final sentence-end words.
+		// Raw events and partial transcripts are never copied to stdout or a prompt.
+		run := p.run
+		if run == nil {
+			run = client.Run
+		}
+		backend := "native"
+		if p.route == "B" {
+			backend = "cascade"
+		}
+		result, callErr := run(ctx, backend, prompt, pcm, "")
+		callErr = errors.Join(callErr, events.Close())
+		if callErr == nil {
+			callErr = abcValidate(result)
+		}
+		if ctx.Err() != nil {
+			callErr = ctx.Err()
+		}
+		state := "completed"
+		if callErr != nil {
+			state = "failed_cancelled_or_unknown"
+		}
+		if len(result.PCM) > 0 {
+			if e = abcPrivateBytes(filepath.Join(s.directory, "abc-output-"+token+".pcm"), result.PCM); e != nil {
+				return errors.Join(callErr, e)
+			}
+		}
+		if e = privateJSON(filepath.Join(s.directory, "abc-result-"+token+".json"), map[string]any{"route": p.route, "turn": id, "state": state, "mode": "buffered_complete_tts", "primary_model": abcModel(p.route), "tts_model": "cosyvoice-v3-flash", "voice": "longanyang", "sample_rate": 24000, "samples": len(result.PCM) / 2, "text": result.Text, "words": result.Words, "calls": result.Calls, "usage_unknown": callErr != nil, "error": abcPrivateFailure(callErr)}); e != nil {
+			return errors.Join(callErr, e)
+		}
+		if callErr != nil {
+			return callErr
+		}
+		if e = ctx.Err(); e != nil {
+			return e
+		}
+		codec, e := realtimeaudio.New(24000, 1440)
+		if e != nil {
+			return e
+		}
+		delay, e := codec.LookaheadSamples()
+		codec.Close()
+		if e != nil {
+			return e
+		}
+		p.mu.Lock()
+		if p.sources == nil {
+			p.sources = map[int64]abcSource{}
+		}
+		p.sources[id] = abcSource{Text: result.Text, Words: append([]voicecompare.Word(nil), result.Words...), Samples: int64(len(result.PCM) / 2), Lookahead: int64(delay)}
+		p.mu.Unlock()
+		if e = emit("text", []byte(result.Text)); e != nil {
+			return e
+		}
+		if e = ctx.Err(); e != nil {
+			return e
+		}
+		return emit("audio", result.PCM)
+	}
+	return nil
+}
+func abcHealthMode(route string) string {
+	if route == "C" {
+		return "native_streaming"
+	}
+	return "buffered_complete_tts"
+}
+func abcValidate(result voicecompare.Result) error {
+	if strings.TrimSpace(result.Text) == "" || !utf8.ValidString(result.Text) || utf8.RuneCountInString(result.Text) > 120 || len(result.PCM) == 0 || len(result.PCM)%2 != 0 || len(result.PCM) > 24000*2*30 || len(result.Words) == 0 {
+		return errors.New("abc_incomplete_result")
+	}
+	end := int64(0)
+	var covered strings.Builder
+	for _, word := range result.Words {
+		if word.Text == "" || word.BeginMS < end || word.EndMS <= word.BeginMS || word.EndMS > int64(len(result.PCM)/2)/24 {
+			return errors.New("abc_invalid_words")
+		}
+		end = word.EndMS
+		covered.WriteString(word.Text)
+	}
+	if covered.String() != result.Text {
+		return errors.New("abc_word_coverage_missing")
+	}
+	return nil
+}
+
+// Same encoder-lookahead and 120ms rules as fixedTTSMap. This is a read-only
+// audit of the frozen receipt, never a replacement for common OutputASR context.
+func abcMap(source abcSource, b abcBoundary) abcAlignment {
+	result := abcAlignment{Unknown: true}
+	if b.Basis != "i2s_dma" || source.Lookahead < 0 || b.Completed < 0 || b.Completed > b.Sent {
+		return result
+	}
+	result.Hardware = true
+	result.SourcePlayed = max(int64(0), min(source.Samples, b.Completed-source.Lookahead))
+	result.Prefix = voicecompare.ConfirmedText(source.Words, result.SourcePlayed, 120)
+	result.Full = b.Ended && !b.Cut && b.Final && b.Sent > 0 && b.Completed == b.Sent && result.SourcePlayed == source.Samples
+	result.Unknown = !result.Full
+	if result.Full {
+		result.Prefix = source.Text
+	} else if result.Prefix == source.Text && len(source.Words) > 0 {
+		result.Prefix = strings.TrimSuffix(result.Prefix, source.Words[len(source.Words)-1].Text)
+	}
+	return result
+}
+func (p *abcPilot) finish(s *Session) error {
+	type frozen struct {
+		ID       int64
+		Source   abcSource
+		Boundary abcBoundary
+	}
+	rows := []frozen{}
+	p.mu.Lock()
+	s.mu.Lock()
+	for _, rt := range s.history {
+		if source, ok := p.sources[rt.turn.ID]; ok {
+			v := rt.turn
+			rows = append(rows, frozen{v.ID, source, abcBoundary{v.Completed, v.Sent, v.Cut, v.Ended, v.PlaybackFinal, v.PlaybackBasis}})
+		}
+	}
+	p.sources = nil // The terminal snapshot cannot be upgraded by a later call.
+	s.mu.Unlock()
+	p.mu.Unlock()
+	for _, row := range rows {
+		if e := privateJSON(filepath.Join(s.directory, fmt.Sprintf("abc-alignment-%s-turn-%d.json", p.route, row.ID)), map[string]any{"route": p.route, "turn": row.ID, "source": row.Source, "boundary": row.Boundary, "alignment": abcMap(row.Source, row.Boundary), "margin_ms": 120, "audit_only": true}); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+func abcLedger(t *testing.T, historical int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "attempts.jsonl")
+	f, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < historical; i++ {
+		if e = json.NewEncoder(f).Encode(map[string]any{"event": "intent", "stage": "primary", "attempt": fmt.Sprintf("historical/%d", i), "state": "outcome_unknown"}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = f.Close(); e != nil {
+		t.Fatal(e)
+	}
+	return path
+}
+func abcSession(t *testing.T) *Session {
+	t.Helper()
+	ws, _ := testSocket(t)
+	dir := t.TempDir()
+	productPath := filepath.Join(dir, "product.json")
+	if e := os.WriteFile(productPath, []byte(`{"schema_version":1,"name":"小满","role":"家庭陪伴","style":"简洁","default_language":"中文","developer":null,"owner":null}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	product, e := realtimestate.LoadProduct(productPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := NewSession(ws, Config{Model: "qwen3.8-omni-flash-realtime", Voice: "Tina"}, dir, product)
+	s.rec.owner = Ownership{DeviceID: abcOwner, SessionID: abcTestSID, ClientType: "xiaozhi"}
+	s.wire = &xiaozhiWire{ws: ws, mcp: true, expression: true}
+	t.Cleanup(s.cancel)
+	return s
+}
+func abcGoodResult() voicecompare.Result {
+	return voicecompare.Result{Text: "好呀。", PCM: make([]byte, 24000), Words: []voicecompare.Word{{Text: "好呀。", BeginMS: 0, EndMS: 400}}}
+}
+func TestABCGateRouteAndScope(t *testing.T) {
+	for _, route := range []string{"A", "B", "C"} {
+		if e := abcScope(abcAllow, route); e != nil {
+			t.Fatal(e)
+		}
+	}
+	for _, tc := range [][2]string{{"", "A"}, {"1", "A"}, {abcAllow + " ", "A"}, {abcAllow, ""}, {abcAllow, "native"}, {abcAllow, "a"}} {
+		if abcScope(tc[0], tc[1]) == nil {
+			t.Fatal("gate bypass", tc)
+		}
+	}
+	for _, tc := range []string{"owner", "pcm", "wire", "ownership_error", "valid"} {
+		t.Run(tc, func(t *testing.T) {
+			s := abcSession(t)
+			switch tc {
+			case "owner":
+				s.rec.owner.DeviceID = "other"
+			case "pcm":
+				s.wire.(*xiaozhiWire).pcm = true
+			case "wire":
+				s.wire = &macWire{ws: s.ws}
+			case "ownership_error":
+				s.ownerErr = errors.New("invalid")
+			}
+			if (abcAdmit(s) == nil) != (tc == "valid") {
+				t.Fatal("admission mismatch")
+			}
+		})
+	}
+	app := NewServer(Config{MaxSessions: 1}, nil, t.TempDir(), abcBuild)
+	calls := 0
+	h := abcHandler(app, "B", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(204) }))
+	for _, tc := range []struct {
+		path, mac, remote string
+		want              int
+	}{{"/healthz", "", "127.0.0.1:1234", 200}, {"/xiaozhi/v1/", abcMAC, "127.0.0.1:1234", 204}, {"/xiaozhi/v1/", "other", "127.0.0.1:1234", 403}, {"/xiaozhi/v1/", abcMAC, "192.0.2.1:1234", 403}, {"/live", abcMAC, "127.0.0.1:1234", 404}} {
+		r := httptest.NewRequest("GET", tc.path, nil)
+		r.RemoteAddr = tc.remote
+		r.Header.Set("Device-Id", tc.mac)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s: got %d want %d", tc.path, w.Code, tc.want)
+		}
+		if tc.path == "/healthz" {
+			var v map[string]any
+			if json.Unmarshal(w.Body.Bytes(), &v) != nil || v["route"] != "B" || v["primary_model"] != "qwen-plus" || v["tts_model"] != "cosyvoice-v3-flash" || v["voice"] != "longanyang" || v["mode"] != "buffered_complete_tts" || v["target_device"] != abcOwner || v["active_sessions"] != float64(0) || v["memory_enabled"] != false || v["tools"] != false || v["search"] != false || v["output_asr"] != true {
+				t.Fatal("health provenance", v)
+			}
+		}
+	}
+	if calls != 1 {
+		t.Fatal("unexpected forwarding", calls)
+	}
+}
+func TestABCPersistentPrimaryCapsAndUnknown(t *testing.T) {
+	path := abcLedger(t, 38)
+	for _, route := range []string{"A", "B", "C"} {
+		for id := int64(1); id <= 4; id++ {
+			if e := abcReserve(context.Background(), path, route, abcTestSID, id); e != nil {
+				t.Fatal(e)
+			}
+		}
+		if abcReserve(context.Background(), path, route, abcTestSID, 5) == nil {
+			t.Fatal("route cap bypassed")
+		}
+	}
+	if abcReserve(context.Background(), path, "A", abcTestSID, 1) == nil {
+		t.Fatal("unknown attempt reused")
+	}
+	if abcReserve(context.Background(), path, "C", abcTestSID, 6) == nil {
+		t.Fatal("phase cap bypassed")
+	}
+	path = abcLedger(t, 49)
+	if e := abcReserve(context.Background(), path, "B", abcTestSID, 1); e != nil {
+		t.Fatal(e)
+	}
+	if abcReserve(context.Background(), path, "C", abcTestSID, 2) == nil {
+		t.Fatal("global50 bypassed")
+	}
+	for _, raw := range []string{"{}\n", "{bad}\n", `{"event":"intent","stage":"primary","attempt":"old"}`, "{\"event\":\"intent\",\"stage\":\"other\",\"attempt\":\"old\"}\n"} {
+		path = abcLedger(t, 0)
+		if e := os.WriteFile(path, []byte(raw), 0600); e != nil {
+			t.Fatal(e)
+		}
+		if abcReserve(context.Background(), path, "A", abcTestSID, 1) == nil {
+			t.Fatal("corrupt ledger accepted")
+		}
+	}
+	path = abcLedger(t, 38)
+	before, _ := os.ReadFile(path)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if abcReserve(ctx, path, "A", abcTestSID, 1) == nil {
+		t.Fatal("canceled reservation")
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("canceled intent charged before submission")
+	}
+}
+func TestABCPromptUsesOnlyPlayedSessionEvidence(t *testing.T) {
+	s := abcSession(t)
+	previous := realtimestate.NewTurn(1)
+	previous.User = "我喜欢蓝色"
+	previous.Generated = "秘密的未播全文"
+	previous.Sent = 24000
+	previous.Completed = 0
+	s.history = []*liveTurn{{turn: previous}}
+	prompt, e := abcPrompt(s, 2)
+	if e != nil || !strings.Contains(prompt, "小满") || !strings.Contains(prompt, "120") || !strings.Contains(prompt, "我喜欢蓝色") || strings.Contains(prompt, previous.Generated) {
+		t.Fatal("unsafe prompt", e, prompt)
+	}
+	previous.Generated = "已播回答"
+	previous.Completed = 24000
+	previous.Ended = true
+	previous.PlaybackBasis = "i2s_dma"
+	previous.PlaybackFinal = true
+	prompt, e = abcPrompt(s, 2)
+	if e != nil || !strings.Contains(prompt, "已播回答") {
+		t.Fatal("played prefix absent", e, prompt)
+	}
+	previous.Cut = true
+	prompt, e = abcPrompt(s, 2)
+	if e != nil || strings.Contains(prompt, "已播回答") {
+		t.Fatal("drained cut upgraded unverified whole transcript", e, prompt)
+	}
+}
+func TestABCSessionInjectionBuffersAndNeverFallsBack(t *testing.T) {
+	for _, route := range []string{"A", "B"} {
+		t.Run(route, func(t *testing.T) {
+			s := abcSession(t)
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			emitted := make(chan string, 4)
+			p := &abcPilot{route: route, ledger: abcLedger(t, 38), run: func(ctx context.Context, backend, prompt string, pcm []byte, text string) (voicecompare.Result, error) {
+				want := "native"
+				if route == "B" {
+					want = "cascade"
+				}
+				if backend != want || len(pcm) != 640 || text != "" || !strings.Contains(prompt, "小满") {
+					return voicecompare.Result{}, errors.New("wrong route/input/prompt")
+				}
+				close(entered)
+				<-release
+				return abcGoodResult(), nil
+			}}
+			if e := p.install(s); e != nil {
+				t.Fatal(e)
+			}
+			if s.controls != nil || s.wire.(*xiaozhiWire).mcp || s.wire.(*xiaozhiWire).expression {
+				t.Fatal("auxiliary enabled")
+			}
+			go func() {
+				done <- s.generate(context.Background(), 1, "DIAGNOSTIC_UNPLAYED", make([]byte, 640), func(k string, v []byte) error {
+					emitted <- k
+					if k == "audio" {
+						paths, _ := filepath.Glob(filepath.Join(s.directory, "abc-result-*.json"))
+						if len(paths) != 1 {
+							return errors.New("result not persisted before playback")
+						}
+					}
+					return nil
+				})
+			}()
+			<-entered
+			if k := <-emitted; k != "ready" {
+				t.Fatal("first event must start shared budget", k)
+			}
+			select {
+			case k := <-emitted:
+				t.Fatal("emitted before result completed", k)
+			default:
+			}
+			close(release)
+			if e := <-done; e != nil {
+				t.Fatal(e)
+			}
+			if <-emitted != "text" || <-emitted != "audio" {
+				t.Fatal("wrong emission")
+			}
+			files, _ := filepath.Glob(filepath.Join(s.directory, "abc-result-*.json"))
+			raw, _ := os.ReadFile(files[0])
+			if strings.Contains(string(raw), "DIAGNOSTIC_UNPLAYED") {
+				t.Fatal("diagnostic copied into prompt")
+			}
+		})
+	}
+	for _, kind := range []string{"error", "cancel", "limit", "missing_words"} {
+		t.Run(kind, func(t *testing.T) {
+			s := abcSession(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			p := &abcPilot{route: "A", ledger: abcLedger(t, 38), run: func(context.Context, string, string, []byte, string) (voicecompare.Result, error) {
+				calls++
+				r := abcGoodResult()
+				switch kind {
+				case "error":
+					return r, errors.New("fixture_provider_error:" + strings.Repeat("私有错误", 800))
+				case "cancel":
+					cancel()
+				case "limit":
+					r.PCM = make([]byte, 24000*2*30+2)
+				case "missing_words":
+					r.Words = nil
+				}
+				return r, nil
+			}}
+			if e := p.install(s); e != nil {
+				t.Fatal(e)
+			}
+			audio := 0
+			if e := s.generate(ctx, 1, "", make([]byte, 640), func(k string, v []byte) error {
+				if k == "audio" {
+					audio++
+				}
+				return nil
+			}); e == nil || audio != 0 || calls != 1 {
+				t.Fatal("unsafe fallback or emission", e, audio, calls)
+			}
+			paths, _ := filepath.Glob(filepath.Join(s.directory, "abc-result-*.json"))
+			if len(paths) != 1 {
+				t.Fatal("missing private failed result")
+			}
+			raw, _ := os.ReadFile(paths[0])
+			var row map[string]any
+			_ = json.Unmarshal(raw, &row)
+			failure := object(row["error"])
+			detail, _ := failure["message"].(string)
+			if failure["reason"] == nil || detail == "" || utf8.RuneCountInString(detail) > 2048 {
+				t.Fatal("private result omitted bounded failure cause")
+			}
+			if kind == "limit" || kind == "missing_words" {
+				if !strings.Contains(detail, "abc_incomplete_result") {
+					t.Fatal("validation failure cause was lost")
+				}
+			}
+			if kind == "error" && failure["truncated"] != true {
+				t.Fatal("long private error was not bounded")
+			}
+			if kind != "cancel" {
+				if e := s.generate(context.Background(), 1, "", make([]byte, 640), func(string, []byte) error { return nil }); e == nil || calls != 1 {
+					t.Fatal("failed or unknown primary was retried", e, calls)
+				}
+			}
+		})
+	}
+}
+func TestABCVerifiedWordsAuditIsFrozenAndReadOnly(t *testing.T) {
+	source := abcSource{Text: "好呀。", Words: []voicecompare.Word{{Text: "好", BeginMS: 0, EndMS: 100}, {Text: "呀。", BeginMS: 100, EndMS: 400}}, Samples: 12000, Lookahead: 156}
+	b := abcBoundary{Completed: 7200, Sent: 12960, Basis: "i2s_dma"}
+	a := abcMap(source, b)
+	if a.Prefix != "好" || a.SourcePlayed != 7044 || !a.Hardware || !a.Unknown {
+		t.Fatal(a)
+	}
+	b = abcBoundary{Completed: 12960, Sent: 12960, Ended: true, Final: true, Basis: "i2s_dma"}
+	if a = abcMap(source, b); a.Prefix != source.Text || !a.Full || a.Unknown {
+		t.Fatal(a)
+	}
+	b.Basis = "other"
+	if a = abcMap(source, b); a.Hardware || a.Prefix != "" || !a.Unknown {
+		t.Fatal(a)
+	}
+	s := abcSession(t)
+	turn := realtimestate.NewTurn(1)
+	turn.Generated = "公共ASR原上下文"
+	turn.Sent = 12960
+	turn.Completed = 12960
+	turn.Ended = true
+	turn.PlaybackFinal = true
+	turn.PlaybackBasis = "i2s_dma"
+	s.history = []*liveTurn{{turn: turn}}
+	snapshot := func() string {
+		raw, err := json.Marshal(map[string]any{"generated": turn.Generated, "tracker": turn.Tracker, "sent": turn.Sent, "completed": turn.Completed, "ended": turn.Ended, "basis": turn.PlaybackBasis, "final": turn.PlaybackFinal})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	before := snapshot()
+	p := &abcPilot{route: "A", sources: map[int64]abcSource{1: source}}
+	if e := p.finish(s); e != nil {
+		t.Fatal(e)
+	}
+	after := snapshot()
+	if before != after {
+		t.Fatal("audit changed public history")
+	}
+	paths, _ := filepath.Glob(filepath.Join(s.directory, "abc-alignment-*.json"))
+	if len(paths) != 1 {
+		t.Fatal(paths)
+	}
+	frozen, _ := os.ReadFile(paths[0])
+	turn.Completed = 0
+	still, _ := os.ReadFile(paths[0])
+	if string(still) != string(frozen) {
+		t.Fatal("audit was not frozen")
+	}
+	codec, e := realtimeaudio.New(24000, 1440)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer codec.Close()
+	if _, e = codec.LookaheadSamples(); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func abcPrivateDir(path string) error {
+	if e := os.MkdirAll(path, 0700); e != nil {
+		return e
+	}
+	st, e := os.Lstat(path)
+	if e != nil {
+		return e
+	}
+	if !st.IsDir() || st.Mode().Perm() != 0700 {
+		return errors.New("abc_private_directory_required")
+	}
+	return nil
+}
+func TestABCComparisonPilotServe(t *testing.T) {
+	// No filesystem, network, key/config reads, or listeners before exact opt-in.
+	if os.Getenv("FAMILY_ABC_PILOT_ALLOW") != abcAllow {
+		t.Skip("explicit cloud-only ABC opt-in required")
+	}
+	route := os.Getenv("FAMILY_ABC_PILOT_ROUTE")
+	if e := abcScope(abcAllow, route); e != nil {
+		t.Fatal(e)
+	}
+	syscall.Umask(0077)
+	root := filepath.Join("/home/ubuntu/abc-voice-compare-20261115/v1", route)
+	for _, dir := range []string{root, filepath.Join(root, "records")} {
+		if e := abcPrivateDir(dir); e != nil {
+			t.Fatal(e)
+		}
+	}
+	cfg, e := LoadConfig("/etc/family-robot/server.env")
+	if e != nil {
+		t.Fatal("protected model configuration unavailable")
+	}
+	u, e := url.Parse(cfg.URL)
+	if e != nil || u.Scheme != "wss" || u.Query().Get("model") != "qwen3.8-omni-flash-realtime" || !strings.HasSuffix(u.Hostname(), ".cn-beijing.maas.aliyuncs.com") || cfg.Model != "qwen3.8-omni-flash-realtime" {
+		t.Fatal("unverified native model or region")
+	}
+	off := false
+	cfg.Search = &off
+	cfg.MemoryEnabled = false
+	cfg.MemoryOnly = false
+	cfg.ExpressionsEnabled = false
+	cfg.ParallelPlanning = false
+	cfg.MaxSessions = 1
+	cfg.Tools = nil
+	cfg.Music = nil
+	cfg.MusicForDevice = nil
+	cfg.Speaker = nil
+	cfg.DiagnosticsDevice = ""
+	cfg.DeviceProfilesPath = ""
+	product, e := realtimestate.LoadProduct("/opt/family-robot-livekit-dev/config/product-identity.json")
+	if e != nil {
+		t.Fatal("product configuration unavailable")
+	}
+	dc, e := LoadDeviceConfig("/etc/family-robot/device-admission-20261109.env")
+	if e != nil {
+		t.Fatal("device admission unavailable")
+	}
+	dc, e = dc.WithOnboardingAuthURL("http://127.0.0.1:18791/api/internal/device-auth")
+	if e != nil {
+		t.Fatal(e)
+	}
+	app := NewServer(cfg, product, filepath.Join(root, "records"), abcBuild)
+	if e = app.InitializationError(); e != nil {
+		t.Fatal(e)
+	}
+	u.Path, u.RawQuery, u.Scheme = "/compatible-mode/v1/chat/completions", "", "https"
+	client := voicecompare.Client{Key: cfg.Key, RealtimeURL: cfg.URL, InferenceURL: cfg.ASRURL, TextURL: u.String(), TTSModel: "cosyvoice-v3-flash", Voice: "longanyang"}
+	app.runDevice = func(s *Session) {
+		pilot := &abcPilot{route: route, ledger: "/home/ubuntu/waveshare-native-integration-20261114/attempts.jsonl", client: client}
+		if e := pilot.install(s); e != nil {
+			s.failReason("abc_target_or_transport_denied")
+			return
+		}
+		if e := privateJSON(filepath.Join(s.directory, "abc-session.json"), abcHealth(app, route)); e != nil {
+			s.failReason("abc_metadata_failed")
+			return
+		}
+		timer := time.AfterFunc(180*time.Second, func() { s.failReason("abc_session_timeout") })
+		_ = s.Run()
+		timer.Stop()
+		if e := pilot.finish(s); e != nil {
+			fmt.Fprintln(os.Stderr, "abc_alignment_record_failed")
+		}
+	}
+	listener, e := net.Listen("tcp4", "127.0.0.1:18818")
+	if e != nil {
+		t.Fatal(e)
+	}
+	server := &http.Server{Handler: abcHandler(app, route, app.DeviceHandler(dc)), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	lifetime, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	select {
+	case <-lifetime.Done():
+	case e = <-done:
+		if !errors.Is(e, http.ErrServerClosed) {
+			t.Error(e)
+		}
+	}
+	shutdown, stopShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopShutdown()
+	if e = app.CloseActive(shutdown); e != nil {
+		t.Error(e)
+	}
+	if e = server.Shutdown(shutdown); e != nil {
+		_ = server.Close()
+		t.Error(e)
+	}
+}
+
+// Synthetic provider protocol fixture. Requests travel through the real Client
+// or Native implementation; no external provider or physical device is used.
+func TestABCRealClientAndNativeStayOnSelectedRoute(t *testing.T) {
+	for _, label := range []string{"A", "B", "C", "A-unknown", "A-cancel", "C-overlong", "B-http-rejected"} {
+		t.Run(label, func(t *testing.T) {
+			route := strings.Split(label, "-")[0]
+			fail := strings.Contains(label, "-")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s := abcSession(t)
+			stages := make(chan string, 8)
+			checkIntent := func(stage string) {
+				stages <- stage
+				if route == "C" {
+					return
+				}
+				paths, _ := filepath.Glob(filepath.Join(s.directory, "abc-api-*.json"))
+				found := false
+				for _, path := range paths {
+					raw, _ := os.ReadFile(path)
+					var row map[string]any
+					_ = json.Unmarshal(raw, &row)
+					if row["api_stage"] == stage && row["state"] == "submission_outcome_unknown" && row["route"] == route && row["turn"] == float64(1) && row["call_index"] != nil {
+						found = true
+					}
+				}
+				if !found {
+					t.Error("provider request preceded durable route/turn/API intent", stage)
+				}
+			}
+			native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				checkIntent("native")
+				c, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if e != nil {
+					return
+				}
+				defer c.Close()
+				c.SetReadDeadline(time.Now().Add(3 * time.Second))
+				_ = c.WriteJSON(map[string]any{"type": "session.created"})
+				var request map[string]any
+				if c.ReadJSON(&request) != nil {
+					return
+				}
+				settings := object(request["session"])
+				if !strings.Contains(fmt.Sprint(settings["instructions"]), "小满") {
+					t.Error("shared prompt absent")
+				}
+				_ = c.WriteJSON(map[string]any{"type": "session.updated", "session": settings})
+				for {
+					if c.ReadJSON(&request) != nil {
+						return
+					}
+					if request["type"] == "input_audio_buffer.commit" {
+						break
+					}
+				}
+				_ = c.WriteJSON(map[string]any{"type": "input_audio_buffer.committed"})
+				if c.ReadJSON(&request) != nil {
+					return
+				}
+				if label == "A-cancel" {
+					cancel()
+					return
+				}
+				_ = c.WriteJSON(map[string]any{"type": "response.created", "response": map[string]any{"id": "abc-r"}})
+				if route == "C" {
+					_ = c.WriteJSON(map[string]any{"type": "response.audio.delta", "response_id": "abc-r", "delta": func() string {
+						if label == "C-overlong" {
+							return base64.StdEncoding.EncodeToString(make([]byte, 24000*2*30+2))
+						}
+						return "AAAAAAAAAAA="
+					}()})
+					_ = c.WriteJSON(map[string]any{"type": "response.audio_transcript.done", "response_id": "abc-r", "transcript": "好呀。"})
+				} else {
+					_ = c.WriteJSON(map[string]any{"type": "response.text.done", "response_id": "abc-r", "text": "好呀。"})
+				}
+				output := []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "好呀。"}}}}
+				_ = c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "abc-r", "status": "completed", "output": output, "usage": func() any {
+					if label == "A-unknown" {
+						return nil
+					}
+					return map[string]any{"input_tokens": 3, "output_tokens": 3, "total_tokens": 6, "input_tokens_details": map[string]any{"text_tokens": 1, "audio_tokens": 2}}
+				}()}})
+			}))
+			defer native.Close()
+			inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if e != nil {
+					return
+				}
+				defer c.Close()
+				c.SetReadDeadline(time.Now().Add(3 * time.Second))
+				var request map[string]any
+				if c.ReadJSON(&request) != nil {
+					return
+				}
+				header, payload := object(request["header"]), object(request["payload"])
+				id := header["task_id"]
+				stage, _ := payload["task"].(string)
+				checkIntent(stage)
+				event := func(kind string, output any) {
+					usage := map[string]any{"characters": 3}
+					if stage == "asr" {
+						usage = map[string]any{"duration": .02}
+					}
+					_ = c.WriteJSON(map[string]any{"header": map[string]any{"task_id": id, "event": kind}, "payload": map[string]any{"output": output, "usage": usage}})
+				}
+				event("task-started", nil)
+				if stage == "asr" {
+					if payload["model"] != "fun-asr-realtime" {
+						t.Error("wrong ASR model")
+					}
+					for {
+						typ, raw, e := c.ReadMessage()
+						if e != nil {
+							return
+						}
+						if typ == websocket.TextMessage {
+							var v map[string]any
+							_ = json.Unmarshal(raw, &v)
+							if object(v["header"])["action"] == "finish-task" {
+								break
+							}
+						}
+					}
+					event("result-generated", map[string]any{"sentence": map[string]any{"text": "你好", "sentence_end": true}})
+					event("task-finished", nil)
+					return
+				}
+				if stage != "tts" || payload["model"] != "cosyvoice-v3-flash" || object(payload["parameters"])["voice"] != "longanyang" {
+					t.Error("wrong TTS route/model/voice")
+				}
+				if c.ReadJSON(&request) != nil {
+					return
+				}
+				text, _ := object(object(request["payload"])["input"])["text"].(string)
+				if c.ReadJSON(&request) != nil {
+					return
+				}
+				out := func(kind string, words any) map[string]any {
+					return map[string]any{"type": kind, "original_text": text, "sentence": map[string]any{"index": 0, "words": words}}
+				}
+				event("result-generated", out("sentence-begin", nil))
+				event("result-generated", out("sentence-synthesis", nil))
+				_ = c.WriteMessage(websocket.BinaryMessage, make([]byte, 24000))
+				words := []any{map[string]any{"text": text, "begin_index": 0, "end_index": len([]rune(text)), "begin_time": 0, "end_time": 400}}
+				event("result-generated", out("sentence-end", words))
+				event("task-finished", nil)
+			}))
+			defer inference.Close()
+			textAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				checkIntent("llm")
+				var request map[string]any
+				if json.NewDecoder(r.Body).Decode(&request) != nil {
+					t.Error("bad JSON")
+				}
+				if request["model"] != "qwen-plus" || request["enable_thinking"] != false || request["enable_search"] != false {
+					t.Error("wrong Plus mode")
+				}
+				if label == "B-http-rejected" {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = fmt.Fprint(w, `{"error":{"code":"fixture_rejected"}}`)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": "好呀。"}}}, "usage": map[string]any{"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}})
+			}))
+			defer textAPI.Close()
+			nativeURL := "ws" + strings.TrimPrefix(native.URL, "http")
+			s.cfg.URL = nativeURL
+			s.listener.cfg.URL = nativeURL
+			p := &abcPilot{route: route, ledger: abcLedger(t, 38), client: voicecompare.Client{Key: "fixture", RealtimeURL: nativeURL, InferenceURL: "ws" + strings.TrimPrefix(inference.URL, "http"), TextURL: textAPI.URL, TTSModel: "cosyvoice-v3-flash", Voice: "longanyang"}}
+			if e := p.install(s); e != nil {
+				t.Fatal(e)
+			}
+			var audio int
+			e := s.generate(ctx, 1, "unplayed diagnostic", make([]byte, 640), func(k string, v []byte) error {
+				if k == "audio" || k == "pcm" {
+					audio += len(v)
+				}
+				return nil
+			})
+			if (e != nil) != fail || fail && audio != 0 || !fail && audio == 0 {
+				t.Fatal("incorrect terminal/audio", e, audio, fail)
+			}
+			close(stages)
+			var got []string
+			for stage := range stages {
+				got = append(got, stage)
+			}
+			want := "native,tts"
+			if route == "B" {
+				want = "asr,llm,tts"
+			}
+			if route == "C" || fail {
+				want = "native"
+			}
+			if label == "B-http-rejected" {
+				want = "asr,llm"
+			}
+			if strings.Join(got, ",") != want {
+				t.Fatal("crossed backend", got, want)
+			}
+			if route != "C" {
+				paths, _ := filepath.Glob(filepath.Join(s.directory, "abc-api-*.json"))
+				if len(paths) != len(got) {
+					t.Fatal("missing API usage records", paths)
+				}
+				for _, path := range paths {
+					raw, _ := os.ReadFile(path)
+					var row map[string]any
+					_ = json.Unmarshal(raw, &row)
+					callFailed := fail && (label != "B-http-rejected" || row["api_stage"] == "llm")
+					if !callFailed && (row["state"] != "completed" || row["usage_state"] != "known" || row["usage"] == nil) || callFailed && (row["state"] != "failed_cancelled_or_unknown" || row["usage_state"] != "unknown") {
+						t.Fatal("usage was lost or unknown became success", row)
+					}
+					if callFailed {
+						failure := object(row["error"])
+						detail, _ := failure["message"].(string)
+						if failure["reason"] == nil || detail == "" || utf8.RuneCountInString(detail) > 2048 || label == "B-http-rejected" && !strings.Contains(detail, "text provider rejected request") {
+							t.Fatal("API intent omitted private failure cause")
+						}
+					}
+				}
+				if fail {
+					paths, _ := filepath.Glob(filepath.Join(s.directory, "abc-result-*.json"))
+					if len(paths) != 1 {
+						t.Fatal("missing failed result")
+					}
+					raw, _ := os.ReadFile(paths[0])
+					var result map[string]any
+					_ = json.Unmarshal(raw, &result)
+					if object(result["error"])["message"] == nil {
+						t.Fatal("result omitted provider failure cause")
+					}
+				}
+				events, _ := filepath.Glob(filepath.Join(s.directory, "abc-events-*.jsonl"))
+				if len(events) != 1 {
+					t.Fatal(events)
+				}
+				raw, _ := os.ReadFile(events[0])
+				if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+					t.Fatal("missing raw provider evidence")
+				}
+			} else if fail {
+				paths, _ := filepath.Glob(filepath.Join(s.directory, "abc-primary-*.json"))
+				if len(paths) != 1 {
+					t.Fatal("missing overlong native audit", paths)
+				}
+				raw, _ := os.ReadFile(paths[0])
+				var row map[string]any
+				if json.Unmarshal(raw, &row) != nil || row["overlong"] != true || row["state"] != "failed_cancelled_or_unknown" || row["received_samples"] != float64(24000*30+1) {
+					t.Fatal("overlong native was presented as completed", row)
+				}
+				if detail, _ := object(row["error"])["message"].(string); !strings.Contains(detail, "abc_native_output_limit") {
+					t.Fatal("native primary omitted private limit cause")
+				}
+			}
+		})
+	}
+}
+
+func TestABCInvalidInputAndPrivateLedgerNeverSubmit(t *testing.T) {
+	s := abcSession(t)
+	path := abcLedger(t, 38)
+	calls := 0
+	p := &abcPilot{route: "C", ledger: path, run: func(context.Context, string, string, []byte, string) (voicecompare.Result, error) {
+		calls++
+		return abcGoodResult(), nil
+	}}
+	if e := p.install(s); e != nil {
+		t.Fatal(e)
+	}
+	before, _ := os.ReadFile(path)
+	for _, pcm := range [][]byte{nil, make([]byte, 1), make([]byte, 16000*2*10+2)} {
+		if e := s.generate(context.Background(), 1, "", pcm, func(string, []byte) error { t.Error("invalid input emitted event"); return nil }); e == nil {
+			t.Fatal("invalid input accepted")
+		}
+	}
+	after, _ := os.ReadFile(path)
+	if calls != 0 || string(before) != string(after) {
+		t.Fatal("invalid input reserved or submitted")
+	}
+	if e := os.Chmod(path, 0644); e != nil {
+		t.Fatal(e)
+	}
+	if abcReserve(context.Background(), path, "A", abcTestSID, 1) == nil {
+		t.Fatal("public ledger accepted")
+	}
+	if e := os.Chmod(path, 0600); e != nil {
+		t.Fatal(e)
+	}
+	link := filepath.Join(t.TempDir(), "linked-ledger")
+	if e := os.Symlink(path, link); e != nil {
+		t.Fatal(e)
+	}
+	if abcReserve(context.Background(), link, "A", abcTestSID, 1) == nil {
+		t.Fatal("symlink ledger accepted")
+	}
+}

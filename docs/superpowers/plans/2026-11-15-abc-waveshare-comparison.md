@@ -26,12 +26,14 @@
 
 成品费用仍按30分钟/天、约900分钟/月比较：分开记录模型文本/音频token、ASR时长、TTS计费字符、历史、辅助API、取消/失败/未知。先给本轮实测用量，缺账单或模态细项保持未知；批处理/短答不能直接外推流式产品月费。音色克隆、3.5音色及生产迁移不包含在本轮。
 
+2026-11-15复核北京区公开原价：[Omni3.8](https://help.aliyun.com/zh/model-studio/qwen3-8-omni-flash-realtime)文本输入/音频输入/文本输出/音频输出分别1.5/6/4.5/12元每百万Token，C的音频与对应文字分别收费；[CosyVoice v3 Flash](https://help.aliyun.com/zh/model-studio/cosyvoice-v3-flash)为1元每万计费字符；[价格表](https://help.aliyun.com/zh/model-studio/model-pricing)中Qwen Plus非思考≤128K为输入0.8/输出2元每百万Token，fun-asr-realtime和公共qwen3-asr-flash-realtime均0.00033元/秒。以代码实际payload及usage为准，B与OutputASR实际使用fun-asr-realtime；不把简称Fun-ASR误套为录音模型fun-asr的0.00022元/秒。免费额度/活动价/缓存折扣及账号账单另核对，不当作实际扣费结论。
+
 ## Task 1：显式三链路现场资产与必要计量
 
 **Files:** 新建`tools/tts-playback-pilot/abc_comparison_test.go.txt`；若C缺分模态计量，只最小修改`internal/realtimelive/native.go`及对应测试。
 
-- [ ] 在资产内先写合成保护测试，显式复制到云端`internal/realtimelive/abc_comparison_pilot_test.go`，运行RED。场景：精确opt-in前无文件/网络；A/B/C枚举拒绝其他值；loopback/唯一MAC/鉴权owner/Opus；4/12/50持久上限、重复/破损/未知不重跑；取消不发声音；失败不降级到C；A/B同TTS；来源完成前不emit音频；各路线记录明确；字词对齐不改公共历史。
-- [ ] 实现一个三分支适配，复用`Session.generate`，不增加产品配置或自动路由。Serve精确gate为`FAMILY_ABC_PILOT_ALLOW=waveshare-abc-20261115`，路线由`FAMILY_ABC_PILOT_ROUTE=A|B|C`固定；loopback18818、单并发、会话180秒、实例10分钟，SIGTERM/结束CloseActive。
+- [x] 在资产内先写合成保护测试，显式复制到云端`internal/realtimelive/abc_comparison_pilot_test.go`，运行RED。场景：精确opt-in前无文件/网络；A/B/C枚举拒绝其他值；loopback/唯一MAC/鉴权owner/Opus；4/12/50持久上限、重复/破损/未知不重跑；取消不发声音；失败不降级到C；A/B同TTS；来源完成前不emit音频；各路线记录明确；字词对齐不改公共历史。
+- [x] 实现一个三分支适配，复用`Session.generate`，不增加产品配置或自动路由。Serve精确gate为`FAMILY_ABC_PILOT_ALLOW=waveshare-abc-20261115`，路线由`FAMILY_ABC_PILOT_ROUTE=A|B|C`固定；loopback18818、单并发、会话180秒、实例10分钟，SIGTERM/结束CloseActive。
 
 ```go
 switch route {
@@ -45,11 +47,11 @@ case "C":
 }
 ```
 
-- [ ] 三边使用同一简洁主提示和有界已播历史投影；只用Turn.Prefix/PlaybackEvidence，不能把未播生成全文当历史，不用串行工具/音乐改变背景。保留真实产品名，B模型身份为Plus。输入最长10秒、回答120字/30秒音频，超限记录失败，不截断冒充成功、不自动重试。
-- [ ] 全局primary intent先fsync，再调用提供方；A/B每次BeforeCall创建独立私有intent并落盘，AfterCall记录usage/失败/取消，unknown不能当零。JSON事件/原音/结果仅云端0700/0600，不打印正文或凭据；Call.Stage明示native/asr/llm/tts，TTS分句可能多次调用。
-- [ ] A/B保存本轮源文本、PCM样本数和最终Words，结束时复用固定TTS的lookahead/120ms规则做只读对齐审计。公共中断/排空/OutputASR上下文保持；本阶段不把尚未验收的TTS映射写进产品历史。
-- [ ] C若现有usage只保留顶层，补数值白名单内的input/output_tokens_details（text/audio/cache等必要计费字段），拒绝字符串/任意对象，不记录额外提供方payload。先RED再GREEN，旧计数保留。
-- [ ] 云端普通/race/vet/build；规格再质量复核，冻结来源与二进制。默认Serve全部skip，合成检查不得触发真实API或设备。
+- [x] 三边使用同一简洁主提示和有界已播历史投影；只用Turn.Prefix/PlaybackEvidence，不能把未播生成全文当历史，不用串行工具/音乐改变背景。保留真实产品名，B模型身份为Plus。输入最长10秒、回答120字/30秒音频，超限记录失败，不截断冒充成功、不自动重试。
+- [x] 全局primary intent先fsync，再调用提供方；A/B每次BeforeCall创建独立私有intent并落盘，AfterCall记录usage/失败/取消，unknown不能当零。JSON事件/原音/结果仅云端0700/0600，不打印正文或凭据；Call.Stage明示native/asr/llm/tts，TTS分句可能多次调用。
+- [x] A/B保存本轮源文本、PCM样本数和最终Words，结束时复用固定TTS的lookahead/120ms规则做只读对齐审计。公共中断/排空/OutputASR上下文保持；本阶段不把尚未验收的TTS映射写进产品历史。
+- [x] C若现有usage只保留顶层，补数值白名单内的input/output_tokens_details（text/audio/cache等必要计费字段），拒绝字符串/任意对象，不记录额外提供方payload。先RED再GREEN，旧计数保留。
+- [x] 云端普通/race/vet/build；规格再质量复核，冻结来源与二进制。默认Serve全部skip，合成检查不得触发真实API或设备。
 
 ## Task 2：新现场入口与真实对比
 

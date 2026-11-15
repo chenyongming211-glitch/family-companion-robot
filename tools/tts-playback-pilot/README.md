@@ -1,5 +1,7 @@
 # 固定 TTS 微雪播放核对
 
+**新增：** 用户已要求A/B/C三链路共同对比，当前新增资产为`abc_comparison_test.go.txt`，见本文末节及[三链路计划](../../docs/superpowers/plans/2026-11-15-abc-waveshare-comparison.md)。固定TTS和规划并行资产保留为独立历史验证，不将它们的结果称作三链路对比。
+
 这是显式启用的云端验证资产，不是产品后端或自动测试中的发声入口。仅支持微雪 ESP32-S3 2.16；不改固件或正式服务。关联[实施计划](../../docs/superpowers/plans/2026-11-15-fixed-tts-waveshare-playback.md)。
 
 `fixed_tts_test.go.txt` 默认不参与构建。仅在独立云端源码显式复制为 `internal/realtimelive/fixed_tts_pilot_test.go` 后测试；Mac不运行。普通测试使用合成fixture，Serve默认skip，只有精确环境值才可启用现场入口。服务器凭据、固定源PCM、完整结果和设备记录均不进入Git。
@@ -28,4 +30,14 @@
 
 复用当前主模型、公共Session/Opus/MCP/表情/在线音乐，启用默认关闭的ParallelPlanning；指定微雪和鉴权owner，单并发，每会话180秒、服务10分钟，memory=false。沿用全局账本，本阶段最多4个主回答，未知/失败保留。辅助规划、监听和控制也可能调用API，4不是所有API或硬件动作的总上限；并行本身不保证省费。
 
-先完成云端普通/race/vet/build、源/二进制冻结和fresh路由准备；用户在场且入口就绪后按四轮测试：自我介绍、音量调到80、查询当前音量、短故事。第四轮结束后停止，不追加第五条命令。控制器限时并在第四个主回答播放结算后停止自身unit、guarded restore，核对正式进程和Caddy file/admin。UART只读、云端捕获须同时覆盖候选18818；尚未完成实机验证，不能将合成通过记作起播改善或音量修复。
+先完成云端普通/race/vet/build、源/二进制冻结和fresh路由准备；用户在场且入口就绪后按四轮测试：自我介绍、音量调到80、查询当前音量、短故事。第四轮结束后停止，不追加第五条命令。控制器限时并在第四个主回答播放结算后停止自身unit、guarded restore，核对正式进程和Caddy file/admin。2026-11-15 14:02–14:03已完成此独立候选四轮，用户反馈整体正常、四轮完整played；入口已恢复，旧音量超时根因未宣称修复，见[现场记录](../../docs/verification/2026-11-15-voice-startup-control-candidate.md)。该C带辅助功能样本不代替新ABC统一条件对比。
+
+## A/B/C 三链路对比
+
+`abc_comparison_test.go.txt`显式复制到云端`internal/realtimelive/abc_comparison_pilot_test.go`后检查。`TestABCComparisonPilotServe`仅在`FAMILY_ABC_PILOT_ALLOW=waveshare-abc-20261115`且`FAMILY_ABC_PILOT_ROUTE=A|B|C`时运行，普通检查默认skip。每次会话固定一路，失败不回退C：A为Omni原音理解→文字→专用TTS，B为Fun-ASR-Realtime→Qwen Plus非思考→同一TTS，C为原生直接语音。A/B实际TTS为cosyvoice-v3-flash/longanyang，C使用原配置音色。
+
+复用公共微雪鉴权、Opus、输入监听、OutputASR、流控和中断；辅助工具/音乐/表情/搜索/声纹/跨会话记忆首轮统一关闭。A/B当前完整收齐并校验后播放，C保持流式，元数据明确buffered/native_streaming，初轮不当作最终流式延迟排名。TTS字词只读审计，不替换公共已播历史。
+
+每路线4个主回答、阶段12、原全局账本累计50同时限制；旧48默认工具不改，历史38与未知全部保留。4次主回答可能包含多次TTS分句调用，另有公共输入/输出识别；B的主链路ASR与公共监听是两项调用，不能漏算或合并。音频最长10秒、回答120字、输出30秒；单并发、会话180秒、实例10分钟，仅指定MAC/owner/Opus/loopback18818。
+
+源/二进制和规格/质量复核通过后才启服务。按A→B→C分别通知用户，再fresh路由apply；每次第四答I2S结算后停止本轮unit并guarded restore，未准备下一条时不自动切换。三条各自的真实结果、失败、用量、用户反馈和恢复必须分开记录，见[当前状态](../../docs/verification/2026-11-15-abc-waveshare-comparison.md)。

@@ -333,6 +333,20 @@ func (n *Native) Stream(ctx context.Context, pcm []byte, emit func(string, []byt
 					usage[k] = v
 				}
 			}
+			// Preserve the existing top-level counters and only the numeric
+			// modality/cache fields needed to reconcile provider billing. Never
+			// copy arbitrary nested provider payloads into the private audit.
+			for _, field := range []string{"input_tokens_details", "output_tokens_details"} {
+				details := map[string]any{}
+				for _, key := range []string{"text_tokens", "audio_tokens", "cached_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+					if value, ok := integer(object(object(r["usage"])[field])[key]); ok && value >= 0 {
+						details[key] = value
+					}
+				}
+				if len(details) > 0 {
+					usage[field] = details
+				}
+			}
 			if er = audit.update(map[string]any{"state": "completed", "output_samples": size / 2, "usage": usage, "search": search}); er != nil {
 				return er
 			}
