@@ -34,7 +34,7 @@
 
 ## A/B/C 三链路对比
 
-最新build为`abc-comparison-20261115-v3`：数字口语化或标点分合导致词索引不再对应原稿时，保留严格协议/音频/终态检查，使用显式完整TTS任务PCM边界并标`task_boundary`，不伪造Words或数字内部断点。源字段和样本范围须通过校验；公共OutputASR历史保持，未增加辅助API调用。三份真实失败元数据已静默重放，976普通/976竞态检查通过，完整故事仍待新设备样本。B-v5已恢复，B-v6只prepare；旧待机与C漏拦仍未解决。
+最新build为`abc-comparison-20261115-v3`：数字口语化或标点分合导致词索引不再对应原稿时，保留严格协议/音频/终态检查，使用显式完整TTS任务PCM边界并标`task_boundary`，不伪造Words或数字内部断点。源字段和样本范围须通过校验；公共OutputASR历史保持，未增加辅助API调用。三份真实失败元数据静默重放、976普通/976竞态检查通过；B-v6故事/追问完整播放且真实引号分支走通，数字仍仅重放覆盖。C-v6自我介绍完整、未复现旧漏拦，追加故事超临时120字保护而终止，单列失败。所有窗口已恢复；旧待机与C漏拦仍未解决，统一四问矩阵未完成。
 
 `abc_comparison_test.go.txt`显式复制到云端`internal/realtimelive/abc_comparison_pilot_test.go`后检查。`TestABCComparisonPilotServe`仅在`FAMILY_ABC_PILOT_ALLOW=waveshare-abc-20261115`且`FAMILY_ABC_PILOT_ROUTE=A|B|C`时运行，普通检查默认skip。每次会话固定一路，失败不回退C：A为Omni原音理解→文字→专用TTS，B为Fun-ASR-Realtime→Qwen Plus非思考→同一TTS，C为原生直接语音。A/B实际TTS为cosyvoice-v3-flash/longanyang，C使用原配置音色。
 
