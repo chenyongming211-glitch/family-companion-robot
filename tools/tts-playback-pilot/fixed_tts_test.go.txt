@@ -1,0 +1,733 @@
+// Cloud-only, opt-in verification asset. Copy explicitly into an isolated
+// internal/realtimelive/fixed_tts_pilot_test.go; never a product entry point.
+package realtimelive
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"familyrobot/internal/realtimeaudio"
+	"familyrobot/internal/realtimestate"
+	"familyrobot/internal/voicecompare"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+const (
+	fixedTTSAllow         = "waveshare-fixed-tts-20261115"
+	fixedTTSBuild         = "fixed-tts-playback-20261115-v1"
+	fixedTTSTarget        = "dev_ce26243f0d2f0b8019bfe45796307b48"
+	fixedTTSMAC           = "44:bd:8d:79:1f:e8"
+	fixedTTSText          = "早上好！今天天气不错，适合出门走走。"
+	fixedTTSSamples int64 = 141360
+	fixedTTSMetaSHA       = "7993af01ccbe106cac296825dc1c021ffd5d735d07be8248f57bba3f2d3af657"
+	fixedTTSPCMSHA        = "9b5af3699c41dc2de0d1033c245b08d981ed1266d556d159dd499320996e0e1d"
+)
+
+type fixedTTSSource struct {
+	Text            string
+	PCM             []byte
+	Words           []voicecompare.Word
+	Samples         int64
+	MetaSHA, PCMSHA string
+}
+type fixedTTSBoundary struct {
+	Completed, Sent   int64
+	Cut, Ended, Final bool
+	Basis             string
+}
+type fixedTTSAlignment struct {
+	SourcePlayed int64  `json:"source_played_samples"`
+	Prefix       string `json:"confirmed_text"`
+	Unknown      bool   `json:"unknown_tail"`
+	Full         bool   `json:"full_text_confirmed"`
+	Hardware     bool   `json:"hardware_evidence"`
+}
+type fixedTTSIntent struct {
+	Event         string    `json:"event"`
+	Number        int       `json:"number"`
+	At            time.Time `json:"at"`
+	Device        string    `json:"device_id"`
+	MAC           string    `json:"target_mac"`
+	Session       string    `json:"session_id"`
+	Turn          int64     `json:"id"`
+	SourceMetaSHA string    `json:"source_metadata_sha256"`
+	SourcePCMSHA  string    `json:"source_pcm_sha256"`
+	SourceSamples int64     `json:"source_samples"`
+	Lookahead     int64     `json:"encoder_lookahead_samples"`
+}
+type fixedTTSPilot struct {
+	source fixedTTSSource
+	ledger string
+	mu     sync.Mutex
+	turns  map[string]map[int64]fixedTTSIntent
+}
+
+func fixedTTSEnabled(value string) bool { return value == fixedTTSAllow }
+
+// The frozen exporter contract is mono signed PCM16LE at 24 kHz. The exact
+// byte digest/length and every required result field must agree; never infer a
+// missing sample clock or derive word timing from generated text.
+func fixedTTSRead(meta, pcm []byte, metaSHA, pcmSHA string) (fixedTTSSource, error) {
+	invalid := errors.New("fixed_tts_source_invalid")
+	if fixedTTSSum(meta) != metaSHA || fixedTTSSum(pcm) != pcmSHA {
+		return fixedTTSSource{}, errors.New("fixed_tts_source_digest_mismatch")
+	}
+	var m struct {
+		State   string `json:"state"`
+		Rate    *int64 `json:"sample_rate"`
+		Samples *int64 `json:"samples"`
+		Text    string `json:"text"`
+		Model   string `json:"tts_model"`
+		Voice   string `json:"voice"`
+		Words   []struct {
+			Text           *string
+			BeginMS, EndMS *int64
+		} `json:"words"`
+	}
+	if json.Unmarshal(meta, &m) != nil || m.State != "completed" || m.Rate == nil || *m.Rate != 24000 || m.Samples == nil || *m.Samples != fixedTTSSamples || m.Text != fixedTTSText || m.Model != "cosyvoice-v3-flash" || m.Voice != "longanyang" || len(m.Words) != 18 || int64(len(pcm)) != fixedTTSSamples*2 {
+		return fixedTTSSource{}, invalid
+	}
+	words := make([]voicecompare.Word, 0, len(m.Words))
+	var text strings.Builder
+	var end int64
+	for _, w := range m.Words {
+		if w.Text == nil || *w.Text == "" || w.BeginMS == nil || w.EndMS == nil || *w.BeginMS < end || *w.EndMS <= *w.BeginMS || *w.EndMS > fixedTTSSamples/24 {
+			return fixedTTSSource{}, invalid
+		}
+		words = append(words, voicecompare.Word{Text: *w.Text, BeginMS: *w.BeginMS, EndMS: *w.EndMS})
+		text.WriteString(*w.Text)
+		end = *w.EndMS
+	}
+	if text.String() != fixedTTSText {
+		return fixedTTSSource{}, invalid
+	}
+	return fixedTTSSource{Text: m.Text, PCM: pcm, Words: words, Samples: *m.Samples, MetaSHA: metaSHA, PCMSHA: pcmSHA}, nil
+}
+func fixedTTSAdmit(s *Session) error {
+	w, ok := s.wire.(*xiaozhiWire)
+	if s.ownerErr != nil || s.rec.owner.DeviceID != fixedTTSTarget || s.rec.owner.ClientType != "xiaozhi" || !ok || w.pcm {
+		return errors.New("fixed_tts_target_opus_required")
+	}
+	return nil
+}
+func fixedTTSMap(source fixedTTSSource, b fixedTTSBoundary, lookahead int64) fixedTTSAlignment {
+	result := fixedTTSAlignment{Unknown: true}
+	if b.Basis != "i2s_dma" || lookahead < 0 || b.Completed < 0 || b.Completed > b.Sent {
+		return result
+	}
+	result.Hardware = true
+	result.SourcePlayed = max(int64(0), min(source.Samples, b.Completed-lookahead))
+	result.Prefix = voicecompare.ConfirmedText(source.Words, result.SourcePlayed, 120)
+	result.Full = b.Ended && !b.Cut && b.Final && b.Sent > 0 && b.Completed == b.Sent && result.SourcePlayed == source.Samples
+	result.Unknown = !result.Full
+	if result.Full {
+		result.Prefix = source.Text
+	} else if result.Prefix == source.Text && len(source.Words) > 0 {
+		// Word timestamps alone cannot confirm the entire answer before the final
+		// hardware receipt and complete source coverage. Keep the last token unknown.
+		result.Prefix = strings.TrimSuffix(result.Prefix, source.Words[len(source.Words)-1].Text)
+	}
+	return result
+}
+
+// This is an append-only reservation journal, not a retry ledger. fsync precedes
+// every emission. A crash, failed emit, malformed tail or unknown outcome never
+// releases a slot. flock coordinates independent processes and connections.
+func (p *fixedTTSPilot) reserve(ctx context.Context, sid string, id, lookahead int64) (fixedTTSIntent, error) {
+	var row fixedTTSIntent
+	if len(sid) != 32 || id <= 0 || lookahead < 0 {
+		return row, errors.New("fixed_tts_invalid_turn")
+	}
+	if _, e := hex.DecodeString(sid); e != nil {
+		return row, errors.New("fixed_tts_invalid_session")
+	}
+	f, e := os.OpenFile(p.ledger, os.O_CREATE|os.O_RDWR|os.O_APPEND|syscall.O_NOFOLLOW, 0600)
+	if e != nil {
+		return row, e
+	}
+	defer f.Close()
+	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); e != nil {
+		return row, e
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	st, e := f.Stat()
+	if e != nil {
+		return row, e
+	}
+	if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Size() > 32768 {
+		return row, errors.New("fixed_tts_invalid_ledger")
+	}
+	raw, e := io.ReadAll(io.LimitReader(f, 32769))
+	if e != nil {
+		return row, e
+	}
+	if len(raw) > 32768 || len(raw) > 0 && raw[len(raw)-1] != '\n' {
+		return row, errors.New("fixed_tts_ledger_outcome_unknown")
+	}
+	count := 0
+	if len(raw) > 0 {
+		for _, line := range bytes.Split(raw[:len(raw)-1], []byte{'\n'}) {
+			var prior fixedTTSIntent
+			d := json.NewDecoder(bytes.NewReader(line))
+			d.DisallowUnknownFields()
+			if d.Decode(&prior) != nil || prior.Event != "fixed_tts_intent" || prior.Number != count+1 || prior.At.IsZero() || prior.Device != fixedTTSTarget || prior.MAC != fixedTTSMAC || len(prior.Session) != 32 || prior.Turn <= 0 || prior.Lookahead < 0 || prior.SourceSamples != p.source.Samples || prior.SourceMetaSHA != p.source.MetaSHA || prior.SourcePCMSHA != p.source.PCMSHA {
+				return row, errors.New("fixed_tts_ledger_outcome_unknown")
+			}
+			var extra any
+			if d.Decode(&extra) != io.EOF {
+				return row, errors.New("fixed_tts_ledger_outcome_unknown")
+			}
+			if prior.Session == sid && prior.Turn == id {
+				return row, errors.New("fixed_tts_duplicate_turn")
+			}
+			count++
+		}
+	}
+	if count >= 2 {
+		return row, errors.New("fixed_tts_playback_limit")
+	}
+	if e = ctx.Err(); e != nil {
+		return row, e
+	}
+	row = fixedTTSIntent{Event: "fixed_tts_intent", Number: count + 1, At: time.Now().UTC(), Device: fixedTTSTarget, MAC: fixedTTSMAC, Session: sid, Turn: id, SourceMetaSHA: p.source.MetaSHA, SourcePCMSHA: p.source.PCMSHA, SourceSamples: p.source.Samples, Lookahead: lookahead}
+	b, e := json.Marshal(row)
+	if e != nil {
+		return row, e
+	}
+	b = append(b, '\n')
+	n, e := f.Write(b)
+	if e != nil {
+		return row, e
+	}
+	if n != len(b) {
+		return row, io.ErrShortWrite
+	}
+	if e = f.Sync(); e != nil {
+		return row, e
+	}
+	dir, e := os.Open(filepath.Dir(p.ledger))
+	if e != nil {
+		return row, e
+	}
+	defer dir.Close()
+	if e = dir.Sync(); e != nil {
+		return row, e
+	}
+	return row, nil
+}
+func (p *fixedTTSPilot) generate(ctx context.Context, sid string, id int64, emit func(string, []byte) error) error {
+	if e := ctx.Err(); e != nil {
+		return e
+	}
+	codec, e := realtimeaudio.New(24000, 1440)
+	if e != nil {
+		return e
+	}
+	delay, e := codec.LookaheadSamples()
+	codec.Close()
+	if e != nil {
+		return e
+	}
+	row, e := p.reserve(ctx, sid, id, int64(delay))
+	if e != nil {
+		return e
+	}
+	p.mu.Lock()
+	if p.turns == nil {
+		p.turns = map[string]map[int64]fixedTTSIntent{}
+	}
+	if p.turns[sid] == nil {
+		p.turns[sid] = map[int64]fixedTTSIntent{}
+	}
+	p.turns[sid][id] = row
+	p.mu.Unlock()
+	if e = ctx.Err(); e != nil {
+		return e
+	}
+	if e = emit("text", []byte(p.source.Text)); e != nil {
+		return e
+	}
+	if e = ctx.Err(); e != nil {
+		return e
+	}
+	return emit("audio", p.source.PCM)
+}
+func fixedTTSHandler(s *Server, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Path == "/healthz" {
+			s.mu.Lock()
+			active := len(s.leases)
+			ready := s.initErr == nil && !s.stopping
+			s.mu.Unlock()
+			status := http.StatusOK
+			if !ready {
+				status = http.StatusServiceUnavailable
+			}
+			respond(w, status, map[string]any{"ready": ready, "build": fixedTTSBuild, "target_device": fixedTTSTarget, "target_mac": fixedTTSMAC, "model": "fixed-cosyvoice-v3-flash", "native_conversation": false, "memory_enabled": false, "max_sessions": 1, "active_sessions": active, "diagnostics": false})
+			return
+		}
+		if r.URL.Path != "/xiaozhi/v1/" {
+			http.NotFound(w, r)
+			return
+		}
+		mac, e := net.ParseMAC(r.Header.Get("Device-Id"))
+		if e != nil || mac.String() != fixedTTSMAC {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+func (p *fixedTTSPilot) finish(s *Session) error {
+	sid := s.rec.owner.SessionID
+	p.mu.Lock()
+	reserved := p.turns[sid]
+	delete(p.turns, sid)
+	p.mu.Unlock()
+	type frozen struct {
+		row      fixedTTSIntent
+		boundary fixedTTSBoundary
+	}
+	var turns []frozen
+	// Session.Run has joined producers and ASR workers. Take the final immutable
+	// snapshot under its owning lock; never write its tracker/context/memory.
+	s.mu.Lock()
+	for _, rt := range s.history {
+		if row, ok := reserved[rt.turn.ID]; ok {
+			v := rt.turn
+			turns = append(turns, frozen{row, fixedTTSBoundary{Completed: v.Completed, Sent: v.Sent, Cut: v.Cut, Ended: v.Ended, Final: v.PlaybackFinal, Basis: v.PlaybackBasis}})
+		}
+	}
+	s.mu.Unlock()
+	for _, v := range turns {
+		alignment := fixedTTSMap(p.source, v.boundary, v.row.Lookahead)
+		if e := s.record("tts_playback_alignment", map[string]any{
+			"id": v.row.Turn, "intent_number": v.row.Number, "source_metadata_sha256": v.row.SourceMetaSHA, "source_pcm_sha256": v.row.SourcePCMSHA, "source_samples": v.row.SourceSamples, "source_text": p.source.Text, "source_words": p.source.Words, "tts_model": "cosyvoice-v3-flash", "voice": "longanyang", "sample_rate": 24000, "channels": 1, "sample_format": "pcm_s16le", "encoder_lookahead_samples": v.row.Lookahead,
+			"completed": v.boundary.Completed, "sent": v.boundary.Sent, "cut": v.boundary.Cut, "ended": v.boundary.Ended, "final": v.boundary.Final, "basis": v.boundary.Basis, "source_played_samples": alignment.SourcePlayed, "confirmed_text": alignment.Prefix, "full_text_confirmed": alignment.Full, "unknown_tail": alignment.Unknown, "hardware_evidence": alignment.Hardware, "margin_ms": 120,
+		}); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+func fixedTTSSum(b []byte) string { sum := sha256.Sum256(b); return hex.EncodeToString(sum[:]) }
+func fixedTTSFixture(t *testing.T) ([]byte, []byte, fixedTTSSource) {
+	t.Helper()
+	words := []voicecompare.Word{}
+	for i, r := range []rune(fixedTTSText) {
+		words = append(words, voicecompare.Word{Text: string(r), BeginMS: int64(i * 300), EndMS: int64((i + 1) * 300)})
+	}
+	pcm := make([]byte, fixedTTSSamples*2) // Synthetic test input; no captured audio.
+	meta, err := json.Marshal(map[string]any{"state": "completed", "sample_rate": 24000, "samples": fixedTTSSamples, "text": fixedTTSText, "tts_model": "cosyvoice-v3-flash", "voice": "longanyang", "words": words})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return meta, pcm, fixedTTSSource{Text: fixedTTSText, PCM: pcm, Words: words, Samples: fixedTTSSamples, MetaSHA: fixedTTSSum(meta), PCMSHA: fixedTTSSum(pcm)}
+}
+
+func TestFixedTTSDefaultDisabled(t *testing.T) {
+	for _, v := range []string{"", "1", "true", fixedTTSAllow + " "} {
+		if fixedTTSEnabled(v) {
+			t.Fatalf("enabled for %q", v)
+		}
+	}
+	if !fixedTTSEnabled(fixedTTSAllow) {
+		t.Fatal("explicit opt-in must enable")
+	}
+}
+func TestFixedTTSMetadata(t *testing.T) {
+	meta, pcm, want := fixedTTSFixture(t)
+	got, err := fixedTTSRead(meta, pcm, want.MetaSHA, want.PCMSHA)
+	if err != nil || got.Samples != fixedTTSSamples || len(got.Words) != 18 || got.Text != fixedTTSText {
+		t.Fatalf("valid source: %+v %v", got, err)
+	}
+	for _, field := range []string{"state", "sample_rate", "samples", "text", "words", "tts_model", "voice"} {
+		t.Run("missing_"+field, func(t *testing.T) {
+			var m map[string]any
+			json.Unmarshal(meta, &m)
+			delete(m, field)
+			b, _ := json.Marshal(m)
+			if _, e := fixedTTSRead(b, pcm, fixedTTSSum(b), want.PCMSHA); e == nil {
+				t.Fatal("missing metadata accepted")
+			}
+		})
+	}
+	for _, mutation := range []string{"state", "sample_rate", "samples", "text", "word_time", "word_field", "word_text"} {
+		t.Run(mutation, func(t *testing.T) {
+			var m map[string]any
+			json.Unmarshal(meta, &m)
+			switch mutation {
+			case "state":
+				m["state"] = "failed"
+			case "sample_rate":
+				m["sample_rate"] = 16000
+			case "samples":
+				m["samples"] = 141359
+			case "text":
+				m["text"] = "其他"
+			case "word_time":
+				m["words"].([]any)[0].(map[string]any)["EndMS"] = 6000
+			case "word_field":
+				delete(m["words"].([]any)[0].(map[string]any), "BeginMS")
+			case "word_text":
+				m["words"].([]any)[0].(map[string]any)["Text"] = "误"
+			}
+			b, _ := json.Marshal(m)
+			if _, e := fixedTTSRead(b, pcm, fixedTTSSum(b), want.PCMSHA); e == nil {
+				t.Fatal("invalid metadata accepted")
+			}
+		})
+	}
+	if _, e := fixedTTSRead(meta, pcm, "bad", want.PCMSHA); e == nil {
+		t.Fatal("metadata digest ignored")
+	}
+	if _, e := fixedTTSRead(meta, pcm, want.MetaSHA, "bad"); e == nil {
+		t.Fatal("audio digest ignored")
+	}
+	short := pcm[:len(pcm)-2]
+	if _, e := fixedTTSRead(meta, short, want.MetaSHA, fixedTTSSum(short)); e == nil {
+		t.Fatal("audio length ignored")
+	}
+}
+func TestFixedTTSAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name, owner string
+		pcm, mac    bool
+		want        bool
+	}{
+		{"target_opus", fixedTTSTarget, false, false, true}, {"wrong_owner", "dev_other", false, false, false}, {"pcm", fixedTTSTarget, true, false, false}, {"mac_wire", fixedTTSTarget, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Session{rec: recorder{owner: Ownership{DeviceID: tc.owner, ClientType: "xiaozhi"}}, wire: &xiaozhiWire{pcm: tc.pcm}}
+			if tc.mac {
+				s.wire = &macWire{}
+			}
+			if (fixedTTSAdmit(s) == nil) != tc.want {
+				t.Fatal("admission mismatch")
+			}
+		})
+	}
+}
+func TestFixedTTSHandlerScope(t *testing.T) {
+	s := NewServer(Config{MaxSessions: 1}, nil, t.TempDir(), fixedTTSBuild)
+	called := 0
+	h := fixedTTSHandler(s, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called++; w.WriteHeader(204) }))
+	for _, tc := range []struct {
+		method, path, mac string
+		status            int
+	}{
+		{"GET", "/healthz", "", 200}, {"GET", "/xiaozhi/v1/", fixedTTSMAC, 204}, {"GET", "/xiaozhi/v1/", "68:c6:3a:39:64:98", 403}, {"POST", "/xiaozhi/v1/", fixedTTSMAC, 404}, {"GET", "/live", fixedTTSMAC, 404}, {"GET", "/xiaozhi/v1/extra", fixedTTSMAC, 404},
+	} {
+		r := httptest.NewRequest(tc.method, tc.path, nil)
+		r.Header.Set("Device-Id", tc.mac)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("%s %s: %d", tc.method, tc.path, w.Code)
+		}
+		if tc.path == "/healthz" {
+			var v map[string]any
+			if json.Unmarshal(w.Body.Bytes(), &v) != nil || v["build"] != fixedTTSBuild || v["target_device"] != fixedTTSTarget || v["native_conversation"] != false || v["memory_enabled"] != false || v["diagnostics"] != false {
+				t.Fatalf("bad health: %s", w.Body)
+			}
+		}
+	}
+	if called != 1 {
+		t.Fatalf("forwarded %d requests", called)
+	}
+}
+func TestFixedTTSBudgetPersistenceCancelAndFailure(t *testing.T) {
+	_, _, src := fixedTTSFixture(t)
+	path := filepath.Join(t.TempDir(), "intents.jsonl")
+	p := &fixedTTSPilot{source: src, ledger: path}
+	emitCount := 0
+	emit := func(kind string, _ []byte) error {
+		if kind != "text" && kind != "audio" {
+			t.Fatalf("unexpected emission %s", kind)
+		}
+		b, e := os.ReadFile(path)
+		if e != nil || !strings.Contains(string(b), "fixed_tts_intent") {
+			t.Fatal("emit before durable intent")
+		}
+		emitCount++
+		return nil
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if p.generate(canceled, strings.Repeat("a", 32), 1, emit) == nil || emitCount != 0 {
+		t.Fatal("canceled generation emitted or succeeded")
+	}
+	if e := p.generate(context.Background(), strings.Repeat("a", 32), 1, emit); e != nil {
+		t.Fatal(e)
+	}
+	if emitCount != 2 {
+		t.Fatalf("expected text+audio, got %d", emitCount)
+	}
+	// A failed/unknown emission still consumes its persistent reservation.
+	q := &fixedTTSPilot{source: src, ledger: path}
+	if e := q.generate(context.Background(), strings.Repeat("b", 32), 1, func(string, []byte) error { return errors.New("unknown") }); e == nil {
+		t.Fatal("emission failure swallowed")
+	}
+	r := &fixedTTSPilot{source: src, ledger: path}
+	if e := r.generate(context.Background(), strings.Repeat("c", 32), 1, emit); e == nil || emitCount != 2 {
+		t.Fatal("third generation was not denied")
+	}
+	st, e := os.Stat(path)
+	if e != nil || st.Mode().Perm() != 0600 {
+		t.Fatal("ledger must be private", e)
+	}
+	b, e := os.ReadFile(path)
+	if e != nil || len(strings.Split(strings.TrimSpace(string(b)), "\n")) != 2 {
+		t.Fatal("intent count mismatch", e)
+	}
+}
+func TestFixedTTSCancelAfterIntent(t *testing.T) {
+	_, _, src := fixedTTSFixture(t)
+	p := &fixedTTSPilot{source: src, ledger: filepath.Join(t.TempDir(), "intents.jsonl")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	audio := 0
+	err := p.generate(ctx, strings.Repeat("a", 32), 1, func(kind string, _ []byte) error {
+		if kind == "text" {
+			cancel()
+		}
+		if kind == "audio" {
+			audio++
+		}
+		return nil
+	})
+	if err == nil || audio != 0 {
+		t.Fatal("cancellation emitted audio")
+	}
+}
+func TestFixedTTSBudgetConcurrentAndCorrupt(t *testing.T) {
+	_, _, src := fixedTTSFixture(t)
+	path := filepath.Join(t.TempDir(), "intents.jsonl")
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	success := 0
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := &fixedTTSPilot{source: src, ledger: path}
+			if p.generate(context.Background(), strings.Repeat(string(rune('a'+i)), 32), 1, func(string, []byte) error { return nil }) == nil {
+				mu.Lock()
+				success++
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	if success != 2 {
+		t.Fatalf("persistent cap: %d", success)
+	}
+	corrupt := filepath.Join(t.TempDir(), "intents.jsonl")
+	os.WriteFile(corrupt, []byte("{\"event\":"), 0600)
+	p := &fixedTTSPilot{source: src, ledger: corrupt}
+	if p.generate(context.Background(), strings.Repeat("a", 32), 1, func(string, []byte) error { t.Fatal("corrupt ledger emitted"); return nil }) == nil {
+		t.Fatal("corrupt ledger accepted")
+	}
+}
+func TestFixedTTSMapping(t *testing.T) {
+	_, _, src := fixedTTSFixture(t)
+	for _, tc := range []struct {
+		name           string
+		b              fixedTTSBoundary
+		delay, played  int64
+		prefix         string
+		full, hardware bool
+	}{
+		{"lookahead_subtracted", fixedTTSBoundary{Completed: 18000, Sent: 30000, Basis: "i2s_dma"}, 156, 17844, "早上", false, true},
+		{"clamp_zero", fixedTTSBoundary{Completed: 100, Sent: 30000, Basis: "i2s_dma"}, 156, 0, "", false, true},
+		{"complete", fixedTTSBoundary{Completed: 142560, Sent: 142560, Ended: true, Final: true, Basis: "i2s_dma"}, 156, 141360, fixedTTSText, true, true},
+		{"unknown_final", fixedTTSBoundary{Completed: 142560, Sent: 142560, Ended: true, Basis: "i2s_dma"}, 156, 141360, "早上好！今天天气不错，适合出门走走", false, true},
+		{"cut", fixedTTSBoundary{Completed: 142560, Sent: 142560, Cut: true, Ended: true, Final: true, Basis: "i2s_dma"}, 156, 141360, "早上好！今天天气不错，适合出门走走", false, true},
+		{"not_ended", fixedTTSBoundary{Completed: 142560, Sent: 142560, Final: true, Basis: "i2s_dma"}, 156, 141360, "早上好！今天天气不错，适合出门走走", false, true},
+		{"incomplete_receipt", fixedTTSBoundary{Completed: 142000, Sent: 142560, Ended: true, Final: true, Basis: "i2s_dma"}, 156, 141360, "早上好！今天天气不错，适合出门走走", false, true},
+		{"source_not_covered", fixedTTSBoundary{Completed: 141360, Sent: 141360, Ended: true, Final: true, Basis: "i2s_dma"}, 156, 141204, "早上好！今天天气不错，适合出门走走", false, true},
+		{"wrong_basis", fixedTTSBoundary{Completed: 142560, Sent: 142560, Ended: true, Final: true, Basis: "CoreAudio_dataPlayedBack"}, 156, 0, "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fixedTTSMap(src, tc.b, tc.delay)
+			if got.SourcePlayed != tc.played || got.Prefix != tc.prefix || got.Full != tc.full || got.Hardware != tc.hardware || got.Unknown == tc.full {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestFixedTTSFrozenAlignment(t *testing.T) {
+	_, _, source := fixedTTSFixture(t)
+	dir := t.TempDir()
+	sid := strings.Repeat("a", 32)
+	session := NewSession(nil, Config{}, dir, nil)
+	defer session.cancel()
+	session.rec.owner = Ownership{DeviceID: fixedTTSTarget, SessionID: sid, ClientType: "xiaozhi"}
+	turn := realtimestate.NewTurn(9)
+	turn.Generated = "unaltered product turn"
+	turn.Sent = 142560
+	turn.Completed = 142560
+	turn.PlaybackFinal = true
+	turn.PlaybackBasis = "i2s_dma"
+	turn.Ended = true
+	tracker := turn.Tracker
+	session.history = []*liveTurn{{turn: turn}}
+	row := fixedTTSIntent{Turn: 9, Number: 1, SourceSamples: source.Samples, SourceMetaSHA: source.MetaSHA, SourcePCMSHA: source.PCMSHA, Lookahead: 156}
+	p := &fixedTTSPilot{source: source, turns: map[string]map[int64]fixedTTSIntent{sid: {9: row}}}
+	if e := p.finish(session); e != nil {
+		t.Fatal(e)
+	}
+	b, e := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var event map[string]any
+	if e = json.Unmarshal(b, &event); e != nil {
+		t.Fatal(e)
+	}
+	words, _ := event["source_words"].([]any)
+	if event["event"] != "tts_playback_alignment" || event["source_text"] != fixedTTSText || len(words) != 18 || event["encoder_lookahead_samples"] != float64(156) || event["full_text_confirmed"] != true || event["unknown_tail"] != false {
+		t.Fatalf("incomplete alignment event: %s", b)
+	}
+	if turn.Generated != "unaltered product turn" || turn.Tracker != tracker || turn.Completed != 142560 || session.memory != nil {
+		t.Fatal("read-only alignment changed product state")
+	}
+	if len(p.turns) != 0 {
+		t.Fatal("finished session metadata retained")
+	}
+}
+
+// No server config, private file or network is touched without this exact gate.
+// Run only in the isolated cloud source, with a test timeout longer than 6 min.
+func TestFixedTTSPlaybackServe(t *testing.T) {
+	if !fixedTTSEnabled(os.Getenv("FAMILY_FIXED_TTS_PILOT_ALLOW")) {
+		t.Skip("fixed TTS playback pilot requires explicit opt-in")
+	}
+	const root = "/home/ubuntu/fixed-tts-waveshare-20261115"
+	const input = "/home/ubuntu/quiet-voice-backend-20261114/final-ab-20261115/native-v1"
+	for _, dir := range []string{root, filepath.Join(root, "records")} {
+		if e := os.MkdirAll(dir, 0700); e != nil {
+			t.Fatal(e)
+		}
+		st, e := os.Lstat(dir)
+		if e != nil || !st.IsDir() || st.Mode().Perm() != 0700 {
+			t.Fatal("fixed_tts_private_directory_required", dir, e)
+		}
+	}
+	meta, e := os.ReadFile(filepath.Join(input, "result.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	pcm, e := os.ReadFile(filepath.Join(input, "output.pcm"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	source, e := fixedTTSRead(meta, pcm, fixedTTSMetaSHA, fixedTTSPCMSHA)
+	if e != nil {
+		t.Fatal(e)
+	}
+	cfg, e := LoadConfig("/etc/family-robot/server.env")
+	if e != nil {
+		t.Fatal(e)
+	}
+	off := false
+	cfg.Search = &off
+	cfg.MemoryEnabled = false
+	cfg.MemoryOnly = false
+	cfg.ExpressionsEnabled = false
+	cfg.MaxSessions = 1
+	cfg.Tools = nil
+	cfg.Music = nil
+	cfg.MusicForDevice = nil
+	cfg.Speaker = nil
+	cfg.DiagnosticsDevice = ""
+	cfg.DeviceProfilesPath = ""
+	product, e := realtimestate.LoadProduct("/opt/family-robot-livekit-dev/config/product-identity.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	admission, e := LoadDeviceConfig("/etc/family-robot/device-admission-20261109.env")
+	if e != nil {
+		t.Fatal(e)
+	}
+	admission, e = admission.WithOnboardingAuthURL("http://127.0.0.1:18791/api/internal/device-auth")
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := NewServer(cfg, product, filepath.Join(root, "records"), fixedTTSBuild)
+	if e = s.InitializationError(); e != nil {
+		t.Fatal(e)
+	}
+	p := &fixedTTSPilot{source: source, ledger: filepath.Join(root, "records", "fixed-tts-intents.jsonl")}
+	s.runDevice = func(session *Session) {
+		if e := fixedTTSAdmit(session); e != nil {
+			session.failReason("fixed_tts_target_opus_required")
+			return
+		}
+		w := session.wire.(*xiaozhiWire)
+		w.mcp = false
+		w.expression = false
+		session.controls = nil
+		session.generate = func(ctx context.Context, id int64, _ string, _ []byte, emit func(string, []byte) error) error {
+			e := p.generate(ctx, session.rec.owner.SessionID, id, emit)
+			if e != nil && ctx.Err() == nil {
+				session.failReason("fixed_tts_generation_denied")
+			}
+			return e
+		}
+		timer := time.AfterFunc(120*time.Second, func() { session.failReason("fixed_tts_session_timeout") })
+		_ = session.Run()
+		timer.Stop()
+		if e := p.finish(session); e != nil {
+			fmt.Fprintln(os.Stderr, "fixed_tts_alignment_record_failed")
+		}
+	}
+	listener, e := net.Listen("tcp", "127.0.0.1:18818")
+	if e != nil {
+		t.Fatal(e)
+	}
+	server := &http.Server{Handler: fixedTTSHandler(s, s.DeviceHandler(admission)), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 16384}
+	stopCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	lifetime, cancel := context.WithTimeout(stopCtx, 6*time.Minute)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	select {
+	case <-lifetime.Done():
+	case e = <-done:
+		if !errors.Is(e, http.ErrServerClosed) {
+			t.Error(e)
+		}
+	}
+	shutdown, stop := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stop()
+	if e = s.CloseActive(shutdown); e != nil {
+		t.Error("fixed_tts_close_active", e)
+	}
+	if e = server.Shutdown(shutdown); e != nil {
+		_ = server.Close()
+		t.Error("fixed_tts_http_shutdown", e)
+	}
+}
