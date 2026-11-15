@@ -139,7 +139,7 @@ func run(args []string, stdout io.Writer) error {
 		"backend": *backend, "attempt": *attempt, "tts_model": *model, "voice": *voice,
 		"state": "completed", "device_connected": false, "audio_played": false,
 		"elapsed_ms": time.Since(started).Milliseconds(), "sample_rate": 24000,
-		"samples": len(result.PCM) / 2, "text": result.Text, "words": result.Words, "calls": result.Calls,
+		"samples": len(result.PCM) / 2, "text": result.Text, "words": result.Words, "task_boundaries": result.TaskBoundaries, "calls": result.Calls,
 		"cost_status": "usage_requires_billing_reconciliation", "budget_fen": *budgetFen,
 		"timestamp_limit": "provider timestamps; no physical playback or acoustic precision verified",
 	}

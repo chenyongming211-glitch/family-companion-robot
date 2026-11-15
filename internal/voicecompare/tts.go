@@ -59,7 +59,7 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 		if e = s.send(taskCommand("finish-task", id, map[string]any{"input": map[string]any{}})); e != nil {
 			return e
 		}
-		started, ended := false, false
+		started, ended, coarse := false, false, false
 		index := -1
 		for {
 			ev, e = s.taskEvent(id, usage)
@@ -67,7 +67,7 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 				return e
 			}
 			if ev.Header.Event == "task-finished" {
-				if !ended || len(pcm) == 0 || len(words) == 0 {
+				if !ended || len(pcm) == 0 || len(words) == 0 && !coarse {
 					return errors.New("incomplete TTS terminal")
 				}
 				return nil
@@ -117,6 +117,11 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 					return errors.New("missing final sentence text")
 				}
 				words, e = validateWords(text, out.Sentence.Words, int64(len(pcm)/48))
+				if e != nil && canUseTaskBoundary(text, out.Sentence.Words, int64(len(pcm)/48)) {
+					// Preserve completed audio without inventing source-word positions.
+					// Run records the exact task PCM boundary separately from Words.
+					words, e, coarse = nil, nil, true
+				}
 				if e != nil {
 					return e
 				}
@@ -127,6 +132,59 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 		}
 	})
 	return
+}
+
+func canUseTaskBoundary(text string, raw []timestampWord, durationMS int64) bool {
+	if len(raw) == 0 || len(raw) > 512 {
+		return false
+	}
+	var spoken strings.Builder
+	for _, w := range raw {
+		spoken.WriteString(w.Text)
+	}
+	limit := max(len([]rune(text)), len([]rune(spoken.String())))
+	lastIndex, lastTime := int64(0), int64(0)
+	for _, w := range raw {
+		if w.Text == "" || w.Begin == nil || w.End == nil || w.BeginIndex == nil || w.EndIndex == nil ||
+			*w.BeginIndex < lastIndex || *w.EndIndex <= *w.BeginIndex || *w.EndIndex > int64(limit) ||
+			*w.Begin < lastTime || *w.End <= *w.Begin || *w.End > durationMS {
+			return false
+		}
+		lastIndex, lastTime = *w.EndIndex, *w.End
+	}
+	lexical := func(value string) []rune {
+		return []rune(strings.Map(func(r rune) rune {
+			if unicode.IsSpace(r) || unicode.IsPunct(r) || r == '～' || r == '~' {
+				return -1
+			}
+			return r
+		}, value))
+	}
+	source, reported := lexical(text), lexical(spoken.String())
+	i, j := 0, 0
+	for i < len(source) && j < len(reported) {
+		if unicode.IsDigit(source[i]) {
+			for i < len(source) && unicode.IsDigit(source[i]) {
+				i++
+			}
+			start := j
+			// Number pronunciation remains opaque: this grants only the whole
+			// task's PCM boundary, never digit-level or numeric-value evidence.
+			for j < len(reported) && (unicode.IsDigit(reported[j]) || strings.ContainsRune("零〇一二三四五六七八九十百千万亿两幺点负正", reported[j])) {
+				j++
+			}
+			if j == start {
+				return false
+			}
+		} else {
+			if source[i] != reported[j] {
+				return false
+			}
+			i++
+			j++
+		}
+	}
+	return i == len(source) && j == len(reported)
 }
 
 type timestampWord struct {

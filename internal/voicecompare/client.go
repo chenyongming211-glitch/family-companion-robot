@@ -28,11 +28,20 @@ type Call struct {
 	Usage map[string]any
 }
 
+// A completed TTS task is an indivisible source/PCM boundary when the provider's
+// spoken-word coordinates cannot be mapped to the original text.
+type TaskBoundary struct {
+	Text       string
+	EndSamples int64
+	Precision  string
+}
+
 type Result struct {
-	Text  string
-	PCM   []byte
-	Words []Word
-	Calls []Call
+	Text           string
+	PCM            []byte
+	Words          []Word
+	Calls          []Call
+	TaskBoundaries []TaskBoundary
 }
 
 type Client struct {
@@ -96,6 +105,7 @@ func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byt
 	if len(clauses) == 0 || len(clauses) > 16 {
 		return r, errors.New("too many TTS clauses")
 	}
+	wordPrefix := true
 	for _, clause := range clauses {
 		pcmPart, wordPart, call, err := c.tts(ctx, clause, 24000*2*30-len(r.PCM))
 		if call.Stage != "" {
@@ -108,12 +118,19 @@ func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byt
 			return r, errors.New("TTS output limit exceeded")
 		}
 		offset := (int64(len(r.PCM)/2) + 23) / 24 // Round up: never confirm the next task early.
-		for _, w := range wordPart {
-			w.BeginMS += offset
-			w.EndMS += offset
-			r.Words = append(r.Words, w)
+		precision := "word"
+		if len(wordPart) == 0 {
+			precision, wordPrefix = "task_boundary", false
+		}
+		if wordPrefix {
+			for _, w := range wordPart {
+				w.BeginMS += offset
+				w.EndMS += offset
+				r.Words = append(r.Words, w)
+			}
 		}
 		r.PCM = append(r.PCM, pcmPart...)
+		r.TaskBoundaries = append(r.TaskBoundaries, TaskBoundary{Text: clause, EndSamples: int64(len(r.PCM) / 2), Precision: precision})
 	}
 	return r, nil
 }

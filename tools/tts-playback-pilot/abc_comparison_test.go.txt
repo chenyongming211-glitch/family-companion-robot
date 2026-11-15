@@ -33,7 +33,7 @@ import (
 )
 
 const abcAllow = "waveshare-abc-20261115"
-const abcBuild = "abc-comparison-20261115-v2"
+const abcBuild = "abc-comparison-20261115-v3"
 const abcMAC = "44:bd:8d:79:1f:e8"
 const abcOwner = "dev_ce26243f0d2f0b8019bfe45796307b48"
 const abcPhase = "abc-compare-20261115/"
@@ -43,8 +43,68 @@ type abcRun func(context.Context, string, string, []byte, string) (voicecompare.
 type abcSource struct {
 	Text               string
 	Words              []voicecompare.Word
+	TaskBoundaries     []voicecompare.TaskBoundary
 	Samples, Lookahead int64
 }
+
+func TestABCTaskBoundariesStayWholeAcrossCoordinateGaps(t *testing.T) {
+	r := voicecompare.Result{
+		Text: "开头。100颗。结尾。", PCM: make([]byte, 28800),
+		Words: []voicecompare.Word{{Text: "开头。", BeginMS: 0, EndMS: 100}},
+		TaskBoundaries: []voicecompare.TaskBoundary{
+			{Text: "开头。", EndSamples: 4800, Precision: "word"},
+			{Text: "100颗。", EndSamples: 9600, Precision: "task_boundary"},
+			{Text: "结尾。", EndSamples: 14400, Precision: "word"},
+		},
+	}
+	if err := abcValidate(r); err != nil {
+		t.Fatal("completed task-boundary result rejected", err)
+	}
+	var source abcSource
+	raw, _ := json.Marshal(map[string]any{"Text": r.Text, "Words": r.Words, "TaskBoundaries": r.TaskBoundaries, "Samples": 14400, "Lookahead": 156})
+	_ = json.Unmarshal(raw, &source)
+	for _, tc := range []struct {
+		played int64
+		want   string
+	}{
+		{9600 + 2880 + 156 - 1, "开头。"},
+		{9600 + 2880 + 156, "开头。100颗。"},
+	} {
+		got := abcMap(source, abcBoundary{Completed: tc.played, Sent: 15840, Cut: true, Basis: "i2s_dma"})
+		if got.Prefix != tc.want || !got.Unknown || got.Full {
+			t.Fatalf("split a normalized number or skipped a gap: %+v", got)
+		}
+	}
+	for _, mode := range []string{"end", "text", "precision", "invented_words"} {
+		bad := r
+		bad.TaskBoundaries = append([]voicecompare.TaskBoundary(nil), r.TaskBoundaries...)
+		switch mode {
+		case "end":
+			bad.TaskBoundaries[1].EndSamples = 4800
+		case "text":
+			bad.TaskBoundaries[1].Text = "200颗。"
+		case "precision":
+			bad.TaskBoundaries[1].Precision = "guessed"
+		case "invented_words":
+			bad.Words = append(append([]voicecompare.Word(nil), r.Words...), voicecompare.Word{Text: "100颗。结尾。", BeginMS: 200, EndMS: 400})
+		}
+		if abcValidate(bad) == nil {
+			t.Fatal("untrusted task boundary accepted", mode)
+		}
+	}
+}
+
+func TestABCFullShortCoarseTailNeverClaimsWordPrecision(t *testing.T) {
+	source := abcSource{Text: "开头。100颗。", Samples: 9600, TaskBoundaries: []voicecompare.TaskBoundary{
+		{Text: "开头。", EndSamples: 8000, Precision: "word"},
+		{Text: "100颗。", EndSamples: 9600, Precision: "task_boundary"},
+	}}
+	got := abcMap(source, abcBoundary{Completed: 9600, Sent: 9600, Ended: true, Final: true, Basis: "i2s_dma"})
+	if !got.Full || got.Prefix != source.Text || got.Precision != "task_boundary" {
+		t.Fatalf("short coarse tail was mislabeled as exact words: %+v", got)
+	}
+}
+
 type abcPilot struct {
 	route, ledger string
 	client        voicecompare.Client
@@ -63,6 +123,7 @@ type abcAlignment struct {
 	Unknown      bool   `json:"unknown_tail"`
 	Full         bool   `json:"full_text_confirmed"`
 	Hardware     bool   `json:"hardware_evidence"`
+	Precision    string `json:"precision"`
 }
 
 func abcScope(allow, route string) error {
@@ -492,7 +553,7 @@ func (p *abcPilot) install(s *Session) error {
 				return errors.Join(callErr, e)
 			}
 		}
-		if e = privateJSON(filepath.Join(s.directory, "abc-result-"+token+".json"), map[string]any{"route": p.route, "turn": id, "state": state, "mode": "buffered_complete_tts", "primary_model": abcModel(p.route), "tts_model": "cosyvoice-v3-flash", "voice": "longanyang", "sample_rate": 24000, "samples": len(result.PCM) / 2, "text": result.Text, "words": result.Words, "calls": result.Calls, "usage_unknown": callErr != nil, "error": abcPrivateFailure(callErr)}); e != nil {
+		if e = privateJSON(filepath.Join(s.directory, "abc-result-"+token+".json"), map[string]any{"route": p.route, "turn": id, "state": state, "mode": "buffered_complete_tts", "primary_model": abcModel(p.route), "tts_model": "cosyvoice-v3-flash", "voice": "longanyang", "sample_rate": 24000, "samples": len(result.PCM) / 2, "text": result.Text, "words": result.Words, "task_boundaries": result.TaskBoundaries, "calls": result.Calls, "usage_unknown": callErr != nil, "error": abcPrivateFailure(callErr)}); e != nil {
 			return errors.Join(callErr, e)
 		}
 		if callErr != nil {
@@ -514,7 +575,7 @@ func (p *abcPilot) install(s *Session) error {
 		if p.sources == nil {
 			p.sources = map[int64]abcSource{}
 		}
-		p.sources[id] = abcSource{Text: result.Text, Words: append([]voicecompare.Word(nil), result.Words...), Samples: int64(len(result.PCM) / 2), Lookahead: int64(delay)}
+		p.sources[id] = abcSource{Text: result.Text, Words: append([]voicecompare.Word(nil), result.Words...), TaskBoundaries: append([]voicecompare.TaskBoundary(nil), result.TaskBoundaries...), Samples: int64(len(result.PCM) / 2), Lookahead: int64(delay)}
 		p.mu.Unlock()
 		if e = emit("text", []byte(result.Text)); e != nil {
 			return e
@@ -533,7 +594,7 @@ func abcHealthMode(route string) string {
 	return "buffered_complete_tts"
 }
 func abcValidate(result voicecompare.Result) error {
-	if strings.TrimSpace(result.Text) == "" || !utf8.ValidString(result.Text) || utf8.RuneCountInString(result.Text) > 120 || len(result.PCM) == 0 || len(result.PCM)%2 != 0 || len(result.PCM) > 24000*2*30 || len(result.Words) == 0 {
+	if strings.TrimSpace(result.Text) == "" || !utf8.ValidString(result.Text) || utf8.RuneCountInString(result.Text) > 120 || len(result.PCM) == 0 || len(result.PCM)%2 != 0 || len(result.PCM) > 24000*2*30 || len(result.Words) == 0 && len(result.TaskBoundaries) == 0 {
 		return errors.New("abc_incomplete_result")
 	}
 	end := int64(0)
@@ -545,7 +606,27 @@ func abcValidate(result voicecompare.Result) error {
 		end = word.EndMS
 		covered.WriteString(word.Text)
 	}
-	if covered.String() != result.Text {
+	expectedWords := result.Text
+	if len(result.TaskBoundaries) > 0 {
+		var tasks, prefix strings.Builder
+		last, gap := int64(0), false
+		for _, task := range result.TaskBoundaries {
+			if task.Text == "" || task.EndSamples <= last || task.EndSamples > int64(len(result.PCM)/2) || task.Precision != "word" && task.Precision != "task_boundary" {
+				return errors.New("abc_invalid_task_boundary")
+			}
+			gap = gap || task.Precision == "task_boundary"
+			if !gap {
+				prefix.WriteString(task.Text)
+			}
+			tasks.WriteString(task.Text)
+			last = task.EndSamples
+		}
+		if tasks.String() != result.Text || last != int64(len(result.PCM)/2) {
+			return errors.New("abc_task_coverage_missing")
+		}
+		expectedWords = prefix.String()
+	}
+	if covered.String() != expectedWords {
 		return errors.New("abc_word_coverage_missing")
 	}
 	return nil
@@ -554,13 +635,29 @@ func abcValidate(result voicecompare.Result) error {
 // Same encoder-lookahead and 120ms rules as fixedTTSMap. This is a read-only
 // audit of the frozen receipt, never a replacement for common OutputASR context.
 func abcMap(source abcSource, b abcBoundary) abcAlignment {
-	result := abcAlignment{Unknown: true}
+	result := abcAlignment{Unknown: true, Precision: "word"}
 	if b.Basis != "i2s_dma" || source.Lookahead < 0 || b.Completed < 0 || b.Completed > b.Sent {
 		return result
 	}
 	result.Hardware = true
 	result.SourcePlayed = max(int64(0), min(source.Samples, b.Completed-source.Lookahead))
 	result.Prefix = voicecompare.ConfirmedText(source.Words, result.SourcePlayed, 120)
+	for _, task := range source.TaskBoundaries {
+		if task.Precision == "task_boundary" {
+			result.Precision = "task_boundary"
+			break
+		}
+	}
+	var wholeTasks strings.Builder
+	for _, task := range source.TaskBoundaries {
+		if task.EndSamples > result.SourcePlayed-120*24 {
+			break
+		}
+		wholeTasks.WriteString(task.Text)
+	}
+	if wholeTasks.Len() > len(result.Prefix) && strings.HasPrefix(wholeTasks.String(), result.Prefix) {
+		result.Prefix = wholeTasks.String()
+	}
 	result.Full = b.Ended && !b.Cut && b.Final && b.Sent > 0 && b.Completed == b.Sent && result.SourcePlayed == source.Samples
 	result.Unknown = !result.Full
 	if result.Full {
