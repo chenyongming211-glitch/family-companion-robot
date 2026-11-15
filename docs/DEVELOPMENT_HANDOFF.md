@@ -1,5 +1,7 @@
 # 换电脑开发交接
 
+**22:26最新现场入口（2026-11-15）：** 用户已就位；B-v4私有脚本全局改编号误改TTS health标签，启动核对拒绝并停止，未apply/无API，证据不覆盖。B-v5改为仅文件/unit/artifact编号替换，三路health与已审v3逐项相等、54保护/4人工收尾检查通过；同b3c37c6b二进制/Go源码，22:26:42 fresh apply、pilot1266238，保护至22:35:42北京时间，只测一次自我介绍。先查`ops/route-B-v5`的apply/restore、B records和用户反馈，不能复用v4/v5 intent。UART客户端`/tmp/abc-uart-metadata-v4.py`正运行，私有`uart-v4-metadata.jsonl`；打开串口后reset15/启动/22:25:55回idle已观察且告知用户，属于准备阶段复位，不冒充B故障。TCP元数据75秒观察另存云端`ops/B-v5-tcp-metadata.jsonl`，结束后核对实际覆盖时段。正式与固件未改、测试结果尚未取得；下方17时记录为历史。
+
 **最新B待机确认、C空窗口及正式后续（2026-11-15，覆盖下方待测状态）：** 用户确认B屏幕反复显示待机、没有按键；原`～`问题修复后一答TTS/I2S完整，但7.123秒起播、13.56秒音频耗19.587秒，5次回执空档>1秒，完整播完8.894秒后1006；不是测试器收尾，设备机制仍未知。B-v3已恢复。C-v3实际16:57:28–17:06:28零连接/零新API、超时restore；UART16:55–17:10无对话状态且已停止。用户17:32“C单轮正常”实际是正式self-echo入口：3.023秒首包、8.28秒音频完整、回执最大0.230秒，既有防护拒绝一次疑似开头回声；记忆/规划/表情条件不同，不能算隔离C通过，漏拦根因未定位。正式两进程/配置/admin保持、active0；隔离账本protocol9/primary50，正式样本成本另列。B-v4已fresh prepare、同b3c37c6b冻结binary，54保护/4人工收尾与marker检查通过，尚未start/apply；pending询问物理就位后才开窗，须告知有效时间。云端`start-pilot-v4.py`/`abc-window-v4.py`及新baseline/freeze已备，本机`/tmp/abc-uart-metadata-v4.py`已备未运行（现有pySerial路径`.superpowers/usb-device-tools-20261031`）；不要重用旧B-v3/C-v3 proof/intent。详见[补测与正式后续](verification/2026-11-15-abc-waveshare-comparison.md)。
 
 **A/B/C首轮现场结果及最小修复（2026-11-15，覆盖下方首次窗口状态）：** A四答完整I2S played、用户整体正常，但偏好问题被切段成“一个周末活动。”，不能宣称完整偏好理解通过；B三次自我介绍的ASR/LLM正常、TTS在`～`句界严格原文核对失败，无播放；C首答被自身回声“我叫小。”误打断，用户明确从未插话，额外回复占满4次模型调用后测试控制器主动server_shutdown，导致自动待机。C不是用户按钮结束，回声漏拦具体条件仍未知。旧ABC窗口已恢复；历史protocol9/primary49（38+A4+B3+C4）保持，修复后fresh v3补测。
