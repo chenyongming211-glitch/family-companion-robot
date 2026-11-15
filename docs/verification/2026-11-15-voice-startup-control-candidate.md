@@ -1,6 +1,6 @@
 # 起播规划并行候选与音量回执诊断
 
-日期：2026-11-15。接续[正式会话核对](2026-11-15-formal-conversation-latency.md)及[实施计划](../superpowers/plans/2026-11-15-voice-startup-control-repair.md)。本轮完成代码和云端合成检查；尚无候选实机结果，正式服务和固件未变。
+日期：2026-11-15。接续[正式会话核对](2026-11-15-formal-conversation-latency.md)及[实施计划](../superpowers/plans/2026-11-15-voice-startup-control-repair.md)。代码和云端合成检查后，14:02–14:03完成微雪四轮实测，用户反馈“四轮完成，整体正常”。四轮均完整played，测试入口已恢复，正式服务和固件未变。下方准备状态保留为此前阶段，最新结果见末节。
 
 ## 当前判断
 
@@ -50,3 +50,37 @@ go test -c -o /home/ubuntu/voice-latency-control-20261115/parallel-planning-pilo
 普通聊天基础API调用数不变；点歌被处理可能增加已提交后取消的控制规划，依据失效也可能多一次重规划。候选不承诺省费。成品按每天30分钟、每月约900分钟比较主模型、ASR、TTS、表情、点歌、控制、历史及取消/重试的完整用量，按各自计费单位核算；缺usage保持未知，真实账单待核对，不用单轮问候外推月费排名。
 
 截至本轮检查，正式Voice PID732503、管理PID635398，Caddy SHA adb6222394b10c444c5d563b241afc87be39aa17fb00d5bce2c4f2d22653f115；ready/memory_ready、0/2、diagnostics=false。没有正式部署、路由apply、固件改动或新付费推理。实际起播改善、音量修复、固定TTS逐字对齐/中断恢复及连续A/B均未验收。
+
+## 14:02–14:03微雪四轮实测
+
+用户确认在设备旁后执行。本轮开启前正式旧会话已结束，先核对原配置、正式进程、14份冻结来源及现场binary SHA2099657d，再启动仅loopback候选、生成绑定baseline/manifest/进程的proof，并单次apply指定MAC路由。未改正式Voice/管理unit或固件。
+
+| 输入 | 话尾至首包 | 完整I2S已播 | 控制核对 |
+| --- | ---: | ---: | --- |
+| 自我介绍 | 1.946秒 | 8.22秒 | 无动作 |
+| 音量调到80 | 2.510秒 | 2.10秒 | setter id3匹配，85ms后进入readback id4，147ms确认80 |
+| 查询音量 | 2.792秒 | 1.98秒 | status id5匹配，273ms确认80 |
+| 简短故事 | 2.464秒 | 19.38秒 | 无动作 |
+
+四轮completed samples均等于sent samples，全部played；无turn_error、drain_timeout或session_error。用户反馈四轮完成、整体正常。14:03:36.917收到第四轮完整回执后，控制器停止临时实例；14:03:38的server_shutdown为约定测试收尾，14:03:39记录restore verified，不归为自发断线。
+
+两规划提交时差分别约6.6/7.7/23.0/10.5ms，实际响应等待重叠0.578/0.636/0.819/0.550秒，证明实机路径确实并行。首包是服务端下发边界，不等于扬声器首音。本轮memory=false，正式旧服务memory=true，输入、历史和网络条件也不同；不能用四条样本计算稳定提速比例或长期可靠率。音量超时本轮未复现，旧故障未宣称根治。
+
+### 同期旧入口的“第一次有问题”
+
+用户随后反馈此前第二次调整正确、第一次有问题。正式13:47轮已在2.938秒回读80，随后只下发600ms音频、没有I2S回执；5秒信用等待后生成失败，再3秒drain超时关闭。该轮设置已核验成功，异常在确认语音播放链路，不能记作音量设置失败。13:48后一次设置/回读80为95ms，查询32ms；随后设置90为84ms、查询117ms，均verified。13:59旧入口设置85也在55ms核验。以上不消除12:17原轮setter ACK超时的未知原因，不把设备调度或网络假设当结论。
+
+私有证据：`field-predecessor-v1/`两份冻结正式events摘要，以及`field-result-v1.json`；候选会话`parallel-pilot-v1/records/20261115T060243-8cb5f6cd154940806d44fa7917ceda93`，events SHA77570537c4102c88f4cc9b4e2cb6a9e92e058e1ea06e4f0fe1916710c601c947。UART只读采集确认AudioCodec的Set output volume to 80和各轮speaking→listening；采集已停止，原串口留忽略目录，不入Git。网络采集v3权限失败，v4 tcpdump以-11退出、文件0字节，无可用pcap证据；没有据此声称已定位网络问题，也未重跑真人/API测试。
+
+### 本轮用量与恢复
+
+| 模型用途 | 请求数 | input tokens | output tokens |
+| --- | ---: | ---: | ---: |
+| 主回答 | 4 | 15,553 | 495 |
+| 点歌规划 | 4 | 5,713 | 188 |
+| 控制规划 | 4 | 7,413 | 225 |
+| 表情选择 | 4 | 2,701 | 105 |
+
+16份数值usage均已取得；表情只计expression_selection，排除其native_session副本。另有4次OutputASR、合计31.68秒音频，以及输入监听/转写，不能把16次当成全部API数量。现有主回答记录只留顶层token，未留分模态计费细项；输入监听也缺独立账单usage。因此上述为用量证据，不能直接算精确金额，辅助文本token与主回答混合token不能按统一单价比较。普通聊天基础调用数未减少，本轮没有点歌handled或失效重规划，不能由此证明这两类额外费用为零。成品仍按30分钟/天、约900分钟/月比较完整费用。
+
+原账本从协议9/主回答34增至9/38，本阶段4次主回答全部保留。pilot/window两个unit均MainPID0，采集进程结束；正式Voice732503/管理635398身份、7份受保护配置摘要、Caddy file/admin均恢复/保持与baseline一致，ready/memory_ready、0/2、diagnostics=false。候选开关仍默认关闭，未正式启用。固定TTS逐字对齐、中断恢复和连续A/B是独立待验项。
