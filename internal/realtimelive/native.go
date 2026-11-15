@@ -33,12 +33,16 @@ func sessionSettings(c Config, prompt string) map[string]any {
 }
 
 type Native struct {
-	cfg             Config
-	dir             string
-	conn            *websocket.Conn
-	writeMu         sync.Mutex
-	OnSearch        func(map[string]any) error
-	searchConfirmed bool
+	cfg              Config
+	dir              string
+	conn             *websocket.Conn
+	writeMu          sync.Mutex
+	audit            *intent // Protected by writeMu, including intent.data updates.
+	planningRequests int
+	planningStarted  time.Time
+	planningTerminal bool
+	OnSearch         func(map[string]any) error
+	searchConfirmed  bool
 }
 
 func NewNative(c Config, dir string) *Native { return &Native{cfg: c, dir: dir} }
@@ -48,8 +52,26 @@ func (n *Native) write(v any) error {
 	if n.conn == nil {
 		return errors.New("native_not_connected")
 	}
+	planningRequest := false
+	if request, ok := v.(map[string]any); ok && request["type"] == "response.create" && len(n.cfg.Tools) > 0 && n.audit != nil {
+		planningRequest = true
+		n.planningTerminal = false
+		n.planningRequests++
+		n.planningStarted = time.Now()
+		// Persist before the socket write: cancellation and a failed write do not
+		// prove the provider received nothing or charged zero.
+		if err := n.audit.update(map[string]any{"request_count": n.planningRequests, "submitted_at": n.planningStarted.UTC().Format(time.RFC3339Nano), "usage_state": "unknown", "usage": nil, "response_id": "", "planning_ms": nil, "planning_outcome": "pending"}); err != nil {
+			return err
+		}
+	}
 	n.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	return n.conn.WriteJSON(v)
+	err := n.conn.WriteJSON(v)
+	if err != nil && planningRequest {
+		if auditErr := n.audit.update(map[string]any{"planning_ms": time.Since(n.planningStarted).Milliseconds(), "planning_outcome": "request_write_failed"}); auditErr != nil {
+			return auditErr
+		}
+	}
+	return err
 }
 func (n *Native) Read(ctx context.Context) (map[string]any, error) {
 	return n.read(ctx, 35*time.Second)
@@ -116,9 +138,32 @@ func (n *Native) Open(ctx context.Context, prompt string, listener bool) (err er
 	if e != nil {
 		return e
 	}
+	n.writeMu.Lock()
+	n.audit = audit
+	n.planningRequests = 0
+	n.planningStarted = time.Time{}
+	n.planningTerminal = false
+	toolNames := []string{}
+	usageSource := "native_session"
+	for _, tool := range n.cfg.Tools {
+		name, _ := object(object(tool)["function"])["name"].(string)
+		if name != "" {
+			toolNames = append(toolNames, name)
+		}
+		if name == "set_expression" {
+			usageSource = "expression_selection"
+		}
+	}
+	err = audit.update(map[string]any{"model": n.cfg.Model, "tool_names": toolNames, "usage_source": usageSource})
+	n.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
 	defer func() {
 		if err != nil {
+			n.writeMu.Lock()
 			audit.update(map[string]any{"state": "connection_outcome_unknown"})
+			n.writeMu.Unlock()
 			n.Close()
 		}
 	}()
@@ -145,7 +190,10 @@ func (n *Native) Open(ctx context.Context, prompt string, listener bool) (err er
 	if err = n.expect(openCtx, "session.updated"); err != nil {
 		return err
 	}
-	if err = audit.update(map[string]any{"state": "connected"}); err != nil {
+	n.writeMu.Lock()
+	err = audit.update(map[string]any{"state": "connected", "connect_ms": time.Since(audit.start).Milliseconds()})
+	n.writeMu.Unlock()
+	if err != nil {
 		return err
 	}
 	if listener {

@@ -3,6 +3,7 @@ package realtimelive
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type plannedControlCall struct{ id, name, args string }
@@ -17,7 +18,12 @@ func controlCallFields(item map[string]any, allowed map[string]bool) (plannedCon
 	return plannedControlCall{id, name, args}, nil
 }
 
-func (n *Native) completedControlCalls(ctx context.Context, allowed, seen map[string]bool) ([]plannedControlCall, error) {
+func (n *Native) completedControlCalls(ctx context.Context, allowed, seen map[string]bool) (calls []plannedControlCall, routeErr error) {
+	defer func() {
+		if auditErr := n.finishPlanning(ctx, routeErr); auditErr != nil {
+			routeErr = auditErr
+		}
+	}()
 	identity := ""
 	arguments := map[string]plannedControlCall{}
 	for range 256 {
@@ -46,7 +52,13 @@ func (n *Native) completedControlCalls(ctx context.Context, allowed, seen map[st
 			arguments[call.id] = call
 		case "response.done":
 			r := object(e["response"])
-			if identity == "" || r["id"] != identity || r["status"] != "completed" {
+			if identity == "" || r["id"] != identity {
+				return nil, errors.New("tool_response_terminal")
+			}
+			if err := n.recordPlanningUsage(r); err != nil {
+				return nil, err
+			}
+			if r["status"] != "completed" {
 				return nil, errors.New("tool_response_terminal")
 			}
 			output, ok := r["output"].([]any)
@@ -76,4 +88,51 @@ func (n *Native) completedControlCalls(ctx context.Context, allowed, seen map[st
 		}
 	}
 	return nil, errors.New("tool_event_limit")
+}
+
+// A matching terminal is enough to retain billing evidence even if its tool
+// output is invalid. Missing or partial provider usage remains explicitly unknown.
+func (n *Native) recordPlanningUsage(response map[string]any) error {
+	n.writeMu.Lock()
+	defer n.writeMu.Unlock()
+	if n.audit == nil || n.planningRequests == 0 {
+		return nil
+	}
+	usage := expressionUsage(response)
+	state := "unknown"
+	_, input := usage["input_tokens"]
+	_, output := usage["output_tokens"]
+	_, total := usage["total_tokens"]
+	if input && output && total {
+		state = "complete"
+	}
+	err := n.audit.update(map[string]any{"response_id": response["id"], "usage": usage, "usage_state": state, "planning_ms": time.Since(n.planningStarted).Milliseconds()})
+	if err == nil {
+		n.planningTerminal = true
+	}
+	return err
+}
+
+// This reader owns the explicit planning exit. Close only releases the socket;
+// repeated or later closes cannot overwrite a matched terminal measurement.
+func (n *Native) finishPlanning(ctx context.Context, routeErr error) error {
+	n.writeMu.Lock()
+	defer n.writeMu.Unlock()
+	if n.audit == nil || n.planningRequests == 0 {
+		return nil
+	}
+	outcome := "response_completed"
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		outcome = "deadline_exceeded"
+	case ctx.Err() != nil:
+		outcome = "canceled"
+	case routeErr != nil:
+		outcome = "failed"
+	}
+	fields := map[string]any{"planning_outcome": outcome}
+	if !n.planningTerminal {
+		fields["planning_ms"] = time.Since(n.planningStarted).Milliseconds()
+	}
+	return n.audit.update(fields)
 }

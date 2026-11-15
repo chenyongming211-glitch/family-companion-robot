@@ -28,10 +28,20 @@ type Completion struct {
 	Output     string
 }
 
+// RPCObservation contains only fixed routing metadata, never device content.
+// matched means the envelope and ID matched, not that the operation succeeded.
+type RPCObservation struct {
+	RPCID         uint64 `json:"rpc_id"`
+	ExpectedRPCID uint64 `json:"expected_rpc_id"`
+	Phase         string `json:"phase"`
+	Reason        string `json:"reason"`
+}
+
 // Update contains MCP payloads without their transport wrapper and model results.
 type Update struct {
-	Requests []json.RawMessage
-	Results  []Completion
+	Requests    []json.RawMessage
+	Results     []Completion
+	Observation *RPCObservation
 }
 
 type deviceCall struct {
@@ -81,17 +91,38 @@ func (b *Bridge) Start(now time.Time) Update {
 
 func (b *Bridge) Receive(payload json.RawMessage, now time.Time) Update {
 	u := b.Expire(now)
+	o := &RPCObservation{Phase: "none", Reason: "invalid_envelope"}
+	u.Observation = o
+	if !b.ready && b.started {
+		o.ExpectedRPCID, o.Phase = b.discoveryID, "initialize"
+		if b.listing {
+			o.Phase = "tools_list"
+		}
+	} else if c := b.active; c != nil {
+		o.ExpectedRPCID, o.Phase = c.rpcID, "setter"
+		if c.readback {
+			o.Phase = "readback"
+		} else if c.name == "device_get_status" {
+			o.Phase = "status"
+		}
+	}
 	var r struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      uint64          `json:"id"`
 		Result  json.RawMessage `json:"result"`
 		Error   json.RawMessage `json:"error"`
 	}
-	if json.Unmarshal(payload, &r) != nil || r.JSONRPC != "2.0" || r.ID == 0 {
+	if json.Unmarshal(payload, &r) != nil {
 		return u
 	}
+	o.RPCID = r.ID
+	if r.JSONRPC != "2.0" || r.ID == 0 {
+		return u
+	}
+	o.Reason = "ignored_id"
 	failed := len(r.Error) != 0 && string(r.Error) != "null"
 	if !b.ready && b.started && r.ID == b.discoveryID {
+		o.Reason = "matched"
 		if failed {
 			b.finishDiscovery(false)
 			return u
@@ -113,6 +144,7 @@ func (b *Bridge) Receive(payload json.RawMessage, now time.Time) Update {
 	if c == nil || r.ID != c.rpcID {
 		return u
 	}
+	o.Reason = "matched"
 	if failed {
 		b.finishCall(&u, errorOutput("device_error"))
 		b.startNext(&u)

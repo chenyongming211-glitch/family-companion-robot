@@ -21,3 +21,11 @@
 现场操作必须先告知用户，并完成新一轮exact-route准备、源/二进制证明与自动清理。复用云端 `native_route_guard_v4.py`（SHA `cdb9438c4be936834a95238005fcc18f5e2b80e9bb33114609fe55f2ebd48f8b`）的原子apply/restore；仅更换本阶段临时unit及health契约，不重用既有apply intent。不可直接运行历史路由命令。结束后关闭临时实例、核对Caddy file/admin和正式语音/管理基线，外部配置漂移时拒绝覆盖。
 
 用户操作：唤醒说“开始”，第一次完整听完；再说“再来一次”，第二次听到中段时说“停一下”。固定内容为“早上好！今天天气不错，适合出门走走。”，约5.89秒。记录声音是否连续、有无截尾及实际停止位置。本阶段不验收连续A/B交流或自动续讲。
+
+## 起播规划并行候选
+
+`parallel_planning_test.go.txt`是独立现场资产，显式复制至云端`internal/realtimelive/parallel_planning_pilot_test.go`后检查。`TestParallelPlanningPilotServe`仅在`FAMILY_PARALLEL_PLANNING_PILOT_ALLOW=waveshare-parallel-planning-20261115`时开放loopback 18818；普通检查只运行合成保护测试，Serve跳过。见[验证状态](../../docs/verification/2026-11-15-voice-startup-control-candidate.md)。
+
+复用当前主模型、公共Session/Opus/MCP/表情/在线音乐，启用默认关闭的ParallelPlanning；指定微雪和鉴权owner，单并发，每会话180秒、服务10分钟，memory=false。沿用全局账本，本阶段最多4个主回答，未知/失败保留。辅助规划、监听和控制也可能调用API，4不是所有API或硬件动作的总上限；并行本身不保证省费。
+
+先完成云端普通/race/vet/build、源/二进制冻结和fresh路由准备；用户在场且入口就绪后按四轮测试：自我介绍、音量调到80、查询当前音量、短故事。第四轮结束后停止，不追加第五条命令。控制器限时并在第四个主回答播放结算后停止自身unit、guarded restore，核对正式进程和Caddy file/admin。UART只读、云端捕获须同时覆盖候选18818；尚未完成实机验证，不能将合成通过记作起播改善或音量修复。

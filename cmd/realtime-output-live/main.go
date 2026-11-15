@@ -32,6 +32,7 @@ func main() {
 	musicLibrary := flag.String("music-library", "", "optional private family music library root")
 	musicOnline := flag.Bool("music-online", false, "enable complete publicly playable online songs")
 	memory := flag.Bool("memory", true, "restore bounded recent conversation memory per authenticated device")
+	parallelPlanning := flag.Bool("parallel-planning", false, "overlap silent music and device control planning (candidate)")
 	expressions := flag.Bool("expressions", false, "enable silent expression selection for negotiated face_expression_v1 devices")
 	diagnosticDevice := flag.String("diagnostics-device", "", "optional authenticated device ID for one diagnostic session")
 	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
@@ -60,6 +61,7 @@ func main() {
 	cfg.MaxSessions = *maxSessions
 	cfg.MemoryEnabled = *memory
 	cfg.ExpressionsEnabled = *expressions
+	cfg.ParallelPlanning = *parallelPlanning
 	cfg.DeviceProfilesPath = *deviceProfiles
 	cfg.DiagnosticsDevice = *diagnosticDevice
 	cfg.DiagnosticsDuration = *diagnosticDuration

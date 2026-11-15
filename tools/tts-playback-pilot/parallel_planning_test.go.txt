@@ -1,0 +1,270 @@
+// Cloud-only candidate runner. Copy explicitly into an isolated realtimelive
+// package; the normal repository build cannot start this listener.
+package realtimelive
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"familyrobot/internal/music"
+	"familyrobot/internal/realtimestate"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+const parallelPilotAllow = "waveshare-parallel-planning-20261115"
+const parallelPilotBuild = "parallel-planning-20261115-v1"
+const parallelPilotMAC = "44:bd:8d:79:1f:e8"
+const parallelPilotOwner = "dev_ce26243f0d2f0b8019bfe45796307b48"
+
+// Consume the existing primary ledger; no new ledger resets historical unknowns.
+func parallelPilotReserve(path, attempt string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|syscall.O_NOFOLLOW, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Size() > 8<<20 {
+		return errors.New("pilot_ledger_invalid")
+	}
+	if st.Size() > 0 {
+		var last [1]byte
+		if _, err = f.ReadAt(last[:], st.Size()-1); err != nil || last[0] != '\n' {
+			return errors.New("pilot_ledger_tail_unknown")
+		}
+	}
+	primary, own := 0, 0
+	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 4096), 1<<20)
+	for scan.Scan() {
+		var row map[string]any
+		if json.Unmarshal(scan.Bytes(), &row) != nil {
+			return errors.New("pilot_ledger_invalid")
+		}
+		if row["event"] != "intent" {
+			continue
+		}
+		id, ok := row["attempt"].(string)
+		if !ok || id == attempt {
+			return errors.New("pilot_duplicate_or_unknown")
+		}
+		switch row["stage"] {
+		case "protocol":
+		case "primary":
+			primary++
+		default:
+			return errors.New("pilot_ledger_stage_invalid")
+		}
+		if strings.HasPrefix(id, "latency-control-20261115/") {
+			own++
+		}
+	}
+	if scan.Err() != nil {
+		return scan.Err()
+	}
+	if primary >= 48 || own >= 4 {
+		return errors.New("pilot_primary_limit")
+	}
+	if err = json.NewEncoder(f).Encode(map[string]any{"event": "intent", "stage": "primary", "attempt": attempt, "backend": "parallel-planning", "state": "outcome_unknown", "at": time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+func parallelPilotHandler(app *Server, device http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil || !net.ParseIP(host).IsLoopback() {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/healthz" {
+			app.mu.Lock()
+			active, ready := len(app.leases), !app.stopping && app.initErr == nil
+			app.mu.Unlock()
+			respond(w, 200, map[string]any{"ready": ready, "build": parallelPilotBuild,
+				"target_device": parallelPilotOwner, "target_mac": parallelPilotMAC,
+				"model": app.cfg.Model, "native_conversation": false, "memory_enabled": false,
+				"max_sessions": 1, "active_sessions": active, "diagnostics": false,
+				"parallel_planning": app.cfg.ParallelPlanning, "music_online": true, "expressions": true})
+			return
+		}
+		if r.Method != "GET" || r.URL.Path != "/xiaozhi/v1/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Device-Id") != parallelPilotMAC {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		device.ServeHTTP(w, r)
+	})
+}
+
+func TestParallelPilotScope(t *testing.T) {
+	app := NewServer(Config{ParallelPlanning: true, MaxSessions: 1}, nil, t.TempDir(), parallelPilotBuild)
+	called := 0
+	h := parallelPilotHandler(app, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called++; w.WriteHeader(204) }))
+	for _, tc := range []struct {
+		path, mac, remote string
+		want              int
+	}{
+		{"/healthz", "", "127.0.0.1:1234", 200},
+		{"/xiaozhi/v1/", parallelPilotMAC, "127.0.0.1:1234", 204},
+		{"/xiaozhi/v1/", "other", "127.0.0.1:1234", 403},
+		{"/xiaozhi/v1/", parallelPilotMAC, "192.0.2.1:1234", 403},
+		{"/live", parallelPilotMAC, "127.0.0.1:1234", 404},
+	} {
+		r := httptest.NewRequest("GET", tc.path, nil)
+		r.RemoteAddr = tc.remote
+		r.Header.Set("Device-Id", tc.mac)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s: got %d want %d", tc.path, w.Code, tc.want)
+		}
+	}
+	if called != 1 {
+		t.Fatal("unexpected device forwarding", called)
+	}
+}
+
+func TestParallelPilotKeepsGlobalAndPhaseLimits(t *testing.T) {
+	for _, historical := range []int{0, 47} {
+		path := filepath.Join(t.TempDir(), "attempts.jsonl")
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc := json.NewEncoder(f)
+		for i := 0; i < historical; i++ {
+			if err := enc.Encode(map[string]any{"event": "intent", "stage": "primary", "attempt": fmt.Sprintf("historical/%d", i), "state": "outcome_unknown"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := 0; i < 9; i++ {
+			if err := enc.Encode(map[string]any{"event": "intent", "stage": "protocol", "attempt": fmt.Sprintf("historical/protocol-%d", i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.Close()
+		allowed := 4
+		if historical == 47 {
+			allowed = 1
+		}
+		for i := 0; i < allowed; i++ {
+			if err := parallelPilotReserve(path, fmt.Sprintf("latency-control-20261115/test-%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if parallelPilotReserve(path, "latency-control-20261115/extra") == nil {
+			t.Fatal("primary limit bypassed")
+		}
+		if parallelPilotReserve(path, "latency-control-20261115/test-0") == nil {
+			t.Fatal("unknown attempt retried")
+		}
+	}
+}
+
+func TestParallelPlanningPilotServe(t *testing.T) {
+	if os.Getenv("FAMILY_PARALLEL_PLANNING_PILOT_ALLOW") != parallelPilotAllow {
+		t.Skip("explicit cloud-only field-test opt-in required")
+	}
+	syscall.Umask(0077)
+	const root = "/home/ubuntu/voice-latency-control-20261115/parallel-pilot-v1"
+	if err := os.MkdirAll(filepath.Join(root, "records"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig("/etc/family-robot/server.env")
+	if err != nil {
+		t.Fatal("protected model configuration unavailable")
+	}
+	cfg.ParallelPlanning = true
+	cfg.MemoryEnabled, cfg.MemoryOnly, cfg.ExpressionsEnabled = false, false, true
+	cfg.MaxSessions, cfg.DiagnosticsDevice, cfg.DeviceProfilesPath = 1, "", ""
+	cfg.Music, cfg.MusicForDevice = music.New(), nil
+	product, err := realtimestate.LoadProduct("/opt/family-robot-livekit-dev/config/product-identity.json")
+	if err != nil {
+		t.Fatal("product configuration unavailable")
+	}
+	app := NewServer(cfg, product, filepath.Join(root, "records"), parallelPilotBuild)
+	if err := app.InitializationError(); err != nil {
+		t.Fatal(err)
+	}
+	dc, err := LoadDeviceConfig("/etc/family-robot/device-admission-20261109.env")
+	if err != nil {
+		t.Fatal("device admission unavailable")
+	}
+	dc, err = dc.WithOnboardingAuthURL("http://127.0.0.1:18791/api/internal/device-auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.runDevice = func(s *Session) {
+		if s.rec.owner.DeviceID != parallelPilotOwner {
+			s.failReason("pilot_target_required")
+			return
+		}
+		w, ok := s.wire.(*xiaozhiWire)
+		if !ok || w.pcm {
+			s.failReason("pilot_opus_required")
+			return
+		}
+		generate := s.generate
+		s.generate = func(ctx context.Context, id int64, prompt string, pcm []byte, emit func(string, []byte) error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			attempt := fmt.Sprintf("latency-control-20261115/%s/turn-%d", s.rec.owner.SessionID, id)
+			if err := parallelPilotReserve("/home/ubuntu/waveshare-native-integration-20261114/attempts.jsonl", attempt); err != nil {
+				s.failReason("pilot_primary_limit_or_unknown")
+				return err
+			}
+			return generate(ctx, id, prompt, pcm, emit)
+		}
+		timer := time.AfterFunc(180*time.Second, func() { s.failReason("pilot_session_timeout") })
+		defer timer.Stop()
+		_ = s.Run()
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:18818")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: parallelPilotHandler(app, app.DeviceHandler(dc)), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	lifetime, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	select {
+	case <-lifetime.Done():
+	case err = <-done:
+		if !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	}
+	shutdown, stopShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopShutdown()
+	if err := app.CloseActive(shutdown); err != nil {
+		t.Error(err)
+	}
+	if err := server.Shutdown(shutdown); err != nil {
+		_ = server.Close()
+		t.Error(err)
+	}
+}

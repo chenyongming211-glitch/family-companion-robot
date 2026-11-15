@@ -318,29 +318,36 @@ func (n *Native) RunControlPlan(parent context.Context, input ControlInput, tool
 	if e != nil {
 		return result, e
 	}
+	err = runPlannedControl(total, p, execute, &result)
+	return result, err
+}
+
+// Both serial and prefetched planning use the same action and receipt handling.
+func runPlannedControl(ctx context.Context, p *ControlPlan, execute func(context.Context, string, string, string) (string, error), result *ControlResult) error {
 	result.Plan = p
 	switch p.Intent {
 	case "none":
 		result.Outcome = "none"
-		return result, nil
+		return nil
 	case "clarify":
 		result.Outcome = "needs_clarification"
-		return result, nil
+		return nil
 	case "unsupported":
 		result.Outcome = "unsupported_target"
-		return result, nil
+		return nil
 	}
 	if execute == nil {
-		return result, errors.New("executor_missing")
+		return errors.New("executor_missing")
 	}
-	err = executeControlPlan(total, p, execute, &result)
+	err := executeControlPlan(ctx, p, execute, result)
 	if err == nil {
 		result.Outcome = "completed"
 	} else if len(result.Receipts) > 0 {
 		result.Outcome = "partial_or_unknown"
 	}
-	return result, err
+	return err
 }
+
 func (n *Native) semanticPlan(ctx context.Context, input ControlInput, tools []map[string]any) (*ControlPlan, error) {
 	history := controlHistory(input.PlayedContext)
 	if history == "" || len(input.CurrentRequest) > 16384 || strings.TrimSpace(input.CurrentRequest) == "" || !utf8.ValidString(input.CurrentRequest) || len(tools) == 0 || len(tools) > 3 || len(input.DeviceName) > 256 || !utf8.ValidString(input.DeviceName) {

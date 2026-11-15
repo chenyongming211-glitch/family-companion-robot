@@ -808,9 +808,14 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.fail()
 		return
 	}
+	prefetch := s.prefetchControls(rt)
+	defer prefetch.close()
 	route, e := s.routeMusic(rt, contextText)
 	if e != nil {
 		return
+	}
+	if route.Handled {
+		prefetch.close()
 	}
 	contextText = s.musicContext(contextText)
 	media := route.Stream != nil
@@ -826,7 +831,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		}
 		contextText = s.musicContext(contextText)
 		s.expressionContextReady(rt, contextText)
-		controlContext, e = s.routeDeviceControls(rt, contextText)
+		if prefetch != nil {
+			controlContext, e = s.routePrefetchedControls(rt, prefetch)
+		} else {
+			controlContext, e = s.routeDeviceControls(rt, contextText)
+		}
 		if e != nil {
 			return
 		}
