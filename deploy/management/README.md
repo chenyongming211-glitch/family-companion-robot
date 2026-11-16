@@ -1,5 +1,7 @@
 # 独立管理服务
 
+**2026-11-16长期语音链路选择：** 内部设备配置提供 A（Omni 原音→文字→CosyVoice）、B（Fun-ASR→Qwen Plus→同一 CosyVoice）、C（原生直接语音）。`GET/PUT /api/admin/device-voice-route/:deviceId` 使用当前管理员/设备授权，PUT 另需设备管理权限及选择版本。选择保存在管理配置可选 `voice_route` 和 `voice_route_revision`，每次显式保存递增 revision，未设置保持 C；保存后通过已有 Unix socket 结束目标对话，新连接重新读取。私有 `/voice-route/status`、`/voice-route/disconnect` 不进入公网 handler 或 Caddy，未确认不得宣称切换完成。新字段需要兼容它们的 Voice 与管理二进制，先更新 Voice 再管理/静态；写入新字段后不能直接切回旧严格解析器，更不能整份恢复旧配置覆盖当前账号、绑定或设置。无需更新微雪固件。实际发布与验证状态以[本批记录](../../docs/verification/2026-11-16-admin-voice-routes.md)为准；下方日期段落是各批历史状态。
+
 **2026-11-14手动OTA管理已发布：** 管理代码新增`--firmware-root /var/lib/family-robot-management/firmware`，私有目录0700、文件0600，沿用现有管理服务可写父目录，不增加Voice写权限。使用`management publish-firmware --root <私有目录> --manifest <已核对元数据> --app <app.bin> --partition <二进制分区表>`封存可信构建；校验实际镜像版本/ELF/内容摘要、芯片/项目、精确双槽布局，禁止任意URL输入或覆盖同一发布。最多8份/共32MiB、1024设备文件、每设备32项任务，不静默删除旧证据。两端`GET/POST /api/<scope>/device-firmware/<dev_32hex>`复用当前设备管理权限；新增审计分类`firmware`。仅必要家庭/设备接口进入Caddy白名单，内部管理路径保持既有访问边界。代码、两端真实页面、云端整包和整体审查通过；管理已发布device-ota-20261114-r1，Voice保持原版，微雪首次OTA待现场确认。发布须从实际Caddy叠加三项匹配器以保留原路由，完整状态见[本轮验证](../../docs/verification/2026-11-14-device-ota.md)。
 
 **2026-11-11真实入口清理：** 管理产品只使用默认真实构建；旧mock、HTML原型、云端旧前端/静态副本及18790演示入口已删除。当前仍由原管理进程在18791服务`admin-audit-20261111-r1/web`的4个真实文件，公开pins为release父目录`real-only-frontend.json`。M5当前绑定已结束，仅微雪为当前设备；真实旧档案和历史配置兼容保留。旧release二进制/证明不删，但其旧UI已清理，不能直接作为界面回退。详情与CI/现场边界见[本批验证](../../docs/verification/2026-11-11-real-only-waveshare.md)。
@@ -16,7 +18,7 @@
 
 本模板用于云端发布；添加模板本身不会安装、启动或重启任何服务。正式语音进程与设备固件不在本管理单元范围内。当前产品仅支持微雪 ESP32-S3 2.16，历史M5配置兼容用于保留真实档案。
 
-所有构建、命令与配置初始化在云端执行。前端默认 `npm run build` 生成真实两端 `dist/`，无mock模式或第二套演示构建。发布目录采用 `/opt/family-robot-management/releases/<build>/`，包含 `management` 二进制与核验后的静态资源；服务使用的二进制和静态目录以实际systemd argv为准，不只看`current`链接。当前静态目录为`admin-audit-20261111-r1/web`。模板中的 `@RECORDS_ROOT@`、`@PROFILES_DIR@`、`@BUILD_ID@` 必须替换为部署时核验的路径/版本（无空格）；若无 profiles 参数，移除对应参数和 BindReadOnlyPaths 中的资料映射。只读源记录与资料路径必须位于 ProtectHome 可访问的系统路径，不移动或修改正式源数据以适应模板。
+所有构建、命令与配置初始化在云端执行。前端默认 `npm run build` 生成真实两端 `dist/`，无mock模式或第二套演示构建。发布目录采用 `/opt/family-robot-management/releases/<build>/`，包含 `management` 二进制与核验后的静态资源；服务使用的二进制和静态目录以实际systemd argv为准，不只看`current`链接。当前静态目录为`product-voice-routes-20261116-r1/web`。模板中的 `@RECORDS_ROOT@`、`@PROFILES_DIR@`、`@BUILD_ID@` 必须替换为部署时核验的路径/版本（无空格）；若无 profiles 参数，移除对应参数和 BindReadOnlyPaths 中的资料映射。只读源记录与资料路径必须位于 ProtectHome 可访问的系统路径，不移动或修改正式源数据以适应模板。
 
 服务需要 root 读取既有 root/0700 记录目录；不得放宽源目录权限。模板将源记录目录和仅包含展示资料的 presentation 目录只读挂载到服务专属的 `/run/family-robot-management/` 视图，绕开源父目录其他属主的0700遍历限制；原数据不移动、不复制，能力集继续为空。资料源必须是经核验的窄范围 presentation 目录，不能绑定包含其他私密配置的上级目录；目录挂载确保原子替换后能读到新版本。systemd 只允许写管理服务自己的 `/var/lib/family-robot-management`，配置0600、父目录0700、审计0600，配置文件本身不能再只读 bind，否则认领的原子替换无法生效；原记录和资料继续只读。进程仅监听 `127.0.0.1:18791`，网页仍通过 SSH 转发访问；公网小程序走固定 HTTPS 代理及 `--public-origin`。公网 Cookie 为 Secure/HttpOnly/SameSite=Strict，本机 HTTP 转发兼容，不开启跨域或公网 HTTP。
 

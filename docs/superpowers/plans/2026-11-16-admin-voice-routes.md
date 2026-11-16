@@ -52,11 +52,11 @@ func (s *Server) VoiceRouteControlHandler(VoiceRouteGuard) http.Handler
 
 **Interfaces:** 产出上面的共享语音契约，和`voicecompare.Client.RunConversation(ctx, backend, instructions, pcm)`；原Run接口/限制保持。
 
-- [ ] 先写云端RED：合法A/B/C解析、读取失败不得回C、每连接固定选择、当前route查询、带guard取消只终止目标连接、准备阶段租约/快速重连/迟到结束/ctx取消、守卫拒绝无副作用。
-- [ ] 产品A/B生成复用协议，支持25秒输入/60秒音频、正常回复和上下文，不使用120字/4问/试验账本；合成提供方协议验证超120字、输入超过10秒、取消、失败不降级及最终元数据校验。
-- [ ] 在newSession取得鉴权owner后解析route，A/B只替换生成函数，沿用公共reply业务前置/OutputASR/播放证据。C不改变原native行为。每API写现有私有intent/数值usage，不额外落原音。
-- [ ] 实现Unix私有handler，guard下核对claim，再用Server.mu封锁目标准入、关闭该旧socket并等待租约结束。网络等待不持Server.mu；锁顺序不得反向；其他设备不终止，旧取消不能移除新租约。
-- [ ] 云端专项普通/race通过；提交本任务拥有路径；产出来源、RED/GREEN命令结果、限制及架构自审报告，交task reviewer。
+- [x] 先写云端RED：合法A/B/C解析、读取失败不得回C、每连接固定选择、当前route查询、带guard取消只终止目标连接、准备阶段租约/快速重连/迟到结束/ctx取消、守卫拒绝无副作用。
+- [x] 产品A/B生成复用协议，支持25秒输入/60秒音频、正常回复和上下文，不使用120字/4问/试验账本；合成提供方协议验证超120字、输入超过10秒、取消、失败不降级及最终元数据校验。
+- [x] 在newSession取得鉴权owner后解析route，A/B只替换生成函数，沿用公共reply业务前置/OutputASR/播放证据。C不改变原native行为。每API写现有私有intent/数值usage，不额外落原音。
+- [x] 实现Unix私有handler，guard下核对claim，再用Server.mu封锁目标准入、关闭该旧socket并等待租约结束。网络等待不持Server.mu；锁顺序不得反向；其他设备不终止，旧取消不能移除新租约。
+- [x] 云端专项普通/race通过；提交本任务拥有路径；产出来源、RED/GREEN命令结果、限制及架构自审报告，交task reviewer。
 
 精确命令：`go test -count=1 ./internal/voicecompare ./internal/realtimelive -run 'VoiceRoute|Conversation|ProductRoute'`，再对同目标`-race`，预期0失败。
 
@@ -66,12 +66,12 @@ func (s *Server) VoiceRouteControlHandler(VoiceRouteGuard) http.Handler
 
 **Interfaces:** 消费共享claim/state/guard；产出GET/PUT响应及resolver/guard函数。DeviceConfig新增可选`VoiceRoute string json:voice_route,omitempty`及`VoiceRouteRevision uint64 json:voice_route_revision,omitempty`；ValidateConfig拒绝未知route和超过2^53-1的revision，历史配置缺省C/revision0。版本仅用id/binding/route/revision公开事实；每次接受PUT递增revision（相同route也递增），溢出拒绝以避免ABA旧关闭。
 
-- [ ] 先云端RED：真实登录请求不存在API返回404；default C、A/B/C持久化及重读、错误枚举/大小写键/重复JSON、只读/家庭Cookie/跨家庭/撤权/重绑/版本冲突拒绝且不调用私有接口。
-- [ ] 使用ConfigStore.Transaction及锁后重新认证/授权，审计后仅修改该设备的voice_route。GET只需admin/当前设备授权，PUT另需CanAddDevices；原始资料/密码/绑定/其他设置不修改。
-- [ ] PUT提交成功后发送带版本/绑定的私有disconnect，结果未确认返回真实已保存且disconnectConfirmed=false，不伪装原子回退。GET从Unix真实取当前route，IPC不可用标unknown。IPC后重新授权，避免撤权后泄露。
-- [ ] guard通过WithSnapshot持读锁调用fn；写必须验证route/version与配置匹配且仍有管理权。resolver每次连接重读配置；不存在/损坏不静默C，只有未设置选择缺省C。
-- [ ] 命令层接入Config.VoiceRouteForDevice，在同一既有Unix listener上按精确私有路径分发两handler，不加入公网Handler；没有新监听口/启动器。
-- [ ] 云端专项普通/race、vet/build通过；提交拥有路径；交task reviewer。
+- [x] 先云端RED：真实登录请求不存在API返回404；default C、A/B/C持久化及重读、错误枚举/大小写键/重复JSON、只读/家庭Cookie/跨家庭/撤权/重绑/版本冲突拒绝且不调用私有接口。
+- [x] 使用ConfigStore.Transaction及锁后重新认证/授权，审计后仅修改该设备的voice_route和voice_route_revision。GET只需admin/当前设备授权，PUT另需CanAddDevices；原始资料/密码/绑定/其他设置不修改。
+- [x] PUT提交成功后发送带版本/绑定的私有disconnect，结果未确认返回真实已保存且disconnectConfirmed=false，不伪装原子回退。GET从Unix真实取当前route，IPC不可用标unknown。IPC后重新授权，避免撤权后泄露。
+- [x] guard通过WithSnapshot持读锁调用fn；写必须验证route/version与配置匹配且仍有管理权。resolver每次连接重读配置；不存在/损坏不静默C，只有未设置选择缺省C。
+- [x] 命令层接入Config.VoiceRouteForDevice，在同一既有Unix listener上按精确私有路径分发两handler，不加入公网Handler；没有新监听口/启动器。
+- [x] 云端专项普通/race、vet/build通过；提交拥有路径；交task reviewer。
 
 精确命令：`go test -count=1 ./internal/management -run 'VoiceRoute'`；`go test -race -count=1 ./internal/management -run 'VoiceRoute'`；`go test ./cmd/realtime-output-live`。预期新API行为GREEN，不执行真实配置写入。
 
@@ -81,24 +81,28 @@ func (s *Server) VoiceRouteControlHandler(VoiceRouteGuard) http.Handler
 
 **Interfaces:** 复用共享API契约；类型`VoiceRoute = 'A'|'B'|'C'`。集中`getDeviceVoiceRoute(deviceId)`/`setDeviceVoiceRoute(deviceId,route,version)`；请求路径始终admin，家庭界面无新增入口。
 
-- [ ] 云端RED：响应严格校验路由/设备/版本/active状态、三按钮、PUT→GET回读、持久化不等于取消确认、IPC unknown、重复点击、失败/409后要求刷新、隐藏/401/切设备迟到结果清理。
-- [ ] 简单一块panel展示三个可键盘操作按钮、链路完整名称与A/B完整合成后播放说明；点击前明确当前对话将结束，点击即执行，不再弹额外确认。选中与实际状态分开显示，切换中禁重复。
-- [ ] 编写小型controller沿用敏感生命周期；保存后GET确认selected route/device/version，并结合disconnectConfirmed和当前connection显示“已切换，请重新唤醒”或“选择已保存，旧对话结束尚未确认”。状态可手动刷新，定时读取不发写请求。
-- [ ] 云端npm test/typecheck/build通过，记录来源与产物；提交拥有路径；交task reviewer。
+- [x] 云端RED：响应严格校验路由/设备/版本/active状态、三按钮、PUT→GET回读、持久化不等于取消确认、IPC unknown、重复点击、失败/409后要求刷新、隐藏/401/切设备迟到结果清理。
+- [x] 简单一块panel展示三个可键盘操作按钮、链路完整名称与A/B完整合成后播放说明；点击前明确当前对话将结束，点击即执行，不再弹额外确认。选中与实际状态分开显示，切换中禁重复。
+- [x] 编写小型controller沿用敏感生命周期；保存后GET确认selected route/device/version，并结合disconnectConfirmed和当前connection显示“已切换，请重新唤醒”或“选择已保存，旧对话结束尚未确认”。状态可手动刷新，定时读取不发写请求。
+- [x] 云端npm test/typecheck/build通过，记录来源与产物；提交拥有路径；交task reviewer。
 
 精确命令：在云端网页目录`npm test`、`npm run typecheck`、`npm run build`，预期现有和新增回归均通过。
 
 ### Task 4: 集成审查、云端发布和交接
 
-**Files:** 本计划、设计、验证记录、DEVELOPMENT_HANDOFF、必要产品README；私有发布脚本及产物仅云端。
+**Files:** 本计划、设计、验证记录、DEVELOPMENT_HANDOFF、必要产品README；私有发布执行、运行数据及构建产物仅在云端，Mac只保留代码与不含正文/凭据的审查摘要。
 
-- [ ] 各任务独立规格/质量review后修复范围内重要问题，整批diff作最终架构/权限/取消/前后端契约review。
-- [ ] 云端相关完整Go功能、相关race、vet/build、前端完整测试/类型/构建，冻结公开source；核对实际部署差异，只移入本批拥有路径，保留原Voice MemoryOnly/Speaker等差异。
-- [ ] 隔离真实浏览器验证三按钮及生命周期，使用隔离服务和自动化夹具；不触发正式模型发声或替用户改变链路。
-- [ ] 云端已有空闲状态下保留配置/绑定/记录/记忆/固件/Caddy及其他进程，先发布兼容新字段的Voice，再管理与静态；保持默认C，不自动选择A/B，不刷机。按真实PID/二进制/健康/静态来源核对。
-- [ ] 正式只读确认admin真实GET显示C及语音闲置，家庭与公网私有路径拒绝；实际切换/三路现场音效另列待验证。提交推送main、核对远端和干净工作区，更新交接如实列已实现/部署/自动化/现场边界。
+- [x] 各任务独立规格/质量review后修复范围内重要问题，整批diff作最终架构/权限/取消/前后端契约review。
+- [x] 云端相关完整Go功能、相关race、vet/build、前端完整测试/类型/构建，冻结公开source；核对实际部署差异，只移入本批拥有路径，保留原Voice MemoryOnly/Speaker等差异。
+- [x] 隔离真实浏览器验证三按钮及生命周期，使用隔离服务和自动化夹具；不触发正式模型发声或替用户改变链路。
+- [x] 云端已有空闲状态下保留配置/绑定/记录/记忆/固件/Caddy及其他进程，先发布兼容新字段的Voice，再管理与静态；保持默认C，不自动选择A/B，不刷机。按真实PID/二进制/健康/静态来源核对。
+- [x] 正式只读核对真实授权Unix状态C/idle、匿名admin401与公网私有路径404，更新交接及验证记录；完成部署证据独立复审。
+- [x] 本批实现与文档直接main提交推送，核对远端和干净Git工作区。
+- [ ] 后续现场验收：正式浏览器重登/带Cookie的admin GET，以及微雪真实三路切换、声音、长回答和打断续讲；本批不冒充这些已通过。
 
 ## 执行记录
 
 - 设计已按用户最新选择更新为长期产品能力和立即终止旧会话；先前next-connection提案为已撤销建议。
 - 已先清理经引用核对的Go缓存约3.37GiB，当前服务保持；构建前再次检查磁盘。
+
+- 已完成产品实现、独立审查、云端功能/race/vet/构建与实际组件浏览器检查，详情见[本批验证](../../verification/2026-11-16-admin-voice-routes.md)。三次实际尝试均只读prepare停止，原始保护基线/失败/marker全部保留；namespace、心跳seq与云盾临时SSH名单比较政策经证据/审查修订后，显式同事务续行完成，Voice→管理各重启一次。没有重设基线或回写旧数据。

@@ -2,7 +2,7 @@
 
 当前产品主线为**Go原生Realtime**，以已经验证的语音核心为基础，后续逐项适配旧Go业务模块。默认入口云端18040，Mac只作客户端；后端依赖、运行测试和部署均在云端。先读[开发交接](docs/DEVELOPMENT_HANDOFF.md)与[代码生命周期清单](docs/CODE_LIFECYCLE.md)。
 
-- [管理平台](web/management/README.md)：Vue 3内部后台与家庭网页仅使用真实API，产品mock、样例数据、演示路由与构建开关已删除。支持真实账号、设备、聊天、近期记忆、在线状态、音量/亮度、清除及回执，内部另有操作审计；未接入的写操作不提供模拟表单。网页设备昵称/位置保存是下一项待开发功能。旧审计发布事务的防火墙摘要差异仍未收口，详见[原审计限制](docs/verification/2026-11-11-admin-audit.md)。
+- [管理平台](web/management/README.md)：Vue 3内部后台与家庭网页仅使用真实API，产品mock、样例数据、演示路由与构建开关已删除。支持真实账号、设备、聊天、近期记忆、在线状态、音量/亮度、昵称/位置、清除及回执；内部另有操作审计和长期A/B/C语音链路选择。未接入的写操作不提供模拟表单。当前发布及现场状态见[开发交接](docs/DEVELOPMENT_HANDOFF.md)；旧审计发布事务的防火墙摘要差异仍未收口，详见[原审计限制](docs/verification/2026-11-11-admin-audit.md)。
 
 - 网页已按 **UI UX Pro Max → unslop** 优化：桌面家庭端展开、手机保留底栏，统一扁平图标/文字/状态；真实操作规则不变，见[网页验证](docs/verification/2026-11-11-web-uiux-unslop.md)。
 

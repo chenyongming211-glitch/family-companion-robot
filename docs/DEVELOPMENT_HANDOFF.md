@@ -1,5 +1,16 @@
 # 换电脑开发交接
 
+
+**最新：长期 A/B/C 链路选择已发布（2026-11-16）：** 用户确认长期保留，并选择立即结束旧对话。内部设备“配置”提供 A（Omni 原音→文字→CosyVoice）、B（Fun-ASR→Qwen Plus→同一 CosyVoice）、C（原生语音），按设备持久保存；点击保存后结束该设备旧连接，再次唤醒/按键使用新选择。默认 C、无自动降级；已选择与当前实际分开，PUT→GET 回读，结束未确认保持未知，不自动重发。家庭网页/小程序本批无切换入口。三路共用既有权限、业务工具、记忆、表情、Opus、流控、播放回执和取消；A/B 目前完整合成后播，C 流式，产品不继承历史 120 字/四问限制。无需刷微雪，仍为 2.5.4。
+
+公开实现 `bcfd811` / 测试夹具修正 `a8f418b`，云端功能 1415 PASS/2 已有可选 skip、相关 race163、vet/双构建通过；网页139及类型/构建通过，375/1440 真实组件浏览器、键盘/错误/未知状态通过，hover 对比修至12.31。整批与实际来源独立审查通过，候选保留原 Voice 与 main 的未部署差异；实际 Voice/管理完整相关功能987/895 PASS（各2已有可选skip）、专项 race42/46通过，同字节重构/来源闭包通过。浏览器 TaskSpace15已 finish，隔离服务及仅18808转发关闭，原18791/SSH保留。
+
+实际两服务均为 `product-voice-routes-20261116-r1`：Voice1596637/SHA b940a01a，管理1597057/SHA79be7cf7，管理 static 为该 release/web。Voice先、管理后各重启一次，ready/memory_ready true；四静态HTTP/SHA/no-store通过。只读真实授权Unix/status200确认C/idle，匿名admin401、公网admin/私有路径404；新namespace records/presentation实际均ro。管理重启需重新登录。未重新做正式浏览器带Cookie的admin GET，不把隔离组件结果当该项通过。
+
+发布保留全部原基线/失败/marker：前三次实际尝试均在只读prepare停止；后续补齐namespace宿主映射、心跳checkpoint单调seq证明，区分云盾动态SSH封禁表与静态政策后显式续行成功。原baseline61df保持、result9e319为verified/data_restored=false，四memory项仅ctime变化；配置/绑定/资料/聊天/记忆内容与权限、审计前缀、Caddy、其他服务/current/单元保护保持。只允许规范YJ链成对IPv4/32 TCP/UDP22 REJECT动态增删，其他IPv4字节顺序/IPv6全文不变，核对root云盾PID/exe/starttime/SHA/cgroup；本任务不写防火墙、不停安全服务，不声称全表字节相同。**旧11日审计/防火墙差异事务仍独立未关闭。**
+
+未替用户改A/B、未调用模型探活/播放/USB；真实微雪三路声音、切换结束/再次唤醒、长回答及打断续讲仍待现场，旧回声/待机/连接问题不宣称已修复。下一步先按这组现场流程验证产品入口，勿再用已消费的历史比较窗口或任何发布CLI。私有完整来源/运行证据仅云端 `/home/ubuntu/admin-voice-routes-20261116` 和同名root备份事务，凭据/原音/二进制不入Git。见[本批验证](verification/2026-11-16-admin-voice-routes.md)及[已执行计划](superpowers/plans/2026-11-16-admin-voice-routes.md)。下方15日比较窗口为历史记录。
+
 **23:04最新：B故事和C自我介绍现场通过，所有窗口已恢复（2026-11-15）：** main c551ca4归一化边界修复在B-v6真实引号任务走通，故事/追问完整played，首包7.024/3.331秒；用户整体正常，数字仍仅静默重放验证。C-v6于23:03:53真正进入隔离Omni/Tina，自我介绍0.954秒起播、11.82秒完整I2S played、回执最大0.263秒，用户正常；无回声输入/误打断，未复现不等于已修复。追加“讲个小故事”达到124字触发临时120字`abc_native_text_limit`，取消未知、下发2.22秒后drained，单列测试保护失败，不归模型/网络或设备故障，不能说C故事通过。用户反馈后手动restore，正式两进程/保护配置/admin保持、active0，所有pilot/采集停止，固件/Go本轮未改。protocol9/primary58，C已知主调用约0.003192元另1取消未知，OutputASR样本估0.0046332元、公共监听未知。旧B无按键待机、B播后1006及C漏拦仍未定位；不要复用任何v6 proof/intent。后续统一固定四问及成功问题总API成本，A原偏好被分段、B/C分阶段样本不冒充完整统一矩阵。私有摘要`field-C-v6-intro-success-story-limit.json`，见[当前验证记录](verification/2026-11-15-abc-waveshare-comparison.md)。
 
 **最新B-v5故障修复候选（2026-11-15，覆盖下方开窗状态）：** 22:28自我介绍完整连续（6.860秒首包、13.98秒音频耗14.195秒，回执最大0.230秒，UART无播放中idle），随后三次故事因TTS `100→一百`、省略号索引压缩、破折号变顿号导致字词原稿坐标错配，均无下发。B-v5已手动stop/restore，22:29:44回idle属本次收尾；旧B-v3无按键待机仍未知，C漏拦未修复。UART/TCP均已停止，串口打开后的reset15单列。已最小修复：精确字词保持，合规归一化可用显式整任务PCM边界，首个缺口后不伪造Words/数字内部位置，公共历史/中断及API调用机制不变。三实际元数据静默重放、规格/质量PASS；六包普通/race各976通过/5skip、vet/三构建通过，169编译Go来源165仓库/资产一致、4私有单列。新build v3/pilot SHA0bc258e133b23268f47bcfc9a179d937be509f2ecac6261923443b2121bcec95，证据`repair-task-boundary-v1/`；正式服务/固件未改。B-v6只prepare，新freeze/proof须绑定该候选，等待用户就位后单测故事；不得复用v4/v5 intent。隔离账本protocol9/primary54，B-v5已知主调用约0.033634元、OutputASR样本估0.0046134元、公共监听未知；仍完整缓冲后播，起播延迟本轮未优化。详见[完整结果与限制](verification/2026-11-15-abc-waveshare-comparison.md)。
