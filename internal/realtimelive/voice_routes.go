@@ -9,6 +9,23 @@ import (
 	"net/url"
 )
 
+const voiceRouteTTSModel = "cosyvoice-v3-flash"
+const voiceRouteTTSVoice = "longanyang"
+
+// Presentation follows this connection's generation route. Native configuration
+// remains owned by the common listener and business preflight.
+func (s *Session) voiceRouteFacts() map[string]any {
+	facts := s.cfg.facts()
+	if s.voiceRoute == "A" || s.voiceRoute == "B" {
+		facts["QWEN_VOICE"] = voiceRouteTTSVoice
+		facts["enable_search"] = false
+		if s.voiceRoute == "B" {
+			facts["model"] = "qwen-plus"
+		}
+	}
+	return facts
+}
+
 func parseVoiceRoute(route string) (string, error) {
 	if route == "" {
 		return "C", nil
@@ -111,7 +128,7 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 		return nil
 	}
 	var audit *intent
-	c := voicecompare.Client{Key: s.cfg.Key, RealtimeURL: s.cfg.URL, InferenceURL: s.cfg.ASRURL, TextURL: textURL.String(), TTSModel: "cosyvoice-v3-flash", Voice: "longanyang", BeforeSubmit: allowed}
+	c := voicecompare.Client{Key: s.cfg.Key, RealtimeURL: s.cfg.URL, InferenceURL: s.cfg.ASRURL, TextURL: textURL.String(), TTSModel: voiceRouteTTSModel, Voice: voiceRouteTTSVoice, BeforeSubmit: allowed}
 	c.BeforeCall = func(stage string, _ float64) error {
 		if err := allowed(); err != nil {
 			return err

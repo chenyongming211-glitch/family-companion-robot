@@ -382,7 +382,7 @@ func (s *Session) updateControlContext(rt *liveTurn, result ControlResult, err e
 }
 
 func (s *Session) sessionFacts() map[string]any {
-	facts := s.cfg.facts()
+	facts := s.voiceRouteFacts()
 	if w, ok := s.wire.(*xiaozhiWire); ok && w.expression && s.cfg.ExpressionsEnabled && s.ownerErr == nil && s.rec.owner.ClientType == "xiaozhi" && s.rec.owner.DeviceID != "" {
 		facts["screen_expression_emotions"] = append([]string(nil), expressionEmotions[:]...)
 	}

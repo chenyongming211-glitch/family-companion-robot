@@ -14,7 +14,7 @@
 2. 每台设备保存一项链路选择，缺省 C，重启服务后保留。管理员必须具有该设备的管理权限。保存后 GET 回读确认；读写均重新核对当前绑定/权限，并记录审计。
 3. 保存目标链路后立即通过私有控制通道结束该设备现有语音会话，取消旧生成及下发，再次唤醒/按键建立新连接使用新链路。同一连接的链路固定；没有现有连接时无需结束。页面分开显示“已选择”和“当前连接实际链路”，未查询成功不能显示已生效。若配置已保存而终止连接未确认，应明确显示保存成功/生效未确认，不自动重发或回退。
 4. 三条链路复用公共设备和会话通道，不改固件、不重写配网、不在按钮操作时启动独立进程或调用模型、不自动切到其他链路。A/B/C属于长期产品选择，不移入一次性窗口、历史调用账本或测试标志；公共控制、音乐、近期记忆、表情、播放回执与取消仍按原业务前置/会话规则工作。A/B使用现有25秒输入、60秒输出等级的有界资源，不沿用试验的10秒输入、120字及四问保护。A/B 保留先收齐并校验 TTS 后播放的现有方式；页面说明其等待特征和当前能力边界。
-5. 配置持久化归管理端；实际链路和连接状态归语音服务。私有通道仅提供按当前授权和绑定核对的状态查询、旧会话终止；不向公网提供私有控制接口或模型密钥。新增可选设备字段voice_route，只允许A/B/C，旧配置缺省C。旧配置的其他字段保持。
+5. 配置持久化归管理端；实际链路和连接状态归语音服务。私有通道仅提供按当前授权和绑定核对的状态查询、旧会话终止；不向公网提供私有控制接口或模型密钥。新增可选设备字段voice_route，只允许A/B/C，旧配置缺省C；同时保留可选voice_route_revision（uint64，0到2^53-1，旧配置缺省0）。每次接受显式PUT递增revision（相同选择也递增），溢出拒绝，避免A→B→A令旧关闭请求重新有效。旧配置的其他字段保持。
 6. 遵循现有取消、输出失效、真实播放确认、授权及数据隔离规则；不得把未播全文写成已播上下文。保留原正式功能与既有失败记录，不把本次入口完成写成稳定性缺陷已修复。
 
 ## 验证与发布
@@ -36,7 +36,7 @@
 
 ## 接口与职责
 
-- 管理API：`GET/PUT /api/admin/device-voice-route/:deviceId`。PUT严格接受`{"route":"A","version":"<sha256>"}`；版本由设备ID、当前绑定与所选链路确定。读需内部账号及当前设备授权；写还需家庭设备管理权限。
+- 管理API：`GET/PUT /api/admin/device-voice-route/:deviceId`。PUT严格接受`{"route":"A","version":"<sha256>"}`；版本由设备ID、当前绑定、所选链路与持久化选择revision确定；均为公开选择事实，不含密钥。读需内部账号及当前设备授权；写还需家庭设备管理权限。
 - 返回：`deviceId, selectedRoute, activeRoute (A/B/C或null), connection (idle/connecting/active/unknown), version, canSwitch`。PUT返回`disconnectConfirmed`。保存后前端再GET核对，不把`unknown`当成功。
 - 语音配置回调：`VoiceRouteForDevice func(string) (string,error)`，命令层用管理配置的resolver接入，业务包不反向依赖management；没有配置选择才缺省C，读取/损坏失败不偷偷回退。
 - 私有接口：同一个既有Unix listener分发`POST /voice-route/status`与`POST /voice-route/disconnect`，不挂到公网Handler。共享`VoiceRouteClaim`包含actor/device/family/binding/version/deadline/route，voice调用注入的`VoiceRouteGuard`在持有管理配置读锁时重查权限/当前选择，旧版本请求不能结束新选择的连接。

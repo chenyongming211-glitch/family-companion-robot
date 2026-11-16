@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"familyrobot/internal/realtimelive"
 	"net/http"
 	"os"
@@ -11,6 +12,50 @@ import (
 	"testing"
 	"time"
 )
+
+func TestVoiceRouteResolverBoundsHeldConfigLock(t *testing.T) {
+	_, _, id, path := voiceRouteFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- (ConfigStore{path}).WithSnapshot(context.Background(), func(Config) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case err := <-lockDone:
+		t.Fatal("hold config lock", err)
+	}
+	resolved := make(chan struct{})
+	var route string
+	var err error
+	started := time.Now()
+	go func() {
+		route, err = NewVoiceRouteResolver(path)(id)
+		close(resolved)
+	}()
+	defer func() {
+		close(release)
+		if err := <-lockDone; err != nil {
+			t.Error("release config lock", err)
+		}
+		<-resolved
+	}()
+	select {
+	case <-resolved:
+		if !errors.Is(err, context.DeadlineExceeded) || route != "" {
+			t.Fatalf("held lock must fail without route fallback: route=%q err=%v", route, err)
+		}
+		if elapsed := time.Since(started); elapsed < 1900*time.Millisecond {
+			t.Fatal("resolver deadline is shorter than two seconds", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("resolver retained admission beyond its config-lock deadline")
+	}
+}
 
 func voiceRouteFixture(t *testing.T) (*Server, *http.Cookie, string, string) {
 	t.Helper()

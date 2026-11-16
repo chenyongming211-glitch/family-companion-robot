@@ -5,16 +5,122 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"familyrobot/internal/realtimestate"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestVoiceRouteProductFactsPromptAndReady(t *testing.T) {
+	product, err := realtimestate.LoadProduct("../../config/product-identity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the common listener opens this isolated provider; no generation occurs.
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteJSON(map[string]any{"type": "session.created"}); err != nil {
+			return
+		}
+		for {
+			var event map[string]any
+			if err := conn.ReadJSON(&event); err != nil {
+				return
+			}
+			if event["type"] == "session.update" {
+				if err := conn.WriteJSON(map[string]any{"type": "session.updated", "session": map[string]any{"enable_search": false}}); err != nil {
+					return
+				}
+			}
+		}
+	}))
+	defer provider.Close()
+	for _, route := range []string{"A", "B", "C"} {
+		t.Run(route, func(t *testing.T) {
+			search := true
+			cfg := Config{Model: "qwen3-omni-flash-realtime", Voice: "Tina", Search: &search, URL: "ws" + strings.TrimPrefix(provider.URL, "http"), Synthetic: true, VoiceRouteForDevice: func(string) (string, error) { return route, nil }}
+			server := NewServer(cfg, product, t.TempDir(), "route-facts")
+			dir, err := server.sessionDirectory(Ownership{DeviceID: memoryDeviceA, ClientType: "fixture"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ws, client := testSocket(t)
+			session := server.newSession(ws, dir)
+			defer session.cancel()
+			originalFacts := cfg.facts()
+			listenerFacts := session.listener.cfg.facts()
+			if listenerFacts["model"] != cfg.Model || listenerFacts["QWEN_VOICE"] != cfg.Voice || listenerFacts["enable_search"] != false {
+				t.Error("common listener lost its native configuration")
+			}
+			facts := session.sessionFacts()
+			model, voice, enabled := cfg.Model, cfg.Voice, true
+			if route != "C" {
+				voice, enabled = "longanyang", false
+			}
+			if route == "B" {
+				model = "qwen-plus"
+			}
+			if facts["model"] != model || facts["QWEN_VOICE"] != voice || facts["enable_search"] != enabled {
+				t.Errorf("route presentation mismatch: %v", facts)
+			}
+			prompt, err := product.InstructionsFor(facts, `{"recent_turns":[]}`, true, time.Unix(0, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(prompt, "底层语音模型："+model+"；") || (route == "B" && strings.Contains(prompt, cfg.Model)) {
+				t.Error("product prompt has wrong route model identity")
+			}
+			if strings.Contains(prompt, "当前可使用内置联网搜索") != enabled {
+				t.Error("product prompt has wrong search instruction")
+			}
+			snapshot, err := product.Snapshot(facts, `{"recent_turns":[]}`, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := "not_connected"
+			if enabled {
+				status = "available"
+			}
+			if object(object(snapshot["capabilities"])["live_information"])["status"] != status {
+				t.Error("product snapshot advertises wrong search capability")
+			}
+			if route == "C" && !reflect.DeepEqual(facts, originalFacts) {
+				t.Error("C product facts changed from native baseline")
+			}
+			done := make(chan error, 1)
+			go func() { done <- session.Run() }()
+			t.Cleanup(func() {
+				client.Close()
+				if err := <-done; err != nil {
+					t.Error("session ended unexpectedly", err)
+				}
+			})
+			client.SetReadDeadline(time.Now().Add(3 * time.Second))
+			var ready map[string]any
+			if err := client.ReadJSON(&ready); err != nil {
+				t.Fatal(err)
+			}
+			if ready["type"] != "ready" || ready["model"] != model || ready["voice"] != voice {
+				t.Errorf("ready misrepresents route: %v", ready)
+			}
+			if !reflect.DeepEqual(server.cfg.facts(), originalFacts) || !reflect.DeepEqual(session.cfg.facts(), originalFacts) || !reflect.DeepEqual(session.listener.cfg.facts(), listenerFacts) || !search {
+				t.Error("route presentation mutated native server/session/listener configuration")
+			}
+		})
+	}
+}
 
 func TestVoiceRouteSelectionFixedAndReadFailure(t *testing.T) {
 	selected := "A"

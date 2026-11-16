@@ -389,7 +389,8 @@ func (s *Session) Run() (err error) {
 	}
 	defer codec.Close()
 	_, device := s.wire.(*xiaozhiWire)
-	ready := map[string]any{"type": "ready", "model": s.cfg.Model, "voice": s.cfg.Voice}
+	facts := s.voiceRouteFacts()
+	ready := map[string]any{"type": "ready", "model": facts["model"], "voice": facts["QWEN_VOICE"]}
 	if s.cfg.MemoryOnly {
 		ready["speaker_test"] = true
 		ready["speaker_enabled"] = s.cfg.Speaker != nil

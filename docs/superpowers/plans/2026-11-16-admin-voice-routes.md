@@ -44,7 +44,7 @@ func (s *Server) VoiceRouteControlHandler(VoiceRouteGuard) http.Handler
 // management新增：NewVoiceRouteGuard(path string) realtimelive.VoiceRouteGuard
 ```
 
-网页API `GET/PUT /api/admin/device-voice-route/:deviceId`，PUT精确JSON键`route,version`。响应 `deviceId,selectedRoute,activeRoute,connection,version,canSwitch`，PUT额外`disconnectConfirmed`；GET私有服务不可用返回`activeRoute:null,connection:unknown`并保留真实已选配置。私有POST `/voice-route/status`、`/voice-route/disconnect`接受共享claim。route严格A/B/C；缺省C；version为公开选择/绑定事实SHA256，不包含密钥。
+网页API `GET/PUT /api/admin/device-voice-route/:deviceId`，PUT精确JSON键`route,version`。响应 `deviceId,selectedRoute,activeRoute,connection,version,canSwitch`，PUT额外`disconnectConfirmed`；GET私有服务不可用返回`activeRoute:null,connection:unknown`并保留真实已选配置。私有POST `/voice-route/status`、`/voice-route/disconnect`接受共享claim。route严格A/B/C；缺省C；version为公开选择/当前绑定事实及持久化选择revision的SHA256，不包含密钥。DeviceConfig另存可选`voice_route_revision`（uint64，0到2^53-1，历史缺省0）；每次接受显式PUT均递增（包括相同route），溢出拒绝，防止A→B→A旧请求再次有效。
 
 ### Task 1: 长期语音生成与私有连接控制
 
@@ -64,7 +64,7 @@ func (s *Server) VoiceRouteControlHandler(VoiceRouteGuard) http.Handler
 
 **Files:** `internal/management/config.go`,`server.go`；新增`voice_routes.go`,`voice_routes_test.go`；`cmd/realtime-output-live/main.go`的配置和Unix handler组合；相关CLI测试。
 
-**Interfaces:** 消费共享claim/state/guard；产出GET/PUT响应及resolver/guard函数。DeviceConfig新增可选`VoiceRoute string json:voice_route,omitempty`，ValidateConfig拒绝未知route，历史配置缺省C。版本仅用id/binding/route事实。
+**Interfaces:** 消费共享claim/state/guard；产出GET/PUT响应及resolver/guard函数。DeviceConfig新增可选`VoiceRoute string json:voice_route,omitempty`及`VoiceRouteRevision uint64 json:voice_route_revision,omitempty`；ValidateConfig拒绝未知route和超过2^53-1的revision，历史配置缺省C/revision0。版本仅用id/binding/route/revision公开事实；每次接受PUT递增revision（相同route也递增），溢出拒绝以避免ABA旧关闭。
 
 - [ ] 先云端RED：真实登录请求不存在API返回404；default C、A/B/C持久化及重读、错误枚举/大小写键/重复JSON、只读/家庭Cookie/跨家庭/撤权/重绑/版本冲突拒绝且不调用私有接口。
 - [ ] 使用ConfigStore.Transaction及锁后重新认证/授权，审计后仅修改该设备的voice_route。GET只需admin/当前设备授权，PUT另需CanAddDevices；原始资料/密码/绑定/其他设置不修改。

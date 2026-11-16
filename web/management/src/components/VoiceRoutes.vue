@@ -51,6 +51,7 @@ onBeforeUnmount(() => {unsubscribe(); document.removeEventListener("visibilitych
 .voice-routes { margin-top: 24px; }
 .voice-route-options { display: grid; gap: 12px; margin: 20px 0; }
 .voice-route-options button { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; padding: 16px; text-align: left; white-space: normal; overflow-wrap: anywhere; background: var(--surface, #fff); color: var(--text); border: 1px solid var(--line); }
+.voice-route-options button:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
 .voice-route-options button[aria-pressed="true"] { border-color: var(--accent, #3267d6); box-shadow: inset 3px 0 var(--accent, #3267d6); }
 .voice-route-options button:focus-visible { outline: 3px solid var(--accent, #3267d6); outline-offset: 3px; }
 .voice-route-options span { font-weight: normal; line-height: 1.6; }

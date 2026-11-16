@@ -80,8 +80,10 @@ func voiceRouteView(c Config, actor, id string, now time.Time) (DeviceVoiceRoute
 }
 func NewVoiceRouteResolver(path string) func(string) (string, error) {
 	return func(id string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 		var route string
-		e := (ConfigStore{path}).WithSnapshot(context.Background(), func(c Config) error { var e error; route, e = selectedVoiceRoute(c, id); return e })
+		e := (ConfigStore{path}).WithSnapshot(ctx, func(c Config) error { var e error; route, e = selectedVoiceRoute(c, id); return e })
 		return route, e
 	}
 }
