@@ -186,7 +186,11 @@ func TestAdminMemoryClearRealUnixStoreAndFreshGuard(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s, family, id, path := settingsFixture(t)
 			admin := login(t, s, "admin", "alice")
-			r, snapshotPath, _ := memoryFixture(t)
+			r, snapshotPath, snapshot := memoryFixture(t)
+			// This case opens the real store, whose seven-day retention uses the
+			// current clock. Keep the fixture live before testing denied clears.
+			snapshot["updated_at"] = time.Now().UTC()
+			writeMemoryFixture(t, snapshotPath, snapshot)
 			s.opts.RecordsPath = r.Root
 			s.reader.Root = r.Root
 			archive := filepath.Join(r.Root, "source-a", "session.json")
