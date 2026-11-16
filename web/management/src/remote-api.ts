@@ -10,6 +10,9 @@ import type {
   DeviceRuntime,
   DeviceSettings,
   DeviceSettingsInput,
+  DeviceVoiceRoute,
+  VoiceRoute,
+  VoiceRouteReceipt,
   DeviceFirmware,
   FirmwareUpgradeInput,
   ControlInput,
@@ -58,6 +61,23 @@ function checkedDeviceSettings(id: string, value: DeviceSettings): DeviceSetting
       typeof value.location !== "string" || typeof value.version !== "string" ||
       !/^[a-f0-9]{64}$/.test(value.version) || typeof value.canEdit !== "boolean")
     throw new ApiError("invalid_settings", "设备设置响应未核实，请重新读取。");
+  return value;
+}
+
+const voiceRoute = (value: unknown): value is VoiceRoute => value === "A" || value === "B" || value === "C";
+function checkedVoiceRoute<T extends DeviceVoiceRoute>(id: string, value: T, receipt = false): T {
+  const keys = "deviceId selectedRoute activeRoute connection version canSwitch" + (receipt ? " disconnectConfirmed" : "");
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).sort().join(",") !== keys.split(" ").sort().join(",") ||
+      value.deviceId !== id || !voiceRoute(value.selectedRoute) ||
+      !(value.activeRoute === null || voiceRoute(value.activeRoute)) ||
+      !["idle", "connecting", "active", "unknown"].includes(value.connection) ||
+      (["idle", "unknown"].includes(value.connection) && value.activeRoute !== null) ||
+      (value.connection === "active" && value.activeRoute === null) ||
+      typeof value.version !== "string" || !/^[a-f0-9]{64}$/.test(value.version) ||
+      typeof value.canSwitch !== "boolean" ||
+      (receipt && (!("disconnectConfirmed" in value) || typeof value.disconnectConfirmed !== "boolean")))
+    throw new ApiError("invalid_voice_route", "语音链路响应未核实，请重新读取。");
   return value;
 }
 
@@ -188,6 +208,18 @@ export function createRemoteApi(fetcher: typeof fetch = globalThis.fetch) {
     return request(filter.scope ?? "admin", `chats?${params}`);
   }
   return {
+    async getDeviceVoiceRoute(id: string, signal?: AbortSignal) {
+      return checkedVoiceRoute(id, await request<DeviceVoiceRoute>("admin", `device-voice-route/${encodeURIComponent(id)}`, {signal}));
+    },
+    async setDeviceVoiceRoute(id: string, route: VoiceRoute, version: string, signal?: AbortSignal) {
+      if (!voiceRoute(route) || !/^[a-f0-9]{64}$/.test(version))
+        throw new ApiError("invalid_voice_route", "语音链路选择未核实，请重新读取。");
+      const result = checkedVoiceRoute(id, await request<VoiceRouteReceipt>("admin", `device-voice-route/${encodeURIComponent(id)}`, {
+        method: "PUT", body: JSON.stringify({route, version}), signal,
+      }), true);
+      if (result.selectedRoute !== route) throw new ApiError("invalid_voice_route", "保存的语音链路未核实，请重新读取。");
+      return result;
+    },
     async getDeviceFirmware(id: string, scope: Scope, signal?: AbortSignal) {
       return checkedFirmware(id, await request<DeviceFirmware>(scope, `device-firmware/${encodeURIComponent(id)}`, {signal}));
     },

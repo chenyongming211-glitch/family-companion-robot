@@ -87,6 +87,16 @@ export type DeviceSettings = {
   canEdit: boolean;
 };
 export type DeviceSettingsInput = Pick<DeviceSettings, "name" | "location" | "version">;
+export type VoiceRoute = "A" | "B" | "C";
+export type DeviceVoiceRoute = {
+  deviceId: string;
+  selectedRoute: VoiceRoute;
+  activeRoute: VoiceRoute | null;
+  connection: "idle" | "connecting" | "active" | "unknown";
+  version: string;
+  canSwitch: boolean;
+};
+export type VoiceRouteReceipt = DeviceVoiceRoute & { disconnectConfirmed: boolean };
 export type RuntimeField = "volume" | "brightness";
 export type ControlInput = { field: RuntimeField; value: number; boot: string };
 export type DeviceRuntime = {
