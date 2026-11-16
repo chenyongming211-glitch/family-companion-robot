@@ -36,6 +36,7 @@ type liveTurn struct {
 	expressionCancel        context.CancelFunc
 }
 type Session struct {
+	voiceRoute       string        // Immutable after authenticated session setup.
 	music            *sessionMusic // Session.mu; discarded with this authenticated connection.
 	ws               *websocket.Conn
 	wire             sessionWire

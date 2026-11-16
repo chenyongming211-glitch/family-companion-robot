@@ -55,7 +55,7 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 		if ev.Type != "session.created" {
 			return errors.New("missing native session")
 		}
-		session := map[string]any{"modalities": []string{"text"}, "turn_detection": nil, "input_audio_transcription": nil, "instructions": prompt, "enable_search": false, "max_tokens": 256, "tools": []any{}, "audio": map[string]any{"input": map[string]any{"format": map[string]any{"type": "pcm", "sample_rate": 16000, "sample_format": "s16le", "channels": 1, "packing": "interleaved", "channel_layout": "mono"}}}}
+		session := map[string]any{"modalities": []string{"text"}, "turn_detection": nil, "input_audio_transcription": nil, "instructions": prompt, "enable_search": false, "max_tokens": c.limits().tokens, "tools": []any{}, "audio": map[string]any{"input": map[string]any{"format": map[string]any{"type": "pcm", "sample_rate": 16000, "sample_format": "s16le", "channels": 1, "packing": "interleaved", "channel_layout": "mono"}}}}
 		if e = s.send(map[string]any{"type": "session.update", "session": session}); e != nil {
 			return e
 		}
@@ -125,12 +125,12 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 			}
 			switch ev.Type {
 			case "response.text.delta":
-				if done || len(delta)+len(ev.Delta) > 480 {
+				if done || len(delta)+len(ev.Delta) > c.limits().textRunes*4 {
 					return errors.New("native reply limit exceeded")
 				}
 				delta += ev.Delta
 			case "response.text.done":
-				if done || !boundedText(ev.Text, 120) || delta != "" && delta != ev.Text {
+				if done || !boundedText(ev.Text, c.limits().textRunes) || delta != "" && delta != ev.Text {
 					return errors.New("invalid native complete text")
 				}
 				text = ev.Text
@@ -230,6 +230,11 @@ func (c Client) asr(ctx context.Context, pcm []byte) (text string, call Call, er
 		}
 		for begin := 0; begin < len(pcm); begin += 3200 {
 			end := min(begin+3200, len(pcm))
+			if c.BeforeSubmit != nil {
+				if e = c.BeforeSubmit(); e != nil {
+					return e
+				}
+			}
 			if s.WriteMessage(websocket.BinaryMessage, pcm[begin:end]) != nil {
 				return errors.New("ASR write failed")
 			}
@@ -243,7 +248,7 @@ func (c Client) asr(ctx context.Context, pcm []byte) (text string, call Call, er
 				return e
 			}
 			if ev.Header.Event == "task-finished" {
-				if !boundedText(text, 512) {
+				if !boundedText(text, c.limits().asrRunes) {
 					return errors.New("missing ASR final text")
 				}
 				return nil
@@ -258,15 +263,15 @@ func (c Client) asr(ctx context.Context, pcm []byte) (text string, call Call, er
 					Heartbeat bool   `json:"heartbeat"`
 				} `json:"sentence"`
 			}
-			if json.Unmarshal(ev.Payload.Output, &out) != nil || len(out.Sentence.Text) > 2048 {
+			if json.Unmarshal(ev.Payload.Output, &out) != nil || len(out.Sentence.Text) > c.limits().asrRunes*4 {
 				return errors.New("invalid ASR result")
 			}
 			if out.Sentence.Final && !out.Sentence.Heartbeat {
-				if !boundedText(out.Sentence.Text, 512) {
+				if !boundedText(out.Sentence.Text, c.limits().asrRunes) {
 					return errors.New("empty ASR final")
 				}
 				text += out.Sentence.Text
-				if !boundedText(text, 512) {
+				if !boundedText(text, c.limits().asrRunes) {
 					return errors.New("ASR text limit exceeded")
 				}
 			}
@@ -277,7 +282,7 @@ func (c Client) asr(ctx context.Context, pcm []byte) (text string, call Call, er
 
 func (c Client) llm(ctx context.Context, prompt, input string) (text string, call Call, err error) {
 	call, err = c.call(ctx, "llm", .05, func(usage *map[string]any) error {
-		body, _ := json.Marshal(map[string]any{"model": "qwen-plus", "enable_thinking": false, "enable_search": false, "stream": false, "max_tokens": 256, "messages": []any{map[string]any{"role": "system", "content": prompt}, map[string]any{"role": "user", "content": input}}})
+		body, _ := json.Marshal(map[string]any{"model": "qwen-plus", "enable_thinking": false, "enable_search": false, "stream": false, "max_tokens": c.limits().tokens, "messages": []any{map[string]any{"role": "system", "content": prompt}, map[string]any{"role": "user", "content": input}}})
 		req, e := http.NewRequestWithContext(ctx, http.MethodPost, c.TextURL, bytes.NewReader(body))
 		if e != nil {
 			return errors.New("invalid text request")
@@ -285,6 +290,11 @@ func (c Client) llm(ctx context.Context, prompt, input string) (text string, cal
 		req.Header.Set("Authorization", "Bearer "+c.Key)
 		req.Header.Set("Content-Type", "application/json")
 		h := http.Client{Timeout: 35 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		if c.BeforeSubmit != nil {
+			if e = c.BeforeSubmit(); e != nil {
+				return e
+			}
+		}
 		resp, e := h.Do(req)
 		if e != nil {
 			return errors.New("text request failed")
@@ -317,7 +327,7 @@ func (c Client) llm(ctx context.Context, prompt, input string) (text string, cal
 			return errors.New("invalid text choice count")
 		}
 		choice := v.Choices[0]
-		if choice.Finish != "stop" || choice.Message.Role != "assistant" || len(choice.Message.Tools) != 0 || len(choice.Message.Function) > 0 && string(choice.Message.Function) != "null" || !boundedText(choice.Message.Content, 120) {
+		if choice.Finish != "stop" || choice.Message.Role != "assistant" || len(choice.Message.Tools) != 0 || len(choice.Message.Function) > 0 && string(choice.Message.Function) != "null" || !boundedText(choice.Message.Content, c.limits().textRunes) {
 			return errors.New("incomplete or unsafe text response")
 		}
 		text = strings.TrimSpace(choice.Message.Content)

@@ -21,25 +21,26 @@ import (
 )
 
 type Server struct {
-	connectionLog     *log.Logger // Set before serving; correlation logs only.
-	clearing          map[string]bool
-	clearWG           sync.WaitGroup
-	stopping          bool
-	mu                sync.Mutex
-	tickets           map[string]ticketBinding
-	devices           *voiceidentity.Store
-	memory            *recordstore.Store
-	memoryErr         error
-	initErr           error
-	leases            map[string]*sessionLease
-	cfg               Config
-	product           *realtimestate.Product
-	profiles          *deviceprofile.Store
-	root, build       string
-	run               func(*websocket.Conn, string)
-	runDevice         func(*Session)
-	diagnosticClaimed bool
-	diagnosticCapture *audioDiagnostics
+	connectionLog      *log.Logger // Set before serving; correlation logs only.
+	clearing           map[string]bool
+	routeDisconnecting map[string]bool
+	clearWG            sync.WaitGroup
+	stopping           bool
+	mu                 sync.Mutex
+	tickets            map[string]ticketBinding
+	devices            *voiceidentity.Store
+	memory             *recordstore.Store
+	memoryErr          error
+	initErr            error
+	leases             map[string]*sessionLease
+	cfg                Config
+	product            *realtimestate.Product
+	profiles           *deviceprofile.Store
+	root, build        string
+	run                func(*websocket.Conn, string)
+	runDevice          func(*Session)
+	diagnosticClaimed  bool
+	diagnosticCapture  *audioDiagnostics
 }
 
 func NewServer(cfg Config, product *realtimestate.Product, root, build string) *Server {
@@ -89,6 +90,7 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 // the server. Both entry points use this immutable per-session product copy.
 func (s *Server) newSession(ws *websocket.Conn, dir string) *Session {
 	session := NewSession(ws, s.cfg, dir, s.product)
+	s.bindVoiceRouteSession(session)
 	if session.ownerErr == nil && session.rec.owner.DeviceID != "" && s.product != nil && s.profiles != nil {
 		profile, err := s.profiles.Resolve(session.rec.owner.DeviceID, s.product.Name())
 		if err != nil {
@@ -103,6 +105,7 @@ func (s *Server) newSession(ws *websocket.Conn, dir string) *Session {
 			}
 		}
 	}
+	s.configureVoiceRoute(session)
 	s.attachMemory(session)
 	return session
 }
@@ -123,9 +126,13 @@ func respond(w http.ResponseWriter, status int, v any) {
 // A lease belongs to one authenticated terminal (or the separate legacy scope).
 // Pointer identity prevents an old cleanup from releasing any newer lease.
 type sessionLease struct {
-	key  string
-	conn *websocket.Conn
-	done chan struct{}
+	key      string
+	conn     *websocket.Conn
+	done     chan struct{}
+	released sync.Once
+	route    string
+	revoked  bool
+	cancel   context.CancelFunc
 }
 
 func ownerKey(owner Ownership) string {
@@ -137,7 +144,7 @@ func ownerKey(owner Ownership) string {
 
 // Caller holds s.mu. No network operation is performed under this lock.
 func (s *Server) reserveLocked(key string) *sessionLease {
-	if s.stopping || s.clearing[key] || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
+	if s.stopping || s.clearing[key] || s.routeDisconnecting[key] || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
 		return nil
 	}
 	lease := &sessionLease{key: key, done: make(chan struct{})}
@@ -149,13 +156,14 @@ func (s *Server) releaseLease(lease *sessionLease) {
 	defer s.mu.Unlock()
 	if s.leases[lease.key] == lease {
 		delete(s.leases, lease.key)
-		close(lease.done)
 	}
+	lease.cancel = nil
+	lease.released.Do(func() { close(lease.done) })
 }
 func (s *Server) attachLease(lease *sessionLease, conn *websocket.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopping || s.leases[lease.key] != lease {
+	if s.stopping || lease.revoked || s.leases[lease.key] != lease {
 		return false
 	}
 	lease.conn = conn
@@ -295,7 +303,7 @@ func (s *Server) issueTicket(owner Ownership) (string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := ownerKey(owner)
-	if s.stopping || s.clearing[key] || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
+	if s.stopping || s.clearing[key] || s.routeDisconnecting[key] || len(s.leases) >= s.cfg.MaxSessions || s.leases[key] != nil {
 		return "", http.StatusConflict
 	}
 	now := time.Now()

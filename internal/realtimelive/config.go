@@ -12,6 +12,7 @@ import (
 )
 
 type Config struct {
+	VoiceRouteForDevice            func(string) (string, error)          // Resolve once per authenticated connection; errors deny admission.
 	refreshMusicInput              func(string, string) (string, string) // Trusted live refresh at model input submission.
 	MusicForDevice                 func(string) *music.Catalog           // Fresh scoped source per play; nil result denies access.
 	Music                          *music.Catalog                        // Immutable external adapter; selection stays Session-owned.

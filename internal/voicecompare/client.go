@@ -44,16 +44,56 @@ type Result struct {
 	TaskBoundaries []TaskBoundary
 }
 
+type runLimits struct{ inputSeconds, outputSeconds, promptRunes, textRunes, asrRunes, clauses, tokens int }
+
+var benchmarkLimits = runLimits{10, 30, 4096, 120, 512, 16, 256}
+var conversationLimits = runLimits{25, 60, 32768, 4096, 4096, 128, 4096}
+
+func (c Client) limits() runLimits {
+	if c.product {
+		return conversationLimits
+	}
+	return benchmarkLimits
+}
+
 type Client struct {
+	product                                                  bool
+	BeforeSubmit                                             func() error // Optional live access check immediately before provider writes.
 	Key, RealtimeURL, InferenceURL, TextURL, TTSModel, Voice string
 	BeforeCall                                               func(stage string, reserveYuan float64) error
 	AfterCall                                                func(stage string, usage map[string]any, err error) error
 	RecordEvent                                              func(json.RawMessage) error
 }
 
+// RunConversation is the permanent A/B generation path. Run keeps historical
+// comparison bounds. Both share the exact same provider and terminal validation.
+func (c Client) RunConversation(ctx context.Context, backend, instructions string, pcm []byte) (Result, error) {
+	if backend != "native" && backend != "cascade" {
+		return Result{}, errors.New("unknown conversation backend")
+	}
+	c.product = true
+	r, err := c.Run(ctx, backend, instructions, pcm, "")
+	if err != nil {
+		// A websocket deadline can fire just before the context timer is scheduled.
+		// Preserve cancellation identity instead of exposing a provider-read failure.
+		if ctx.Err() != nil {
+			err = errors.Join(ctx.Err(), err)
+		} else if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			err = errors.Join(context.DeadlineExceeded, err)
+		}
+		return r, conversationError{err}
+	}
+	return r, err
+}
+
+type conversationError struct{ cause error }
+
+func (e conversationError) Error() string { return "conversation generation failed" }
+func (e conversationError) Unwrap() error { return e.cause }
 func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byte, text string) (Result, error) {
+	limits := c.limits()
 	var r Result
-	if c.BeforeCall == nil || c.AfterCall == nil || c.Key == "" || strings.ContainsAny(c.Key, "\r\n") || !utf8.ValidString(instructions) || utf8.RuneCountInString(instructions) > 4096 {
+	if c.BeforeCall == nil || c.AfterCall == nil || c.Key == "" || strings.ContainsAny(c.Key, "\r\n") || !utf8.ValidString(instructions) || utf8.RuneCountInString(instructions) > limits.promptRunes {
 		return r, errors.New("invalid configuration or instructions")
 	}
 	if backend != "tts" && backend != "native" && backend != "cascade" {
@@ -64,7 +104,7 @@ func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byt
 		if len(pcm) != 0 || !boundedText(text, 256) {
 			return r, errors.New("invalid TTS input")
 		}
-	} else if len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > 16000*2*10 || text != "" {
+	} else if len(pcm) == 0 || len(pcm)%2 != 0 || len(pcm) > 16000*2*limits.inputSeconds || text != "" {
 		return r, errors.New("invalid PCM input")
 	}
 	if c.TTSModel == "" || c.Voice == "" || len(c.TTSModel) > 128 || len(c.Voice) > 256 || !safeURL(c.InferenceURL, true) || backend == "native" && !safeURL(c.RealtimeURL, true) || backend == "cascade" && !safeURL(c.TextURL, false) {
@@ -76,6 +116,9 @@ func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byt
 		return r, err
 	}
 	prompt := instructions + "\n请直接简短回答，不超过120个字符；不调用工具，不搜索。"
+	if c.product {
+		prompt = instructions + "\n请自然回答当前问题，保留上下文；不调用工具，不搜索。"
+	}
 	if backend != "tts" {
 		var err error
 		var call Call
@@ -102,19 +145,19 @@ func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byt
 	}
 	r.Text = text
 	clauses := splitClauses(text)
-	if len(clauses) == 0 || len(clauses) > 16 {
+	if len(clauses) == 0 || len(clauses) > limits.clauses {
 		return r, errors.New("too many TTS clauses")
 	}
 	wordPrefix := true
 	for _, clause := range clauses {
-		pcmPart, wordPart, call, err := c.tts(ctx, clause, 24000*2*30-len(r.PCM))
+		pcmPart, wordPart, call, err := c.tts(ctx, clause, 24000*2*limits.outputSeconds-len(r.PCM))
 		if call.Stage != "" {
 			r.Calls = append(r.Calls, call)
 		}
 		if err != nil {
 			return r, err
 		}
-		if len(r.PCM)+len(pcmPart) > 24000*2*30 {
+		if len(r.PCM)+len(pcmPart) > 24000*2*limits.outputSeconds {
 			return r, errors.New("TTS output limit exceeded")
 		}
 		offset := (int64(len(r.PCM)/2) + 23) / 24 // Round up: never confirm the next task early.
@@ -242,6 +285,7 @@ type socket struct {
 	stop         func() bool
 	count, total int
 	record       func(json.RawMessage) error
+	beforeWrite  func() error
 }
 
 func (c Client) dial(ctx context.Context, endpoint string) (*socket, error) {
@@ -260,11 +304,16 @@ func (c Client) dial(ctx context.Context, endpoint string) (*socket, error) {
 	}
 	_ = conn.SetReadDeadline(deadline)
 	_ = conn.SetWriteDeadline(deadline)
-	return &socket{Conn: conn, stop: context.AfterFunc(ctx, func() { _ = conn.Close() }), record: c.RecordEvent}, nil
+	return &socket{Conn: conn, stop: context.AfterFunc(ctx, func() { _ = conn.Close() }), record: c.RecordEvent, beforeWrite: c.BeforeSubmit}, nil
 }
 
 func (s *socket) close() { s.stop(); _ = s.Conn.Close() }
 func (s *socket) send(v any) error {
+	if s.beforeWrite != nil {
+		if err := s.beforeWrite(); err != nil {
+			return err
+		}
+	}
 	if s.WriteJSON(v) != nil {
 		return errors.New("provider write failed")
 	}
