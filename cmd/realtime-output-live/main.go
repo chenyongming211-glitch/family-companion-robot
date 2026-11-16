@@ -37,7 +37,7 @@ func main() {
 	diagnosticDevice := flag.String("diagnostics-device", "", "optional authenticated device ID for one diagnostic session")
 	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
 	memorySocket := flag.String("memory-control-socket", "", "optional root-private memory control Unix socket")
-	managementConfig := flag.String("management-config", "", "private management config required for memory control or family music")
+	managementConfig := flag.String("management-config", "", "private management config for voice routes, memory control or family music")
 	flag.Parse()
 	if (*memorySocket != "" || *musicLibrary != "") && *managementConfig == "" {
 		log.Fatal("memory_control_config_invalid")
@@ -57,6 +57,9 @@ func main() {
 	}
 	if e = configureMusic(&cfg, *musicOnline, *musicLibrary, *managementConfig, *memorySocket); e != nil {
 		log.Fatal("music_config_invalid")
+	}
+	if e = configureVoiceRoutes(&cfg, *managementConfig); e != nil {
+		log.Fatal("voice_route_config_invalid")
 	}
 	cfg.MaxSessions = *maxSessions
 	cfg.MemoryEnabled = *memory
@@ -101,7 +104,7 @@ func main() {
 			log.Fatal("memory_control_listen_failed")
 		}
 		defer memoryListener.Close()
-		servers = append(servers, &http.Server{Handler: app.MemoryControlHandler(management.NewMemoryClearGuard(*managementConfig)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 8192})
+		servers = append(servers, &http.Server{Handler: privateControlHandler(app, *managementConfig), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 8192})
 	}
 	// Bind every requested listener before accepting either client kind. A
 	// failed device bind must not leave a partially configured running process.
@@ -144,4 +147,31 @@ func main() {
 	if e != nil && e != http.ErrServerClosed {
 		log.Fatal("serve_failed")
 	}
+}
+
+// The existing Unix listener is the sole transport for both private controls.
+// Exact dispatch avoids adding any private operation to the public handlers.
+func privateControlHandler(app *realtimelive.Server, configPath string) http.Handler {
+	memory := app.MemoryControlHandler(management.NewMemoryClearGuard(configPath))
+	routes := app.VoiceRouteControlHandler(management.NewVoiceRouteGuard(configPath))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/memory/clear":
+			memory.ServeHTTP(w, r)
+		case "/voice-route/status", "/voice-route/disconnect":
+			routes.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+func configureVoiceRoutes(cfg *realtimelive.Config, configPath string) error {
+	if configPath == "" {
+		return nil
+	}
+	if _, err := management.LoadConfig(configPath); err != nil {
+		return err
+	}
+	cfg.VoiceRouteForDevice = management.NewVoiceRouteResolver(configPath)
+	return nil
 }

@@ -190,6 +190,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.deviceRuntime(w, r, a, parts)
 		return
 	}
+	if resource == "device-voice-route" {
+		s.deviceVoiceRoute(w, r, a, parts)
+		return
+	}
 	if resource == "device-settings" {
 		s.deviceSettings(w, r, a, parts)
 		return

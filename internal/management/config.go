@@ -56,11 +56,13 @@ type FamilyConfig struct {
 	Name string `json:"name"`
 }
 type DeviceConfig struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Model       string `json:"model"`
-	Location    string `json:"location"`
-	DisplayName string `json:"display_name,omitempty"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Model              string `json:"model"`
+	Location           string `json:"location"`
+	DisplayName        string `json:"display_name,omitempty"`
+	VoiceRoute         string `json:"voice_route,omitempty"`
+	VoiceRouteRevision uint64 `json:"voice_route_revision,omitempty"`
 }
 type Binding struct {
 	ID       string     `json:"id"`
@@ -93,6 +95,9 @@ func ValidateConfig(c Config) error {
 	}
 	for _, d := range c.Devices {
 		if !device.MatchString(d.ID) || devices[d.ID] || len(d.Name) > 256 || len(d.Location) > 256 || (d.Model != "微雪 ESP32-S3" && d.Model != "M5 ESP32-S3") {
+			return ErrInvalid
+		}
+		if d.VoiceRouteRevision > maxVoiceRouteRevision || (d.VoiceRoute != "" && !validVoiceRoute(d.VoiceRoute)) {
 			return ErrInvalid
 		}
 		if d.DisplayName != "" {

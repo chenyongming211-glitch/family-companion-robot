@@ -199,6 +199,8 @@ func parseAuditSnapshot(raw []byte) ([]auditEntry, bool, error) {
 }
 func auditClass(action string) (class, description string) {
 	switch action {
+	case "read_voice_route_requested":
+		return "access", "查看语音链路"
 	case "read_conversation", "read_chat", "list_chats", "read_memory", "read_memories", "list_memories":
 		return "access", "查看记录"
 	case "device_firmware_requested":
@@ -207,6 +209,8 @@ func auditClass(action string) (class, description string) {
 		return "device_control", "调整设备"
 	case "clear_memory_requested":
 		return "memory_clear", "清除近期记忆"
+	case "update_voice_route_requested":
+		return "settings", "切换语音链路"
 	case "update_device_settings_requested":
 		return "settings", "修改设备信息"
 	}
@@ -219,6 +223,9 @@ func auditSameTarget(request, result auditEntry) bool {
 	}
 	if request.Action == "clear_memory_requested" {
 		expected = "clear_memory_result"
+	}
+	if request.Action == "update_voice_route_requested" {
+		expected = "update_voice_route_result"
 	}
 	return result.Action == expected && request.OperationID == result.OperationID && request.RecordID == result.RecordID && request.ActorID == result.ActorID && request.Scope == result.Scope && request.DeviceID == result.DeviceID && request.FamilyID == result.FamilyID && request.BindingID == result.BindingID && request.BindingVersion == result.BindingVersion && request.Field == result.Field && auditSameInt(request.Value, result.Value)
 }
@@ -259,7 +266,7 @@ func auditProjection(c Config, viewer string, now time.Time, entries []auditEntr
 	requests := map[string][]auditEntry{}
 	for _, e := range entries {
 		if e.OperationID != "" {
-			if e.Action == "device_control_result" || e.Action == "clear_memory_result" || e.Action == "device_firmware_result" {
+			if e.Action == "device_control_result" || e.Action == "clear_memory_result" || e.Action == "device_firmware_result" || e.Action == "update_voice_route_result" {
 				results[e.OperationID] = append(results[e.OperationID], e)
 			} else {
 				requests[e.OperationID] = append(requests[e.OperationID], e)
@@ -357,6 +364,13 @@ func auditProjection(c Config, viewer string, now time.Time, entries []auditEntr
 			item.Result = "执行失败"
 		default:
 			item.Result = "执行结果未知"
+		}
+		if e.Action == "update_voice_route_requested" {
+			if item.Status == "confirmed" {
+				item.Result = "旧对话结束已确认"
+			} else {
+				item.Result = "旧对话结束未确认"
+			}
 		}
 		rows = append(rows, row{item, e.UTC, i})
 	}
