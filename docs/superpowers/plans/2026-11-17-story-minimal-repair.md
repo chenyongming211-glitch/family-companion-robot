@@ -23,16 +23,18 @@
 
 **Interfaces:** 不改变公开接口。既有 live_native_turn intent 增加受控 terminal 字段；不改变原 state/usage 的含义或 streaming/错误/取消行为。
 
-- [ ] TDD RED：通过真实隔离 WebSocket 服务验证匹配 response.done 的 completed/非 completed、缺失原因和恶意/超长终态字段；日志应保留安全原因及字数，不复制任意 provider payload。直接检查原 intent 文件，不只测试新 helper。
-- [ ] 最小实现：identity 的现有短故事要求明确“直接正文、同一回复推进到行动和结果、不能只停在开场/背景”；保持长故事分段和普通问答语义。Native 在终态身份匹配后先保存受控终态，再沿用原有效/无效响应处理。原因只接受有界协议标识，正文/错误 message 不保存；没有原因用 null 或显式未知。
-- [ ] 云端 GREEN：go test -count=1 ./internal/realtimelive ./internal/realtimestate；新终态专项 -race；相关 vet 与 Voice build。使用实际权限范围，不以 optional skip 冒充验证。
-- [ ] 自审职责/依赖与最终 diff，提交该任务文件，交独立规格/质量审查。报告 RED/GREEN 命令和结果、源 SHA、限制。
+- [x] TDD RED：通过真实隔离 WebSocket 服务验证匹配 response.done 的 completed/非 completed、缺失原因和恶意/超长终态字段；日志应保留安全原因及字数，不复制任意 provider payload。直接检查原 intent 文件，不只测试新 helper。
+- [x] 最小实现：identity 的现有短故事要求明确“直接正文、同一回复推进到行动和结果、不能只停在开场/背景”；保持长故事分段和普通问答语义。Native 在终态身份匹配后先保存受控终态，再沿用原有效/无效响应处理。原因只接受有界协议标识，正文/错误 message 不保存；没有原因用 null 或显式未知。
+- [x] 云端 GREEN：go test -count=1 ./internal/realtimelive ./internal/realtimestate；新终态专项 -race；相关 vet 与 Voice build。使用实际权限范围，不以 optional skip 冒充验证。
+- [x] 自审职责/依赖与最终 diff，提交该任务文件，交独立规格/质量审查。报告 RED/GREEN 命令和结果、源 SHA、限制。
 
 ### Task 2: 有界云端对照、发布与交接
 
 **Files:** 本计划/设计、验证记录、DEVELOPMENT_HANDOFF；合成输入/输出、私有 helper 和产物仅云端。
 
-- [ ] 以当前部署来源最小叠加 Task 1，保持原 source 差异；冻结编译输入与候选 SHA，不整包覆盖 main。
-- [ ] 复用云端合成输入或既有 TTS 合成“讲个小故事吧”，相同模型/音色/上下文对照旧/新提示。最多旧 1 轮、新 2 轮，保存数值 usage 与真实终态，不连接设备、不播放。人工检查人物行动/变化/结果，不用字数直接宣称故事完成。
-- [ ] 若行为证据支持，独立审查后空闲时仅更新 Voice exe；管理/前端/配置/绑定/记忆内容/其他服务与静态防火墙保持，云盾动态 SSH 名单按已核实规则单独核对。保留失败证据，不恢复旧数据、不复用已消费发布 marker。
-- [ ] 核对实际 PID/exe/SHA/build/ready、管理私有只读 C 状态及原 IPC 兼容；现场效果单列待验。更新交接、提交推送 main、核对远端与干净 Git 工作区。
+- [x] 以当前部署来源最小叠加 Task 1，保持原 source 差异；冻结编译输入与候选 SHA，不整包覆盖 main。
+- [x] 复用云端合成输入或既有 TTS 合成“讲个小故事吧”，相同模型/音色/上下文对照旧/新提示。最多旧 1 轮、新 2 轮，保存数值 usage 与真实终态，不连接设备、不播放。人工检查人物行动/变化/结果，不用字数直接宣称故事完成。
+- [x] 若行为证据支持，独立审查后空闲时仅更新 Voice exe；管理/前端/配置/绑定/记忆内容/其他服务与静态防火墙保持，云盾动态 SSH 名单按已核实规则单独核对。保留失败证据，不恢复旧数据、不复用已消费发布 marker。
+- [x] 核对实际 PID/exe/SHA/build/ready、管理私有只读 C 状态及原 IPC 兼容；现场效果单列待验。更新交接、提交推送 main、核对远端与干净 Git 工作区。
+
+执行结果：公开代码 ea7c3a3；实际Voice1847403/SHA29016fe8已发布，管理1597057保持；验证与所有边界见[本批记录](../../verification/2026-11-17-story-minimal-repair.md)。旧提示本次亦完整，原现场问题未复现；真实微雪效果仍待验证，不把提示缓解或自动化PASS当根治。

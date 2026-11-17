@@ -1,6 +1,16 @@
 # 换电脑开发交接
 
 
+**最新：C故事早停最小修正已发布（2026-11-17）：** 用户要求最小化。11月16日23:05真实C故事仅37字/7.86秒、全部I2S played，无打断/超时/断线，上游completed；内部为何早停尚未知。`ea7c3a3` 只在共用 StorytellingGuidance 新增“直接正文、同一回复推进到人物行动和结果”一句，Native 原intent增4个受控终态/字数字段；原因缺失/不认识保持unknown/null，不落provider正文/错误message。未加判定模型/关键词层/自动续讲或重试，不改token/音色/播放窗口/前端/固件，A/B/C继续共用指导。
+
+公开云端两包745PASS/2已有可选SKIP、专项race14、vet/build通过；实际来源保留上批218文件差异，仅叠两生产patch，附等价测试和冻结Python基准资产，602+12PASS/2已有SKIP、race14、vet、225来源/1406依赖及两次同字节构建通过。第一次实际State差分因缺Python测试资产失败已保留，补原基准后只重跑受影响包通过，非产品规则修复。代码与实际来源/Voice-only操作器已独立审查。
+
+云端仅1次TTS合成输入＋1旧/2新原生对照，同qwen3.8/Tina/输入/上下文：旧99字21.92秒也完整，新72字14.96秒和69字16.24秒均有行动结果，均completed/reason=null。**原现场失败未复现，不能证明因果改善或根治**；是提示缓解＋诊断补齐，不是实机PASS。原音/生成正文/凭据/产物仅云端，不入Git/Mac。
+
+实际只更新 Voice：PID1847403、release `story-minimal-20261117-r1`、SHA29016fe8、build `story-minimal-20261117-ea7c3a3`，ready/memory_ready true/idle/NRestarts0。新独立事务首次成功，Voice重启一次，管理1597057/静态/会话/配置绑定/聊天记忆内容/审计前缀/Caddy/其他服务/current保持，三memory项仅ctime；不写防火墙，静态政策保持、云盾临时SSH名单按规范正常增删。pins ee0cbf10/result45d4b3d3 verified，无恢复旧数据/重试。真实Unix/status200确认C/idle、管理两挂载ro、匿名admin401/公网私有404；未操作USB/刷固件/实际路由PUT或设备发声。完整证据仅云端 `/home/ubuntu/story-minimal-20261117` 与同名新root备份事务；不要复用任何已消费发布CLI/marker。旧审计/防火墙历史差异仍独立未关闭。
+
+下一步现场用微雪C讲小故事，核对是否有完整情节，再测打断与续讲；如复发按新terminal字段定位，不能因云端两轮成功宣称已根治。见[本批验证](verification/2026-11-17-story-minimal-repair.md)和[计划](superpowers/plans/2026-11-17-story-minimal-repair.md)。下方16日Voice PID/版本为此前快照；三链路管理仍为该版。
+
 **最新：长期 A/B/C 链路选择已发布（2026-11-16）：** 用户确认长期保留，并选择立即结束旧对话。内部设备“配置”提供 A（Omni 原音→文字→CosyVoice）、B（Fun-ASR→Qwen Plus→同一 CosyVoice）、C（原生语音），按设备持久保存；点击保存后结束该设备旧连接，再次唤醒/按键使用新选择。默认 C、无自动降级；已选择与当前实际分开，PUT→GET 回读，结束未确认保持未知，不自动重发。家庭网页/小程序本批无切换入口。三路共用既有权限、业务工具、记忆、表情、Opus、流控、播放回执和取消；A/B 目前完整合成后播，C 流式，产品不继承历史 120 字/四问限制。无需刷微雪，仍为 2.5.4。
 
 公开实现 `bcfd811` / 测试夹具修正 `a8f418b`，云端功能 1415 PASS/2 已有可选 skip、相关 race163、vet/双构建通过；网页139及类型/构建通过，375/1440 真实组件浏览器、键盘/错误/未知状态通过，hover 对比修至12.31。整批与实际来源独立审查通过，候选保留原 Voice 与 main 的未部署差异；实际 Voice/管理完整相关功能987/895 PASS（各2已有可选skip）、专项 race42/46通过，同字节重构/来源闭包通过。浏览器 TaskSpace15已 finish，隔离服务及仅18808转发关闭，原18791/SSH保留。
