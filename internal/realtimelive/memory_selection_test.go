@@ -125,7 +125,21 @@ func memorySelectionProvider(t *testing.T, args, scenario string, inspect func(m
 		if scenario == "failed" {
 			status = "failed"
 		}
-		c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "r", "status": status, "output": output, "usage": map[string]any{"input_tokens": 12, "output_tokens": 4, "total_tokens": 16}}})
+		usage := map[string]any{"input_tokens": 12, "output_tokens": 4, "total_tokens": 16, "secret": "private-provider-body"}
+		if scenario == "partial_usage" {
+			usage = map[string]any{"input_tokens": 12, "output_tokens": -4, "total_tokens": "16", "private_detail": 999}
+		}
+		response := map[string]any{"id": "r", "status": status, "output": output, "usage": usage, "private_text": "private-provider-body"}
+		if scenario == "missing_usage" {
+			delete(response, "usage")
+		}
+		if scenario == "malformed_terminal" {
+			response["output"] = "invalid"
+		}
+		if scenario == "terminal_identity" {
+			response["id"] = "other"
+		}
+		c.WriteJSON(map[string]any{"type": "response.done", "response": response})
 	}))
 }
 func selectionInput() MemorySelectionInput {
@@ -392,5 +406,140 @@ func TestMemorySelectionInputValidationDoesNotOpenProvider(t *testing.T) {
 				t.Fatal("invalid input opened provider", err)
 			}
 		})
+	}
+}
+
+func memorySelectionIntent(t *testing.T, dir string) map[string]any {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "memory_selection_request-*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatal("missing selection-owned request audit", paths, err)
+	}
+	raw, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private-provider-body") || strings.Contains(string(raw), "private_detail") {
+		t.Fatal("uncontrolled provider fields in audit", string(raw))
+	}
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+func TestMemorySelectionHasIndependentRequestAudit(t *testing.T) {
+	for _, scenario := range []string{"complete", "missing_usage", "partial_usage", "malformed_terminal", "failed", "terminal_identity", "provider_error", "bad_plan"} {
+		t.Run(scenario, func(t *testing.T) {
+			args := `{"intent":"recall","indices":[0]}`
+			if scenario == "bad_plan" {
+				args = `{"intent":"recall","indices":[9]}`
+			}
+			provider := memorySelectionProvider(t, args, scenario, nil, nil)
+			defer provider.Close()
+			dir := t.TempDir()
+			n := NewNative(Config{URL: "ws" + strings.TrimPrefix(provider.URL, "http"), Model: "selection-audit-model", Synthetic: true}, dir)
+			_, err := n.SelectMemory(context.Background(), selectionInput())
+			data := memorySelectionIntent(t, dir)
+			submitted, ok := data["submitted_at"].(string)
+			if data["request_count"] != float64(1) || !ok || submitted == "" || data["model"] != "selection-audit-model" {
+				t.Fatal("missing pre-request facts", data)
+			}
+			expectedState := "completed"
+			if scenario == "malformed_terminal" || scenario == "failed" || scenario == "terminal_identity" || scenario == "provider_error" || scenario == "bad_plan" {
+				expectedState = "failed"
+			}
+			if (err != nil) != (expectedState == "failed") || data["state"] != expectedState {
+				t.Fatal("incorrect final request state", data, err)
+			}
+			expectedUsage := "complete"
+			if scenario == "missing_usage" || scenario == "partial_usage" || scenario == "terminal_identity" || scenario == "provider_error" {
+				expectedUsage = "unknown"
+			}
+			if data["usage_state"] != expectedUsage {
+				t.Fatal("incorrect usage confidence", data)
+			}
+			usage, _ := data["usage"].(map[string]any)
+			if expectedUsage == "complete" && (usage["input_tokens"] != float64(12) || usage["total_tokens"] != float64(16)) {
+				t.Fatal("matching terminal usage lost", data)
+			}
+			if scenario == "partial_usage" && (len(usage) != 1 || usage["input_tokens"] != float64(12)) {
+				t.Fatal("partial numeric evidence not preserved", data)
+			}
+			if elapsed, ok := data["total_ms"].(float64); !ok || elapsed < 0 {
+				t.Fatal("missing elapsed", data)
+			}
+		})
+	}
+}
+func TestMemorySelectionAuditCancellationRetainsUnknownSubmittedRequest(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	provider := memorySelectionProvider(t, `{"intent":"none","indices":[]}`, "", func(map[string]any) { close(started) }, release)
+	defer provider.Close()
+	dir := t.TempDir()
+	n := NewNative(Config{URL: "ws" + strings.TrimPrefix(provider.URL, "http")}, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := n.SelectMemory(ctx, selectionInput()); done <- err }()
+	<-started
+	deadline := time.Now().Add(time.Second)
+	for {
+		files, _ := filepath.Glob(filepath.Join(dir, "memory_selection_request-*.json"))
+		var data map[string]any
+		if len(files) == 1 {
+			raw, _ := os.ReadFile(files[0])
+			json.Unmarshal(raw, &data)
+		}
+		if data["request_count"] == float64(1) {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			close(release)
+			<-done
+			t.Fatal("request audit missing before terminal")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	err := <-done
+	close(release)
+	if err == nil {
+		t.Fatal("canceled request accepted")
+	}
+	data := memorySelectionIntent(t, dir)
+	if data["state"] != "failed" || data["request_count"] != float64(1) || data["usage_state"] != "unknown" || data["outcome"] != "canceled" {
+		t.Fatal("cancellation rewrote unknown usage", data)
+	}
+	n.Close()
+	after := memorySelectionIntent(t, dir)
+	if data["total_ms"] != after["total_ms"] || data["state"] != after["state"] {
+		t.Fatal("later Close changed selection-owned audit", data, after)
+	}
+}
+
+func TestMemorySelectionTerminalHookPreservesCallerAndGenericAudit(t *testing.T) {
+	provider := memorySelectionProvider(t, `{"intent":"none","indices":[]}`, "", nil, nil)
+	defer provider.Close()
+	dir := t.TempDir()
+	n := NewNative(Config{URL: "ws" + strings.TrimPrefix(provider.URL, "http")}, dir)
+	called := 0
+	n.OnToolTerminal = func(response map[string]any) error {
+		called++
+		if response["id"] != "r" {
+			t.Error("hook received wrong identity", response)
+		}
+		return nil
+	}
+	if _, err := n.SelectMemory(context.Background(), selectionInput()); err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 || n.OnToolTerminal == nil {
+		t.Fatal("existing observer lost", called)
+	}
+	own, generic := memorySelectionIntent(t, dir), planningIntent(t, dir)
+	if own["usage_state"] != "complete" || generic["usage_state"] != "complete" || generic["request_count"] != float64(1) {
+		t.Fatal("audit regressed", own, generic)
 	}
 }

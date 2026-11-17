@@ -55,6 +55,11 @@ func (n *Native) completedControlCalls(ctx context.Context, allowed, seen map[st
 			if identity == "" || r["id"] != identity {
 				return nil, errors.New("tool_response_terminal")
 			}
+			if n.OnToolTerminal != nil {
+				if err := n.OnToolTerminal(r); err != nil {
+					return nil, err
+				}
+			}
 			if err := n.recordPlanningUsage(r); err != nil {
 				return nil, err
 			}

@@ -42,6 +42,7 @@ type Native struct {
 	planningStarted  time.Time
 	planningTerminal bool
 	OnSearch         func(map[string]any) error
+	OnToolTerminal   func(map[string]any) error // Set before reading; receives only a matching terminal, before status/output validation.
 	searchConfirmed  bool
 }
 

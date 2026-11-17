@@ -83,7 +83,7 @@ func memorySelectionArguments(raw string, count int) (MemorySelection, error) {
 
 // SelectMemory shares the existing Native tool terminal parser and usage audit.
 // The single budget covers opening, submission and the completed response.
-func (n *Native) SelectMemory(parent context.Context, input MemorySelectionInput) (MemorySelection, error) {
+func (n *Native) SelectMemory(parent context.Context, input MemorySelectionInput) (selection MemorySelection, routeErr error) {
 	none := MemorySelection{Intent: "none", Indices: []int{}}
 	history := controlHistory(input.PlayedContext)
 	if history == "" || strings.TrimSpace(input.CurrentRequest) == "" || len(input.CurrentRequest) > 16384 || !utf8.ValidString(input.CurrentRequest) || len(input.Candidates) == 0 || len(input.Candidates) > 14 {
@@ -102,6 +102,54 @@ func (n *Native) SelectMemory(parent context.Context, input MemorySelectionInput
 	ctx, cancel := context.WithTimeout(parent, MemorySelectionBudget)
 	defer cancel()
 	defer n.Close()
+	// This request owns its billing evidence independently of generic Native
+	// planning instrumentation, which may differ on older deployed runtimes.
+	started := time.Now()
+	audit, err := newIntent(n.dir, "memory_selection_request", n.cfg.Synthetic, n.cfg.MemoryOnly)
+	if err != nil {
+		return none, err
+	}
+	defer func() {
+		outcome := "completed"
+		if ctx.Err() != nil {
+			selection, routeErr = none, ctx.Err()
+			outcome = "canceled"
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				outcome = "deadline_exceeded"
+			}
+		} else if routeErr != nil {
+			outcome = "failed"
+		}
+		state := "completed"
+		if routeErr != nil {
+			state = "failed"
+		}
+		if err := audit.update(map[string]any{"state": state, "outcome": outcome, "total_ms": time.Since(started).Milliseconds()}); err != nil {
+			selection, routeErr = none, err
+		}
+	}()
+	if err := audit.update(map[string]any{"model": n.cfg.Model, "tool_names": []string{memorySelectionName}, "usage_source": "memory_selection", "request_count": 0, "usage_state": "unknown", "usage": nil}); err != nil {
+		return none, err
+	}
+	priorTerminal := n.OnToolTerminal
+	n.OnToolTerminal = func(response map[string]any) error {
+		usage := expressionUsage(response)
+		state := "unknown"
+		_, input := usage["input_tokens"]
+		_, output := usage["output_tokens"]
+		_, total := usage["total_tokens"]
+		if input && output && total {
+			state = "complete"
+		}
+		if err := audit.update(map[string]any{"response_id": response["id"], "usage": usage, "usage_state": state, "response_ms": time.Since(started).Milliseconds()}); err != nil {
+			return err
+		}
+		if priorTerminal != nil {
+			return priorTerminal(response)
+		}
+		return nil
+	}
+	defer func() { n.OnToolTerminal = priorTerminal }()
 	off := false
 	n.cfg = n.cfg.snapshot()
 	n.cfg.Search = &off
@@ -117,6 +165,9 @@ func (n *Native) SelectMemory(parent context.Context, input MemorySelectionInput
 		return none, err
 	}
 	if err = n.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": string(data)}}}}); err != nil {
+		return none, err
+	}
+	if err = audit.update(map[string]any{"state": "submission_outcome_unknown", "request_count": 1, "submitted_at": time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
 		return none, err
 	}
 	if err = n.write(map[string]any{"type": "response.create"}); err != nil {
