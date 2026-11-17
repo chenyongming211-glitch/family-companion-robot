@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+func TestStorytellingGuidanceRequestsBodyActionAndResult(t *testing.T) {
+	// This checks the instruction contract, not whether a model obeys it.
+	for _, required := range []string{"直接从故事正文开始", "同一回复", "人物行动和结果", "不能只停在开场或背景", "长故事可以分段", "普通问答保持简洁"} {
+		if !strings.Contains(StorytellingGuidance, required) {
+			t.Errorf("storytelling instruction missing %q", required)
+		}
+	}
+}
+
 func TestProductStartupCopyAndInstructions(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "product.json")

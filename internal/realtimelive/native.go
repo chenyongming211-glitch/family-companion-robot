@@ -314,7 +314,13 @@ func (n *Native) Stream(ctx context.Context, pcm []byte, emit func(string, []byt
 			}
 		case "response.done":
 			r := object(e["response"])
-			if r["id"] != identity || r["status"] != "completed" || size == 0 {
+			if identity == "" || r["id"] != identity {
+				return errors.New("response_terminal")
+			}
+			if er = audit.update(nativeTerminalEvidence(r, transcript)); er != nil {
+				return er
+			}
+			if r["status"] != "completed" || size == 0 {
 				return errors.New("response_terminal")
 			}
 			search := searchEvidence(r)
@@ -356,6 +362,27 @@ func (n *Native) Stream(ctx context.Context, pcm []byte, emit func(string, []byt
 	}
 	return errors.New("event_limit")
 }
+
+// Keep provider terminal metadata separate from playback/state and never copy
+// free-form errors or payloads. Missing or unrecognized details stay unknown.
+func nativeTerminalEvidence(response map[string]any, transcript string) map[string]any {
+	fields := map[string]any{"terminal_status": "unknown", "terminal_reason": nil, "terminal_details_type": nil, "output_text_chars": utf8.RuneCountInString(transcript)}
+	switch status := response["status"]; status {
+	case "completed", "failed", "incomplete", "cancelled":
+		fields["terminal_status"] = status
+	}
+	details := object(response["status_details"])
+	switch reason := details["reason"]; reason {
+	case "max_output_tokens", "content_filter", "turn_detected", "client_cancelled":
+		fields["terminal_reason"] = reason
+	}
+	switch kind := details["type"]; kind {
+	case "incomplete", "failed", "cancelled":
+		fields["terminal_details_type"] = kind
+	}
+	return fields
+}
+
 func integer(v any) (int64, bool) {
 	n, ok := v.(json.Number)
 	if !ok {
