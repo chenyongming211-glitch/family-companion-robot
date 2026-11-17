@@ -63,7 +63,7 @@ func memoryContext(t *testing.T, s *Session) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return text
+	return s.mergeMemory(text) // Explicit storage projection, not a reply prompt.
 }
 
 func TestMemoryReconnectRestartAndDeviceIsolation(t *testing.T) {
@@ -328,6 +328,9 @@ func TestMemoryReplyPromptUsesRestoredContextAndVerifiedClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.product = product
+	provider := memorySelectionProvider(t, `{"intent":"recall","indices":[0]}`, "", nil, nil)
+	defer provider.Close()
+	s.cfg.URL = "ws" + strings.TrimPrefix(provider.URL, "http")
 	prompts := []string{}
 	s.generate = func(ctx context.Context, id int64, prompt string, pcm []byte, emit func(string, []byte) error) error {
 		prompts = append(prompts, prompt)

@@ -32,6 +32,7 @@ type sessionMemory struct {
 	store  *recordstore.Store
 	base   []memoryTurn
 	loaded bool
+	epoch  uint64 // Invalidates selections submitted before a clear, including failed clears.
 	wake   chan struct{}
 }
 
@@ -271,6 +272,7 @@ func (s *Session) clearMemory(rt *liveTurn) error {
 	}
 	s.mu.Unlock()
 	m.base = nil
+	m.epoch++
 	if err := clearStoredMemory(rt.ctx, m.store, s.rec.owner.DeviceID); err != nil {
 		return err
 	}
@@ -278,25 +280,27 @@ func (s *Session) clearMemory(rt *liveTurn) error {
 	return nil
 }
 
-// mergeMemory is bounded and extractive. It never reads the audit log or sends
-// any extra model request. Historical utterances are data, not tool requests.
-func (s *Session) mergeMemory(text string) string {
+// currentMemoryContext validates a prepared current-session context against the
+// clear boundary. Only selectMemoryContext may introduce old-session evidence.
+func (s *Session) currentMemoryContext(text string) string {
 	m := s.memory
 	if m == nil {
 		return text
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// A newer clear can finish after settle prepared the current-session JSON.
-	// Revalidate that JSON while holding the clear's lock, even with no base.
+	return s.currentMemoryContextLocked(text)
+}
+func (s *Session) currentMemoryContextLocked(text string) string {
 	s.mu.Lock()
 	floor := s.memoryFloor
 	s.mu.Unlock()
+	data, err := decodeObject([]byte(text))
+	if err != nil {
+		return realtimestate.ContextFor(nil)
+	}
+	delete(data, "prior_session_memory")
 	if floor > 0 {
-		data, err := decodeObject([]byte(text))
-		if err != nil {
-			return realtimestate.ContextFor(nil)
-		}
 		kept := []any{}
 		for _, raw := range listMemoryTurns(data["recent_turns"]) {
 			turn, _ := raw.(map[string]any)
@@ -305,18 +309,67 @@ func (s *Session) mergeMemory(text string) string {
 			}
 		}
 		data["recent_turns"] = kept
-		delete(data, "prior_session_memory")
-		encoded, _ := json.Marshal(data)
-		text = string(encoded)
 	}
-	if !m.loaded {
+	encoded, _ := json.Marshal(data)
+	return string(encoded)
+}
+
+// Refresh a trusted prepared reply/planner input after another network wait.
+// Only this connection's still-current selection generation can survive.
+func (s *Session) selectedMemoryContext(text string) string {
+	m := s.memory
+	if m == nil {
 		return text
 	}
-	turns := boundedMemory(m.base, time.Now())
-	if len(turns) == 0 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	data, _ := decodeObject([]byte(text))
+	prior, _ := data["prior_session_memory"].(map[string]any)
+	epoch, ok := integer(prior["selection_epoch"])
+	clean := s.currentMemoryContextLocked(text)
+	if !ok || epoch < 0 || uint64(epoch) != m.epoch {
+		return clean
+	}
+	data, _ = decodeObject([]byte(clean))
+	data["prior_session_memory"] = prior
+	encoded, _ := json.Marshal(data)
+	return string(encoded)
+}
+func (s *Session) refreshReplyInput(history, prefix string) (string, string) {
+	history = s.selectedMemoryContext(history)
+	return s.refreshMusicInput(history, prefix)
+}
+
+// The existing bounded storage projection remains explicit for diagnostics and
+// storage tests. Reply/business-planner inputs never call this raw projection.
+func (s *Session) mergeMemory(text string) string {
+	m := s.memory
+	if m == nil {
 		return text
 	}
-	recent := []memoryTurn{}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	text = s.currentMemoryContextLocked(text)
+	excerpts, recent := s.projectedMemoryLocked()
+	if len(excerpts)+len(recent) == 0 {
+		return text
+	}
+	data, _ := decodeObject([]byte(text))
+	data["prior_session_memory"] = map[string]any{"scope": "current_authenticated_device", "retention_days": 7, "summary_mode": "extractive", "older_excerpts": excerpts, "recent_turns": recent, "recognition_may_differ": true}
+	encoded, _ := json.Marshal(data)
+	return string(encoded)
+}
+func (s *Session) projectedMemoryLocked() (excerpts, recent []memoryTurn) {
+	excerpts, recent = []memoryTurn{}, []memoryTurn{}
+	if !s.memory.loaded {
+		return
+	}
+	turns := []memoryTurn{}
+	for _, turn := range boundedMemory(s.memory.base, time.Now()) {
+		if turn.SessionID != s.rec.owner.SessionID {
+			turns = append(turns, turn)
+		}
+	}
 	budget := 6000
 	start := len(turns)
 	for i := len(turns) - 1; i >= max(0, len(turns)-8); i-- {
@@ -328,18 +381,75 @@ func (s *Session) mergeMemory(text string) string {
 		start = i
 		recent = append([]memoryTurn{turns[i]}, recent...)
 	}
-	excerpts := []memoryTurn{}
 	for _, turn := range turns[max(0, start-6):start] {
 		turn.User, turn.Assistant = clipMemory(turn.User, 100), clipMemory(turn.Assistant, 180)
 		excerpts = append(excerpts, turn)
 	}
-	var base map[string]any
-	if json.Unmarshal([]byte(text), &base) != nil {
-		return text
+	return
+}
+
+func (s *Session) selectMemoryContext(rt *liveTurn, history, text string) (string, error) {
+	m := s.memory
+	m.mu.Lock()
+	history = s.currentMemoryContextLocked(history)
+	epoch := m.epoch
+	excerpts, recent := s.projectedMemoryLocked()
+	candidates := []MemorySelectionCandidate{}
+	for _, turn := range append(excerpts, recent...) {
+		candidates = append(candidates, MemorySelectionCandidate{len(candidates), turn})
 	}
-	base["prior_session_memory"] = map[string]any{"scope": "current_authenticated_device", "retention_days": 7, "summary_mode": "extractive", "older_excerpts": excerpts, "recent_turns": recent, "recognition_may_differ": true}
-	encoded, _ := json.Marshal(base)
-	return string(encoded)
+	m.mu.Unlock()
+	if len(candidates) == 0 || strings.TrimSpace(text) == "" {
+		return history, rt.ctx.Err()
+	}
+	n := NewNative(s.cfg, s.directory)
+	started := time.Now()
+	plan, selectionErr := n.SelectMemory(rt.ctx, MemorySelectionInput{text, history, candidates})
+	// Network waits never own memory.mu. A clear admitted during the request
+	// invalidates the entire result before any selected excerpt is reintroduced.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	history = s.currentMemoryContextLocked(history)
+	if err := rt.ctx.Err(); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	invalid := rt.turn.Cut || rt.turn.ID < s.memoryFloor
+	s.mu.Unlock()
+	outcome := "selected"
+	if selectionErr != nil {
+		outcome = "failed_or_unknown"
+	}
+	if epoch != m.epoch || invalid {
+		outcome = "invalidated"
+	}
+	if plan.Intent == "none" && selectionErr == nil && outcome != "invalidated" {
+		outcome = "none"
+	}
+	if e := s.record("memory_selection", map[string]any{"id": rt.turn.ID, "outcome": outcome, "elapsed_ms": time.Since(started).Milliseconds(), "candidates": len(candidates), "selected": len(plan.Indices)}); e != nil {
+		return "", e
+	}
+	if outcome != "selected" {
+		return history, nil
+	}
+	selected := []memoryTurn{}
+	// Revalidate the whole plan again at the storage boundary, including source
+	// age/identity. Never accept a surviving subset of an invalid plan.
+	encodedPlan, _ := json.Marshal(plan)
+	if _, err := memorySelectionArguments(string(encodedPlan), len(candidates)); err != nil {
+		return history, nil
+	}
+	for _, index := range plan.Indices {
+		turn := candidates[index].Evidence
+		if turn.SessionID == s.rec.owner.SessionID || len(boundedMemory([]memoryTurn{turn}, time.Now())) != 1 {
+			return history, nil
+		}
+		selected = append(selected, turn)
+	}
+	data, _ := decodeObject([]byte(history))
+	data["prior_session_memory"] = map[string]any{"scope": "current_authenticated_device", "retention_days": 7, "selection_intent": plan.Intent, "summary_mode": "selected_extractive", "selected_excerpts": selected, "selection_epoch": epoch, "recognition_may_differ": true}
+	encoded, _ := json.Marshal(data)
+	return string(encoded), nil
 }
 
 func listMemoryTurns(value any) []any { turns, _ := value.([]any); return turns }
@@ -377,6 +487,10 @@ func (s *Session) routeMemory(rt *liveTurn, history string) (string, string, err
 		}
 		if outcome == "verified_saved" {
 			status = "本轮新输入已核实保存到当前设备的有界近期记忆。"
+		}
+		history, err := s.selectMemoryContext(rt, history, text)
+		if err != nil {
+			return "", "", err
 		}
 		return history, "\n本轮用户输入的近期记忆写入回执：" + outcome + "。" + status + "不保证永久记住，不编造保存或删除成功。不要念后台状态，依据已有对话自然回答。\n", nil
 	}

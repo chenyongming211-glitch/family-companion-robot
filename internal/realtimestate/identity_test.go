@@ -129,3 +129,19 @@ func TestScreenExpressionCapabilityRejectsUntrustedFactShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectedMemoryGuidanceDoesNotUseOldRepliesAsTemplates(t *testing.T) {
+	product, err := LoadProduct("../../config/product-identity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := product.InstructionsFor(map[string]any{"device_memory_enabled": true}, ContextFor(nil), true, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"按本轮关联选中", "selected_excerpts", "不是新回答的模板", "不套用旧答案", "不代表历史不存在或已清除"} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("missing guidance %s", required)
+		}
+	}
+}

@@ -95,7 +95,7 @@ func NewSession(ws *websocket.Conn, cfg Config, dir string, product *realtimesta
 	}
 	s.manifest = info
 	s.rec.owner = info.Ownership
-	s.cfg.refreshMusicInput = s.refreshMusicInput
+	s.cfg.refreshMusicInput = s.refreshReplyInput
 	s.generate = s.generateNative
 	s.selectExpression = func(ctx context.Context, input ExpressionInput) ExpressionResult {
 		return SelectExpression(ctx, s.cfg, s.directory, input)
@@ -742,7 +742,7 @@ waitLoop:
 		records = append(records, map[string]any{"id": v.turn.ID, "next_id": rt.turn.ID, "candidate": v.turn.Prefix(), "evidence": realtimestate.PlaybackEvidence(v.turn), "completed": v.turn.Completed, "sent": v.turn.Sent, "asr_input_samples": samples})
 	}
 	s.mu.Unlock()
-	contextText = s.musicContext(s.mergeMemory(contextText))
+	contextText = s.musicContext(s.currentMemoryContext(contextText))
 	for _, r := range records {
 		if e := s.record("settled_playback", r); e != nil {
 			return "", e
@@ -810,6 +810,10 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.fail()
 		return
 	}
+	contextText, memoryReceipt, e := s.routeMemory(rt, contextText)
+	if e != nil {
+		return
+	}
 	prefetch := s.prefetchControls(rt)
 	defer prefetch.close()
 	route, e := s.routeMusic(rt, contextText)
@@ -825,12 +829,8 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.turnError(rt)
 		return
 	}
-	memoryReceipt, controlContext := "", ""
+	controlContext := ""
 	if !route.Handled {
-		contextText, memoryReceipt, e = s.routeMemory(rt, contextText)
-		if e != nil {
-			return
-		}
 		contextText = s.musicContext(contextText)
 		s.expressionContextReady(rt, contextText)
 		if prefetch != nil {
@@ -842,6 +842,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			return
 		}
 	}
+	contextText = s.selectedMemoryContext(contextText)
 	contextText, currentMusicGuidance, musicAllowed := s.musicReplyState(contextText, route)
 	route.Guidance = currentMusicGuidance
 	prompt, e := s.product.InstructionsFor(s.sessionFacts(), contextText, true, time.Now())
