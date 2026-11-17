@@ -159,7 +159,13 @@ func (n *Native) SelectMemory(parent context.Context, input MemorySelectionInput
 	}
 	stop := context.AfterFunc(ctx, func() { n.Close() })
 	defer stop()
-	input.PlayedContext = history
+	if n.cfg.refreshMusicInput != nil {
+		input.PlayedContext, _ = n.cfg.refreshMusicInput(input.PlayedContext, "")
+	}
+	input.PlayedContext = controlHistory(input.PlayedContext)
+	if input.PlayedContext == "" {
+		return none, errors.New("invalid_memory_selection_input")
+	}
 	data, err := json.Marshal(input)
 	if err != nil {
 		return none, err

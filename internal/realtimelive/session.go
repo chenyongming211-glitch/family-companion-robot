@@ -810,10 +810,6 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.fail()
 		return
 	}
-	contextText, memoryReceipt, e := s.routeMemory(rt, contextText)
-	if e != nil {
-		return
-	}
 	prefetch := s.prefetchControls(rt)
 	defer prefetch.close()
 	route, e := s.routeMusic(rt, contextText)
@@ -829,8 +825,12 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.turnError(rt)
 		return
 	}
-	controlContext := ""
+	controlContext, memoryReceipt := "", ""
 	if !route.Handled {
+		contextText, memoryReceipt, e = s.routeMemory(rt, contextText)
+		if e != nil {
+			return
+		}
 		contextText = s.musicContext(contextText)
 		s.expressionContextReady(rt, contextText)
 		if prefetch != nil {
