@@ -239,6 +239,12 @@ func TestInputEchoUnavailableEvidenceFallsBack(t *testing.T) {
 			r.sync(t)
 			r.s.mu.Lock()
 			defer r.s.mu.Unlock()
+			if name == "no_progress" || name == "stale_progress" || name == "no_reference" || name == "wrong_basis" {
+				if r.s.lastInput == nil || r.s.lastInput.hadPreview || r.s.output != old {
+					t.Fatal("weak preview with uncertain evidence canceled device playback")
+				}
+				return
+			}
 			if r.s.lastInput == nil || !r.s.lastInput.hadPreview || r.s.output != nil {
 				t.Fatal("missing or inapplicable evidence did not use normal preview interruption")
 			}
@@ -317,6 +323,8 @@ func TestInputEchoProgressTimestampOnlyAdvancesWithValidatedCompleted(t *testing
 	r.s.mu.Unlock()
 	r.start(t, "stale")
 	r.preview(t, "stale", "text", "月亮")
+	assertEchoOutputAlive(t, r, old)
+	r.preview(t, "stale", "text", "月亮之外有什么")
 	assertEchoPreviewCuts(t, r, old)
 }
 
@@ -354,6 +362,8 @@ func TestInputEchoEvidenceIsSessionLocal(t *testing.T) {
 	other := echoOutput(t, b, "小猫出门啦。", 19)
 	b.start(t, "other-session")
 	b.preview(t, "other-session", "text", "小猫")
+	assertEchoOutputAlive(t, b, other)
+	b.preview(t, "other-session", "text", "小猫去哪了")
 	assertEchoPreviewCuts(t, b, other)
 	assertEchoOutputAlive(t, a, old)
 }
@@ -398,8 +408,8 @@ func TestInputEchoFinalRechecksProgressAndOutput(t *testing.T) {
 			r.sync(t)
 			r.s.mu.Lock()
 			defer r.s.mu.Unlock()
-			if len(r.s.history) != historyBefore+1 || r.s.output == old {
-				t.Fatal("final reused expired or another output's echo evidence")
+			if len(r.s.history) != historyBefore || r.s.output != old || r.s.lastInput != nil {
+				t.Fatal("ambiguous final or a replaced target admitted a stale turn")
 			}
 		})
 	}
@@ -543,27 +553,18 @@ func TestInputPreviewOpeningDiagnosticIsBoundedAndDoesNotChangeAdmission(t *test
 				if err = json.Unmarshal([]byte(line), &event); err != nil {
 					t.Fatal(err)
 				}
-				if event["event"] != "input_preview" {
+				if event["event"] != "input_preview" && event["event"] != "input_held" {
 					continue
 				}
 				previews++
 				check := object(event["opening_echo_check"])
-				if name == "long_preview" {
-					if len(check) != 0 {
-						t.Error("long preview received opening diagnostic")
-					}
-					continue
+				if len(check) == 0 || event["source"] != "provider_asr_preview" || event["reason"] == nil {
+					t.Fatal("missing decision diagnostics", event)
 				}
-				if len(check) == 0 {
-					t.Fatal("unheld short preview omitted frozen opening diagnostic")
+				if check["input_opening"] != nil || check["generated_opening"] != nil || strings.Contains(line, "private_reference_tail") {
+					t.Error("decision diagnostics include transcript content")
 				}
-				input, _ := check["input_opening"].(string)
-				generated, _ := check["generated_opening"].(string)
-				if input != string(echoOpeningRunes(preview)) || generated != string(echoOpeningRunes(reference)) || len([]rune(input)) > 9 || len([]rune(generated)) > 9 || strings.Contains(string(line), "private_reference_tail") {
-					t.Error("opening diagnostic leaked unbounded or unnormalized text")
-				}
-				eligible := name != "ineligible"
-				if check["reference_present"] != (reference != "") || check["same_output"] != true || check["active_output"] != true || check["owner_eligible"] != eligible || check["client_eligible"] != eligible || check["output_id"] != float64(old.turn.ID) {
+				if check["reference_present"] != (reference != "") || check["same_output"] != true || check["active_output"] != true || check["matched"] != (name == "held") || check["output_id"] != float64(old.turn.ID) {
 					t.Error("decision snapshot lost pre-interruption state", check)
 				}
 				if name == "zero_progress" {
@@ -576,12 +577,8 @@ func TestInputPreviewOpeningDiagnosticIsBoundedAndDoesNotChangeAdmission(t *test
 					}
 				}
 			}
-			if name == "held" {
-				if previews != 0 {
-					t.Error("held preview was newly admitted")
-				}
-			} else if previews != 1 {
-				t.Error("unheld preview changed event count", previews)
+			if previews != 1 {
+				t.Error("expected one decision event")
 			}
 		})
 	}

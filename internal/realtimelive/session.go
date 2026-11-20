@@ -24,6 +24,7 @@ type liveTurn struct {
 	done                    chan struct{}
 	stoppedAt, drainStarted time.Time
 	lastPlaybackProgress    time.Time // Session.mu; validated Completed advances only.
+	spokenReference         string    // Session.mu; A/B text submitted for synthesis, never proof of playback.
 	asr                     *OutputASR
 	transcriptReady         chan struct{}
 	transcriptOnce          sync.Once
@@ -242,6 +243,11 @@ func (s *Session) interruptInput(expected *liveTurn, source string, input *pendi
 		return nil
 	}
 	rt := s.output
+	if input != nil && rt != nil && rt != input.outputAtStart {
+		s.discardInputLocked()
+		s.mu.Unlock()
+		return nil
+	}
 	var id int64
 	if rt != nil {
 		id = rt.turn.ID
@@ -266,6 +272,11 @@ func (s *Session) interruptInput(expected *liveTurn, source string, input *pendi
 		s.mu.Unlock()
 		return nil
 	}
+	// A separately cancelled output no longer owns its unconfirmed input.
+	// A real interruption keeps its own input until the final transcript.
+	if p := s.lastInput; input == nil && p != nil && p.overlapped && p.outputAtStart == rt && !p.hadPreview {
+		s.discardInputLocked()
+	}
 	t.SealForDrain()
 	s.retireExpressionLocked(rt)
 	rt.drainStarted = time.Now()
@@ -285,7 +296,10 @@ func (s *Session) interruptInput(expected *liveTurn, source string, input *pendi
 	}
 	asr := rt.asr
 	begun := t.Begun
-	fields := map[string]any{"id": t.ID, "sent": t.Sent, "completed_before_receipt": t.Completed}
+	fields := map[string]any{"id": t.ID, "source": source, "sent": t.Sent, "completed_before_receipt": t.Completed}
+	if input != nil {
+		fields["input_id"] = input.id
+	}
 	s.mu.Unlock()
 	if asr != nil {
 		asr.Finish()
@@ -901,6 +915,12 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			if kind == "text" {
 				s.mu.Lock()
 				rt.turn.Generated = string(value)
+				s.mu.Unlock()
+				return nil
+			}
+			if kind == "spoken_reference" {
+				s.mu.Lock()
+				rt.spokenReference = string(value)
 				s.mu.Unlock()
 				return nil
 			}

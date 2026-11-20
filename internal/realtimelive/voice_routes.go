@@ -7,6 +7,7 @@ import (
 	"familyrobot/internal/voicecompare"
 	"math"
 	"net/url"
+	"strings"
 )
 
 const voiceRouteTTSModel = "cosyvoice-v3-flash"
@@ -177,6 +178,15 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 		return err
 	}
 	if err = emit("text", []byte(result.Text)); err != nil {
+		return err
+	}
+	// Use the validated TTS inputs for echo comparison. The display text can
+	// contain decorations that the synthesizer never received.
+	var spoken strings.Builder
+	for _, task := range result.TaskBoundaries {
+		spoken.WriteString(task.Text)
+	}
+	if err = emit("spoken_reference", []byte(spoken.String())); err != nil {
 		return err
 	}
 	// Keep cancellation responsive; the caller still owns Opus, flow control,

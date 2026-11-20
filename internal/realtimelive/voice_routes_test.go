@@ -375,6 +375,8 @@ func TestVoiceRouteBlockedResolverDisconnectNoLockDeadlock(t *testing.T) {
 }
 
 func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
+	const generated = "😋你好……你好。✨"
+	const spoken = "你好……你好。"
 	for _, route := range []string{"A", "B"} {
 		t.Run(route, func(t *testing.T) {
 			usage := func(stage string) map[string]any {
@@ -391,7 +393,7 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 			}
 			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/compatible-mode/v1/chat/completions" {
-					_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": "你好。"}}}, "usage": usage("llm")})
+					_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": generated}}}, "usage": usage("llm")})
 					return
 				}
 				c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -416,8 +418,8 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 					_ = c.WriteJSON(map[string]any{"type": "input_audio_buffer.committed"})
 					_ = read()
 					_ = c.WriteJSON(map[string]any{"type": "response.created", "response": map[string]any{"id": "r"}})
-					_ = c.WriteJSON(map[string]any{"type": "response.text.done", "response_id": "r", "text": "你好。"})
-					_ = c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "r", "status": "completed", "usage": usage("native"), "output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "你好。"}}}}}})
+					_ = c.WriteJSON(map[string]any{"type": "response.text.done", "response_id": "r", "text": generated})
+					_ = c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "r", "status": "completed", "usage": usage("native"), "output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": generated}}}}}})
 					return
 				}
 				run := read()
@@ -462,18 +464,24 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 			}
 			session := s.newSession(nil, dir)
 			defer session.cancel()
-			text := ""
+			var text, reference string
 			audio := 0
 			err = session.generate(context.Background(), 1, "existing common business context", make([]byte, 3200), func(kind string, b []byte) error {
-				if kind == "text" {
-					text += string(b)
-				} else if kind == "audio" {
+				switch kind {
+				case "text":
+					text = string(b)
+				case "spoken_reference":
+					reference = string(b)
+				case "audio":
+					if text != generated || reference != spoken {
+						return errors.New("missing generated text or spoken reference before audio")
+					}
 					audio += len(b)
 				}
 				return nil
 			})
-			if err != nil || text != "你好。" || audio != 9600 {
-				t.Fatal("adapter generation", err, text, audio)
+			if err != nil || audio != 2*9600 {
+				t.Fatal("adapter generation", err, text, reference, audio)
 			}
 			entries, err := os.ReadDir(dir)
 			if err != nil {
@@ -501,9 +509,9 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 				}
 				calls++
 			}
-			want := 2
+			want := 3
 			if route == "B" {
-				want = 3
+				want = 4
 			}
 			if calls != want {
 				t.Fatal("API intent count", calls, want)

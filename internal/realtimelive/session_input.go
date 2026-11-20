@@ -23,6 +23,10 @@ type pendingInput struct {
 	stoppedAt                             time.Time
 	pcm                                   []byte
 	outputAtStart                         *liveTurn
+	overlapped                            bool   // Device speech was playing when VAD opened this capture.
+	overlapSamples                        int64  // First confirmed playhead observed during this capture.
+	weakPreview                           string // At most eight normalized runes until corroborated.
+	lastHeldReason                        string
 }
 
 func inputItem(event map[string]any) (string, bool) {
@@ -57,6 +61,7 @@ func (s *Session) discardInputLocked() {
 		clear(p.pcm)
 		p.pcm = nil
 		p.outputAtStart = nil
+		p.weakPreview = ""
 		p.retired = true
 	}
 	s.lastInput = nil
@@ -93,7 +98,8 @@ func (s *Session) startInput(event map[string]any) error {
 		start = int64(pos * 16)
 	}
 	s.seq++
-	p := &pendingInput{id: s.seq, item: item, start: start, speakerStartValid: valid && pos >= 0 && pos*16 <= float64(s.providerEnd), outputAtStart: s.output}
+	p := &pendingInput{id: s.seq, item: item, start: start, speakerStartValid: valid && pos >= 0 && pos*16 <= float64(s.providerEnd), outputAtStart: s.output, overlapped: s.speechPlayingLocked()}
+	p.observePlayback(s.output, time.Now())
 	s.lastInput = p
 	s.items[item] = p
 	s.itemOrder = append(s.itemOrder, item)
@@ -127,6 +133,7 @@ func (s *Session) stopInput(event map[string]any) error {
 	}
 	p.ended = true
 	p.stoppedAt = time.Now()
+	p.observePlayback(s.output, p.stoppedAt)
 	end := s.ring.End
 	pos, valid := timestamp(event["audio_end_ms"])
 	if valid && pos > 0 {
@@ -189,47 +196,25 @@ func (s *Session) previewInput(event map[string]any) error {
 	// The provider's text and stash can be stable and unstable continuations.
 	// Compare their complete content; a matching field cannot hide new words.
 	now := time.Now()
-	if s.suspectedOpeningEchoLocked(p, preview, now) {
+	if !p.ended {
+		p.observePlayback(s.output, now)
+	}
+	stable, _ := event["text"].(string)
+	decision := s.playbackInputLocked(p, preview, stable, false, now)
+	fields := s.inputDecisionFieldsLocked(p, decision, "provider_asr_preview", chars, now)
+	if !decision.allow {
+		record := p.lastHeldReason != decision.reason
+		p.lastHeldReason = decision.reason
 		s.mu.Unlock()
+		if record {
+			return s.record("input_held", fields)
+		}
 		return nil
-	}
-	var openingCheck map[string]any
-	// Snapshot only short, unheld previews before interruption changes output
-	// ownership. This private diagnostic never feeds the guard or turn history.
-	short, normalized := true, 0
-	for _, r := range preview {
-		if !unicode.IsSpace(r) && !unicode.IsPunct(r) {
-			normalized++
-			if normalized > 9 {
-				short = false
-				break
-			}
-		}
-	}
-	if rt := s.output; rt != nil && short {
-		input, generated := echoOpeningRunes(preview), echoOpeningRunes(rt.turn.Generated)
-		var age any
-		if !rt.lastPlaybackProgress.IsZero() {
-			age = now.Sub(rt.lastPlaybackProgress).Milliseconds()
-		}
-		_, device := s.wire.(*xiaozhiWire)
-		openingCheck = map[string]any{
-			"input_opening": string(input), "generated_opening": string(generated),
-			"reference_present": len(generated) > 0, "same_output": rt == p.outputAtStart,
-			"active_output":   s.activeOutputLocked(),
-			"owner_eligible":  s.ownerErr == nil && diagnosticDevicePattern.MatchString(s.rec.owner.DeviceID),
-			"client_eligible": s.rec.owner.ClientType == "xiaozhi" && device,
-			"output_id":       rt.turn.ID, "completed": rt.turn.Completed, "progress_age_ms": age,
-		}
 	}
 	p.hadPreview = true
 	s.mu.Unlock()
 	if err := s.interruptInput(nil, "provider_asr_preview", p); err != nil {
 		return err
-	}
-	fields := map[string]any{"id": p.id, "chars": chars, "item_scope": "current", "confirmed": true}
-	if openingCheck != nil {
-		fields["opening_echo_check"] = openingCheck
 	}
 	return s.record("input_preview", fields)
 }
@@ -257,11 +242,15 @@ func (s *Session) finishInput(event map[string]any) error {
 		}
 		return s.record("input_rejected", map[string]any{"id": p.id, "reason": reason, "had_preview": hadPreview, "item_scope": "current"})
 	}
-	if len(p.pcm) > 0 && len(p.pcm) <= 32000 && s.suspectedOpeningEchoLocked(p, text, time.Now()) {
-		samples, chars := len(p.pcm)/2, len(echoOpeningRunes(text))
+	now := time.Now()
+	decision := s.playbackInputLocked(p, text, text, true, now)
+	fields := s.inputDecisionFieldsLocked(p, decision, "provider_asr_final", utf8.RuneCountInString(text), now)
+	fields["samples"] = len(p.pcm) / 2
+	fields["had_preview"] = p.hadPreview
+	if !decision.allow {
 		s.discardInputLocked()
 		s.mu.Unlock()
-		return s.record("input_rejected", map[string]any{"id": p.id, "reason": "suspected_opening_echo", "chars": chars, "samples": samples, "had_preview": false, "item_scope": "current"})
+		return s.record("input_rejected", fields)
 	}
 	s.mu.Unlock()
 	if err := s.interruptInput(nil, "provider_asr_final", p); err != nil {
@@ -272,6 +261,11 @@ func (s *Session) finishInput(event map[string]any) error {
 		s.mu.Unlock()
 		return nil
 	}
+	if s.output != nil && s.output != p.outputAtStart {
+		s.discardInputLocked()
+		s.mu.Unlock()
+		return nil
+	}
 	pcm := p.pcm
 	p.pcm = nil
 	s.discardInputLocked()
@@ -279,7 +273,7 @@ func (s *Session) finishInput(event map[string]any) error {
 	rt.turn.User = text
 	rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
 	s.mu.Unlock()
-	if err := s.record("user_text", map[string]any{"id": rt.turn.ID, "text": text}); err != nil {
+	if err := s.record("user_text", map[string]any{"id": rt.turn.ID, "text": text, "input_decision": fields}); err != nil {
 		clear(pcm)
 		close(rt.done)
 		return err
