@@ -425,8 +425,16 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 					_ = c.WriteJSON(map[string]any{"type": "session.created"})
 					update := read()["session"]
 					_ = c.WriteJSON(map[string]any{"type": "session.updated", "session": update})
-					_ = read()
-					_ = read()
+					for {
+						typ := read()["type"]
+						if typ == "input_audio_buffer.commit" {
+							break
+						}
+						if typ != "input_audio_buffer.append" {
+							t.Error("unexpected audio frame", typ)
+							return
+						}
+					}
 					_ = c.WriteJSON(map[string]any{"type": "input_audio_buffer.committed"})
 					create := read()
 					instructions := update.(map[string]any)["instructions"].(string)

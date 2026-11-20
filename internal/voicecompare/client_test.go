@@ -670,10 +670,8 @@ func nativeFixture(t *testing.T, c *websocket.Conn, bad string) {
 		}
 		return
 	}
-	for _, typ := range []string{"input_audio_buffer.append", "input_audio_buffer.commit"} {
-		if got := readJSON(t, c)["type"]; got != typ {
-			t.Errorf("got %v want %s", got, typ)
-		}
+	if pcm := readNativeTestPCM(t, c); len(pcm) != 3200 {
+		t.Errorf("unexpected native input size: %d", len(pcm))
 	}
 	request := make(chan map[string]any, 1)
 	go func() { var v map[string]any; _ = c.ReadJSON(&v); request <- v }()

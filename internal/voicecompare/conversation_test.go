@@ -1,6 +1,7 @@
 package voicecompare
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -30,32 +31,64 @@ func TestConversationAcceptsProductBounds(t *testing.T) {
 	}
 }
 
-func productNativeFixture(t *testing.T, c *websocket.Conn, text string, inputBytes int) {
+// Consume one committed turn, checking the same 20 ms input bound as Native.Generate.
+func readNativeTestPCM(t *testing.T, c *websocket.Conn) []byte {
+	t.Helper()
+	var pcm []byte
+	for {
+		message := readJSON(t, c)
+		switch message["type"] {
+		case "input_audio_buffer.append":
+			audio, ok := message["audio"].(string)
+			part, err := base64.StdEncoding.DecodeString(audio)
+			if !ok || err != nil || len(part) == 0 || len(part)%2 != 0 || len(part) > 640 {
+				t.Errorf("invalid native PCM append: %d bytes", len(part))
+			}
+			pcm = append(pcm, part...)
+		case "input_audio_buffer.commit":
+			return pcm
+		default:
+			t.Errorf("unexpected native input event: %v", message["type"])
+			return pcm
+		}
+	}
+}
+
+func productNativeFixture(t *testing.T, c *websocket.Conn, text string, inputBytes int) []byte {
 	_ = c.WriteJSON(map[string]any{"type": "session.created"})
 	update := readJSON(t, c)["session"].(map[string]any)
 	if strings.Contains(update["instructions"].(string), "120") || update["max_tokens"] != float64(4096) {
 		t.Error("benchmark restriction leaked", update)
 	}
 	_ = c.WriteJSON(map[string]any{"type": "session.updated", "session": update})
-	append := readJSON(t, c)
-	pcm, err := base64.StdEncoding.DecodeString(append["audio"].(string))
-	if err != nil || len(pcm) != inputBytes {
-		t.Error("product input lost", len(pcm), err)
+	pcm := readNativeTestPCM(t, c)
+	if len(pcm) != inputBytes {
+		t.Error("product input lost", len(pcm))
 	}
-	_ = readJSON(t, c)
 	_ = c.WriteJSON(map[string]any{"type": "input_audio_buffer.committed"})
-	_ = readJSON(t, c)
+	if message := readJSON(t, c); message["type"] != "response.create" {
+		t.Error("expected exactly one input commit before response.create")
+	}
 	_ = c.WriteJSON(map[string]any{"type": "response.created", "response": map[string]any{"id": "product"}})
 	_ = c.WriteJSON(map[string]any{"type": "response.text.done", "response_id": "product", "text": text})
 	_ = c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "product", "status": "completed", "usage": usageFixture("native"), "output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}}}}})
+	return pcm
 }
 func TestConversationProductRouteNormalTextAndNoCallCaps(t *testing.T) {
 	text := strings.Repeat("这是一段自然的回复。", 20)
 	c := fixtureClient(wsFixture(t, func(c *websocket.Conn) { ttsFixture(t, c, "") }))
-	c.RealtimeURL = wsFixture(t, func(c *websocket.Conn) { productNativeFixture(t, c, text, 16000*2*20) })
+	input := make([]byte, 16000*2*20-2)
+	for i := range input {
+		input[i] = byte(i/640 + i%640)
+	}
+	c.RealtimeURL = wsFixture(t, func(conn *websocket.Conn) {
+		if received := productNativeFixture(t, conn, text, len(input)); !bytes.Equal(input, received) {
+			t.Error("chunking changed or reordered PCM")
+		}
+	})
 	stages := []string{}
 	c.BeforeCall = func(stage string, _ float64) error { stages = append(stages, stage); return nil }
-	result, err := c.RunConversation(context.Background(), "native", "normal history", make([]byte, 16000*2*20))
+	result, err := c.RunConversation(context.Background(), "native", "normal history", input)
 	if err != nil || result.Text != text || len(result.PCM) == 0 || len(stages) <= 4 {
 		t.Fatal("product generation", err, result.Text, len(result.PCM), len(stages))
 	}
@@ -296,5 +329,53 @@ func TestConversationProductRouteLiveGuardAfterHandshake(t *testing.T) {
 	result, err := c.RunConversation(context.Background(), "native", "private prompt", make([]byte, 3200))
 	if !errors.Is(err, denied) || len(result.PCM) != 0 {
 		t.Fatal(err)
+	}
+}
+
+func TestNativeInputStopsAtRevokedChunk(t *testing.T) {
+	for _, mode := range []string{"permission", "cancellation"} {
+		t.Run(mode, func(t *testing.T) {
+			var reads []string
+			var received int
+			done := make(chan struct{})
+			endpoint := wsFixture(t, func(conn *websocket.Conn) {
+				defer close(done)
+				_ = conn.WriteJSON(map[string]any{"type": "session.created"})
+				session := readJSON(t, conn)["session"]
+				_ = conn.WriteJSON(map[string]any{"type": "session.updated", "session": session})
+				for {
+					var frame struct{ Type, Audio string }
+					if conn.ReadJSON(&frame) != nil {
+						return
+					}
+					reads = append(reads, frame.Type)
+					pcm, _ := base64.StdEncoding.DecodeString(frame.Audio)
+					received += len(pcm)
+				}
+			})
+			c := fixtureClient(endpoint)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			writes := 0
+			denied := errors.New("permission revoked")
+			if mode == "cancellation" {
+				denied = context.Canceled
+			}
+			c.BeforeSubmit = func() error {
+				writes++
+				if writes == 3 { // after session.update and the first audio chunk
+					if mode == "cancellation" {
+						cancel()
+					}
+					return denied
+				}
+				return nil
+			}
+			_, err := c.RunConversation(ctx, "native", "current turn", make([]byte, 32000))
+			<-done
+			if !errors.Is(err, denied) || len(reads) != 1 || reads[0] != "input_audio_buffer.append" || received != 640 {
+				t.Errorf("rejected write leaked input or commit: reads=%v bytes=%d err=%v", reads, received, err)
+			}
+		})
 	}
 }

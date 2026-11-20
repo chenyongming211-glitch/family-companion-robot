@@ -66,10 +66,19 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 		if ev.Type != "session.updated" || !sessionAcknowledged(ev.Session, session) {
 			return errors.New("missing or unsafe native session update")
 		}
-		for _, v := range []any{map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}, map[string]any{"type": "input_audio_buffer.commit"}} {
-			if e = s.send(v); e != nil {
+		// Match the native audio route's 20 ms frames at 16 kHz, mono PCM16.
+		const inputFrameBytes = 640
+		for offset := 0; offset < len(pcm); offset += inputFrameBytes {
+			if e = ctx.Err(); e != nil {
 				return e
 			}
+			end := min(offset+inputFrameBytes, len(pcm))
+			if e = s.send(map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm[offset:end])}); e != nil {
+				return e
+			}
+		}
+		if e = s.send(map[string]any{"type": "input_audio_buffer.commit"}); e != nil {
+			return e
 		}
 		for {
 			ev, e = s.event()
