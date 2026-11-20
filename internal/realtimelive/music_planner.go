@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 	"time"
 	"unicode"
@@ -83,12 +84,25 @@ func (n *Native) PlanMusic(parent context.Context, input musicInput) (musicPlan,
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	defer n.Close()
+	// A socket can report its read deadline just before the context timer fires.
+	// Keep the planner's deadline identifiable without exposing provider errors.
+	failure := func(cause error, fallback string) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		deadline, _ := ctx.Deadline()
+		var networkError net.Error
+		if errors.As(cause, &networkError) && networkError.Timeout() && !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		return errors.New(fallback)
+	}
 	off := false
 	n.cfg = n.cfg.snapshot()
 	n.cfg.Search = &off
 	n.cfg.Tools = []any{musicPlanTool()}
 	if e := n.Open(ctx, musicInstructions, false); e != nil {
-		return musicPlan{}, errors.New("music_planner_unavailable")
+		return musicPlan{}, failure(e, "music_planner_unavailable")
 	}
 	stop := context.AfterFunc(ctx, func() { n.Close() })
 	defer stop()
@@ -100,14 +114,14 @@ func (n *Native) PlanMusic(parent context.Context, input musicInput) (musicPlan,
 		return musicPlan{}, e
 	}
 	if e = n.write(map[string]any{"type": "conversation.item.create", "item": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": string(data)}}}}); e != nil {
-		return musicPlan{}, errors.New("music_planner_unavailable")
+		return musicPlan{}, failure(e, "music_planner_unavailable")
 	}
 	if e = n.write(map[string]any{"type": "response.create"}); e != nil {
-		return musicPlan{}, errors.New("music_planner_unavailable")
+		return musicPlan{}, failure(e, "music_planner_unavailable")
 	}
 	calls, e := n.completedControlCalls(ctx, map[string]bool{musicPlanName: true}, map[string]bool{})
 	if e != nil || len(calls) != 1 {
-		return musicPlan{}, errors.New("invalid_music_response")
+		return musicPlan{}, failure(e, "invalid_music_response")
 	}
 	p, err := musicArguments(calls[0].args)
 	if err != nil {

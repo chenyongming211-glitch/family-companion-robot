@@ -83,8 +83,17 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 				return errors.New("missing native committed ACK")
 			}
 		}
-		if e = s.send(map[string]any{"type": "response.create", "response": map[string]any{"modalities": []string{"text"}, "instructions": prompt}}); e != nil {
+		// session.updated already acknowledged this turn's complete instructions.
+		if e = s.send(map[string]any{"type": "response.create", "response": map[string]any{"modalities": []string{"text"}}}); e != nil {
 			return e
+		}
+		responseSent := time.Now()
+		firstText := c.FirstNativeText
+		observeText := func(fragment string) {
+			if firstText != nil && strings.TrimSpace(fragment) != "" {
+				firstText(time.Since(responseSent), ev.Type)
+				firstText = nil
+			}
 		}
 		id, delta, assistantID := "", "", ""
 		done := false
@@ -129,12 +138,14 @@ func (c Client) native(ctx context.Context, prompt string, pcm []byte) (text str
 					return errors.New("native reply limit exceeded")
 				}
 				delta += ev.Delta
+				observeText(ev.Delta)
 			case "response.text.done":
 				if done || !boundedText(ev.Text, c.limits().textRunes) || delta != "" && delta != ev.Text {
 					return errors.New("invalid native complete text")
 				}
 				text = ev.Text
 				done = true
+				observeText(text) // Some providers return only the complete text.
 			case "response.output_item.added", "response.output_item.done":
 				var item outputItem
 				complete := ev.Type == "response.output_item.done"

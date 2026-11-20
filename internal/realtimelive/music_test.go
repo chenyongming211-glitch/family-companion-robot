@@ -7,6 +7,8 @@ import (
 	"familyrobot/internal/music"
 	"fmt"
 	"github.com/gorilla/websocket"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +65,64 @@ func musicRequest(s *Session, text string) *liveTurn {
 	r.turn.User = text
 	r.transcriptOnce.Do(func() { close(r.transcriptReady) })
 	return r
+}
+
+func TestMusicPlanRecordsTerminalAtDecision(t *testing.T) {
+	for _, tc := range []struct{ name, reason, action string }{
+		{"ordinary", "completed", "none"},
+		{"requested", "completed", "play"},
+		{"timeout", "timeout", ""},
+		{"canceled", "canceled", ""},
+		{"provider-error", "planner_error", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := musicRouteSession(t)
+			rt := musicRequest(s, "private-request")
+			cfg, _ := expressionProvider(t, false, func(c *websocket.Conn) {
+				switch tc.name {
+				case "ordinary":
+					musicPlannerTerminal(c, `{"action":"none","title":"","artist":""}`, false)
+				case "requested":
+					musicPlannerTerminal(c, `{"action":"play","title":"private-title","artist":"private-artist"}`, false)
+				case "timeout":
+					// Leave the response pending for the planner's own 3-second deadline.
+				case "canceled":
+					rt.cancel()
+				case "provider-error":
+					c.WriteJSON(map[string]any{"type": "error", "message": "private-provider-error"})
+				}
+			})
+			s.cfg.URL, s.cfg.Synthetic = cfg.URL, true
+			route, err := s.routeMusic(rt, `{"recent_turns":[],"context":"private-context"}`)
+			if tc.name == "canceled" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("turn cancellation lost: %v", err)
+				}
+			} else if err != nil || route.Handled != (tc.action == "play") ||
+				(tc.reason != "completed") != strings.Contains(route.outcomeGuidance, "planner_unavailable") {
+				t.Fatalf("unexpected routing after %s: handled=%t err=%v", tc.name, route.Handled, err)
+			}
+			events, _ := os.ReadFile(filepath.Join(s.directory, "events.jsonl"))
+			count := 0
+			for _, line := range strings.Split(string(events), "\n") {
+				var event map[string]any
+				if json.Unmarshal([]byte(line), &event) != nil || event["event"] != "music_plan" {
+					continue
+				}
+				count++
+				duration, measured := event["elapsed_ms"].(float64)
+				action, reported := event["action"].(string)
+				if event["id"] != float64(rt.turn.ID) || event["reason"] != tc.reason || !measured || duration < 0 ||
+					(tc.name == "timeout" && duration < 2900) || reported != (tc.reason == "completed") || action != tc.action ||
+					strings.Contains(line, "private-") {
+					t.Fatalf("unexpected music decision: %s", line)
+				}
+			}
+			if count != 1 {
+				t.Fatalf("want one music decision, got %d", count)
+			}
+		})
+	}
 }
 
 func TestMusicRouteDisabledAndOrdinaryNoAction(t *testing.T) {

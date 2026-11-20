@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const voiceRouteTTSModel = "cosyvoice-v3-flash"
@@ -131,6 +132,11 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 	var audit *intent
 	ttsPart := 0
 	c := voicecompare.Client{Key: s.cfg.Key, RealtimeURL: s.cfg.URL, InferenceURL: s.cfg.ASRURL, TextURL: textURL.String(), TTSModel: voiceRouteTTSModel, Voice: voiceRouteTTSVoice, BeforeSubmit: allowed}
+	var firstTextWait time.Duration
+	var firstTextSource string
+	c.FirstNativeText = func(wait time.Duration, source string) {
+		firstTextWait, firstTextSource = wait, source
+	}
 	c.BeforeCall = func(stage string, _ float64) error {
 		if err := allowed(); err != nil {
 			return err
@@ -165,6 +171,10 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 			}
 		}
 		result := map[string]any{"state": state, "usage": numeric, "usage_state": usageState}
+		if stage == "native" && firstTextSource != "" {
+			result["response_create_to_first_text_ms"] = firstTextWait.Milliseconds()
+			result["first_text_source"] = firstTextSource
+		}
 		if stage == "tts" && callErr != nil {
 			result["failure_category"] = voicecompare.TTSFailureCategory(callErr)
 		}

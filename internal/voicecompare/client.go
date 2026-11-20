@@ -63,7 +63,10 @@ type Client struct {
 	Key, RealtimeURL, InferenceURL, TextURL, TTSModel, Voice string
 	BeforeCall                                               func(stage string, reserveYuan float64) error
 	AfterCall                                                func(stage string, usage map[string]any, err error) error
-	RecordEvent                                              func(json.RawMessage) error
+	// FirstNativeText receives the wait since response.create was written and the
+	// validated event type. The text itself stays within the generation client.
+	FirstNativeText func(wait time.Duration, eventType string)
+	RecordEvent     func(json.RawMessage) error
 }
 
 // StreamConversation hands each fully validated and accounted TTS task to the

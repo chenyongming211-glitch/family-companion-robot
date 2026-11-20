@@ -377,8 +377,19 @@ func TestVoiceRouteBlockedResolverDisconnectNoLockDeadlock(t *testing.T) {
 func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 	const generated = "😋你好……你好。✨"
 	const spoken = "你好……你好。"
-	for _, route := range []string{"A", "B"} {
-		t.Run(route, func(t *testing.T) {
+	const providerWait = 15 * time.Millisecond
+	for _, tc := range []struct {
+		name, route, firstSource     string
+		crossResponse, failAfterText bool
+	}{
+		{name: "A_done", route: "A", firstSource: "response.text.done"},
+		{name: "A_delta", route: "A", firstSource: "response.text.delta"},
+		{name: "A_delta_then_failure", route: "A", firstSource: "response.text.delta", failAfterText: true},
+		{name: "A_no_matching_text", route: "A", crossResponse: true},
+		{name: "B", route: "B"},
+	} {
+		route := tc.route
+		t.Run(tc.name, func(t *testing.T) {
 			var firstAudio atomic.Bool
 			usage := func(stage string) map[string]any {
 				switch stage {
@@ -417,8 +428,28 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 					_ = read()
 					_ = read()
 					_ = c.WriteJSON(map[string]any{"type": "input_audio_buffer.committed"})
-					_ = read()
+					create := read()
+					instructions := update.(map[string]any)["instructions"].(string)
+					if !strings.Contains(instructions, "existing common business context") || create["type"] != "response.create" {
+						t.Error("session instructions or response request missing")
+					}
+					if _, duplicated := create["response"].(map[string]any)["instructions"]; duplicated {
+						t.Error("turn instructions sent twice")
+					}
 					_ = c.WriteJSON(map[string]any{"type": "response.created", "response": map[string]any{"id": "r"}})
+					_ = c.WriteJSON(map[string]any{"type": "response.text.delta", "response_id": "r", "delta": ""})
+					if tc.crossResponse {
+						_ = c.WriteJSON(map[string]any{"type": "response.text.delta", "response_id": "r", "delta": "  "})
+						_ = c.WriteJSON(map[string]any{"type": "response.text.delta", "response_id": "old", "delta": "foreign"})
+						return
+					}
+					time.Sleep(providerWait)
+					if tc.firstSource == "response.text.delta" {
+						_ = c.WriteJSON(map[string]any{"type": "response.text.delta", "response_id": "r", "delta": generated})
+						if tc.failAfterText {
+							return
+						}
+					}
 					_ = c.WriteJSON(map[string]any{"type": "response.text.done", "response_id": "r", "text": generated})
 					_ = c.WriteJSON(map[string]any{"type": "response.done", "response": map[string]any{"id": "r", "status": "completed", "usage": usage("native"), "output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": generated}}}}}})
 					return
@@ -492,7 +523,11 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 				}
 				return nil
 			})
-			if err != nil || audio != 2*9600 {
+			failed := tc.crossResponse || tc.failAfterText
+			if failed && (err == nil || audio != 0) {
+				t.Fatal("invalid response reached playback")
+			}
+			if !failed && (err != nil || audio != 2*9600) {
 				t.Fatal("adapter generation", err, text, reference, audio)
 			}
 			entries, err := os.ReadDir(dir)
@@ -511,17 +546,33 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if bytes.Contains(raw, []byte("must-not-persist")) {
+				if bytes.Contains(raw, []byte("must-not-persist")) || bytes.Contains(raw, []byte(generated)) {
 					t.Fatal("raw usage persisted")
 				}
 				var intent map[string]any
 				_ = json.Unmarshal(raw, &intent)
-				if intent["route"] != route || intent["state"] != "completed" || intent["usage"] == nil {
+				state := "completed"
+				if failed {
+					state = "failed_or_unknown"
+				}
+				ms, measured := intent["response_create_to_first_text_ms"].(float64)
+				source, sourced := intent["first_text_source"]
+				if intent["stage"] == "voice-route-native" && tc.firstSource != "" {
+					if !measured || ms <= 0 || source != tc.firstSource || intent["id"] != float64(1) {
+						t.Errorf("first text missing or misattributed: ms=%v source=%v", ms, source)
+					}
+				} else if measured || sourced {
+					t.Error("first text attributed to unrelated stage or invalid response")
+				}
+				if intent["route"] != route || intent["state"] != state || intent["usage"] == nil {
 					t.Fatal("missing product intent", string(raw))
 				}
 				calls++
 			}
 			want := 3
+			if failed {
+				want = 1
+			}
 			if route == "B" {
 				want = 4
 			}

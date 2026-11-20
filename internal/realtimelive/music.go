@@ -112,7 +112,22 @@ func (s *Session) routeMusic(rt *liveTurn, history string) (route musicRoute, er
 	source := m.source
 	s.mu.Unlock()
 	input.PlayedContext = s.musicContext(input.PlayedContext)
+	started := time.Now()
 	plan, e := NewNative(s.cfg, s.directory).PlanMusic(rt.ctx, input)
+	decision := map[string]any{"id": rt.turn.ID, "elapsed_ms": time.Since(started).Milliseconds()}
+	switch {
+	case e == nil:
+		decision["reason"], decision["action"] = "completed", plan.Action
+	case rt.ctx.Err() != nil:
+		decision["reason"] = "canceled"
+	case errors.Is(e, context.DeadlineExceeded):
+		decision["reason"] = "timeout"
+	default:
+		decision["reason"] = "planner_error"
+	}
+	if err := s.record("music_plan", decision); err != nil {
+		return musicRoute{}, err
+	}
 	if e != nil {
 		if rt.ctx.Err() != nil {
 			return musicRoute{}, rt.ctx.Err()
