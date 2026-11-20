@@ -173,33 +173,32 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 	if err := allowed(); err != nil {
 		return err
 	}
-	result, err := c.RunConversation(ctx, backend, prompt, pcm)
-	if err != nil {
-		return err
-	}
-	if err = emit("text", []byte(result.Text)); err != nil {
-		return err
-	}
-	// Use the validated TTS inputs for echo comparison. The display text can
-	// contain decorations that the synthesizer never received.
 	var spoken strings.Builder
-	for _, task := range result.TaskBoundaries {
-		spoken.WriteString(task.Text)
-	}
-	if err = emit("spoken_reference", []byte(spoken.String())); err != nil {
-		return err
-	}
-	// Keep cancellation responsive; the caller still owns Opus, flow control,
-	// OutputASR and real device playback evidence. No extra raw audio is persisted.
-	for begin := 0; begin < len(result.PCM); begin += 2880 {
-		if err = allowed(); err != nil {
+	return c.StreamConversation(ctx, backend, prompt, pcm, func(draft, clause string, audio []byte) error {
+		if err := allowed(); err != nil {
 			return err
 		}
-		if err = emit("audio", result.PCM[begin:min(begin+2880, len(result.PCM))]); err != nil {
+		if draft != "" {
+			if err := emit("text", []byte(draft)); err != nil {
+				return err
+			}
+		}
+		// Keep one display transcript and grow the playback reference only as
+		// synthesis succeeds. The session owns the continuous PCM/Opus stream.
+		spoken.WriteString(clause)
+		if err := emit("spoken_reference", []byte(spoken.String())); err != nil {
 			return err
 		}
-	}
-	return nil
+		for begin := 0; begin < len(audio); begin += 2880 {
+			if err := allowed(); err != nil {
+				return err
+			}
+			if err := emit("audio", audio[begin:min(begin+2880, len(audio))]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 func voiceRouteUsage(raw map[string]any) map[string]any {
 	out := map[string]any{}

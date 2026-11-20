@@ -795,6 +795,8 @@ type encodedPacket struct {
 	end    bool
 }
 
+const speechQueueFrames = 1002
+
 func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	ctx := rt.ctx
 	var asr *OutputASR
@@ -865,7 +867,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	}
 	prompt += controlContext + memoryReceipt + route.Guidance
 	producerCtx, cancel := context.WithCancel(ctx)
-	queueFrames := 1002
+	queueFrames := speechQueueFrames
 	if media {
 		cancel()
 		// The source and synchronous encoded puts share one deadline, so a
@@ -911,18 +913,21 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			if media && kind != "audio" {
 				return errors.New("invalid_media_event")
 			}
-			if kind == "text" {
+			if kind == "text" || kind == "spoken_reference" {
 				s.mu.Lock()
-				rt.turn.Generated = string(value)
-				s.mu.Unlock()
-				return nil
-			}
-			if kind == "spoken_reference" {
-				s.mu.Lock()
-				if text := string(value); text != rt.turn.Generated {
+				defer s.mu.Unlock()
+				if err := producerCtx.Err(); err != nil {
+					return err
+				}
+				text := string(value)
+				if kind == "text" {
+					rt.turn.Generated = text
+				} else if text == rt.turn.Generated {
+					// The last validated part may complete the original draft.
+					rt.turn.Synthesized = ""
+				} else {
 					rt.turn.Synthesized = text
 				}
-				s.mu.Unlock()
 				return nil
 			}
 			pending = append(pending, value...)

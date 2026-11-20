@@ -379,6 +379,7 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 	const spoken = "你好……你好。"
 	for _, route := range []string{"A", "B"} {
 		t.Run(route, func(t *testing.T) {
+			var firstAudio atomic.Bool
 			usage := func(stage string) map[string]any {
 				switch stage {
 				case "tts":
@@ -446,6 +447,9 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 				cont := read()
 				text := cont["payload"].(map[string]any)["input"].(map[string]any)["text"].(string)
 				_ = read()
+				if text == "你好。" && !firstAudio.Load() {
+					t.Error("second synthesis began before the validated first audio was delivered")
+				}
 				out := func(kind string, words any) any {
 					return map[string]any{"type": kind, "original_text": text, "sentence": map[string]any{"index": 0, "words": words}}
 				}
@@ -469,14 +473,22 @@ func TestProductRouteGenerationAdapterIntentAndNoRawCapture(t *testing.T) {
 			err = session.generate(context.Background(), 1, "existing common business context", make([]byte, 3200), func(kind string, b []byte) error {
 				switch kind {
 				case "text":
+					if text != "" {
+						return errors.New("display transcript emitted more than once")
+					}
 					text = string(b)
 				case "spoken_reference":
 					reference = string(b)
 				case "audio":
-					if text != generated || reference != spoken {
-						return errors.New("missing generated text or spoken reference before audio")
+					wantReference := spoken
+					if audio < 9600 {
+						wantReference = "你好……"
+					}
+					if text != generated || reference != wantReference {
+						return errors.New("spoken reference did not follow validated audio")
 					}
 					audio += len(b)
+					firstAudio.Store(true)
 				}
 				return nil
 			})

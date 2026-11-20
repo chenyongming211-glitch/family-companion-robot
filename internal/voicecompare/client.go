@@ -58,11 +58,24 @@ func (c Client) limits() runLimits {
 
 type Client struct {
 	product                                                  bool
+	onClause                                                 func(draft, text string, audio []byte) error
 	BeforeSubmit                                             func() error // Optional live access check immediately before provider writes.
 	Key, RealtimeURL, InferenceURL, TextURL, TTSModel, Voice string
 	BeforeCall                                               func(stage string, reserveYuan float64) error
 	AfterCall                                                func(stage string, usage map[string]any, err error) error
 	RecordEvent                                              func(json.RawMessage) error
+}
+
+// StreamConversation hands each fully validated and accounted TTS task to the
+// consumer before submitting the next. Only the first callback carries the
+// original reply. Later errors leave previously delivered audio with the caller.
+func (c Client) StreamConversation(ctx context.Context, backend, instructions string, pcm []byte, onClause func(draft, text string, audio []byte) error) error {
+	if onClause == nil {
+		return errors.New("missing conversation output")
+	}
+	c.onClause = onClause
+	_, err := c.RunConversation(ctx, backend, instructions, pcm)
+	return err
 }
 
 // RunConversation is the permanent A/B generation path. Run keeps historical
@@ -152,16 +165,34 @@ func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byt
 		return r, errors.New("too many TTS clauses")
 	}
 	wordPrefix := true
-	for _, clause := range clauses {
-		pcmPart, wordPart, call, err := c.tts(ctx, clause, 24000*2*limits.outputSeconds-len(r.PCM))
+	totalBytes, maxBytes := 0, 24000*2*limits.outputSeconds
+	for i, clause := range clauses {
+		pcmPart, wordPart, call, err := c.tts(ctx, clause, maxBytes-totalBytes)
 		if call.Stage != "" {
 			r.Calls = append(r.Calls, call)
 		}
 		if err != nil {
 			return r, err
 		}
-		if len(r.PCM)+len(pcmPart) > 24000*2*limits.outputSeconds {
+		totalBytes += len(pcmPart)
+		if totalBytes > maxBytes {
 			return r, errors.New("TTS output limit exceeded")
+		}
+		if c.onClause != nil {
+			if err := ctx.Err(); err != nil {
+				return r, err
+			}
+			var draft string
+			if i == 0 {
+				draft = r.Text
+			}
+			if err := c.onClause(draft, clause, pcmPart); err != nil {
+				return r, err
+			}
+			if err := ctx.Err(); err != nil {
+				return r, err
+			}
+			continue
 		}
 		offset := (int64(len(r.PCM)/2) + 23) / 24 // Round up: never confirm the next task early.
 		precision := "word"

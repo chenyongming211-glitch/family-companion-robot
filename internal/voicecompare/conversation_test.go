@@ -206,6 +206,21 @@ func TestConversationProductRouteCascadeLongReplyAndProviderFailure(t *testing.T
 	if len(result.TaskBoundaries) != 20 || result.TaskBoundaries[0].Text != sentence {
 		t.Fatal("unexpected synthesized story opening", result.TaskBoundaries)
 	}
+	delivered := 0
+	err = c.StreamConversation(context.Background(), "cascade", "history", make([]byte, 16000*2*20), func(draft, spoken string, pcm []byte) error {
+		wantDraft := ""
+		if delivered == 0 {
+			wantDraft = text
+		}
+		if draft != wantDraft || spoken != sentence || len(pcm) != 9600 {
+			t.Fatal("stream lost the generated draft or validated TTS content")
+		}
+		delivered++
+		return nil
+	})
+	if err != nil || delivered != 20 {
+		t.Fatal("incomplete cascade stream", delivered, err)
+	}
 	c.TextURL = "http://127.0.0.1:1"
 	result, err = c.RunConversation(context.Background(), "cascade", "history", make([]byte, 16000*2*20))
 	if err == nil || len(result.PCM) != 0 {
@@ -242,6 +257,17 @@ func TestConversationProductRouteOutputSixtySecondBound(t *testing.T) {
 			result, err := c.RunConversation(context.Background(), "native", "history", make([]byte, 3200))
 			if seconds == 31 && (err != nil || len(result.PCM) != 31*24000*2) {
 				t.Fatal("old 30 second cap", err, len(result.PCM))
+			}
+			if seconds == 31 {
+				c.RealtimeURL = wsFixture(t, func(conn *websocket.Conn) { productNativeFixture(t, conn, "你好。你好。", 3200) })
+				bytesDelivered := 0
+				err = c.StreamConversation(context.Background(), "native", "history", make([]byte, 3200), func(_, _ string, pcm []byte) error {
+					bytesDelivered += len(pcm)
+					return nil
+				})
+				if err == nil || bytesDelivered != 31*24000*2 {
+					t.Fatal("60 second limit must span clauses", bytesDelivered, err)
+				}
 			}
 			if seconds == 61 && (err == nil || len(result.PCM) != 0) {
 				t.Fatal("output unbounded", err, len(result.PCM))
