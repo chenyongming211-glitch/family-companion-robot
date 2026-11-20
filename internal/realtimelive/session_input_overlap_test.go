@@ -125,7 +125,7 @@ func TestSpeakingReferencesTrackAudibleWords(t *testing.T) {
 			r := newEchoAdmissionRig(t)
 			old := echoOutput(t, r, "😋我是小满，遥远森林中住着狐狸。", 32)
 			r.s.mu.Lock()
-			old.spokenReference = "我是小满，遥远森林中住着狐狸。"
+			old.turn.Synthesized = "我是小满，遥远森林中住着狐狸。"
 			if name != "spoken_form" {
 				old.turn.Tracker.Add(map[string]any{"sentence_end": true, "sentence_id": json.Number("1"), "words": []any{
 					map[string]any{"text": "停", "begin_time": json.Number("1450"), "end_time": json.Number("1550")},

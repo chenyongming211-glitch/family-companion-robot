@@ -23,6 +23,33 @@ func segmentWord(text string, begin, end any) map[string]any {
 	return map[string]any{"text": text, "begin_time": begin, "end_time": end}
 }
 
+func TestPlaybackEvidenceUsesSynthesizedTranscriptWithReceipts(t *testing.T) {
+	const prefix = "小刺猬出门了。"
+	const spoken = prefix + "它带了一把伞。"
+	const draft = "（表情：开心）\n\n" + spoken
+	turn := segmentTurn(draft, []map[string]any{segmentWord(prefix, 120, 500), segmentWord("它带了一把伞。", 600, 2500)})
+	turn.Synthesized = spoken
+	turn.Completed = 0
+	if PlaybackEvidence(turn).SpokenText != nil || len(ConfirmedPlayback(turn).Segments) != 0 {
+		t.Fatal("synthesized text credited without playback")
+	}
+	turn.Completed = 24000
+	evidence := PlaybackEvidence(turn)
+	segments := ConfirmedPlayback(turn)
+	if evidence.SpokenText == nil || *evidence.SpokenText != prefix || evidence.AlignedPrefix == nil || *evidence.AlignedPrefix != prefix || evidence.ExactStopKnown ||
+		len(segments.Segments) != 1 || segments.Segments[0].Text != prefix || segments.Complete || turn.Prefix()["prefix"] != prefix {
+		t.Fatalf("partial playback lost the actual opening: evidence=%+v, segments=%+v", evidence, segments)
+	}
+	turn.Cut, turn.Ended, turn.PlaybackFinal = false, true, true
+	turn.Completed = turn.Sent
+	evidence = PlaybackEvidence(turn)
+	segments = ConfirmedPlayback(turn)
+	if evidence.SpokenText == nil || *evidence.SpokenText != spoken || evidence.TextSource != "tts_input_full_playback" || !segments.Complete ||
+		len(segments.Segments) != 1 || segments.Segments[0].Text != spoken || turn.Generated != draft || strings.Contains(ContextFor([]*Turn{turn}), "表情") {
+		t.Fatalf("complete playback promoted the draft: evidence=%+v, segments=%+v", evidence, segments)
+	}
+}
+
 func TestConfirmedPlaybackPreservesIndependentClausesAroundMismatch(t *testing.T) {
 	for _, middle := range []string{"他找到了苹果。", "它找到了。"} {
 		t.Run(middle, func(t *testing.T) {

@@ -24,7 +24,6 @@ type liveTurn struct {
 	done                    chan struct{}
 	stoppedAt, drainStarted time.Time
 	lastPlaybackProgress    time.Time // Session.mu; validated Completed advances only.
-	spokenReference         string    // Session.mu; A/B text submitted for synthesis, never proof of playback.
 	asr                     *OutputASR
 	transcriptReady         chan struct{}
 	transcriptOnce          sync.Once
@@ -920,7 +919,9 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 			if kind == "spoken_reference" {
 				s.mu.Lock()
-				rt.spokenReference = string(value)
+				if text := string(value); text != rt.turn.Generated {
+					rt.turn.Synthesized = text
+				}
 				s.mu.Unlock()
 				return nil
 			}
@@ -980,11 +981,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		if asr != nil {
 			asr.Finish()
 		}
-		s.mu.Lock()
-		text, sent := rt.turn.Generated, rt.turn.Sent
-		s.mu.Unlock()
 		if ctx.Err() != nil {
-			s.record("generated_interrupted", map[string]any{"id": rt.turn.ID, "text": text, "sent": sent})
+			s.mu.Lock()
+			fields := generatedRecord(rt.turn)
+			s.mu.Unlock()
+			s.record("generated_interrupted", fields)
 		}
 	}()
 	// Opening the native session has its own 12s budget; the baseline 40s
@@ -1106,15 +1107,25 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		return
 	}
 	rt.turn.Ended = true
-	text, sent := rt.turn.Generated, rt.turn.Sent
-	e = s.sendLocked(map[string]any{"type": "end", "id": rt.turn.ID, "generated_text": text})
+	fields := generatedRecord(rt.turn)
+	e = s.sendLocked(map[string]any{"type": "end", "id": rt.turn.ID, "generated_text": rt.turn.Generated})
 	s.mu.Unlock()
 	if e != nil {
 		s.fail()
 		return
 	}
-	s.record("generated", map[string]any{"id": rt.turn.ID, "text": text, "sent": sent})
+	s.record("generated", fields)
 }
+
+// Snapshot under Session.mu for both terminal archive events.
+func generatedRecord(turn *realtimestate.Turn) map[string]any {
+	fields := map[string]any{"id": turn.ID, "text": turn.Generated, "sent": turn.Sent}
+	if turn.Synthesized != "" {
+		fields["synthesized_text"] = turn.Synthesized
+	}
+	return fields
+}
+
 func (s *Session) turnError(rt *liveTurn) {
 	s.record("turn_error", map[string]any{"id": rt.turn.ID, "error_type": "generation_failed"})
 	s.interruptExpected(rt)

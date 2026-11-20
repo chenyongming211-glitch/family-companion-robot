@@ -498,10 +498,20 @@ func project(raw []byte, info realtimelive.SessionInfo) ([]TurnDTO, bool, error)
 			if !ok {
 				return nil, false, ErrSource
 			}
-			if t.Generated != "" && t.Generated != v {
+			var synthesized string
+			if field, present := m["synthesized_text"]; present {
+				text, ok := field.(string)
+				if !ok || strings.TrimSpace(text) == "" || len(text) > len(v) {
+					return nil, false, ErrSource
+				}
+				if text != v {
+					synthesized = text
+				}
+			}
+			if t.Generated != "" && (t.Generated != v || t.Synthesized != synthesized) {
 				return nil, false, ErrSource
 			}
-			t.Generated = v
+			t.Generated, t.Synthesized = v, synthesized
 			t.Ended = kind == "generated"
 			if kind == "generated_interrupted" {
 				t.Cut = true

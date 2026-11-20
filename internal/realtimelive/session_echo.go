@@ -31,13 +31,6 @@ func (s *Session) speechPlayingLocked() bool {
 		!rt.media && rt.turn.Begun && rt.turn.Sent > 0
 }
 
-func speechReference(rt *liveTurn) string {
-	if rt.spokenReference != "" {
-		return rt.spokenReference
-	}
-	return rt.turn.Generated
-}
-
 func freshPlaybackProgress(rt *liveTurn, now time.Time) bool {
 	if rt == nil || rt.turn.PlaybackBasis != "i2s_dma" || rt.turn.Completed <= 0 || rt.lastPlaybackProgress.IsZero() {
 		return false
@@ -68,7 +61,7 @@ func (s *Session) suspectedOpeningEchoLocked(p *pendingInput, text string, now t
 		return false
 	}
 	if rt.turn.Completed <= 36000 {
-		return strings.Contains(string(echoOpeningRunes(speechReference(rt))), string(input))
+		return strings.Contains(string(echoOpeningRunes(rt.turn.PlaybackTranscript())), string(input))
 	}
 	if rt.turn.Tracker == nil || len(rt.turn.Tracker.Sentences) == 0 {
 		return false
@@ -173,7 +166,7 @@ func (s *Session) inputDecisionFieldsLocked(p *pendingInput, result inputDecisio
 		fields["opening_echo_check"] = map[string]any{
 			"output_id": rt.turn.ID, "same_output": s.output == rt,
 			"active_output": s.activeOutputLocked(), "overlapped": p.overlapped, "capture_played_samples": p.overlapSamples,
-			"reference_present": speechReference(rt) != "", "matched": result.match,
+			"reference_present": rt.turn.PlaybackTranscript() != "", "matched": result.match,
 			"completed": rt.turn.Completed, "progress_age_ms": age,
 		}
 	}

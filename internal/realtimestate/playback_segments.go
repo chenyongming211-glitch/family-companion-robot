@@ -37,17 +37,18 @@ func ConfirmedPlayback(turn *Turn) PlayedSegments {
 	result.Complete = turn.Ended && turn.Sent > 0 && turn.Completed == turn.Sent && (turn.PlaybackBasis != "i2s_dma" || turn.PlaybackFinal)
 	// The observation contract caps text at 2048 runes. Do not truncate a clause
 	// or infer anchor uniqueness from only a prefix of a larger transcript.
-	if utf8.RuneCountInString(turn.Generated) > 2048 || turn.Generated == "" {
+	transcript := turn.PlaybackTranscript()
+	if utf8.RuneCountInString(transcript) > 2048 || transcript == "" {
 		return result
 	}
 	if result.Complete {
-		result.Segments = []ConfirmedSegment{{turn.Generated, 0, float64(turn.Sent) / 24}}
+		result.Segments = []ConfirmedSegment{{transcript, 0, float64(turn.Sent) / 24}}
 		result.Unknown = false
 		return result
 	}
 
 	words, _ := Observations(turn)
-	draft := playbackClauses(turn.Generated, turn.Ended)
+	draft := playbackClauses(transcript, turn.Ended)
 	observed := observedPlaybackClauses(turn, words)
 	// Both sides must identify a whole clause exactly once. In particular, a
 	// unique substring is not enough: "吃药" cannot anchor "不要吃药".

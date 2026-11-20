@@ -57,6 +57,7 @@ func (r *AudioRing) Slice(start, end int64) []byte {
 type Turn struct {
 	ID                        int64
 	User, Generated           string
+	Synthesized               string // TTS text override when it differs from Generated. Neither field proves playback.
 	Sent, Completed, Accepted int64
 	Cut, Begun, Ended         bool
 	DrainTarget               *int64
@@ -71,6 +72,16 @@ type Turn struct {
 func NewTurn(id int64) *Turn {
 	return &Turn{ID: id, DrainDone: make(chan struct{}), Tracker: NewPrefixTracker("", 0)}
 }
+
+// PlaybackTranscript is a reference for matching actual playback receipts.
+// Native audio and older archives only carry the original transcript.
+func (t *Turn) PlaybackTranscript() string {
+	if t.Synthesized != "" {
+		return t.Synthesized
+	}
+	return t.Generated
+}
+
 func (t *Turn) CanSend() bool {
 	window := WindowSamples
 	if t.PlaybackWindowSamples == ExtendedWindowSamples {
@@ -152,7 +163,7 @@ func (t *Turn) ReceiptJSON(raw []byte) bool {
 	return t.Receipt(event)
 }
 func (t *Turn) Prefix() map[string]any {
-	t.Tracker.Generated = t.Generated
+	t.Tracker.Generated = t.PlaybackTranscript()
 	t.Tracker.TotalAudioMS = float64(t.Sent) / 24
 	return t.Tracker.Candidate(float64(t.Completed) / 24)
 }

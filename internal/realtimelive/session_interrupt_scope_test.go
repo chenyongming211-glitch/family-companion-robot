@@ -35,8 +35,28 @@ func TestSpokenReferenceDoesNotBecomeAudioOrReplaceTranscript(t *testing.T) {
 	rt := s.addTurn()
 	s.reply(rt, make([]byte, 640))
 	// One real audio frame and the ordinary Opus tail.
-	if rt.turn.Sent != 2*1440 || rt.turn.Generated != transcript || rt.spokenReference != reference {
+	if rt.turn.Sent != 2*1440 || rt.turn.Generated != transcript || rt.turn.Synthesized != reference {
 		t.Fatalf("spoken metadata affected playback or transcript: sent=%d", rt.turn.Sent)
+	}
+	if ev := realtimestate.PlaybackEvidence(rt.turn); ev.SpokenText != nil {
+		t.Fatal("submitted TTS reference credited before receipt")
+	}
+	raw, err := os.ReadFile(filepath.Join(s.directory, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event["event"] == "generated" {
+			found = event["text"] == transcript && event["synthesized_text"] == reference
+		}
+	}
+	if !found {
+		t.Fatal("archive did not retain both the original and the TTS body")
 	}
 	if rt.asr != nil {
 		rt.asr.Close()

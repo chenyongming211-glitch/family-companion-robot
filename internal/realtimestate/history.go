@@ -197,9 +197,10 @@ func PlaybackEvidence(turn *Turn) Evidence {
 		b.WriteString(w.Text)
 	}
 	observed := optional(strings.TrimFunc(b.String(), func(c rune) bool { return unicode.IsSpace(c) || (c >= 0x1c && c <= 0x1f) }))
+	transcript := turn.PlaybackTranscript()
 	var aligned *string
 	if observed != nil {
-		aligned = EquivalentPrefix(turn.Generated, *observed)
+		aligned = EquivalentPrefix(transcript, *observed)
 	}
 	complete := turn.Ended && turn.Sent > 0 && turn.Completed == turn.Sent && (turn.PlaybackBasis != "i2s_dma" || turn.PlaybackFinal)
 	spoken := aligned
@@ -211,8 +212,11 @@ func PlaybackEvidence(turn *Turn) Evidence {
 		source = "output_asr"
 	}
 	if complete {
-		spoken = optional(turn.Generated)
+		spoken = optional(transcript)
 		source = "native_transcript_full_playback"
+		if turn.Synthesized != "" {
+			source = "tts_input_full_playback"
+		}
 		boundary = "complete_response"
 	}
 	alignment := "unmatched"
