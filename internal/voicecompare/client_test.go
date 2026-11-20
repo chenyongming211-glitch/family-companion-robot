@@ -99,6 +99,10 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 		_, _, _ = c.ReadMessage()
 		return
 	}
+	if mode == "provider-rejected" || text == "！" || text == "**" || text == "😊" || text == "……" {
+		taskEvent(c, id, "task-failed", nil)
+		return
+	}
 	if mode == "binary-first" {
 		_ = c.WriteMessage(websocket.BinaryMessage, make([]byte, 9600))
 		return
@@ -150,6 +154,9 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 	case "nonmonotonic":
 		words = append(words, map[string]any{"text": "好", "begin_index": 1, "end_index": 2, "begin_time": 100, "end_time": 150})
 	}
+	if text == "✨" || text == "～" || text == "~" {
+		words = nil
+	}
 	taskEvent(c, id, "result-generated", out("sentence-end", index, words))
 	if mode != "missing-terminal" {
 		usage := usageFixture("tts")
@@ -167,6 +174,46 @@ func TestSplitClausesKeepsWaveBoundaries(t *testing.T) {
 		if len(parts) != 2 || parts[0] != "你的家庭陪伴助手"+mark || parts[1] != "喜欢聊天、讲故事，" || strings.Join(parts, "") != text {
 			t.Fatalf("provider sentence boundary was not preserved: %q", parts)
 		}
+	}
+}
+
+func TestTTSDoesNotSubmitStandaloneDecorations(t *testing.T) {
+	for _, decoration := range []string{"！", "**", "😊", "……", "✨", "～", "~"} {
+		t.Run(decoration, func(t *testing.T) {
+			c := fixtureClient(wsFixture(t, func(conn *websocket.Conn) { ttsFixture(t, conn, "") }))
+			text := "我是小满。" + decoration
+			result, err := c.Run(context.Background(), "tts", "", nil, text)
+			if err != nil || len(result.Calls) != 1 || len(result.PCM) == 0 {
+				t.Fatalf("decoration suppressed valid speech: calls=%d audio=%d err=%v", len(result.Calls), len(result.PCM), err)
+			}
+			if result.Text != text || len(result.TaskBoundaries) != 1 || result.TaskBoundaries[0].Text != "我是小满。" {
+				t.Fatal("original text or spoken boundary changed", result.Text, result.TaskBoundaries)
+			}
+			onlyDecoration, err := c.Run(context.Background(), "tts", "", nil, decoration)
+			if err == nil || len(onlyDecoration.Calls) != 0 {
+				t.Fatal("decoration-only answer was submitted or treated as voiced", err, onlyDecoration.Calls)
+			}
+		})
+	}
+}
+
+func TestTTSAuditDistinguishesPrimaryFailureFromUnknownUsage(t *testing.T) {
+	for mode, expected := range map[string]string{
+		"provider-rejected":    "provider_rejected",
+		"missing-words":        "timestamp_invalid",
+		"metadata-without-pcm": "audio_invalid",
+		"bad-usage":            "usage_invalid",
+		"wrong-task":           "protocol_or_transport",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			var auditErr error
+			c := fixtureClient(wsFixture(t, func(conn *websocket.Conn) { ttsFixture(t, conn, mode) }))
+			c.AfterCall = func(_ string, _ map[string]any, err error) error { auditErr = err; return nil }
+			_, err := c.Run(context.Background(), "tts", "", nil, "你好。")
+			if err == nil || TTSFailureCategory(auditErr) != expected {
+				t.Fatalf("audit reason %q, want %q (error %v)", TTSFailureCategory(auditErr), expected, err)
+			}
+		})
 	}
 }
 

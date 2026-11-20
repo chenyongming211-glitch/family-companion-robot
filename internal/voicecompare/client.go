@@ -234,7 +234,12 @@ func (c Client) call(ctx context.Context, stage string, reserve float64, run fun
 		err = ctx.Err()
 	}
 	if !validUsage(stage, call.Usage) {
-		err = errors.Join(err, errors.New("provider usage unknown or invalid"))
+		usageErr := errors.New("provider usage unknown or invalid")
+		if stage == "tts" && err == nil {
+			err = ttsFailure{"usage_invalid", usageErr}
+		} else {
+			err = errors.Join(err, usageErr)
+		}
 	}
 	return call, errors.Join(err, c.AfterCall(stage, call.Usage, err))
 }
@@ -385,8 +390,11 @@ func (s *socket) taskEvent(id string, usage *map[string]any) (event, error) {
 	if err != nil {
 		return ev, err
 	}
-	if ev.Header.TaskID != id || ev.Header.Event == "task-failed" {
-		return ev, errors.New("task identity mismatch or failure")
+	if ev.Header.TaskID != id {
+		return ev, errors.New("task identity mismatch")
+	}
+	if ev.Header.Event == "task-failed" {
+		return ev, errTaskRejected
 	}
 	if ev.Payload.Usage != nil {
 		*usage = ev.Payload.Usage

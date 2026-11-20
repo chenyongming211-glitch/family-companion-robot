@@ -11,6 +11,45 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var errTaskRejected = errors.New("provider rejected task")
+
+type ttsFailure struct {
+	category string
+	cause    error
+}
+
+func (e ttsFailure) Error() string { return e.cause.Error() }
+func (e ttsFailure) Unwrap() error { return e.cause }
+
+// TTSFailureCategory is safe for durable logs. Provider payloads and the text
+// being synthesized may appear in the underlying errors.
+func TTSFailureCategory(err error) string {
+	var failure ttsFailure
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, errTaskRejected):
+		return "provider_rejected"
+	case errors.As(err, &failure):
+		return failure.category
+	default:
+		return "protocol_or_transport"
+	}
+}
+
+// Isolated punctuation or pictographs produce no words to align and can be
+// rejected by the provider. Filter only whole fragments with no spoken text.
+func ttsDecorationOnly(text string) bool {
+	return strings.TrimFunc(text, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("，。！？；,.!?;～~…*“”‘’「」『』【】（）()✨", r) ||
+			r >= 0x1F300 && r <= 0x1FAFF && unicode.Is(unicode.So, r)
+	}) == ""
+}
+
 func splitClauses(text string) []string {
 	var parts []string
 	var b strings.Builder
@@ -21,14 +60,14 @@ func splitClauses(text string) []string {
 		n++
 		numericSeparator := (r == '.' || r == ',') && i > 0 && i+1 < len(runes) && unicode.IsDigit(runes[i-1]) && unicode.IsDigit(runes[i+1])
 		if strings.ContainsRune("，。！？；,.!?;～~\n", r) && !numericSeparator || n == 64 {
-			if strings.TrimSpace(b.String()) != "" {
+			if !ttsDecorationOnly(b.String()) {
 				parts = append(parts, b.String())
 			}
 			b.Reset()
 			n = 0
 		}
 	}
-	if strings.TrimSpace(b.String()) != "" {
+	if !ttsDecorationOnly(b.String()) {
 		parts = append(parts, b.String())
 	}
 	return parts
@@ -67,7 +106,10 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 				return e
 			}
 			if ev.Header.Event == "task-finished" {
-				if !ended || len(pcm) == 0 || len(words) == 0 && !coarse {
+				if len(pcm) == 0 {
+					return ttsFailure{"audio_invalid", errors.New("missing TTS audio")}
+				}
+				if !ended || len(words) == 0 && !coarse {
 					return errors.New("incomplete TTS terminal")
 				}
 				return nil
@@ -109,7 +151,7 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 					return e
 				}
 				if kind != websocket.BinaryMessage || len(b) == 0 || len(b)%2 != 0 || len(pcm)+len(b) > maxBytes {
-					return errors.New("missing or invalid TTS audio frame")
+					return ttsFailure{"audio_invalid", errors.New("missing or invalid TTS audio frame")}
 				}
 				pcm = append(pcm, b...)
 			case "sentence-end":
@@ -123,7 +165,7 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 					words, e, coarse = nil, nil, true
 				}
 				if e != nil {
-					return e
+					return ttsFailure{"timestamp_invalid", e}
 				}
 				ended = true
 			default:

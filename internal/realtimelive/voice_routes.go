@@ -128,6 +128,7 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 		return nil
 	}
 	var audit *intent
+	ttsPart := 0
 	c := voicecompare.Client{Key: s.cfg.Key, RealtimeURL: s.cfg.URL, InferenceURL: s.cfg.ASRURL, TextURL: textURL.String(), TTSModel: voiceRouteTTSModel, Voice: voiceRouteTTSVoice, BeforeSubmit: allowed}
 	c.BeforeCall = func(stage string, _ float64) error {
 		if err := allowed(); err != nil {
@@ -139,7 +140,12 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 			return err
 		}
 		model := map[string]string{"native": s.cfg.Model, "asr": "fun-asr-realtime", "llm": "qwen-plus", "tts": c.TTSModel}[stage]
-		return audit.update(map[string]any{"id": id, "route": s.voiceRoute, "model": model, "usage_source": "voice_route_" + stage, "usage_state": "unknown"})
+		fields := map[string]any{"id": id, "route": s.voiceRoute, "model": model, "usage_source": "voice_route_" + stage, "usage_state": "unknown"}
+		if stage == "tts" {
+			ttsPart++
+			fields["tts_part"] = ttsPart
+		}
+		return audit.update(fields)
 	}
 	c.AfterCall = func(stage string, usage map[string]any, callErr error) error {
 		if audit == nil {
@@ -157,7 +163,11 @@ func (s *Session) generateConversation(ctx context.Context, id int64, prompt str
 				usageState = "unknown"
 			}
 		}
-		return audit.update(map[string]any{"state": state, "usage": numeric, "usage_state": usageState})
+		result := map[string]any{"state": state, "usage": numeric, "usage_state": usageState}
+		if stage == "tts" && callErr != nil {
+			result["failure_category"] = voicecompare.TTSFailureCategory(callErr)
+		}
+		return audit.update(result)
 	}
 	if err := allowed(); err != nil {
 		return err
