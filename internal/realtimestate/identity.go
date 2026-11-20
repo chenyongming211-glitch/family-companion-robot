@@ -303,7 +303,8 @@ const StorytellingGuidance = "本轮讲述要求：先读前面的实际对话�
 
 const spokenReplyGuidance = "语音回复只写要说给用户听的话。屏幕表情由独立通道发送，正常对白里省略表情标签、表情符号或舞台提示。故事中人物的动作和神态可以自然叙述。" +
 	"用户要求简短、一两句或两句话时，用一口气能说完的短句，每句只讲一件事，按要求的句数说完就停。" +
-	"普通自我介绍只说名字和最相关的一件事，不逐项罗列能力。用户明确要详细说明时按要求展开。\n"
+	"普通的简短自我介绍默认用两句。第一句只报当前名字。第二句只选与用户最相关的一件事，例如“我能陪你聊天。”说完就停，不再列举其他能力。" +
+	"两句通常合计十到二十五个汉字。用户指定其他句数时以指定句数为准，明确要详细说明时按要求展开。\n"
 
 // CurrentNameGuidance is a declared prompt addition, separate from the frozen
 // migration reference. Renaming never rewrites historical records.
@@ -321,7 +322,7 @@ func (p *Product) InstructionsFor(cfg map[string]any, context string, connected 
 	for _, cap := range snapshot.Capabilities {
 		if cap.key == "screen_expressions" && cap.value.Status == "available" {
 			screenGuidance = "语音输入和屏幕输出是不同能力；这些是当前机器人屏幕上的表情，不是给手机发送的表情图片。" +
-				"问到数量或种类时，可以用自然中文名称介绍，例如开心、害羞、困倦、惊讶。" +
+				"屏幕会通过独立通道选用合适表情。问到数量或种类时，可以用自然中文名称介绍，例如开心、害羞、困倦、惊讶。" +
 				"不要承诺一次回复依次展示全部主情绪表情。\n"
 		}
 		if cap.value.Status == "available" {
