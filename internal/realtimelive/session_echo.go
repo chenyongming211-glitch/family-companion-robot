@@ -90,6 +90,11 @@ type inputDecision struct {
 	match  bool
 }
 
+func (p *pendingInput) shortEchoCapture() bool {
+	return p.matchedEchoPreview && !p.hadPreview && p.ended && p.overlapped && p.overlapSamples > 0 &&
+		len(p.pcm) > 0 && len(p.pcm) <= 32000 // up to one second at 16 kHz, PCM16
+}
+
 // In very short Mandarin ASR fragments, repeated syllables and trailing
 // questioning/aspect particles can all come from one uncertain syllable.
 // Keep this as an overlap-only confidence hint, not transcript normalization.

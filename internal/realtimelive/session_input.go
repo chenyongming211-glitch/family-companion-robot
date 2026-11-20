@@ -26,6 +26,7 @@ type pendingInput struct {
 	overlapped                            bool   // Device speech was playing when VAD opened this capture.
 	overlapSamples                        int64  // First confirmed playhead observed during this capture.
 	weakPreview                           string // At most eight normalized runes until corroborated.
+	matchedEchoPreview                    bool   // An earlier preview matched this capture's playing output.
 	lastHeldReason                        string
 }
 
@@ -201,6 +202,15 @@ func (s *Session) previewInput(event map[string]any) error {
 	}
 	stable, _ := event["text"].(string)
 	decision := s.playbackInputLocked(p, preview, stable, false, now)
+	if decision.match {
+		p.matchedEchoPreview = true
+	}
+	// Once VAD has sealed a short capture, a revised preview adds no new
+	// audio. Wait for its final before cutting a previously matching output.
+	if decision.allow && decision.reason != "stop_request" && p.shortEchoCapture() &&
+		s.output == p.outputAtStart && s.speechPlayingLocked() && len(echoOpeningRunes(preview)) <= 8 {
+		decision = inputDecision{reason: "awaiting_echo_check"}
+	}
 	fields := s.inputDecisionFieldsLocked(p, decision, "provider_asr_preview", chars, now)
 	if !decision.allow {
 		record := p.lastHeldReason != decision.reason
@@ -244,7 +254,37 @@ func (s *Session) finishInput(event map[string]any) error {
 	}
 	now := time.Now()
 	decision := s.playbackInputLocked(p, text, text, true, now)
+	audioCheck := ""
+	referenceMS := 0
+	if decision.allow && decision.reason != "stop_request" && p.shortEchoCapture() {
+		audioCheck = "unavailable"
+		if reference := s.capturedEchoReferenceLocked(p); len(reference) != 0 {
+			referenceMS = len(reference) / 32 // 16 kHz mono PCM16
+			// The output or a new VAD item can retire p and wipe its microphone
+			// buffer while the comparison runs. Keep a private bounded copy.
+			mic := append([]byte(nil), p.pcm...)
+			s.mu.Unlock()
+			matched := matchingPlaybackAudio(mic, reference)
+			clear(mic)
+			clear(reference)
+			s.mu.Lock()
+			if s.ctx.Err() != nil || s.lastInput != p || p.retired {
+				s.mu.Unlock()
+				return nil
+			}
+			now = time.Now()
+			audioCheck = "no_match"
+			if matched && s.output == p.outputAtStart {
+				audioCheck = "matched"
+				decision = inputDecision{reason: "confirmed_playback_echo"}
+			}
+		}
+	}
 	fields := s.inputDecisionFieldsLocked(p, decision, "provider_asr_final", utf8.RuneCountInString(text), now)
+	if audioCheck != "" {
+		fields["playback_audio_check"] = audioCheck
+		fields["playback_reference_ms"] = referenceMS
+	}
 	fields["samples"] = len(p.pcm) / 2
 	fields["had_preview"] = p.hadPreview
 	if !decision.allow {

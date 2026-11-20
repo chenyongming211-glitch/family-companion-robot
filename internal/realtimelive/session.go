@@ -47,6 +47,7 @@ type Session struct {
 	mu               sync.Mutex
 	history          []*liveTurn
 	ring             *realtimestate.AudioRing
+	echoPCM          *realtimestate.AudioRing // Session.mu; only the current device speech output.
 	input            chan []byte
 	listener         *Native
 	controls         *deviceControls
@@ -186,6 +187,7 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 		if e != nil {
 			return true, e
 		}
+		s.rememberEchoPCMLocked(rt, converted)
 		rt.asr.Feed(converted)
 	}
 	return true, nil
@@ -203,6 +205,7 @@ func (s *Session) activateTurnLocked(id int64, stoppedAt time.Time) *liveTurn {
 	if s.output != nil {
 		s.retireExpressionLocked(s.output)
 	}
+	s.echoPCM = nil
 	ctx, cancel := context.WithCancel(s.ctx)
 	rt := &liveTurn{turn: realtimestate.NewTurn(id), ctx: ctx, cancel: cancel, done: make(chan struct{}), transcriptReady: make(chan struct{}), stoppedAt: stoppedAt}
 	// Robot ownership comes from the authenticated adapter. Apply the same
@@ -259,6 +262,7 @@ func (s *Session) interruptInput(expected *liveTurn, source string, input *pendi
 		s.mu.Unlock()
 		return nil
 	}
+	s.echoPCM = nil
 	t := rt.turn
 	_, device := s.wire.(*xiaozhiWire)
 	playbackDone := closed(rt.done)
@@ -347,6 +351,7 @@ func (s *Session) Run() (err error) {
 		}
 		s.wg.Wait()
 		s.mu.Lock()
+		s.echoPCM = nil
 		history := append([]*liveTurn(nil), s.history...)
 		s.mu.Unlock()
 		for _, rt := range history {
@@ -596,6 +601,9 @@ func (s *Session) receiveReceipt(event map[string]any) error {
 	term := normalized["terminal"]
 	if rt.turn.PlaybackFinal {
 		s.retireExpressionLocked(rt)
+		if rt == s.output {
+			s.echoPCM = nil
+		}
 	}
 	var fields map[string]any
 	if term == "drained" || term == "played" {
