@@ -109,6 +109,14 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 	}
 	out := func(typ string, index int, words any) map[string]any {
 		original := text
+		if mode == "omit-pictograph" {
+			original = strings.ReplaceAll(original, "😋", "")
+		}
+		if mode == "ellipsis-boundary" {
+			if i := strings.Index(text, "……"); i >= 0 {
+				original = text[:i+len("……")]
+			}
+		}
 		if mode == "wave-boundary" {
 			if i := strings.IndexAny(text, "～~"); i >= 0 {
 				original = text[:i] + string([]rune(text[i:])[0])
@@ -134,6 +142,14 @@ func ttsFixture(t *testing.T, c *websocket.Conn, mode string) {
 	word := map[string]any{"text": strings.TrimRight(text, "。！？"), "begin_index": 0, "end_index": len([]rune(text)) - 1, "begin_time": 0, "end_time": 200}
 	if mode == "wave-boundary" {
 		lexical := strings.TrimRight(text, "。！？～~，,")
+		word["text"], word["end_index"] = lexical, len([]rune(lexical))
+	}
+	if mode == "omit-pictograph" {
+		lexical := strings.TrimRight(text, " \n。")
+		word["text"], word["end_index"] = lexical, len([]rune(lexical))
+	}
+	if mode == "ellipsis-boundary" {
+		lexical := strings.TrimRight(text, "…。")
 		word["text"], word["end_index"] = lexical, len([]rune(lexical))
 	}
 	words := []any{word}
@@ -214,6 +230,27 @@ func TestTTSAuditDistinguishesPrimaryFailureFromUnknownUsage(t *testing.T) {
 				t.Fatalf("audit reason %q, want %q (error %v)", TTSFailureCategory(auditErr), expected, err)
 			}
 		})
+	}
+}
+
+func TestTTSSpokenTextMatchesProviderWhenReplyContainsPictograph(t *testing.T) {
+	const raw = "甚至馋嘴和搞怪 😋  \n下一句。"
+	c := fixtureClient(wsFixture(t, func(conn *websocket.Conn) { ttsFixture(t, conn, "omit-pictograph") }))
+	result, err := c.Run(context.Background(), "tts", "", nil, raw)
+	if err != nil || len(result.Calls) != 2 || len(result.PCM) != 19200 {
+		t.Fatalf("pictograph stopped speech: calls=%d audio=%d err=%v", len(result.Calls), len(result.PCM), err)
+	}
+	if result.Text != raw || len(result.TaskBoundaries) != 2 || result.TaskBoundaries[0].Text != "甚至馋嘴和搞怪   \n" {
+		t.Fatal("stored reply or verified speech text changed", result.Text, result.TaskBoundaries)
+	}
+}
+
+func TestTTSKeepsProviderEllipsisBoundary(t *testing.T) {
+	const raw = "小猫停下脚步……一共三步。"
+	c := fixtureClient(wsFixture(t, func(conn *websocket.Conn) { ttsFixture(t, conn, "ellipsis-boundary") }))
+	result, err := c.Run(context.Background(), "tts", "", nil, raw)
+	if err != nil || len(result.TaskBoundaries) != 2 || result.TaskBoundaries[0].Text != "小猫停下脚步……" || result.Text != raw {
+		t.Fatal("lost intact reply or ellipsis boundary", err, result.TaskBoundaries)
 	}
 }
 

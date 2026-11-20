@@ -16,16 +16,18 @@ func taskAlignmentFixture(t *testing.T, c *websocket.Conn, failure string) {
 	cont := readJSON(t, c)
 	text := cont["payload"].(map[string]any)["input"].(map[string]any)["text"].(string)
 	readJSON(t, c)
-	pieces := []string{}
-	for _, r := range text {
-		pieces = append(pieces, string(r))
-	}
+	spoken := text
 	if strings.Contains(text, "100") {
-		if strings.Contains(text, "……") {
-			pieces = []string{"第", "一", "百", "颗", "……", "结", "束", "。"}
-		} else {
-			pieces = []string{"第", "一", "百", "颗", "、", "、", "结", "束", "。"}
+		spoken = strings.ReplaceAll(strings.ReplaceAll(text, "100", "一百"), "——", "、、")
+	}
+	// The provider reports a pair of ellipsis characters in one word item.
+	var pieces []string
+	for _, r := range spoken {
+		if r == '…' && len(pieces) > 0 && pieces[len(pieces)-1] == "…" {
+			pieces[len(pieces)-1] = "……"
+			continue
 		}
+		pieces = append(pieces, string(r))
 	}
 	words := []map[string]any{}
 	for i, part := range pieces {

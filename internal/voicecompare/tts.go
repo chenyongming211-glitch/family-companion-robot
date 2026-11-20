@@ -45,21 +45,31 @@ func TTSFailureCategory(err error) string {
 // rejected by the provider. Filter only whole fragments with no spoken text.
 func ttsDecorationOnly(text string) bool {
 	return strings.TrimFunc(text, func(r rune) bool {
-		return unicode.IsSpace(r) || strings.ContainsRune("，。！？；,.!?;～~…*“”‘’「」『』【】（）()✨", r) ||
-			r >= 0x1F300 && r <= 0x1FAFF && unicode.Is(unicode.So, r)
+		return unicode.IsSpace(r) || strings.ContainsRune("，。！？；,.!?;～~…*“”‘’「」『』【】（）()", r)
 	}) == ""
 }
 
 func splitClauses(text string) []string {
+	// CosyVoice omits these pictographs even inside a spoken fragment. Remove
+	// them before submission so the strict provider text check still holds.
+	// Result.Text separately retains the full model reply.
+	spoken := strings.Map(func(r rune) rune {
+		if r == '✨' || r >= 0x1F300 && r <= 0x1FAFF && unicode.Is(unicode.So, r) {
+			return -1
+		}
+		return r
+	}, text)
 	var parts []string
 	var b strings.Builder
 	n := 0
-	runes := []rune(text)
+	runes := []rune(spoken)
 	for i, r := range runes {
 		b.WriteRune(r)
 		n++
 		numericSeparator := (r == '.' || r == ',') && i > 0 && i+1 < len(runes) && unicode.IsDigit(runes[i-1]) && unicode.IsDigit(runes[i+1])
-		if strings.ContainsRune("，。！？；,.!?;～~\n", r) && !numericSeparator || n == 64 {
+		punctuationEnd := strings.ContainsRune("，。！？；,.!?;～~\n", r) && !numericSeparator
+		ellipsisEnd := r == '…' && (i+1 == len(runes) || runes[i+1] != '…')
+		if punctuationEnd || ellipsisEnd || n == 64 {
 			if !ttsDecorationOnly(b.String()) {
 				parts = append(parts, b.String())
 			}
@@ -135,7 +145,7 @@ func (c Client) tts(ctx context.Context, text string, maxBytes int) (pcm []byte,
 				// Begin/stream events may carry changing provisional timestamps.
 				// Only sentence-end words are validated and used for playback mapping.
 				if out.Original != text {
-					return fmt.Errorf("TTS original text mismatch: requested=%q received=%q", text, out.Original)
+					return ttsFailure{"source_text_mismatch", fmt.Errorf("TTS original text mismatch: requested=%q received=%q", text, out.Original)}
 				}
 				started = true
 				index = *out.Sentence.Index
