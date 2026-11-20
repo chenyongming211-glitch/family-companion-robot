@@ -182,7 +182,7 @@ func TestPythonDifferential(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, c := range cases {
-		// Only the declared Go storytelling addition differs from the frozen
+		// Only the declared Go reply guidance additions differ from the frozen
 		// Python prompt. Identity, capabilities, background and state remain
 		// compared in full; do not change the rollback reference implementation.
 		if c["action"] == "instructions" {
@@ -190,7 +190,7 @@ func TestPythonDifferential(t *testing.T) {
 			if !ok || strings.Count(legacy, "\n对话规则：") != 1 {
 				t.Fatalf("case %d: frozen prompt boundary changed", i)
 			}
-			expected[i] = legacy + "\n\n" + StorytellingGuidance
+			expected[i] = legacy + "\n\n" + StorytellingGuidance + spokenReplyGuidance
 		}
 		actual, err := evaluateBaselineCase(c, product)
 		if err != nil {

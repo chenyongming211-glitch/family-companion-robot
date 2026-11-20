@@ -60,6 +60,43 @@ func TestConversationProductRouteNormalTextAndNoCallCaps(t *testing.T) {
 		t.Fatal("product generation", err, result.Text, len(result.PCM), len(stages))
 	}
 }
+
+func TestConversationKeepsRawReplyButSpeaksOnlyStory(t *testing.T) {
+	const body = "小刺猬阿团总嫌自己满身尖刺。"
+	const raw = "（表情：开心）\n\n" + body
+	c := fixtureClient(wsFixture(t, func(conn *websocket.Conn) { ttsFixture(t, conn, "omit-pictograph") }))
+	c.RealtimeURL = wsFixture(t, func(conn *websocket.Conn) { productNativeFixture(t, conn, raw, 3200) })
+	result, err := c.RunConversation(context.Background(), "native", "讲个故事", make([]byte, 3200))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != raw || len(result.TaskBoundaries) != 1 || result.TaskBoundaries[0].Text != body || len(result.PCM) != 9600 {
+		t.Fatalf("raw=%q, synthesized tasks=%v, PCM bytes=%d", result.Text, result.TaskBoundaries, len(result.PCM))
+	}
+}
+
+func TestConversationSpokenTextRecognizesOnlyStandaloneFirstLine(t *testing.T) {
+	for _, raw := range []string{
+		"（表情：开心）这是一句台词。",
+		"“（表情：开心）”\n这是书里的原话。",
+		"他说：\n（表情：开心）\n这是一句台词。",
+		"（小声地说）\n夜深了。",
+		"（表情：为难）\n夜深了。",
+		"(表情：开心）\n夜深了。",
+		"（表情：开心）",
+	} {
+		if got := conversationSpokenText(raw); got != raw {
+			t.Errorf("changed spoken prose %q to %q", raw, got)
+		}
+	}
+	const body = "小刺猬醒来了。"
+	for _, cue := range []string{"（表情：开心）\n\n", " \r\n(表情:困倦) \r\n"} {
+		if got := conversationSpokenText(cue + body); got != body {
+			t.Errorf("expected only the story after %q; got %q", cue, got)
+		}
+	}
+}
+
 func TestConversationProductRouteBadMetadataAndCancellation(t *testing.T) {
 	for _, mode := range []string{"wrong-text", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
@@ -78,7 +115,8 @@ func TestConversationProductRouteBadMetadataAndCancellation(t *testing.T) {
 	}
 }
 func TestConversationProductRouteCascadeLongReplyAndProviderFailure(t *testing.T) {
-	text := strings.Repeat("保持上下文自然回答。", 20)
+	const sentence = "保持上下文自然回答。"
+	text := "（表情：开心）\n\n" + strings.Repeat(sentence, 20)
 	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -164,6 +202,9 @@ func TestConversationProductRouteCascadeLongReplyAndProviderFailure(t *testing.T
 	result, err := c.RunConversation(context.Background(), "cascade", "history", make([]byte, 16000*2*20))
 	if err != nil || result.Text != text || len(result.PCM) == 0 {
 		t.Fatal(err, result.Text)
+	}
+	if len(result.TaskBoundaries) != 20 || result.TaskBoundaries[0].Text != sentence {
+		t.Fatal("unexpected synthesized story opening", result.TaskBoundaries)
 	}
 	c.TextURL = "http://127.0.0.1:1"
 	result, err = c.RunConversation(context.Background(), "cascade", "history", make([]byte, 16000*2*20))

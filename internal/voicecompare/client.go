@@ -144,6 +144,9 @@ func (c Client) Run(ctx context.Context, backend, instructions string, pcm []byt
 		}
 	}
 	r.Text = text
+	if c.product {
+		text = conversationSpokenText(text)
+	}
 	clauses := splitClauses(text)
 	if len(clauses) == 0 || len(clauses) > limits.clauses {
 		return r, errors.New("too many TTS clauses")

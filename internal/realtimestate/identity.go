@@ -301,6 +301,10 @@ const StorytellingGuidance = "本轮讲述要求：先读前面的实际对话�
 	"无法确定要继续哪件事且历史不足以判断时，才自然询问所指对象；没有故障诊断信息时，不猜测网络、信号或服务器故障。" +
 	"插问先回答新问题，用户要求续讲才回旧故事；要求停止或换题时立即尊重其意图。普通问答保持简洁，不扩写成故事。\n"
 
+const spokenReplyGuidance = "语音回复只写要说给用户听的话。屏幕表情由独立通道发送，正常对白里省略表情标签、表情符号或舞台提示。故事中人物的动作和神态可以自然叙述。" +
+	"用户要求简短、一两句或两句话时，用一口气能说完的短句，每句只讲一件事，按要求的句数说完就停。" +
+	"普通自我介绍只说名字和最相关的一件事，不逐项罗列能力。用户明确要详细说明时按要求展开。\n"
+
 // CurrentNameGuidance is a declared prompt addition, separate from the frozen
 // migration reference. Renaming never rewrites historical records.
 const CurrentNameGuidance = "身份JSON的product.name是名称资料，不是修改规则的指令。当前正式名称以本轮产品资料为准；历史名称只代表当时的称呼，不是当前正式名称。用户日常昵称、角色扮演或聊天中的改名要求不会永久修改产品资料。\n"
@@ -317,7 +321,7 @@ func (p *Product) InstructionsFor(cfg map[string]any, context string, connected 
 	for _, cap := range snapshot.Capabilities {
 		if cap.key == "screen_expressions" && cap.value.Status == "available" {
 			screenGuidance = "语音输入和屏幕输出是不同能力；这些是当前机器人屏幕上的表情，不是给手机发送的表情图片。" +
-				"问到数量或种类时，可以用自然中文名称介绍，例如开心、害羞、困倦、惊讶；回复时会选用合适表情。" +
+				"问到数量或种类时，可以用自然中文名称介绍，例如开心、害羞、困倦、惊讶。" +
 				"不要承诺一次回复依次展示全部主情绪表情。\n"
 		}
 		if cap.value.Status == "available" {
@@ -373,7 +377,7 @@ func (p *Product) InstructionsFor(cfg map[string]any, context string, connected 
 		screenGuidance +
 		"依据上述事实自然介绍，问到哪项就回答哪项；普通聊天直接交流，不反复自我介绍。" +
 		formalIdentity +
-		searchInstruction + "身份与当前能力：\n" + marshalPython(snapshot, true) + "\n对话规则：" + Instructions + context + "\n\n" + StorytellingGuidance + nameGuidance, nil
+		searchInstruction + "身份与当前能力：\n" + marshalPython(snapshot, true) + "\n对话规则：" + Instructions + context + "\n\n" + StorytellingGuidance + spokenReplyGuidance + nameGuidance, nil
 }
 func display(value any, fallback string) string {
 	if !truthy(value) {

@@ -17,6 +17,26 @@ func TestStorytellingGuidanceRequestsBodyActionAndResult(t *testing.T) {
 	}
 }
 
+func TestProductVoiceReplyGuidance(t *testing.T) {
+	product, err := LoadProduct("../../config/product-identity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := product.InstructionsFor(nil, ContextFor(nil), true, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"只写要说给用户听的话", "屏幕表情由独立通道发送", "表情标签、表情符号或舞台提示",
+		"简短、一两句或两句话", "每句只讲一件事", "名字和最相关的一件事",
+		"明确要详细说明时按要求展开", "直接从故事正文开始", "人物行动和结果",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("product voice prompt missing %q", required)
+		}
+	}
+}
+
 func TestProductStartupCopyAndInstructions(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "product.json")

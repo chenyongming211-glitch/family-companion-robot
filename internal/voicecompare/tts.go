@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -47,6 +48,21 @@ func ttsDecorationOnly(text string) bool {
 	return strings.TrimFunc(text, func(r rune) bool {
 		return unicode.IsSpace(r) || strings.ContainsRune("，。！？；,.!?;～~…*“”‘’「」『』【】（）()", r)
 	}) == ""
+}
+
+// A model can prefix its reply with a standalone screen direction. Only an
+// explicit known display label on the first line is metadata eligible for removal.
+const displayLabel = `表情[：:](平静|开心|关爱|害羞|自信|馋嘴|难过|哭泣|困倦|搞怪|生气|惊讶|眨眼|放松|疑惑)`
+
+var leadingDisplayCue = regexp.MustCompile(`^[ \t\r\n]*(（` + displayLabel + `）|\(` + displayLabel + `\))[ \t]*\r?\n`)
+
+func conversationSpokenText(text string) string {
+	if cue := leadingDisplayCue.FindStringIndex(text); cue != nil {
+		if body := strings.TrimLeft(text[cue[1]:], "\r\n"); strings.TrimSpace(body) != "" {
+			return body
+		}
+	}
+	return text
 }
 
 func splitClauses(text string) []string {
