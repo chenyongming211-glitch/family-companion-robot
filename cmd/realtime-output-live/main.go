@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"familyrobot/internal/management"
 	"familyrobot/internal/realtimelive"
 	"familyrobot/internal/realtimestate"
@@ -40,6 +41,7 @@ func main() {
 	managementConfig := flag.String("management-config", "", "private management config for voice routes, memory control or family music")
 	prefaceDir := flag.String("preface-dir", "", "optional root for acknowledgement clips, one directory per voice; defaults to preface/ beside the binary")
 	prefaceLines := flag.String("preface-lines", "", "optional JSON list of acknowledgement lines; defaults to the shipped wording")
+	devVoiceRoute := flag.String("dev-voice-route", "", "development terminal only: force A or B for a device that has no route row")
 	flag.Parse()
 	if (*memorySocket != "" || *musicLibrary != "") && *managementConfig == "" {
 		log.Fatal("memory_control_config_invalid")
@@ -60,7 +62,7 @@ func main() {
 	if e = configureMusic(&cfg, *musicOnline, *musicLibrary, *managementConfig, *memorySocket); e != nil {
 		log.Fatal("music_config_invalid")
 	}
-	if e = configureVoiceRoutes(&cfg, *managementConfig); e != nil {
+	if e = configureVoiceRoutes(&cfg, *managementConfig, *devVoiceRoute); e != nil {
 		log.Fatal("voice_route_config_invalid")
 	}
 	configurePreface(&cfg, *prefaceDir, *prefaceLines)
@@ -168,13 +170,44 @@ func privateControlHandler(app *realtimelive.Server, configPath string) http.Han
 		}
 	})
 }
-func configureVoiceRoutes(cfg *realtimelive.Config, configPath string) error {
+func configureVoiceRoutes(cfg *realtimelive.Config, configPath, devRoute string) error {
 	if configPath == "" {
 		return nil
 	}
 	if _, err := management.LoadConfig(configPath); err != nil {
 		return err
 	}
-	cfg.VoiceRouteForDevice = management.NewVoiceRouteResolver(configPath)
+	resolve, err := withDevVoiceRoute(management.NewVoiceRouteResolver(configPath), devRoute)
+	if err != nil {
+		return err
+	}
+	cfg.VoiceRouteForDevice = resolve
+	if devRoute != "" {
+		log.Printf("realtime_go.dev_voice_route_forced route=%s", devRoute)
+	}
 	return nil
+}
+
+// withDevVoiceRoute answers for a device that has no route row, so the
+// development terminal can reach A and B at all. Those two routes exist because
+// some conversation paths were smoother than others, and until now only a
+// physical device could exercise them: the terminal is not a managed family
+// device, so the resolver reports it unknown and voice_routes.go falls back to C.
+//
+// The override answers only that case. Every provisioned device keeps its own
+// persisted choice, so this cannot move a family's device off its route.
+func withDevVoiceRoute(resolve func(string) (string, error), devRoute string) (func(string) (string, error), error) {
+	if devRoute == "" {
+		return resolve, nil
+	}
+	if devRoute != "A" && devRoute != "B" && devRoute != "C" {
+		return nil, errors.New("invalid_dev_voice_route")
+	}
+	return func(id string) (string, error) {
+		route, err := resolve(id)
+		if errors.Is(err, realtimelive.ErrVoiceRouteUnknown) {
+			return devRoute, nil
+		}
+		return route, err
+	}, nil
 }
