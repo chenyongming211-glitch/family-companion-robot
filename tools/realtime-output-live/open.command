@@ -23,7 +23,12 @@ if [[ ! -S "$control" ]]; then
   rm -f "$master"
   ssh -S "$master" -M -f -N ubuntu@82.156.48.111
 fi
-ssh -S "$control" -O forward -L "127.0.0.1:$port:127.0.0.1:$remote_port" ubuntu@82.156.48.111
+if ! ssh -S "$control" -O forward -L "127.0.0.1:$port:127.0.0.1:$remote_port" ubuntu@82.156.48.111; then
+  # A forward left behind by an earlier run still holds the local port, so ssh
+  # refuses this one with "Port forwarding failed". Keep the master alive and
+  # let the health check below prove whether that tunnel reaches the service.
+  ssh -S "$control" -O check ubuntu@82.156.48.111 >/dev/null
+fi
 created=true
 health=$(curl -q --fail --silent --show-error --max-time 5 "http://127.0.0.1:$port/healthz")
 backend=$(printf '%s' "$health" | python3 -c 'import json,sys; h=json.load(sys.stdin); print("go" if h.get("backend")=="go" else "python" if sys.argv[1]=="18032" and h.get("experiment")=="output-asr-live" and not h.get("backend") else "unknown")' "$remote_port")
