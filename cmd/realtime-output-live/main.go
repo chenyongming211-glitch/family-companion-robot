@@ -38,6 +38,8 @@ func main() {
 	diagnosticDuration := flag.Duration("diagnostics-duration", 5*time.Minute, "diagnostic window, maximum 5m")
 	memorySocket := flag.String("memory-control-socket", "", "optional root-private memory control Unix socket")
 	managementConfig := flag.String("management-config", "", "private management config for voice routes, memory control or family music")
+	prefaceDir := flag.String("preface-dir", "", "optional root for acknowledgement clips, one directory per voice; defaults to preface/ beside the binary")
+	prefaceLines := flag.String("preface-lines", "", "optional JSON list of acknowledgement lines; defaults to the shipped wording")
 	flag.Parse()
 	if (*memorySocket != "" || *musicLibrary != "") && *managementConfig == "" {
 		log.Fatal("memory_control_config_invalid")
@@ -61,6 +63,7 @@ func main() {
 	if e = configureVoiceRoutes(&cfg, *managementConfig); e != nil {
 		log.Fatal("voice_route_config_invalid")
 	}
+	configurePreface(&cfg, *prefaceDir, *prefaceLines)
 	cfg.MaxSessions = *maxSessions
 	cfg.MemoryEnabled = *memory
 	cfg.ExpressionsEnabled = *expressions

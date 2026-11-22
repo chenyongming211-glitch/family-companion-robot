@@ -38,38 +38,34 @@ type liveTurn struct {
 	expressionCancel        context.CancelFunc
 }
 type Session struct {
-	voiceRoute    string        // Immutable after authenticated session setup.
-	music         *sessionMusic // Session.mu; discarded with this authenticated connection.
-	ws            *websocket.Conn
-	wire          sessionWire
-	inputFrame    int
-	cfg           Config
-	directory     string
-	product       *realtimestate.Product
-	mu            sync.Mutex
-	history       []*liveTurn
-	ring          *realtimestate.AudioRing
-	echoPCM       *realtimestate.AudioRing // Session.mu; only the current device speech output.
-	input         chan []byte
-	listener      *Native
-	controls      *deviceControls
-	diag          *audioDiagnostics
-	memory        *sessionMemory
-	memoryFloor   int64 // Protected by mu; old playback state remains intact.
-	speaker       speakerObserver
-	speakerLatest int64
-	speakerFailed bool
-	providerEnd   int64
-	seq           int64
-	output        *liveTurn
-	lastInput     *pendingInput
-	items         map[string]*pendingInput
-	itemOrder     []string
-	changed       chan struct{}
-	// Preface lines already spoken this session. A short generation with a short
-	// prompt converges on one sentence; naming the used ones is what actually
-	// breaks it, since "vary your wording" is a rule the model cannot audit.
-	prefaceSaid      []string // Session.mu
+	voiceRoute       string        // Immutable after authenticated session setup.
+	music            *sessionMusic // Session.mu; discarded with this authenticated connection.
+	ws               *websocket.Conn
+	wire             sessionWire
+	inputFrame       int
+	cfg              Config
+	directory        string
+	product          *realtimestate.Product
+	mu               sync.Mutex
+	history          []*liveTurn
+	ring             *realtimestate.AudioRing
+	echoPCM          *realtimestate.AudioRing // Session.mu; only the current device speech output.
+	input            chan []byte
+	listener         *Native
+	controls         *deviceControls
+	diag             *audioDiagnostics
+	memory           *sessionMemory
+	memoryFloor      int64 // Protected by mu; old playback state remains intact.
+	speaker          speakerObserver
+	speakerLatest    int64
+	speakerFailed    bool
+	providerEnd      int64
+	seq              int64
+	output           *liveTurn
+	lastInput        *pendingInput
+	items            map[string]*pendingInput
+	itemOrder        []string
+	changed          chan struct{}
 	ctx              context.Context
 	cancel           context.CancelFunc
 	wg               sync.WaitGroup
@@ -167,9 +163,15 @@ func (s *Session) pcmTransport() bool {
 	return ok && w.pcm
 }
 func (s *Session) binary(rt *liveTurn, packet []byte) (bool, error) {
-	return s.release(rt, packet, nil, nil)
+	return s.release(rt, packet, false, nil, nil)
 }
-func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
+
+// release sends one already-encoded packet and, unless it is an acknowledgement
+// clip, feeds the same audio to the output transcript. The clip has to reach the
+// echo reference (the speaker really played it) but not the transcript: it is
+// the robot clearing its throat, not something it said, and feeding it would put
+// "嗯" into the turn's record and from there into memory.
+func (s *Session) release(rt *liveTurn, packet []byte, preface bool, codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rt.turn.Cut || s.ctx.Err() != nil {
@@ -189,12 +191,16 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 				return true, e
 			}
 		}
+		// Processed even for a clip: the resampler carries state across packets,
+		// so skipping one would leave a discontinuity at the seam.
 		converted, e := resampler.Process(decoded)
 		if e != nil {
 			return true, e
 		}
 		s.rememberEchoPCMLocked(rt, converted)
-		rt.asr.Feed(converted)
+		if !preface {
+			rt.asr.Feed(converted)
+		}
 	}
 	return true, nil
 }
@@ -950,34 +956,39 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	produced := make(chan struct{})
 	prepared := make(chan struct{})
 	var ready sync.Once
-	// A slow turn gets one short acknowledgement as its first second of audio.
+	// A slow turn gets acknowledgement clips as its first second of audio.
 	// Media is its own immediate output, so it never needs one.
-	order := newPrefaceOrder()
+	gate := &prefaceGate{}
 	if !media {
-		go s.speakPreface(producerCtx, rt, order, encodeFrame, func() { ready.Do(func() { close(prepared) }) }, encoded)
+		go s.speakPreface(producerCtx, rt, gate, s.cfg.Preface.For(s.cfg.Voice), encodeFrame, func() { ready.Do(func() { close(prepared) }) }, encoded)
 	}
 	go func() {
 		defer close(produced)
 		defer ready.Do(func() { close(prepared) })
 		pending := []byte{}
 		total, frames := 0, 0
-		put := func(v encodedPacket) error {
-			if v.packet != nil && musicAllowed != nil && !musicAllowed() {
-				return music.ErrLibraryForbidden
-			}
-			if v.packet != nil {
-				// Holds only the answer's first packet, and only while an
-				// acknowledgement is already speaking in front of it.
-				if _, e := order.answerPacket(producerCtx); e != nil {
-					return e
-				}
-			}
+		send := func(v encodedPacket) error {
 			select {
 			case <-producerCtx.Done():
 				return producerCtx.Err()
 			case encoded <- v:
 				return nil
 			}
+		}
+		firstPacket := true
+		put := func(v encodedPacket) error {
+			if v.packet != nil && musicAllowed != nil && !musicAllowed() {
+				return music.ErrLibraryForbidden
+			}
+			if v.packet != nil && firstPacket {
+				// The answer's first packet claims the floor. Clips already
+				// queued play first, which is the overlap this design wants;
+				// nothing is queued behind the answer, which is what kept the
+				// generated acknowledgement from speaking last.
+				firstPacket = false
+				return gate.answer(func() error { return send(v) })
+			}
+			return send(v)
 		}
 		emit := func(kind string, value []byte) error {
 			if producerCtx.Err() != nil {
@@ -1189,7 +1200,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 				return
 			}
 		}
-		ok, e := s.release(rt, p.packet, codec, resampler)
+		ok, e := s.release(rt, p.packet, p.preface, codec, resampler)
 		if e != nil {
 			s.fail()
 			return

@@ -32,7 +32,7 @@ func TestEchoReferenceUsesOnlyConfirmedAudioFromCurrentCapture(t *testing.T) {
 		for j := 0; j < 1440; j++ {
 			binary.LittleEndian.PutUint16(packet[2*j:], uint16(frame*71+j))
 		}
-		ok, e := s.release(rt, packet, nil, convert)
+		ok, e := s.release(rt, packet, false, nil, convert)
 		if !ok || e != nil {
 			t.Fatal("wire release", e)
 		}
