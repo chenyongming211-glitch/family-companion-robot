@@ -60,6 +60,13 @@ func ConversationStateFor(turns []*Turn) string {
 	return marshalPython(state, false)
 }
 
+// ProjectionCounts reports what the reply prompt actually carried. The event log
+// needs this rather than len(turns): a session with sixteen turns still sends
+// eight, and recording sixteen made the cap look broken.
+func ProjectionCounts(turns []*Turn) (kept int, omitted bool) {
+	return min(len(turns), ConversationStateTurnLimit), len(turns) > ConversationStateTurnLimit
+}
+
 func clipRunes(text string, limit int) string {
 	runes := []rune(text)
 	if len(runes) <= limit {

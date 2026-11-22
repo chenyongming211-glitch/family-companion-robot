@@ -775,7 +775,8 @@ waitLoop:
 	if e != nil {
 		return "", e
 	}
-	if e = s.record("restored_context", map[string]any{"id": rt.turn.ID, "data": data, "extra_wait_ms": time.Since(started).Milliseconds(), "context_chars": utf8.RuneCountInString(contextText), "state_turns": len(turns)}); e != nil {
+	projected, omitted := realtimestate.ProjectionCounts(turns)
+	if e = s.record("restored_context", map[string]any{"id": rt.turn.ID, "data": data, "extra_wait_ms": time.Since(started).Milliseconds(), "context_chars": utf8.RuneCountInString(contextText), "history_turns": len(turns), "state_turns": projected, "older_turns_omitted": omitted}); e != nil {
 		return "", e
 	}
 	return contextText, nil

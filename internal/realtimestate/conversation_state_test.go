@@ -128,6 +128,33 @@ func TestConversationStateBoundsWindowAndText(t *testing.T) {
 	}
 }
 
+// The event log states how much of the history reached the model. Reporting
+// len(turns) there said sixteen on a sixteen-turn session, which read as if the
+// window were broken even though the projection only carried eight.
+func TestProjectionCountsReportsWhatWasSent(t *testing.T) {
+	for _, tc := range []struct {
+		turns   int
+		kept    int
+		omitted bool
+	}{{0, 0, false}, {1, 1, false}, {8, 8, false}, {9, 8, true}, {16, 8, true}} {
+		turns := []*Turn{}
+		for id := int64(1); id <= int64(tc.turns); id++ {
+			turns = append(turns, completeTurn(id, "问", "答"))
+		}
+		kept, omitted := ProjectionCounts(turns)
+		if kept != tc.kept || omitted != tc.omitted {
+			t.Fatalf("%d turns: got kept=%d omitted=%v, want kept=%d omitted=%v", tc.turns, kept, omitted, tc.kept, tc.omitted)
+		}
+		state, recent := decodeState(t, ConversationStateFor(turns))
+		if len(recent) != kept {
+			t.Fatalf("%d turns: projection carries %d, counts say %d", tc.turns, len(recent), kept)
+		}
+		if declared, _ := state["older_turns_omitted"].(bool); declared != omitted {
+			t.Fatalf("%d turns: projection declares omitted=%v, counts say %v", tc.turns, declared, omitted)
+		}
+	}
+}
+
 // The whole point is a smaller prompt with the same conversational facts.
 func TestConversationStateIsSmallerThanContextFor(t *testing.T) {
 	turns := []*Turn{}
