@@ -216,7 +216,7 @@ func TestMemorySelectionFinalReplyUsesOnlySelectedEvidence(t *testing.T) {
 				prompt = p
 				return context.Canceled
 			}
-			rt := rememberedTurn(s, "当前需要的回答", "", false)
+			rt := rememberedTurn(s, "你还记得那个暗号吗", "", false)
 			s.reply(rt, make([]byte, 640))
 			if prompt == "" || strings.Contains(prompt, "旧模板不得泄漏") || strings.Contains(prompt, "必要旧暗号紫风铃") != tc.want || !strings.Contains(prompt, "当前会话已播上下文") {
 				t.Fatal("bad final prompt", prompt)
@@ -312,7 +312,7 @@ func TestMemorySelectionSkipsAbsentCandidatesTranscriptAndClear(t *testing.T) {
 		})
 	}
 }
-func TestMemorySelectionSharedThreeSecondBudget(t *testing.T) {
+func TestMemorySelectionSharedBudget(t *testing.T) {
 	provider := memorySelectionProvider(t, "", "timeout", nil, nil)
 	defer provider.Close()
 	n := NewNative(Config{URL: "ws" + strings.TrimPrefix(provider.URL, "http")}, t.TempDir())
@@ -320,8 +320,8 @@ func TestMemorySelectionSharedThreeSecondBudget(t *testing.T) {
 	if _, err := n.SelectMemory(context.Background(), selectionInput()); err == nil {
 		t.Fatal("timeout accepted")
 	}
-	if elapsed := time.Since(started); elapsed < 2800*time.Millisecond || elapsed > 3500*time.Millisecond {
-		t.Fatal("not one shared 3s budget", elapsed)
+	if elapsed := time.Since(started); elapsed < 1000*time.Millisecond || elapsed > 1700*time.Millisecond {
+		t.Fatal("not one shared selection budget", elapsed)
 	}
 }
 

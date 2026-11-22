@@ -141,6 +141,12 @@ func parallelSession(t *testing.T, url string, enabled bool) (*Session, *websock
 	s.cfg.ParallelPlanning = enabled
 	return s, c
 }
+func planningRequest(s *Session, text string) *liveTurn {
+	// The music gate skips classification for turns with no music intent. These
+	// overlap tests still need a real planner round-trip, so carry explicit
+	// music intent while keeping the control wording under test.
+	return musicRequest(s, "放点音乐，"+text)
+}
 func replyForPlanning(t *testing.T, s *Session, rt *liveTurn) (<-chan string, <-chan struct{}) {
 	t.Helper()
 	prompt := make(chan string, 1)
@@ -164,7 +170,7 @@ func assertNoPrompt(t *testing.T, prompt <-chan string) {
 func TestParallelPlanningOverlapsPurePlansAndWaitsForNone(t *testing.T) {
 	g, url := parallelProvider(t, "none", `{"intent":"none","target":"current"}`)
 	s, _ := parallelSession(t, url, true)
-	rt := musicRequest(s, "讲个故事")
+	rt := planningRequest(s, "讲个故事")
 	prompt, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music did not start")
 	awaitPlanning(t, g.controlStarted, "control planner did not overlap blocked music")
@@ -183,7 +189,7 @@ func TestParallelPlanningOverlapsPurePlansAndWaitsForNone(t *testing.T) {
 func TestParallelPlanningMusicHandledCancelsAndJoinsWithoutHardware(t *testing.T) {
 	g, url := parallelProvider(t, "stop", `{"intent":"adjust","target":"current","volume":{"mode":"absolute","basis":"explicit","reference":"current","value":80}}`)
 	s, _ := parallelSession(t, url, true)
-	rt := musicRequest(s, "停止音乐")
+	rt := planningRequest(s, "停止音乐")
 	prompt, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music did not start")
 	awaitPlanning(t, g.controlStarted, "control did not overlap")
@@ -200,7 +206,7 @@ func TestParallelPlanningMusicHandledCancelsAndJoinsWithoutHardware(t *testing.T
 func TestParallelPlanningDisabledKeepsSerialOrder(t *testing.T) {
 	g, url := parallelProvider(t, "none", `{"intent":"none","target":"current"}`)
 	s, _ := parallelSession(t, url, false)
-	rt := musicRequest(s, "你好")
+	rt := planningRequest(s, "你好")
 	_, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music did not start")
 	select {
@@ -216,9 +222,9 @@ func TestParallelPlanningDisabledKeepsSerialOrder(t *testing.T) {
 func TestParallelPlanningInvalidatesPriorControlAnchor(t *testing.T) {
 	g, url := parallelProvider(t, "none", `{"intent":"adjust","target":"current","volume":{"mode":"relative","basis":"explicit","reference":"context","direction":"up"}}`)
 	s, _ := parallelSession(t, url, true)
-	musicRequest(s, "之前设过音量")
+	planningRequest(s, "之前设过音量")
 	s.controls.recent = []ControlRecord{{Turn: 1, At: time.Now(), Operations: []ControlOperation{{Field: "volume", Mode: "absolute"}}}}
-	rt := musicRequest(s, "再大一点")
+	rt := planningRequest(s, "再大一点")
 	prompt, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music missing")
 	awaitPlanning(t, g.controlStarted, "control missing")
@@ -246,7 +252,7 @@ func TestParallelPlanningCanceledOrStaleTurnNeverExecutes(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			g, url := parallelProvider(t, "none", `{"intent":"adjust","target":"current","volume":{"mode":"absolute","basis":"explicit","reference":"current","value":80}}`)
 			s, _ := parallelSession(t, url, true)
-			rt := musicRequest(s, "音量80")
+			rt := planningRequest(s, "音量80")
 			_, done := replyForPlanning(t, s, rt)
 			awaitPlanning(t, g.musicStarted, "music missing")
 			awaitPlanning(t, g.controlStarted, "control missing")
@@ -273,15 +279,13 @@ func TestParallelPlanningClearMemoryDoesNotPrefetch(t *testing.T) {
 	g, url := parallelProvider(t, "none", `{"intent":"none","target":"current"}`)
 	s, _ := parallelSession(t, url, true)
 	rt := musicRequest(s, "清除聊天记忆")
-	_, done := replyForPlanning(t, s, rt)
-	awaitPlanning(t, g.musicStarted, "music missing")
-	select {
-	case <-g.controlStarted:
+	if p := s.prefetchControls(rt); p != nil {
 		t.Fatal("memory clear preplanned")
-	default:
 	}
-	releaseGate(g.allowMusic)
-	awaitPlanning(t, g.controlStarted, "control missing after music")
+	_, done := replyForPlanning(t, s, rt)
+	// A clear command carries no music intent, so classification is gated off
+	// and only the serial control path runs.
+	awaitPlanning(t, g.controlStarted, "control missing")
 	releaseGate(g.allowControl)
 	awaitPlanning(t, done, "reply not finished")
 }
@@ -289,7 +293,7 @@ func TestParallelPlanningClearMemoryDoesNotPrefetch(t *testing.T) {
 func TestParallelPlanningWaitsForVerifiedHardwareReceipt(t *testing.T) {
 	g, url := parallelProvider(t, "none", `{"intent":"adjust","target":"current","volume":{"mode":"absolute","basis":"explicit","reference":"current","value":80}}`)
 	s, c := parallelSession(t, url, true)
-	rt := musicRequest(s, "音量80")
+	rt := planningRequest(s, "音量80")
 	prompt, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music missing")
 	awaitPlanning(t, g.controlStarted, "control missing")
@@ -329,9 +333,9 @@ func TestParallelPlanningWaitsForVerifiedHardwareReceipt(t *testing.T) {
 func TestParallelPlanningDispatchRechecksAnchorAfterFreshRead(t *testing.T) {
 	g, url := parallelProvider(t, "none", `{"intent":"adjust","target":"current","volume":{"mode":"relative","basis":"explicit","reference":"context","direction":"up"}}`)
 	s, c := parallelSession(t, url, true)
-	musicRequest(s, "之前设过音量")
+	planningRequest(s, "之前设过音量")
 	s.controls.recent = []ControlRecord{{Turn: 1, At: time.Now(), Operations: []ControlOperation{{Field: "volume", Mode: "absolute"}}}}
-	rt := musicRequest(s, "再大一点")
+	rt := planningRequest(s, "再大一点")
 	prompt, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music missing")
 	awaitPlanning(t, g.controlStarted, "control missing")
@@ -385,7 +389,7 @@ func TestParallelPlanningPrivateRevocationReplansWithCleanContext(t *testing.T) 
 	s, _ := parallelSession(t, url, true)
 	allowed := scopedSubmissionSelection(t, s)
 	s.cfg.URL = url
-	old := musicRequest(s, "之前的私有音乐背景")
+	old := planningRequest(s, "之前的私有音乐背景")
 	s.mu.Lock()
 	old.turn.User = "SecretTitle SecretArtist"
 	old.turn.Generated = "SecretTitle SecretArtist"
@@ -395,7 +399,7 @@ func TestParallelPlanningPrivateRevocationReplansWithCleanContext(t *testing.T) 
 	old.turn.PlaybackFinal = true
 	old.turn.PlaybackBasis = "i2s_dma"
 	s.mu.Unlock()
-	rt := musicRequest(s, "再大一点")
+	rt := planningRequest(s, "再大一点")
 	prompt, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music missing")
 	awaitPlanning(t, g.controlStarted, "control missing")
@@ -446,7 +450,7 @@ func TestParallelPlanningChangedHistoryOrFloorReplansOnce(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			g, url := parallelProvider(t, "none", `{"intent":"adjust","target":"current","volume":{"mode":"relative","basis":"explicit","reference":"context","direction":"up"}}`)
 			s, _ := parallelSession(t, url, true)
-			old := musicRequest(s, "我们在聊音量")
+			old := planningRequest(s, "我们在聊音量")
 			s.mu.Lock()
 			old.turn.Generated = "我们在聊机器人音量"
 			old.turn.Sent = 24000
@@ -455,7 +459,7 @@ func TestParallelPlanningChangedHistoryOrFloorReplansOnce(t *testing.T) {
 			old.turn.PlaybackFinal = true
 			old.turn.PlaybackBasis = "i2s_dma"
 			s.mu.Unlock()
-			rt := musicRequest(s, "再大一点")
+			rt := planningRequest(s, "再大一点")
 			prompt, done := replyForPlanning(t, s, rt)
 			awaitPlanning(t, g.musicStarted, "music missing")
 			awaitPlanning(t, g.controlStarted, "control missing")
@@ -485,9 +489,9 @@ func TestParallelPlanningChangedHistoryOrFloorReplansOnce(t *testing.T) {
 func TestParallelPlanningInvalidationKeepsOriginalBudget(t *testing.T) {
 	g, url := parallelProvider(t, "none", `{"intent":"none","target":"current"}`)
 	s, _ := parallelSession(t, url, true)
-	musicRequest(s, "之前设过音量")
+	planningRequest(s, "之前设过音量")
 	s.controls.recent = []ControlRecord{{Turn: 1, At: time.Now(), Operations: []ControlOperation{{Field: "volume", Mode: "absolute"}}}}
-	rt := musicRequest(s, "再大一点")
+	rt := planningRequest(s, "再大一点")
 	p := s.prefetchControls(rt)
 	if p == nil {
 		t.Fatal("prefetch missing")
@@ -513,13 +517,13 @@ func TestParallelPlanningSecondInvalidationStillAnswersCurrentRequest(t *testing
 	g.allowReplan = make(chan struct{})
 	g.replanArgs = g.controlArgs
 	s, _ := parallelSession(t, url, true)
-	old := musicRequest(s, "我们在聊音量")
+	old := planningRequest(s, "我们在聊音量")
 	s.mu.Lock()
 	old.turn.Generated = "我们在聊机器人音量"
 	old.turn.Sent, old.turn.Completed = 24000, 24000
 	old.turn.Ended, old.turn.PlaybackFinal, old.turn.PlaybackBasis = true, true, "i2s_dma"
 	s.mu.Unlock()
-	rt := musicRequest(s, "音量设80，然后讲个故事")
+	rt := planningRequest(s, "音量设80，然后讲个故事")
 	prompt, done := replyForPlanning(t, s, rt)
 	awaitPlanning(t, g.musicStarted, "music missing")
 	awaitPlanning(t, g.controlStarted, "initial control missing")

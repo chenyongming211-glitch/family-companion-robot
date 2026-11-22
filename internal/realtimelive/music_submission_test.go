@@ -107,7 +107,7 @@ func TestMusicDeferredModelInputRefreshesAfterOpen(t *testing.T) {
 			cfg, reached, release, payload := gatedMusicInputProvider(t, kind)
 			s.cfg.URL = cfg.URL
 			s.cfg.Synthetic = true
-			rt := musicRequest(s, "当前请求保留")
+			rt := musicRequest(s, "放一首 当前请求保留")
 			done := make(chan error, 1)
 			go func() {
 				switch kind {
@@ -150,7 +150,7 @@ func TestMusicDeferredModelInputRefreshesAfterOpen(t *testing.T) {
 			if kind == "expression" {
 				current = data["current_transcript"]
 			}
-			if current != "当前请求保留" {
+			if current != "放一首 当前请求保留" {
 				t.Fatal("current input lost", data)
 			}
 		})

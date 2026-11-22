@@ -6,6 +6,7 @@ import (
 	"errors"
 	"familyrobot/internal/music"
 	"familyrobot/internal/realtimestate"
+	"strings"
 	"time"
 )
 
@@ -68,6 +69,56 @@ func (s *Session) musicStopOutcome(rt *liveTurn) string {
 func (s *Session) musicEnabled() bool {
 	return (s.cfg.Music != nil || s.cfg.MusicForDevice != nil) && s.ownerErr == nil && s.rec.owner.ClientType == "xiaozhi" && s.rec.owner.DeviceID != ""
 }
+
+// musicIntentWords are strong signals for starting a music action from idle.
+// The bare characters 听 and 歌 stay out on purpose: they appear constantly in
+// storytelling and description, which would put every turn back on the planner.
+var musicIntentWords = []string{
+	"放歌", "放首", "放点音乐", "放音乐", "来首歌", "来一首", "来首",
+	"唱首", "唱一首", "唱个", "听歌", "想听", "要听", "听个", "点歌",
+	"换一首", "换首歌", "下一首", "上一首", "别放", "别唱",
+	"停止播放", "播放", "关掉音乐", "大声点", "小声点",
+	"音乐", "歌曲", "首歌", "bgm", "背景音乐",
+}
+
+// needsMusicPlannerLocked decides whether this turn needs the music planner at
+// all. Session.mu must be held.
+//
+// Three cases still call it:
+//  1. the user asks to play, switch or stop music in this turn;
+//  2. a track is currently selected, so any instruction may affect playback
+//     ("换一个", "大点声" carry no keyword);
+//  3. the previous turn was media and is neither finished nor cut.
+//
+// Every other turn skips the planner, which costs a fixed 0.7-0.9s of model
+// latency and returns "ordinary chat" almost every time. Skipping only removes
+// the classification call: the deferred music facts and the memory wake-up
+// still run, so ordinary replies keep the same guidance.
+func (s *Session) needsMusicPlannerLocked(rt *liveTurn) bool {
+	if s.music != nil && s.music.track.ID > 0 {
+		return true
+	}
+	for i := len(s.history) - 1; i >= 0; i-- {
+		old := s.history[i]
+		if old == rt {
+			continue
+		}
+		if old.media && (!old.turn.Ended || old.turn.Cut) {
+			return true
+		}
+		break
+	}
+	text := strings.ToLower(strings.TrimSpace(rt.turn.User))
+	if text == "" {
+		return false
+	}
+	for _, word := range musicIntentWords {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
+}
 func (s *Session) routeMusic(rt *liveTurn, history string) (route musicRoute, err error) {
 	if !s.musicEnabled() {
 		return musicRoute{}, nil
@@ -91,6 +142,10 @@ func (s *Session) routeMusic(rt *liveTurn, history string) (route musicRoute, er
 	if !s.musicCurrent(rt) {
 		s.mu.Unlock()
 		return musicRoute{}, context.Canceled
+	}
+	if !s.needsMusicPlannerLocked(rt) {
+		s.mu.Unlock()
+		return musicRoute{}, nil
 	}
 	if s.music == nil {
 		s.music = &sessionMusic{source: s.cfg.Music}

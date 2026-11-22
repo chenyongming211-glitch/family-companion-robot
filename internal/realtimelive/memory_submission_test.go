@@ -183,15 +183,24 @@ func TestMusicMemoryReplyClassifiesBeforeCheckpointAndSelection(t *testing.T) {
 				prompt = p
 				return context.Canceled
 			}
-			rt := rememberedTurn(s, "记住本轮偏好紫色", "", false)
+			// A handled stop request must still reach the planner; ordinary and
+			// private turns now skip classification entirely, so the ordering
+			// guarantee narrows to "when classified, always before selection".
+			text := "上次说的那个，记住本轮偏好紫色"
+			if scenario == "handled" {
+				text = "别放了，记住本轮偏好紫色"
+			}
+			rt := rememberedTurn(s, text, "", false)
 			s.reply(rt, make([]byte, 640))
 			close(submitted)
 			var calls []submission
 			for call := range submitted {
 				calls = append(calls, call)
 			}
-			if len(calls) == 0 || calls[0].tool != musicPlanName {
-				t.Error("music classification did not precede selection", calls)
+			for i, call := range calls {
+				if call.tool == musicPlanName && i != 0 {
+					t.Error("music classification submitted after another call", calls)
+				}
 			}
 			for _, call := range calls {
 				if call.tool == musicPlanName {
@@ -205,13 +214,21 @@ func TestMusicMemoryReplyClassifiesBeforeCheckpointAndSelection(t *testing.T) {
 				t.Fatal("reply not reached")
 			}
 			if scenario == "handled" {
-				if len(calls) != 1 {
+				if len(calls) != 1 || calls[0].tool != musicPlanName {
 					t.Error("handled music incurred memory selection", calls)
 				}
 				return
 			}
-			if len(calls) != 2 {
-				t.Error("missing selector after music", calls)
+			if scenario == "private" {
+				// A selected scoped track keeps every turn on the planner, so the
+				// original classification-before-selection order still applies.
+				if len(calls) != 2 || calls[0].tool != musicPlanName || calls[1].tool != memorySelectionName {
+					t.Error("private turn lost classification-before-selection", calls)
+				}
+				return
+			}
+			if len(calls) != 1 || calls[0].tool != memorySelectionName {
+				t.Error("ordinary turn did not select memory exactly once", calls)
 			}
 			wantSaved := scenario == "ordinary"
 			if strings.Contains(prompt, "verified_saved") != wantSaved || !wantSaved && !strings.Contains(prompt, "not_saved") {
