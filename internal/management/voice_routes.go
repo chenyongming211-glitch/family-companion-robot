@@ -84,6 +84,9 @@ func NewVoiceRouteResolver(path string) func(string) (string, error) {
 		defer cancel()
 		var route string
 		e := (ConfigStore{path}).WithSnapshot(ctx, func(c Config) error { var e error; route, e = selectedVoiceRoute(c, id); return e })
+		if errors.Is(e, ErrNotFound) {
+			return "", realtimelive.ErrVoiceRouteUnknown
+		}
 		return route, e
 	}
 }

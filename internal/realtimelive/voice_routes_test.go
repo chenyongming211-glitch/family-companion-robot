@@ -621,3 +621,30 @@ func TestVoiceRouteDisconnectCancelsSessionBeforeSocketRead(t *testing.T) {
 		t.Fatal("session still active")
 	}
 }
+
+// The Mac development terminal connects through the same entry but is not a
+// managed product device, so it has no route row. It must still be admitted on
+// the native route; a product device with no row stays denied.
+func TestUnmanagedMacTerminalDefaultsToNativeRoute(t *testing.T) {
+	s := NewServer(Config{VoiceRouteForDevice: func(string) (string, error) {
+		return "", ErrVoiceRouteUnknown
+	}}, nil, t.TempDir(), "routes")
+	dir, err := s.sessionDirectory(Ownership{DeviceID: memoryDeviceA, ClientType: "mac_native"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := s.newSession(nil, dir)
+	defer mac.cancel()
+	if mac.ownerErr != nil || mac.voiceRoute != "C" {
+		t.Fatalf("mac terminal denied: route=%q err=%v", mac.voiceRoute, mac.ownerErr)
+	}
+	productDir, err := s.sessionDirectory(Ownership{DeviceID: memoryDeviceB, ClientType: "xiaozhi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	product := s.newSession(nil, productDir)
+	defer product.cancel()
+	if product.ownerErr == nil {
+		t.Fatal("product device without a managed route row was admitted")
+	}
+}

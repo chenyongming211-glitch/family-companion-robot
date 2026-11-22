@@ -14,6 +14,11 @@ import (
 const voiceRouteTTSModel = "cosyvoice-v3-flash"
 const voiceRouteTTSVoice = "longanyang"
 
+// ErrVoiceRouteUnknown separates "this device has no route row" from "the route
+// store could not be read". A missing row is a normal state for a Mac terminal,
+// which never appears in family device records; an unreadable store is not.
+var ErrVoiceRouteUnknown = errors.New("voice_route_unknown")
+
 // Presentation follows this connection's generation route. Native configuration
 // remains owned by the common listener and business preflight.
 func (s *Session) voiceRouteFacts() map[string]any {
@@ -74,14 +79,20 @@ func (s *Server) configureVoiceRoute(session *Session) {
 	route := "C"
 	if session.rec.owner.DeviceID != "" && s.cfg.VoiceRouteForDevice != nil {
 		selected, err := s.cfg.VoiceRouteForDevice(session.rec.owner.DeviceID)
-		if err != nil {
+		if errors.Is(err, ErrVoiceRouteUnknown) && session.rec.owner.ClientType == "mac_native" {
+			// The development terminal is not a managed family device, so it has
+			// no route row. Native route C needs no managed state; product
+			// devices below still refuse to connect without their row.
+			route = "C"
+		} else if err != nil {
 			session.ownerErr = errors.New("voice_route_read_failed")
 			return
-		}
-		route, err = parseVoiceRoute(selected)
-		if err != nil {
-			session.ownerErr = err
-			return
+		} else {
+			route, err = parseVoiceRoute(selected)
+			if err != nil {
+				session.ownerErr = err
+				return
+			}
 		}
 	}
 	session.voiceRoute = route

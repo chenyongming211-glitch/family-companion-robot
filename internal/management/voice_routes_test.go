@@ -566,3 +566,16 @@ func TestVoiceRouteRevisionOverflowRejectsWithoutMutation(t *testing.T) {
 		t.Fatal(c.Devices[0], e)
 	}
 }
+
+// Admission needs to tell "this device has no row" apart from "the store is
+// unreadable", so the Mac terminal can fall back to the native route while a
+// real read failure still denies every client.
+func TestVoiceRouteResolverReportsUnknownDevice(t *testing.T) {
+	_, _, id, path := voiceRouteFixture(t)
+	if _, err := NewVoiceRouteResolver(path)("dev_ffffffffffffffffffffffffffffffff"); !errors.Is(err, realtimelive.ErrVoiceRouteUnknown) {
+		t.Fatalf("unknown device must report the sentinel, got %v", err)
+	}
+	if route, err := NewVoiceRouteResolver(path)(id); err != nil || route == "" {
+		t.Fatalf("known device lost its route: %q %v", route, err)
+	}
+}
