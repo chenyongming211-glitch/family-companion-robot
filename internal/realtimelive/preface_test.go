@@ -416,3 +416,21 @@ func prefaceWebsocketHandler(t *testing.T, serve func(*websocket.Conn)) http.Han
 		serve(c)
 	}
 }
+
+func TestPrefaceStaysSilentOnRoutesThatAnswerInAnotherVoice(t *testing.T) {
+	// Routes A and B synthesize the answer with cosyvoice's longanyang. The pool
+	// is built from cfg.Voice through the realtime endpoint, so a clip there
+	// would be a second speaker in the same turn.
+	for _, route := range []string{"A", "B"} {
+		s := &Session{voiceRoute: route}
+		if s.prefaceAllowed() {
+			t.Fatalf("route %s answers in another voice; a clip would be a second person", route)
+		}
+	}
+	for _, route := range []string{"", "C"} {
+		s := &Session{voiceRoute: route}
+		if !s.prefaceAllowed() {
+			t.Fatalf("route %q answers with cfg.Voice, so it can be prefaced", route)
+		}
+	}
+}

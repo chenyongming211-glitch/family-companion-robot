@@ -73,6 +73,17 @@ func (s *Session) recordPreface(rt *liveTurn, fields map[string]any) {
 	_ = s.record("preface", fields)
 }
 
+// prefaceAllowed reports whether this turn's answer speaks with cfg.Voice.
+//
+// Only route C does: it answers through the realtime endpoint and takes its
+// voice from session.update. Routes A and B answer in the CosyVoice voice
+// (longanyang) instead, while these clips are synthesized with cfg.Voice
+// through the realtime endpoint. Prefacing there would put two different
+// people into one answer, which is worse than the silence it was hiding.
+func (s *Session) prefaceAllowed() bool {
+	return s.voiceRoute != "A" && s.voiceRoute != "B"
+}
+
 // speakPreface writes acknowledgement clips into this turn's audio stream while
 // the answer is still being produced. It gives up silently whenever the answer
 // speaks first, the turn is cancelled, or the budget runs out.

@@ -959,7 +959,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	// A slow turn gets acknowledgement clips as its first second of audio.
 	// Media is its own immediate output, so it never needs one.
 	gate := &prefaceGate{}
-	if !media {
+	if !media && s.prefaceAllowed() {
 		go s.speakPreface(producerCtx, rt, gate, s.cfg.Preface.For(s.cfg.Voice), encodeFrame, func() { ready.Do(func() { close(prepared) }) }, encoded)
 	}
 	go func() {
