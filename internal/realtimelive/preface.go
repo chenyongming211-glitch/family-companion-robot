@@ -18,12 +18,15 @@ import (
 // out, and the answer follows them. The worst case a clip can add to a fast
 // answer is one clip length, measured at 230-410ms for tier 1.
 const (
-	// A person answers in 0.2-0.5s. Below 0.5s the answer is usually already
-	// speaking; above it, the silence has become something the user notices.
-	prefaceFireDelay = 500 * time.Millisecond
+	// The answer's first packet lands about 1.1s after the end of speech (p50).
+	// Firing at 0.5s, as the first version did, meant every single turn got an
+	// acknowledgement: that is a call-centre rhythm, not a person listening --
+	// nobody answers every sentence with "嗯". 1.4s sits above the ordinary
+	// case, so only a turn the user has already noticed as slow gets filled.
+	prefaceFireDelay = 1400 * time.Millisecond
 	// Past this the clips stop. They are not the answer, and a listener who has
 	// heard five thinking noises is already waiting, not being fooled.
-	prefaceMaxCover = 5 * time.Second
+	prefaceMaxCover = 8 * time.Second
 	prefaceMaxClips = 6
 )
 

@@ -27,10 +27,11 @@ type prefaceLineSpec struct {
 func defaultPrefaceLines() []prefaceLineSpec {
 	return []prefaceLineSpec{
 		{"a01", 1, "嗯。"},
-		{"a02", 1, "在呢。"},
-		{"a03", 1, "哎。"},
-		{"a04", 1, "嗯？"},
-		{"a05", 1, "诶。"},
+		{"a02", 1, "哎。"},
+		{"a03", 1, "嗯？"},
+		{"a04", 1, "诶。"},
+		{"a05", 1, "唔。"},
+		{"a06", 1, "哦，你说。"},
 		{"b01", 2, "我想想啊。"},
 		{"b02", 2, "嗯，我理理。"},
 		{"b03", 2, "让我想想啊。"},
@@ -142,7 +143,7 @@ func (s *PrefaceStore) Ensure(ctx context.Context, cfg Config, root string, line
 		return pool, nil
 	}
 	dir := filepath.Join(root, cfg.Voice)
-	if pool, err := LoadPrefacePool(dir, cfg.Voice); err == nil {
+	if pool, err := LoadPrefacePool(dir, cfg.Voice); err == nil && pool.speaks(lines) {
 		s.Put(pool)
 		return pool, nil
 	}

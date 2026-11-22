@@ -128,6 +128,29 @@ func (p *PrefacePool) Lines() int {
 	return len(p.lines)
 }
 
+// speaks reports whether this pool's clips are the wording now configured.
+//
+// Without this the manifest loads, every clip is present, and the only visible
+// symptom of an edited list is the robot saying a sentence nobody wrote: a
+// cached pool stays valid on its own terms. Comparing ids, wording and tier is
+// what makes an edit take effect without anyone remembering to clear the cache.
+func (p *PrefacePool) speaks(lines []prefaceLineSpec) bool {
+	if p == nil || len(p.lines) != len(lines) {
+		return false
+	}
+	want := make(map[string]prefaceLineSpec, len(lines))
+	for _, l := range lines {
+		want[l.ID] = l
+	}
+	for _, have := range p.lines {
+		w, ok := want[have.ID]
+		if !ok || w.Text != have.Text || w.Tier != have.Tier {
+			return false
+		}
+	}
+	return true
+}
+
 // Pick chooses a clip of the given tier, avoiding the last few it returned.
 // A tier that has been exhausted forgets its history rather than refusing to
 // speak: repetition is a smaller failure than silence.
@@ -174,9 +197,9 @@ func (p *PrefacePool) Pick(tier int) *prefaceLine {
 // affordable once the answer is already known to be far away.
 func prefaceTier(elapsedMS int64) int {
 	switch {
-	case elapsedMS < 1200:
+	case elapsedMS < 2400:
 		return 1
-	case elapsedMS < 2600:
+	case elapsedMS < 4000:
 		return 2
 	default:
 		return 3

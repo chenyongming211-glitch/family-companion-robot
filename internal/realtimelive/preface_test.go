@@ -102,14 +102,31 @@ func TestPrefaceTierGrowsWithTheWait(t *testing.T) {
 		elapsedMS int64
 		want      int
 	}{
-		{500, 1}, {1199, 1},
-		{1200, 2}, {2599, 2},
-		{2600, 3}, {9000, 3},
+		{1400, 1}, {2399, 1},
+		{2400, 2}, {3999, 2},
+		{4000, 3}, {9000, 3},
 	}
 	for _, c := range cases {
 		if got := prefaceTier(c.elapsedMS); got != c.want {
 			t.Fatalf("at %dms want tier %d, got %d", c.elapsedMS, c.want, got)
 		}
+	}
+}
+
+// The first version fired at 500ms while the answer's first packet lands near
+// 1.1s, so every turn -- including the fast ones -- got an acknowledgement, and
+// a listener heard "嗯" after each sentence. The delay must sit above the
+// ordinary case: this is a fill for silence the user has already noticed.
+func TestPrefaceFiresOnlyAfterTheOrdinaryAnswerIsLate(t *testing.T) {
+	const ordinaryFirstPacket = 1086 * time.Millisecond
+	if prefaceFireDelay <= ordinaryFirstPacket {
+		t.Fatalf("delay %v is at or below the median answer (%v): every turn would be prefaced", prefaceFireDelay, ordinaryFirstPacket)
+	}
+	if prefaceFireDelay < 1200*time.Millisecond {
+		t.Fatalf("delay %v is too close to the ordinary case to be a slow-turn signal", prefaceFireDelay)
+	}
+	if prefaceTier(int64(prefaceFireDelay/time.Millisecond)) != 1 {
+		t.Fatal("the moment the pool becomes eligible must be the lightest tier")
 	}
 }
 
@@ -432,5 +449,27 @@ func TestPrefaceStaysSilentOnRoutesThatAnswerInAnotherVoice(t *testing.T) {
 		if !s.prefaceAllowed() {
 			t.Fatalf("route %q answers with cfg.Voice, so it can be prefaced", route)
 		}
+	}
+}
+
+func TestPrefacePoolRejectsAWordingItNoLongerSpeaks(t *testing.T) {
+	// The cached pool loads fine on its own terms: manifest valid, clips present.
+	// If nothing compares it to the configured lines, an edited wording keeps
+	// playing the old recording and the only symptom is a sentence nobody wrote.
+	pool := newTestPool(
+		prefaceLine{ID: "a01", Tier: 1, Text: "嗯。"},
+		prefaceLine{ID: "b01", Tier: 2, Text: "我想想啊。"},
+	)
+	if !pool.speaks([]prefaceLineSpec{{ID: "a01", Tier: 1, Text: "嗯。"}, {ID: "b01", Tier: 2, Text: "我想想啊。"}}) {
+		t.Fatal("an unchanged list must be accepted, or every restart resynthesizes")
+	}
+	if pool.speaks([]prefaceLineSpec{{ID: "a01", Tier: 1, Text: "在呢。"}, {ID: "b01", Tier: 2, Text: "我想想啊。"}}) {
+		t.Fatal("changed wording must invalidate the pool")
+	}
+	if pool.speaks([]prefaceLineSpec{{ID: "a01", Tier: 3, Text: "嗯。"}, {ID: "b01", Tier: 2, Text: "我想想啊。"}}) {
+		t.Fatal("changed tier must invalidate the pool")
+	}
+	if pool.speaks([]prefaceLineSpec{{ID: "a01", Tier: 1, Text: "嗯。"}}) {
+		t.Fatal("a shorter list must invalidate the pool")
 	}
 }
