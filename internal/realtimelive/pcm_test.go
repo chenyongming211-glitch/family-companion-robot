@@ -349,7 +349,7 @@ func TestPCMSharedCreditDrainAndASR(t *testing.T) {
 	expectedASR := realtimeaudio.NewResampler()
 	frame := pcmSamples(1440)
 	for range 10 {
-		if ok, err := s.release(rt, frame, false, nil, resampler); err != nil || !ok {
+		if ok, err := s.release(rt, frame, nil, resampler); err != nil || !ok {
 			t.Fatal(err)
 		}
 		kind, got, err := c.ReadMessage()

@@ -29,11 +29,6 @@ type Config struct {
 	Speaker                        *speakerlive.Config
 	DiagnosticsDevice              string
 	DiagnosticsDuration            time.Duration
-	// Preface holds pre-synthesized acknowledgements per voice. Nil means no
-	// acknowledgement at all: it is deliberately not replaced by a generated
-	// fallback, because a pool that failed to appear should be visible in the
-	// logs rather than quietly costing 0.6s per turn.
-	Preface *PrefaceStore
 }
 
 func LoadConfig(path string) (Config, error) {

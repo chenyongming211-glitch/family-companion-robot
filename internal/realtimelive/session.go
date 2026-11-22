@@ -163,15 +163,12 @@ func (s *Session) pcmTransport() bool {
 	return ok && w.pcm
 }
 func (s *Session) binary(rt *liveTurn, packet []byte) (bool, error) {
-	return s.release(rt, packet, false, nil, nil)
+	return s.release(rt, packet, nil, nil)
 }
 
-// release sends one already-encoded packet and, unless it is an acknowledgement
-// clip, feeds the same audio to the output transcript. The clip has to reach the
-// echo reference (the speaker really played it) but not the transcript: it is
-// the robot clearing its throat, not something it said, and feeding it would put
-// "嗯" into the turn's record and from there into memory.
-func (s *Session) release(rt *liveTurn, packet []byte, preface bool, codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
+// release sends one already-encoded packet and feeds the same audio to the
+// output transcript, so what was played is what gets recorded.
+func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rt.turn.Cut || s.ctx.Err() != nil {
@@ -191,16 +188,12 @@ func (s *Session) release(rt *liveTurn, packet []byte, preface bool, codec *real
 				return true, e
 			}
 		}
-		// Processed even for a clip: the resampler carries state across packets,
-		// so skipping one would leave a discontinuity at the seam.
 		converted, e := resampler.Process(decoded)
 		if e != nil {
 			return true, e
 		}
 		s.rememberEchoPCMLocked(rt, converted)
-		if !preface {
-			rt.asr.Feed(converted)
-		}
+		rt.asr.Feed(converted)
 	}
 	return true, nil
 }
@@ -863,9 +856,6 @@ type encodedPacket struct {
 	packet []byte
 	err    error
 	end    bool
-	// preface marks the acknowledgement that may speak before the answer. It is
-	// still this turn's audio; the flag only separates the two latency numbers.
-	preface bool
 }
 
 const speechQueueFrames = 1002
@@ -956,12 +946,6 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	produced := make(chan struct{})
 	prepared := make(chan struct{})
 	var ready sync.Once
-	// A slow turn gets acknowledgement clips as its first second of audio.
-	// Media is its own immediate output, so it never needs one.
-	gate := &prefaceGate{}
-	if !media && s.prefaceAllowed() {
-		go s.speakPreface(producerCtx, rt, gate, s.cfg.Preface.For(s.cfg.Voice), encodeFrame, func() { ready.Do(func() { close(prepared) }) }, encoded)
-	}
 	go func() {
 		defer close(produced)
 		defer ready.Do(func() { close(prepared) })
@@ -975,18 +959,9 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 				return nil
 			}
 		}
-		firstPacket := true
 		put := func(v encodedPacket) error {
 			if v.packet != nil && musicAllowed != nil && !musicAllowed() {
 				return music.ErrLibraryForbidden
-			}
-			if v.packet != nil && firstPacket {
-				// The answer's first packet claims the floor. Clips already
-				// queued play first, which is the overlap this design wants;
-				// nothing is queued behind the answer, which is what kept the
-				// generated acknowledgement from speaking last.
-				firstPacket = false
-				return gate.answer(func() error { return send(v) })
 			}
 			return send(v)
 		}
@@ -1095,7 +1070,6 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	case <-prepared:
 	}
 	resampler := realtimeaudio.NewResampler()
-	prefaceLead := false
 	for {
 		var p encodedPacket
 		timer := time.NewTimer(40 * time.Second)
@@ -1189,18 +1163,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 		}
 		s.mu.Unlock()
-		// first_packet is what the user heard first, acknowledgement included.
-		// The answer's own latency is recorded once, so it stays comparable with
-		// the turns that had no acknowledgement.
-		if p.preface {
-			prefaceLead = true
-		} else if prefaceLead {
-			prefaceLead = false
-			if e = s.record("answer_first_packet", map[string]any{"id": rt.turn.ID, "speech_stop_to_packet_ms": time.Since(rt.stoppedAt).Milliseconds()}); e != nil {
-				return
-			}
-		}
-		ok, e := s.release(rt, p.packet, p.preface, codec, resampler)
+		ok, e := s.release(rt, p.packet, codec, resampler)
 		if e != nil {
 			s.fail()
 			return

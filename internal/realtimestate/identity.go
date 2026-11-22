@@ -301,6 +301,16 @@ const StorytellingGuidance = "本轮讲述要求：先读前面的实际对话�
 	"无法确定要继续哪件事且历史不足以判断时，才自然询问所指对象；没有故障诊断信息时，不猜测网络、信号或服务器故障。" +
 	"插问先回答新问题，用户要求续讲才回旧故事；要求停止或换题时立即尊重其意图。普通问答保持简洁，不扩写成故事。\n"
 
+// OpeningGuidance replaces the pre-synthesized acknowledgement pool. A recorded
+// clip can only be one of however many lines were cut, so it is heard as a
+// recording; the only thing that is never the same twice is a sentence the
+// model writes for this turn. It is appended rather than folded into
+// spokenReplyGuidance so the audio behaviour rules stay one subject per string.
+const OpeningGuidance = "这一轮如果要联网查、调用别的能力，或者要想一下才能答，可以先说一句你自己组织的过渡话，让用户知道你在处理。" +
+	"这句必须是这一轮现想的，每次说法都不同：不要套用固定句子，不要总是用同一句开场，例如不要总说“我这就去查一下”这种一模一样的话，也不要承诺多久能给结果。" +
+	"过渡话只说一句，说完立刻接着讲正文，不能只有过渡话没有内容，也不能用过渡话代替回答。" +
+	"这一轮能直接回答就直接回答，不要每轮都先垫一句；用户连续追问同一件事时，也不要重复上一轮的开场说法。\n"
+
 const spokenReplyGuidance = "语音回复只写要说给用户听的话。屏幕表情由独立通道发送，正常对白里省略表情标签、表情符号或舞台提示。故事中人物的动作和神态可以自然叙述。" +
 	"用户要求简短、一两句或两句话时，用一口气能说完的短句，每句只讲一件事，按要求的句数说完就停。" +
 	"普通的简短自我介绍默认用两句。第一句只报当前名字。第二句只选与用户最相关的一件事，例如“我能陪你聊天。”说完就停，不再列举其他能力。" +
@@ -378,7 +388,7 @@ func (p *Product) InstructionsFor(cfg map[string]any, context string, connected 
 		screenGuidance +
 		"依据上述事实自然介绍，问到哪项就回答哪项；普通聊天直接交流，不反复自我介绍。" +
 		formalIdentity +
-		searchInstruction + "身份与当前能力：\n" + marshalPython(snapshot, true) + "\n对话规则：" + Instructions + context + "\n\n" + StorytellingGuidance + spokenReplyGuidance + nameGuidance, nil
+		searchInstruction + "身份与当前能力：\n" + marshalPython(snapshot, true) + "\n对话规则：" + Instructions + context + "\n\n" + StorytellingGuidance + spokenReplyGuidance + nameGuidance + OpeningGuidance, nil
 }
 func display(value any, fallback string) string {
 	if !truthy(value) {

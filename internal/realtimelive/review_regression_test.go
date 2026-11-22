@@ -44,7 +44,7 @@ func TestReviewReleasedPacketReachesASRBeforeConcurrentDrain(t *testing.T) {
 		}
 	}()
 	released := make(chan error, 1)
-	go func() { _, err := s.release(rt, packet, false, codec, realtimeaudio.NewResampler()); released <- err }()
+	go func() { _, err := s.release(rt, packet, codec, realtimeaudio.NewResampler()); released <- err }()
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	if kind, _, err := client.ReadMessage(); err != nil || kind != websocket.BinaryMessage {
 		t.Fatalf("released packet: kind=%d err=%v", kind, err)

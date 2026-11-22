@@ -190,7 +190,7 @@ func TestPythonDifferential(t *testing.T) {
 			if !ok || strings.Count(legacy, "\n对话规则：") != 1 {
 				t.Fatalf("case %d: frozen prompt boundary changed", i)
 			}
-			expected[i] = legacy + "\n\n" + StorytellingGuidance + spokenReplyGuidance
+			expected[i] = legacy + "\n\n" + StorytellingGuidance + spokenReplyGuidance + OpeningGuidance
 		}
 		actual, err := evaluateBaselineCase(c, product)
 		if err != nil {
