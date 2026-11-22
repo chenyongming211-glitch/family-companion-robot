@@ -1,0 +1,82 @@
+# 对话连续性改造：从「逐轮请求」到「像真人聊天」
+
+> **给执行者：** 三步顺序推进，每一步独立可发布、可回滚。第 1 步只改服务端提示词投影，不动连接、不动账本、不刷固件。第 2、3 步依赖设备 AEC，未取得实机结论前不进入生产。所有运行测试、依赖与正式服务只在云端。
+
+**目标：** 让对话在「逻辑」和「体感」两个维度都接近真人：不重复、不越纠正越错、换手等待从 2.2s 降到 0.6s 出声。
+
+**非目标：** 不追求把模型首包（约 1.2s）压到真人水平，物理下限不动；不替换千问原生 Realtime；不删除播放账本、回执与代次保护。
+
+## 一、现状与实测基线
+
+2026-11-22 15:16 取自生产记录 `20261122T071325-d5a0f12e1913d483c4ff22c7ff7c9cf8`（7 轮，Mac 终端）：
+
+| 环节 | 实测 | 说明 |
+| --- | --- | --- |
+| 话尾→首包 | 1279 / 1522 / 1540 / 1702 / 1709 / 2381 ms，中位 1.62s | `first_packet.speech_stop_to_packet_ms` |
+| 首轮（冷启动） | 5843 ms | 每轮新建上游连接，首轮无预热 |
+| 新建连接 | 110–354 ms | `native_session.connect_ms` |
+| 排空/等转写（settle） | 0–4 ms | `restored_context.extra_wait_ms`，已不是瓶颈 |
+| 静音判定 | 600 ms | `silence_duration_ms` |
+| 记忆选择（触发时） | 866 ms | `memory_selection.elapsed_ms`，该轮 2381ms |
+
+用户实际体感：**600ms + 1.6s ≈ 2.2 秒沉默**；真人换手 200–500ms。
+
+## 二、架构判断（为什么要改）
+
+当前是「有状态的外壳 + 无状态的内核」：会话、账本、回执、所有权做得扎实；但对话本身每轮现场重建。
+
+1. **上游会话逐轮新建**：`reply()` → `NewNative` → `Dial` → `session.update(全量提示词)` → `response.create`。模型每轮第一次见用户，连续性完全依赖提示词里的历史 JSON。
+2. **两条连接、同一段音频**：监听连接做 VAD+ASR，回答连接只收本轮 PCM；转写靠 `currentTurnInput` 补进提示词。一个「听懂」、一个「回答」，两者可能理解不一致。
+3. **上下文是带诊断的历史转储**：`ContextFor` 输出 16 轮、含 `playback_evidence`（`spoken_text`/`observed_text`/`tail_words` 等）与重复的助手正文。2026-11-14 评估已证明：错误回答被多次回灌后越纠正越重复，只删掉最近错误助手文字的全部副本即恢复话题（2/2），删数千字旧记忆反而无效。
+
+## 三、三步方案
+
+### 第 1 步：对话状态对象（本批实施）
+
+把回复用的上下文从「历史转储」换成「精简投影」，并显式给出「不要复述」。
+
+- 新投影 `realtimestate.ConversationStateFor`：只保留 `id / user / assistant_spoken_prefix / position / interrupted`；8 轮上限；用户与助手文字各 512 字上限；不输出任何播放诊断结构。
+- 反反复述不另建顶层字段：`assistant_spoken_prefix` 的开头就是「说过的开头」，规则写进提示词的 schema 说明。曾设计顶层 `said_openings`，实测发现内存清理只按 floor 过滤 `recent_turns`，顶层副本会在「清除记忆」后继续进入提示词（`TestMemorySelectionClearAndCancelInvalidateInFlight` 复现），因此取消该设计：投影里所有用户/助手文字只能存在于 turns 内部。
+- `composeReplyPrompt` 增加精简 schema 说明；当轮转写仍必须是最后一行。
+- `restored_context` 事件补 `context_chars`，用于上线后核对瘦身幅度。
+- `ContextFor` 与身份/故事提示词常量**保持原样**：Python 差分测试逐字节比对，不能动。
+
+预期：提示词从 4k–12k 字降到 1–2k，真实首包约省 150–400ms（估算，预填成本），**主要收益在逻辑而非延迟**。
+
+验收：
+- 单测覆盖「无诊断字段 / 长度上限 / 文字只存在于 turns 内 / 体积不大于原投影一半 / 提示词尾部顺序」。
+- 云端 `go test -race ./...`、`go vet ./...`、`go build` 通过；Python 差分不受影响。
+- 现场 4 条语料各 5 次：普通轮无 `music_plan`，回忆轮有 `memory_selection`；`context_chars` 中位数明显低于改造前。
+
+回滚：单个提交 revert；无 schema、无固件、无部署形态变化。
+
+### 第 2 步：抢话（先出声）
+
+固定短语预合成（“嗯”“我在听”“这个我知道”），在静音判定后立即作为独立 turn 下发，正文到达后收掉。
+
+- 抢话短语走现有账本：独立 turn id、可打断、`first_packet` 单独记录 `filler=true`。
+- 必须在 600ms 播放信用窗口下复测收尾，不得破坏防爆音红线（`50-waveshare-playback-window.conf`）。
+- 验收：话尾→可听声 ≤0.6s；正文首包不被推迟；打断后不留残音。
+
+### 第 3 步：常驻单连接 + 设备 AEC
+
+一条常驻会话承载听与说；Go 只做「何时允许开口 / 何时截断」的阀门与账本。设备侧评估 `esp_aec` SR 模式算力（现有 `firmware/probes/c3-aec` 仅供参照，目标板为微雪 S3）。
+
+- 会话内只保留最近 3–5 轮原文，更早压进状态对象；每 20–30 轮或空闲 5 分钟重建一次。
+- 落盘 `turn_index` 与首包耗时，监控 TTFT 漂移。
+- 未取得 AEC 前，播放期间继续门控输入；第 3 步不得以「全双工」名义放开。
+
+验收：真实首包 ≤0.9s；第 20 轮 TTFT 相对第 2 轮上浮 ≤20%；打断可 300ms 内截断且无爆音。
+
+## 四、风险
+
+| 风险 | 影响 | 处置 |
+| --- | --- | --- |
+| 常驻会话上下文增长导致 TTFT 漂移 | 长会话反而更慢 | 滚动窗口 + 定期重建 + `turn_index` 监控 |
+| 无 AEC 时放开输入 | 模型听见自己，自说自话 | 播放期间保持门控；AEC 结论前不做全双工 |
+| 抢话与正文交接 | 爆音/残音 | 复用账本打断路径，600ms 窗口下实机复测 |
+| 精简投影丢失「已播到哪」 | 续讲判断退化 | 保留 `position`/`interrupted`，`complete`/`candidate`/`unknown` 语义不变 |
+
+## 五、本批提交边界
+
+只做第 1 步。改动文件：`internal/realtimestate/conversation_state.go`（新增）、`internal/realtimestate/conversation_state_test.go`（新增）、`internal/realtimelive/session.go`（`settle` 与 `composeReplyPrompt`）、`internal/realtimelive/reply_prompt_test.go`。不触碰身份常量、账本、部署与固件。
