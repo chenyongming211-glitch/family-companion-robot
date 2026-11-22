@@ -100,6 +100,14 @@ voice 名做白名单校验（`[A-Za-z0-9._-]`），防路径穿越。
 - `Synthetic` 只给审计打标，**仍会写 intent 文件**（第一版就踩了，在源码目录掉出一堆 `live_preface_ack-*.json`）
 - `MemoryOnly=true` 才真正不落盘
 
+## 只对 C 链路生效（2026-11-22 修正）
+
+三条链路里只有 C 的回答取自 `session.update` 的 `voice`（Tina），池子正是用同一个接口、同一个 `voice` 合成的。A（Omni 原音→文字→CosyVoice）与 B（Fun-ASR→Qwen Plus→CosyVoice）的回答由 `cosyvoice-v3-flash` 的 `longanyang` 合成——**池子在那里会是另一个人先说一句**。
+
+`voiceRouteFacts()` 只把 `QWEN_VOICE=longanyang` 写进给模型看的 facts，不改 `cfg.Voice`，所以这个洞不会被配置意外堵上。
+
+修法：`prefaceAllowed()` 在 A/B 返回 false，`reply()` 里不再启动 `speakPreface`（提交 `1158482`，release `preface-pool-20261122-r2`）。A/B 回到"没有垫话"的原状——这是对的，它们本来就是完整合成后播，一段 250ms 的语气词盖不住整段 TTS 的等待。
+
 ## 输出音频不进 ASR
 
 `release()` 增加 `preface` 参数：池子音频**进回声参考**（喇叭确实播了，AEC 需要），**不进 output ASR**（那是"机器人说了什么"，垫话不是）。否则 `嗯` 会进 `turn.Tracker`，进而进记忆。
