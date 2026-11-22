@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -778,6 +779,25 @@ waitLoop:
 	}
 	return contextText, nil
 }
+
+// The reply hands the user's speech to the provider as audio only, so a turn
+// whose audio yields no input leaves the model with nothing but the restored
+// context and it replays a line from there, which the user hears as a repeated
+// answer. The transcript is already authoritative for that context and for
+// memory writes, so state it as this turn's input as well.
+func currentTurnInput(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return "\n本轮用户刚刚说（语音识别文字，就是本轮要回应的输入）：" + text + "\n"
+}
+
+// The trailing turn input must stay last: it is the only line that names what
+// this turn has to answer, and every earlier line is background.
+func composeReplyPrompt(base, extra, user string) string {
+	return base + extra + currentTurnInput(user)
+}
 func (s *Session) generateNative(ctx context.Context, id int64, prompt string, pcm []byte, emit func(string, []byte) error) error {
 	n := NewNative(s.cfg, s.directory)
 	defer n.Close()
@@ -873,7 +893,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		s.turnError(rt)
 		return
 	}
-	prompt += controlContext + memoryReceipt + route.Guidance
+	prompt = composeReplyPrompt(prompt, controlContext+memoryReceipt+route.Guidance, rt.turn.User)
 	producerCtx, cancel := context.WithCancel(ctx)
 	queueFrames := speechQueueFrames
 	if media {
