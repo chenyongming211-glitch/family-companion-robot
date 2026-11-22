@@ -125,6 +125,26 @@ func (s *PrefaceStore) Put(pool *PrefacePool) {
 // Ensure returns the pool for cfg.Voice, loading it from root or synthesizing it
 // when no clips exist yet. root holds one directory per voice, so switching the
 // voice switches the clips and changing back reuses what was already generated.
+// LoadCached adopts an existing pool only if it still speaks the wording now
+// configured. It is the boot path: a cached pool is a cheap load, but adopting
+// it blindly means an edited list keeps playing the old recording -- valid
+// manifest, all clips present, and the only symptom is a sentence nobody wrote.
+//
+// The bool says whether the caller may skip synthesis. A voice directory that
+// exists but no longer matches must be regenerated, not trusted.
+func (s *PrefaceStore) LoadCached(root string, cfg Config, lines []prefaceLineSpec) (*PrefacePool, bool) {
+	if s == nil || !validVoiceDirName(cfg.Voice) {
+		return nil, false
+	}
+	dir := filepath.Join(root, cfg.Voice)
+	pool, err := LoadPrefacePool(dir, cfg.Voice)
+	if err != nil || !pool.speaks(lines) {
+		return nil, false
+	}
+	s.Put(pool)
+	return pool, true
+}
+
 func (s *PrefaceStore) Ensure(ctx context.Context, cfg Config, root string, lines []prefaceLineSpec) (*PrefacePool, error) {
 	if s == nil {
 		return nil, errors.New("preface_store_nil")
@@ -143,8 +163,7 @@ func (s *PrefaceStore) Ensure(ctx context.Context, cfg Config, root string, line
 		return pool, nil
 	}
 	dir := filepath.Join(root, cfg.Voice)
-	if pool, err := LoadPrefacePool(dir, cfg.Voice); err == nil && pool.speaks(lines) {
-		s.Put(pool)
+	if pool, ok := s.LoadCached(root, cfg, lines); ok {
 		return pool, nil
 	}
 	pool, err := SynthPrefacePool(ctx, cfg, dir, lines)

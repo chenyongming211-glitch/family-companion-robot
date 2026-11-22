@@ -473,3 +473,43 @@ func TestPrefacePoolRejectsAWordingItNoLongerSpeaks(t *testing.T) {
 		t.Fatal("a shorter list must invalidate the pool")
 	}
 }
+
+func TestLoadCachedRefusesAWordingItNoLongerSpeaks(t *testing.T) {
+	// The boot path loads a pool directly rather than going through Ensure. That
+	// shortcut is exactly how an edited wording kept playing: the directory is
+	// valid, the clips load, and nothing compared the recordings to the list.
+	root := t.TempDir()
+	voice := "Tina"
+	dir := filepath.Join(root, voice)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pcm := bytes.Repeat([]byte{1, 0}, prefacePoolPacket/2)
+	if len(pcm) != prefacePoolPacket {
+		t.Fatalf("setup produced %d bytes", len(pcm))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a01.pcm"), pcm, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := prefaceManifest{
+		Voice: voice, Model: "m", SampleRate: prefacePoolRate, SampleFormat: "s16le",
+		Channels: prefacePoolChannels, PacketBytes: prefacePoolPacket, SeamSilenceMS: prefaceSeamSilenceMS,
+		Lines: []prefaceLine{{ID: "a01", Tier: 1, Text: "在呢。", MS: 60, Bytes: len(pcm), SHA: "x"}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{Voice: voice}
+	if _, ok := NewPrefaceStore().LoadCached(root, cfg, []prefaceLineSpec{{ID: "a01", Tier: 1, Text: "嗯。"}}); ok {
+		t.Fatal("a pool recorded for other words must not be adopted")
+	}
+	pool, ok := NewPrefaceStore().LoadCached(root, cfg, []prefaceLineSpec{{ID: "a01", Tier: 1, Text: "在呢。"}})
+	if !ok || pool.Lines() != 1 {
+		t.Fatal("a pool matching the configured wording must load without resynthesis")
+	}
+}

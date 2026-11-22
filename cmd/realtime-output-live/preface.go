@@ -47,13 +47,11 @@ func configurePreface(cfg *realtimelive.Config, root, linesPath string) {
 	synthCfg := realtimelive.Config{URL: cfg.URL, Key: cfg.Key, Voice: cfg.Voice, Model: cfg.Model}
 
 	dir := filepath.Join(root, cfg.Voice)
-	if pool, err := realtimelive.LoadPrefacePool(dir, cfg.Voice); err == nil {
-		store.Put(pool)
+	if pool, ok := store.LoadCached(root, synthCfg, lines); ok {
 		log.Printf("preface_pool_loaded dir=%s voice=%s lines=%d", dir, cfg.Voice, pool.Lines())
 		return
-	} else {
-		log.Printf("preface_pool_absent dir=%s voice=%s: synthesizing", dir, cfg.Voice)
 	}
+	log.Printf("preface_pool_stale_or_absent dir=%s voice=%s: synthesizing", dir, cfg.Voice)
 	// Synthesis takes about a minute for a full set and touches the same provider
 	// the conversations use, so it runs behind the listener rather than in front
 	// of it.
