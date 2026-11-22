@@ -14,6 +14,15 @@ cleanup() {
   if $created; then ssh -S "$control" -O cancel -L "127.0.0.1:$port:127.0.0.1:$remote_port" ubuntu@82.156.48.111 >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT INT TERM
+if [[ ! -S "$control" ]]; then
+  mkdir -p "$(dirname "$control")"
+  master=$control
+  if [[ -L "$control" ]]; then
+    master=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$control")
+  fi
+  rm -f "$master"
+  ssh -S "$master" -M -f -N ubuntu@82.156.48.111
+fi
 ssh -S "$control" -O forward -L "127.0.0.1:$port:127.0.0.1:$remote_port" ubuntu@82.156.48.111
 created=true
 health=$(curl -q --fail --silent --show-error --max-time 5 "http://127.0.0.1:$port/healthz")
