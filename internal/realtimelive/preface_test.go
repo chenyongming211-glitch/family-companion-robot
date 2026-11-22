@@ -20,18 +20,21 @@ func TestPrefaceOrderKeepsAcknowledgementFirst(t *testing.T) {
 	if !order.claim() {
 		t.Fatal("the first claim must win when the answer is silent")
 	}
-	ctx := context.Background()
-	if err := order.acquire(ctx); err != nil {
-		t.Fatal(err)
+	if !order.begin() {
+		t.Fatal("the acknowledgement must take the front when nothing else has")
 	}
+	ctx := context.Background()
 	answered := make(chan error, 1)
-	go func() { answered <- order.answerPacket(ctx) }()
+	go func() {
+		_, err := order.answerPacket(ctx)
+		answered <- err
+	}()
 	select {
 	case <-answered:
 		t.Fatal("the answer overtook the acknowledgement")
 	case <-time.After(50 * time.Millisecond):
 	}
-	order.release()
+	order.finish()
 	select {
 	case err := <-answered:
 		if err != nil {
@@ -42,11 +45,29 @@ func TestPrefaceOrderKeepsAcknowledgementFirst(t *testing.T) {
 	}
 }
 
+// The answer arriving while the acknowledgement is still generating must win.
+// This is the turn that made the robot answer "what is your name" with a promise
+// to look it up and a first packet at 2.5s: the front was taken before anything
+// was ready, so the answer queued behind a request that had not produced audio.
+func TestPrefaceOrderLetsAnswerTakeTheFrontWhileGenerating(t *testing.T) {
+	order := newPrefaceOrder()
+	if !order.claim() {
+		t.Fatal("claim must be granted before generation starts")
+	}
+	// The acknowledgement is still generating: no packet, no begin yet.
+	if _, err := order.answerPacket(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if order.begin() {
+		t.Fatal("the acknowledgement must not take the front once the answer spoke")
+	}
+}
+
 // Once the answer speaks there is nothing to acknowledge: the user has already
 // heard it, so a spoken apology would arrive as a second, contradictory answer.
 func TestPrefaceOrderDeclinesOnceAnswerSpeaks(t *testing.T) {
 	order := newPrefaceOrder()
-	if err := order.answerPacket(context.Background()); err != nil {
+	if _, err := order.answerPacket(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if order.claim() {
@@ -57,41 +78,75 @@ func TestPrefaceOrderDeclinesOnceAnswerSpeaks(t *testing.T) {
 // Only the first packet needs the gate; later ones follow it in the channel.
 func TestPrefaceOrderOnlyGatesTheFirstPacket(t *testing.T) {
 	order := newPrefaceOrder()
-	if err := order.answerPacket(context.Background()); err != nil {
+	if !order.claim() || !order.begin() {
+		t.Fatal("the acknowledgement must own the front")
+	}
+	order.finish()
+	if _, err := order.answerPacket(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := order.acquire(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer order.release()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := order.answerPacket(ctx); err != nil {
+	if _, err := order.answerPacket(ctx); err != nil {
 		t.Fatalf("later packets must not wait behind the acknowledgement: %v", err)
 	}
 }
 
-// The wording may vary, the claim may not: a turn without search must never say
-// it is looking something up.
-func TestPrefaceInputNeverClaimsASearchItWillNotRun(t *testing.T) {
-	thinking := prefaceInput("明天天气怎么样", false)
-	if !strings.Contains(thinking, "想一想") {
-		t.Fatalf("a turn without search must say it is thinking: %s", thinking)
+// An acknowledgement must never claim a lookup. The switch it used to read says
+// search is allowed this turn, not that a search is running, and the robot was
+// answering "what is your name" with "I'll go look that up".
+func TestPrefaceInputNeverClaimsASearch(t *testing.T) {
+	prompt := prefaceInput("你叫什么？", nil)
+	if strings.Contains(prompt, "查") || strings.Contains(prompt, "搜") {
+		t.Fatalf("the acknowledgement must not promise a lookup: %s", prompt)
 	}
-	if strings.Contains(thinking, "查") {
-		t.Fatalf("a turn without search must not promise a lookup: %s", thinking)
+	if !strings.Contains(prompt, "你叫什么？") {
+		t.Fatal("the acknowledgement must be about this turn")
 	}
-	searching := prefaceInput("明天天气怎么样", true)
-	if !strings.Contains(searching, "联网查") {
-		t.Fatalf("a searching turn must name the lookup: %s", searching)
-	}
-	if !strings.Contains(prefaceInput("明天杭州天气", true), "明天杭州天气") {
-		t.Fatal("the acknowledgement must be about this turn's request")
-	}
-	for _, required := range []string{"十五个字", "每次换个说法", "不要给答案"} {
+	for _, required := range []string{"不要说去查", "不要给答案", "不要用「我这就"} {
 		if !strings.Contains(prefaceInstructions, required) {
 			t.Fatalf("instructions must constrain %q", required)
 		}
+	}
+}
+
+// Repeating one sentence is the failure the user hears first, and the model
+// cannot audit a rule like "vary your wording". Naming the used lines is what
+// actually moves it.
+func TestPrefaceInputListsTheLinesAlreadyUsed(t *testing.T) {
+	avoid := []string{"嗯，我在呢", "稍等一下啊"}
+	prompt := prefaceInput("明天杭州天气怎么样", avoid)
+	for _, line := range avoid {
+		if !strings.Contains(prompt, line) {
+			t.Fatalf("prompt must list the line to avoid %q: %s", line, prompt)
+		}
+	}
+	if strings.Contains(prefaceInput("明天杭州天气怎么样", nil), "已经说过") {
+		t.Fatal("the avoid list must not appear before anything was said")
+	}
+}
+
+func TestRememberPrefaceKeepsDistinctRecentLines(t *testing.T) {
+	s := &Session{}
+	s.rememberPreface("  ")
+	if len(s.prefaceSaid) != 0 {
+		t.Fatal("an empty line must not enter the list")
+	}
+	for _, line := range []string{"a", "b", "a", "c", "d", "e"} {
+		s.rememberPreface(line)
+	}
+	if len(s.prefaceSaid) != prefaceRecall {
+		t.Fatalf("the list must hold %d lines, got %v", prefaceRecall, s.prefaceSaid)
+	}
+	seen := map[string]bool{}
+	for _, line := range s.prefaceSaid {
+		if seen[line] {
+			t.Fatalf("a repeated line was stored twice: %v", s.prefaceSaid)
+		}
+		seen[line] = true
+	}
+	if seen["a"] {
+		t.Fatal("the oldest line must have fallen off")
 	}
 }
 
@@ -144,7 +199,7 @@ func TestStreamTextSendsTextItemAndNoAudio(t *testing.T) {
 	}
 	var pcm []byte
 	text := ""
-	err := n.StreamText(ctx, prefaceInput("明天天气怎么样", true), func(kind string, value []byte) error {
+	err := n.StreamText(ctx, prefaceInput("明天天气怎么样", nil), func(kind string, value []byte) error {
 		switch kind {
 		case "pcm":
 			pcm = append(pcm, value...)

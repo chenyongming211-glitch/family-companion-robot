@@ -38,34 +38,38 @@ type liveTurn struct {
 	expressionCancel        context.CancelFunc
 }
 type Session struct {
-	voiceRoute       string        // Immutable after authenticated session setup.
-	music            *sessionMusic // Session.mu; discarded with this authenticated connection.
-	ws               *websocket.Conn
-	wire             sessionWire
-	inputFrame       int
-	cfg              Config
-	directory        string
-	product          *realtimestate.Product
-	mu               sync.Mutex
-	history          []*liveTurn
-	ring             *realtimestate.AudioRing
-	echoPCM          *realtimestate.AudioRing // Session.mu; only the current device speech output.
-	input            chan []byte
-	listener         *Native
-	controls         *deviceControls
-	diag             *audioDiagnostics
-	memory           *sessionMemory
-	memoryFloor      int64 // Protected by mu; old playback state remains intact.
-	speaker          speakerObserver
-	speakerLatest    int64
-	speakerFailed    bool
-	providerEnd      int64
-	seq              int64
-	output           *liveTurn
-	lastInput        *pendingInput
-	items            map[string]*pendingInput
-	itemOrder        []string
-	changed          chan struct{}
+	voiceRoute    string        // Immutable after authenticated session setup.
+	music         *sessionMusic // Session.mu; discarded with this authenticated connection.
+	ws            *websocket.Conn
+	wire          sessionWire
+	inputFrame    int
+	cfg           Config
+	directory     string
+	product       *realtimestate.Product
+	mu            sync.Mutex
+	history       []*liveTurn
+	ring          *realtimestate.AudioRing
+	echoPCM       *realtimestate.AudioRing // Session.mu; only the current device speech output.
+	input         chan []byte
+	listener      *Native
+	controls      *deviceControls
+	diag          *audioDiagnostics
+	memory        *sessionMemory
+	memoryFloor   int64 // Protected by mu; old playback state remains intact.
+	speaker       speakerObserver
+	speakerLatest int64
+	speakerFailed bool
+	providerEnd   int64
+	seq           int64
+	output        *liveTurn
+	lastInput     *pendingInput
+	items         map[string]*pendingInput
+	itemOrder     []string
+	changed       chan struct{}
+	// Preface lines already spoken this session. A short generation with a short
+	// prompt converges on one sentence; naming the used ones is what actually
+	// breaks it, since "vary your wording" is a rule the model cannot audit.
+	prefaceSaid      []string // Session.mu
 	ctx              context.Context
 	cancel           context.CancelFunc
 	wg               sync.WaitGroup
@@ -939,8 +943,8 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 			if v.packet != nil {
 				// Holds only the answer's first packet, and only while an
-				// acknowledgement is being written in front of it.
-				if e := order.answerPacket(producerCtx); e != nil {
+				// acknowledgement is already speaking in front of it.
+				if _, e := order.answerPacket(producerCtx); e != nil {
 					return e
 				}
 			}
