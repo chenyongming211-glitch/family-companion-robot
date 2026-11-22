@@ -513,3 +513,31 @@ func TestLoadCachedRefusesAWordingItNoLongerSpeaks(t *testing.T) {
 		t.Fatal("a pool matching the configured wording must load without resynthesis")
 	}
 }
+
+// One short acknowledgement per short wait. Two in a row reads as a stuck
+// recording: "嗯", then "哎" a beat later, while the answer is still being made.
+func TestSpeakPrefaceAcknowledgesOnlyOncePerShortWait(t *testing.T) {
+	s := testSession()
+	short := testLine("a", 1, 120)
+	rt := &liveTurn{turn: realtimestate.NewTurn(1), stoppedAt: time.Now().Add(-1500 * time.Millisecond)}
+	out := make(chan encodedPacket, 200)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.speakPreface(ctx, rt, &prefaceGate{}, newTestPool(short, testLine("b", 2, 120)),
+		passthrough, func() {}, out)
+
+	window := time.After(600 * time.Millisecond)
+	got := 0
+collect:
+	for {
+		select {
+		case <-out:
+			got++
+		case <-window:
+			break collect
+		}
+	}
+	if want := short.Bytes / prefacePoolPacket; got != want {
+		t.Fatalf("one short wait must produce one acknowledgement: got %d packets, want %d", got, want)
+	}
+}

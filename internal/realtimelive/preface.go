@@ -126,6 +126,19 @@ func (s *Session) speakPreface(ctx context.Context, rt *liveTurn, gate *prefaceG
 			outcome = "budget"
 			return
 		}
+		// One short acknowledgement is enough. Two in a row -- "嗯", then "哎" a
+		// beat later -- is what a stuck recording sounds like; a person who has
+		// already grunted once stays quiet until they have something to add.
+		if clips > 0 && prefaceTier(elapsed) == 1 {
+			hold := time.NewTimer(time.Duration(2400-elapsed) * time.Millisecond)
+			select {
+			case <-hold.C:
+			case <-ctx.Done():
+				hold.Stop()
+				return
+			}
+			continue
+		}
 		line := pool.Pick(prefaceTier(elapsed))
 		if line == nil {
 			outcome = "no_clip"
