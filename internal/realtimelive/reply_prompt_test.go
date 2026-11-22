@@ -13,7 +13,7 @@ func TestComposeReplyPromptStatesCurrentTurnInputLast(t *testing.T) {
 	base := "身份。\n对话记录：{\"recent_turns\":[]}"
 	extra := "\n控制：无\n"
 	got := composeReplyPrompt(base, extra, "  某个国家的情况。 ")
-	if !strings.HasPrefix(got, base+extra) {
+	if !strings.HasPrefix(got, base+compactStateNote+extra) {
 		t.Fatalf("background must precede the turn input: %q", got)
 	}
 	if !strings.HasSuffix(got, "某个国家的情况。\n") {
@@ -26,7 +26,23 @@ func TestComposeReplyPromptStatesCurrentTurnInputLast(t *testing.T) {
 
 // A turn with no settled transcript must not gain an empty instruction line.
 func TestComposeReplyPromptOmitsEmptyTurnInput(t *testing.T) {
-	if got := composeReplyPrompt("base", "extra", "   "); got != "baseextra" {
+	if got := composeReplyPrompt("base", "extra", "   "); got != "base"+compactStateNote+"extra" {
 		t.Fatalf("empty turn input changed the prompt: %q", got)
+	}
+}
+
+// The projection no longer carries playback evidence, so the prompt has to name
+// the fields it does carry and the one rule the old dump could not state: do not
+// restart with an opening or a passage that was already used.
+func TestComposeReplyPromptExplainsCompactState(t *testing.T) {
+	for _, required := range []string{"精简投影", "assistant_spoken_prefix", "position=complete", "candidate", "interrupted", "不要复述"} {
+		if !strings.Contains(compactStateNote, required) {
+			t.Fatalf("state note must explain %q: %s", required, compactStateNote)
+		}
+	}
+	for _, stale := range []string{"playback_evidence", "said_openings", "spoken_text"} {
+		if strings.Contains(compactStateNote, stale) {
+			t.Fatalf("the note must not describe %q, which the projection no longer carries", stale)
+		}
 	}
 }

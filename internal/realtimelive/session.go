@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type liveTurn struct {
@@ -755,7 +756,7 @@ waitLoop:
 			turns = append(turns, v.turn)
 		}
 	}
-	contextText := realtimestate.ContextFor(turns)
+	contextText := realtimestate.ConversationStateFor(turns)
 	for _, v := range prior[max(0, len(prior)-realtimestate.RecentTurnLimit):] {
 		samples := int64(0)
 		if v.asr != nil {
@@ -774,7 +775,7 @@ waitLoop:
 	if e != nil {
 		return "", e
 	}
-	if e = s.record("restored_context", map[string]any{"id": rt.turn.ID, "data": data, "extra_wait_ms": time.Since(started).Milliseconds()}); e != nil {
+	if e = s.record("restored_context", map[string]any{"id": rt.turn.ID, "data": data, "extra_wait_ms": time.Since(started).Milliseconds(), "context_chars": utf8.RuneCountInString(contextText), "state_turns": len(turns)}); e != nil {
 		return "", e
 	}
 	return contextText, nil
@@ -793,10 +794,16 @@ func currentTurnInput(text string) string {
 	return "\n本轮用户刚刚说（语音识别文字，就是本轮要回应的输入）：" + text + "\n"
 }
 
+// The reply prompt carries a compact projection of the played turns, not the
+// ledger's playback evidence. The schema note sits next to that projection so
+// the model reads position and said_openings correctly instead of treating a
+// fully played clip as a finished task or restarting a line it already used.
+const compactStateNote = "以上对话记录是精简投影：recent_turns 按时间排列，user 是用户原话，assistant_spoken_prefix 是该轮实际播出的开头文字（可能有识别误差或不完整）；position=complete 表示整段播完，candidate 表示只说了一部分，unknown 表示无法判断；interrupted=true 表示被打断。说过的内容不要用相同开头重新起头，也不要复述已经讲过的段落；用户要求继续时，从停下的地方往下讲。\n"
+
 // The trailing turn input must stay last: it is the only line that names what
 // this turn has to answer, and every earlier line is background.
 func composeReplyPrompt(base, extra, user string) string {
-	return base + extra + currentTurnInput(user)
+	return base + compactStateNote + extra + currentTurnInput(user)
 }
 func (s *Session) generateNative(ctx context.Context, id int64, prompt string, pcm []byte, emit func(string, []byte) error) error {
 	n := NewNative(s.cfg, s.directory)
