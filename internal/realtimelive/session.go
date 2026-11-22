@@ -829,6 +829,9 @@ type encodedPacket struct {
 	packet []byte
 	err    error
 	end    bool
+	// preface marks the acknowledgement that may speak before the answer. It is
+	// still this turn's audio; the flag only separates the two latency numbers.
+	preface bool
 }
 
 const speechQueueFrames = 1002
@@ -919,6 +922,12 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	produced := make(chan struct{})
 	prepared := make(chan struct{})
 	var ready sync.Once
+	// A slow turn gets one short acknowledgement as its first second of audio.
+	// Media is its own immediate output, so it never needs one.
+	order := newPrefaceOrder()
+	if !media {
+		go s.speakPreface(producerCtx, rt, order, encodeFrame, func() { ready.Do(func() { close(prepared) }) }, encoded)
+	}
 	go func() {
 		defer close(produced)
 		defer ready.Do(func() { close(prepared) })
@@ -927,6 +936,13 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		put := func(v encodedPacket) error {
 			if v.packet != nil && musicAllowed != nil && !musicAllowed() {
 				return music.ErrLibraryForbidden
+			}
+			if v.packet != nil {
+				// Holds only the answer's first packet, and only while an
+				// acknowledgement is being written in front of it.
+				if e := order.answerPacket(producerCtx); e != nil {
+					return e
+				}
 			}
 			select {
 			case <-producerCtx.Done():
@@ -1040,6 +1056,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	case <-prepared:
 	}
 	resampler := realtimeaudio.NewResampler()
+	prefaceLead := false
 	for {
 		var p encodedPacket
 		timer := time.NewTimer(40 * time.Second)
@@ -1133,6 +1150,17 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 		}
 		s.mu.Unlock()
+		// first_packet is what the user heard first, acknowledgement included.
+		// The answer's own latency is recorded once, so it stays comparable with
+		// the turns that had no acknowledgement.
+		if p.preface {
+			prefaceLead = true
+		} else if prefaceLead {
+			prefaceLead = false
+			if e = s.record("answer_first_packet", map[string]any{"id": rt.turn.ID, "speech_stop_to_packet_ms": time.Since(rt.stoppedAt).Milliseconds()}); e != nil {
+				return
+			}
+		}
 		ok, e := s.release(rt, p.packet, codec, resampler)
 		if e != nil {
 			s.fail()
