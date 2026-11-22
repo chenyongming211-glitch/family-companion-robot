@@ -810,8 +810,32 @@ const compactStateNote = "以上对话记录是精简投影：recent_turns 按�
 func composeReplyPrompt(base, extra, user string) string {
 	return base + compactStateNote + extra + currentTurnInput(user)
 }
+
+// turnUser returns this turn's transcript, used to decide whether the answer can
+// come from what the model already knows.
+func (s *Session) turnUser(id int64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rt := range s.history {
+		if rt.turn.ID == id {
+			return rt.turn.User
+		}
+	}
+	return ""
+}
+
 func (s *Session) generateNative(ctx context.Context, id int64, prompt string, pcm []byte, emit func(string, []byte) error) error {
-	n := NewNative(s.cfg, s.directory)
+	cfg := s.cfg
+	search, reason := searchDecision(s.turnUser(id), cfg.Search)
+	cfg.Search = search
+	// A search turn costs about five seconds in the tail, so which turns kept it
+	// has to be visible next to the latency it produced.
+	var allowed any = "unset"
+	if search != nil {
+		allowed = *search
+	}
+	_ = s.record("search_gate", map[string]any{"id": id, "allowed": allowed, "reason": reason})
+	n := NewNative(cfg, s.directory)
 	defer n.Close()
 	n.OnSearch = func(m map[string]any) error {
 		fields := map[string]any{"id": id}
