@@ -67,6 +67,14 @@ func (s *Server) bindVoiceRouteSession(session *Session) {
 
 // Resolving policy belongs after authenticated ownership and before Run. The
 // captured generation function changes no business preflight or playback rules.
+// developmentTerminal reports the Mac test entry points. They are the same
+// process with or without a recorded plan driving the microphone, and neither
+// is a managed family device, so neither has a route row. Route A/B testing
+// runs through the fixture form, which is why it has to be admitted too.
+func developmentTerminal(clientType string) bool {
+	return clientType == "mac_native" || clientType == "mac_fixture"
+}
+
 func (s *Server) configureVoiceRoute(session *Session) {
 	defer func() {
 		if session.ownerErr != nil {
@@ -79,7 +87,7 @@ func (s *Server) configureVoiceRoute(session *Session) {
 	route := "C"
 	if session.rec.owner.DeviceID != "" && s.cfg.VoiceRouteForDevice != nil {
 		selected, err := s.cfg.VoiceRouteForDevice(session.rec.owner.DeviceID)
-		if errors.Is(err, ErrVoiceRouteUnknown) && session.rec.owner.ClientType == "mac_native" {
+		if errors.Is(err, ErrVoiceRouteUnknown) && developmentTerminal(session.rec.owner.ClientType) {
 			// The development terminal is not a managed family device, so it has
 			// no route row. Native route C needs no managed state; product
 			// devices below still refuse to connect without their row.

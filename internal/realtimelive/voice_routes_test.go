@@ -638,6 +638,17 @@ func TestUnmanagedMacTerminalDefaultsToNativeRoute(t *testing.T) {
 	if mac.ownerErr != nil || mac.voiceRoute != "C" {
 		t.Fatalf("mac terminal denied: route=%q err=%v", mac.voiceRoute, mac.ownerErr)
 	}
+	// The fixture form is the same terminal with a recorded plan driving it,
+	// and it is how routes A and B get exercised without a microphone.
+	fixtureDir, err := s.sessionDirectory(Ownership{DeviceID: memoryDeviceA, ClientType: "mac_fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := s.newSession(nil, fixtureDir)
+	defer fixture.cancel()
+	if fixture.ownerErr != nil || fixture.voiceRoute != "C" {
+		t.Fatalf("fixture terminal denied: route=%q err=%v", fixture.voiceRoute, fixture.ownerErr)
+	}
 	productDir, err := s.sessionDirectory(Ownership{DeviceID: memoryDeviceB, ClientType: "xiaozhi"})
 	if err != nil {
 		t.Fatal(err)
