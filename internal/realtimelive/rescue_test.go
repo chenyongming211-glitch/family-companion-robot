@@ -2,8 +2,10 @@ package realtimelive
 
 import (
 	"testing"
+	"time"
 
 	"familyrobot/internal/realtimeaudio"
+	"familyrobot/internal/realtimestate"
 )
 
 // A cover line is filler: short, a statement, and only as long as it takes to
@@ -18,6 +20,7 @@ func TestRescueAcceptableRejectsAnswersAndLongLines(t *testing.T) {
 		want bool
 	}{
 		{"short statement", "我看看啊", short, true},
+		{"six characters", "我查一下啊", make([]byte, rescueRate*3/2), true},
 		{"empty text", "", short, false},
 		{"no audio", "我看看啊", nil, false},
 		{"question", "你是想找哪一类的", short, false},
@@ -69,7 +72,7 @@ func TestStreamPCMSendsWholePackets(t *testing.T) {
 	defer close(rt.asr.Done)
 	encode := func(p []byte) ([]byte, error) { return append([]byte(nil), p...), nil }
 	pcm := make([]byte, 2880*2+101)
-	cut, err := s.streamPCM(rt, pcm, encode, nil, realtimeaudio.NewResampler())
+	cut, err := s.streamPCM(rt, pcm, encode, nil, realtimeaudio.NewResampler(), nil)
 	if cut || err != nil {
 		t.Fatalf("streamPCM cut=%v err=%v", cut, err)
 	}
@@ -82,11 +85,73 @@ func TestStreamPCMSendsWholePackets(t *testing.T) {
 	s.mu.Lock()
 	rt.turn.Cut = true
 	s.mu.Unlock()
-	cut, err = s.streamPCM(rt, make([]byte, 2880*4), encode, nil, realtimeaudio.NewResampler())
+	cut, err = s.streamPCM(rt, make([]byte, 2880*4), encode, nil, realtimeaudio.NewResampler(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cut {
 		t.Fatal("a cut turn must stop the cover line")
+	}
+}
+
+// A cover line is synthesized in one piece. Pushing it all at once is what
+// closed the connection on every search turn, so sending must wait for the
+// client's playback credit exactly like the streaming path does.
+func TestStreamPCMWaitsForPlaybackCredit(t *testing.T) {
+	s, c := newPCMSession(t)
+	rt := s.addTurn()
+	rt.turn.Begun = true
+	if err := s.send(map[string]any{"type": "begin", "id": rt.turn.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	rt.asr = &OutputASR{queue: make(chan []byte, 72), Done: make(chan struct{}), cancel: func() {}}
+	defer close(rt.asr.Done)
+	encode := func(p []byte) ([]byte, error) { return append([]byte(nil), p...), nil }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := s.streamPCM(rt, make([]byte, 2880*20), encode, nil, realtimeaudio.NewResampler(), nil); err != nil {
+			t.Error(err)
+		}
+	}()
+	// The device entry gets the extended window; ask the turn rather than
+	// assuming which one applies.
+	s.mu.Lock()
+	credit := rt.turn.PlaybackWindowSamples
+	s.mu.Unlock()
+	if credit != realtimestate.ExtendedWindowSamples {
+		credit = realtimestate.WindowSamples
+	}
+	window := credit / 1440
+	for i := int64(0); i < window; i++ {
+		if _, _, err := c.ReadMessage(); err != nil {
+			t.Fatalf("packet %d: %v", i+1, err)
+		}
+	}
+	select {
+	case <-done:
+		t.Fatal("sender ran past the playback credit window")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	s.mu.Lock()
+	rt.turn.Completed = credit
+	s.mu.Unlock()
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
+	for i := int64(0); i < window; i++ {
+		if _, _, err := c.ReadMessage(); err != nil {
+			t.Fatalf("after credit, packet %d: %v", i+1, err)
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sender never resumed after credit arrived")
 	}
 }

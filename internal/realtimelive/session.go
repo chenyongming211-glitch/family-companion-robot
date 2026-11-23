@@ -947,10 +947,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	prepared := make(chan struct{})
 	// The answer's own first packet, stamped where it arrives rather than where
 	// it is played: a cover line already speaking must not inflate the number.
-	var answerArrived struct {
-		sync.Mutex
-		at time.Time
-	}
+	var answer answerClock
 	var ready sync.Once
 	go func() {
 		defer close(produced)
@@ -1004,11 +1001,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 			pending = append(pending, value...)
 			total += len(value) / 2
-			answerArrived.Lock()
-			if answerArrived.at.IsZero() {
-				answerArrived.at = time.Now()
-			}
-			answerArrived.Unlock()
+			answer.arrive()
 			for len(pending) >= 2880 {
 				packet, e := encodeFrame(pending[:2880])
 				if e != nil {
@@ -1149,7 +1142,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 				if e = s.record("rescue_line", map[string]any{"id": rt.turn.ID, "text": res.said, "samples": len(res.pcm) / 2, "since_speech_stop_ms": time.Since(rt.stoppedAt).Milliseconds()}); e != nil {
 					return
 				}
-				if !s.speakRescue(rt, res.pcm, media, encodeFrame, codec, resampler, &asr) {
+				if !s.speakRescue(rt, res.pcm, media, encodeFrame, codec, resampler, &asr, &answer) {
 					return
 				}
 				rescued = true
@@ -1182,11 +1175,8 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		answered = true
 		if rescued {
 			rescued = false
-			answerArrived.Lock()
-			at := answerArrived.at
-			answerArrived.Unlock()
 			ms := int64(0)
-			if !at.IsZero() {
+			if at := answer.at(); !at.IsZero() {
 				ms = at.Sub(rt.stoppedAt).Milliseconds()
 			}
 			s.mu.Lock()
@@ -1306,7 +1296,7 @@ func (s *Session) rescueEligible(media bool) bool {
 
 // speakRescue plays the cover line before the answer. It reports false when the
 // turn must end instead of continuing to wait.
-func (s *Session) speakRescue(rt *liveTurn, pcm []byte, media bool, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler, asr **OutputASR) bool {
+func (s *Session) speakRescue(rt *liveTurn, pcm []byte, media bool, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler, asr **OutputASR, answer *answerClock) bool {
 	s.mu.Lock()
 	if rt.turn.Cut || s.ctx.Err() != nil {
 		s.mu.Unlock()
@@ -1322,7 +1312,7 @@ func (s *Session) speakRescue(rt *liveTurn, pcm []byte, media bool, encodeFrame 
 		*asr = opened
 	}
 	s.mu.Unlock()
-	cut, err := s.streamPCM(rt, pcm, encodeFrame, codec, resampler)
+	cut, err := s.streamPCM(rt, pcm, encodeFrame, codec, resampler, answer)
 	if err != nil {
 		s.fail()
 		return false
@@ -1330,14 +1320,27 @@ func (s *Session) speakRescue(rt *liveTurn, pcm []byte, media bool, encodeFrame 
 	return !cut
 }
 
-// streamPCM plays already-synthesized 24k mono PCM in whole packets.
-func (s *Session) streamPCM(rt *liveTurn, pcm []byte, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
+// streamPCM plays already-synthesized 24k mono PCM in whole packets, at the
+// pace the client will accept. A synthesized line arrives in one piece, so
+// without the same credit gate the streaming path uses, the whole line goes out
+// at once: the client rejects any burst larger than its playback window and
+// closes the connection. Measured 2026-11-23, a 2.48s line did exactly that on
+// every search turn.
+func (s *Session) streamPCM(rt *liveTurn, pcm []byte, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler, answer *answerClock) (bool, error) {
 	for len(pcm) > 0 {
-		s.mu.Lock()
-		cut := rt.turn.Cut
-		s.mu.Unlock()
+		// The answer arriving mid-line ends the cover: its remaining packets
+		// would be filler in front of an answer that is ready to speak.
+		if answer != nil && answer.arrived() {
+			return false, nil
+		}
+		cut, credit := s.playbackCredit(rt)
 		if cut {
 			return true, nil
+		}
+		if !credit {
+			// The cover line is filler; if the client has stopped confirming
+			// playback, abandoning it beats stalling the answer behind it.
+			return false, nil
 		}
 		n := min(len(pcm), 2880)
 		frame := make([]byte, 2880)
@@ -1356,6 +1359,36 @@ func (s *Session) streamPCM(rt *liveTurn, pcm []byte, encodeFrame func([]byte) (
 		}
 	}
 	return false, nil
+}
+
+// playbackCredit waits until the client has played enough of what was already
+// sent to take another packet. Streaming gets this for free: audio arrives at
+// roughly speaking speed. A synthesized line does not, so it has to ask.
+//
+// cut ends the turn. credit false without cut means progress stopped arriving:
+// the line is dropped and the turn keeps waiting for the answer.
+func (s *Session) playbackCredit(rt *liveTurn) (cut bool, credit bool) {
+	for {
+		s.mu.Lock()
+		cut := rt.turn.Cut || s.ctx.Err() != nil || rt.ctx.Err() != nil
+		credit = rt.turn.CanSend()
+		s.mu.Unlock()
+		if cut {
+			return true, false
+		}
+		if credit {
+			return false, true
+		}
+		select {
+		case <-rt.ctx.Done():
+			return true, false
+		case <-s.ctx.Done():
+			return true, false
+		case <-s.changed:
+		case <-time.After(5 * time.Second):
+			return false, false
+		}
+	}
 }
 
 // Snapshot under Session.mu for both terminal archive events.

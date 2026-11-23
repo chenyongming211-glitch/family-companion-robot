@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -25,9 +26,11 @@ const (
 	rescueDelay    = 1500 * time.Millisecond
 	rescueDeadline = 7 * time.Second
 	// A rescue line is filler, not an answer. Anything longer means the model
-	// started answering, which would then be repeated by the real answer.
-	rescueMaxRunes = 14
-	rescueMaxMS    = 2500
+	// started answering, which would then be repeated by the real answer. It
+	// also has to stay short for a second reason: it plays before the answer,
+	// so every extra second is a second the answer is held back.
+	rescueMaxRunes = 9
+	rescueMaxMS    = 1800
 	rescueRate     = 24000
 )
 
@@ -42,7 +45,7 @@ var rescueQuestionWords = []string{"？", "?", "你想", "你要", "你是", "�
 const rescuePrompt = "你在陪家里人说话。用户刚说了一句话，你正要查一下或者想一下才能答上来。" +
 	"现在只做一件事：说一句很短的过渡话，让用户知道你在处理这件事。\n" +
 	"要求：\n" +
-	"1. 用日常口语，不超过十二个字。\n" +
+	"1. 用日常口语，不超过六个字。\n" +
 	"2. 这一句是这一轮现想的说法，不要套用现成的客套话，不要每次都用同一个句式。\n" +
 	"3. 不要回答问题本身，不要说具体内容、数字或结论。\n" +
 	"4. 不要用问句，不要承诺多久能给结果。\n" +
@@ -77,6 +80,34 @@ func rescueLine(ctx context.Context, cfg Config, userText string) ([]byte, strin
 		return nil, said, err
 	}
 	return pcm, said, nil
+}
+
+// answerClock records when the answer's first audio arrived. A cover line has
+// to yield the moment that happens: playing the rest of it would put filler in
+// front of an answer that is already ready to speak.
+type answerClock struct {
+	mu   sync.Mutex
+	when time.Time
+}
+
+func (c *answerClock) arrive() {
+	c.mu.Lock()
+	if c.when.IsZero() {
+		c.when = time.Now()
+	}
+	c.mu.Unlock()
+}
+
+func (c *answerClock) at() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.when
+}
+
+func (c *answerClock) arrived() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.when.IsZero()
 }
 
 // rescueResult carries the audio together with what it says. The text is
