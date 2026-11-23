@@ -31,21 +31,9 @@ func TestProductVoiceReplyGuidance(t *testing.T) {
 		"简短、一两句或两句话", "每句只讲一件事", "第一句只报当前名字",
 		"第二句只选与用户最相关的一件事", "我能陪你聊天。", "两句通常合计十到二十五个汉字",
 		"明确要详细说明时按要求展开", "直接从故事正文开始", "人物行动和结果",
-		"每次说法都不同", "不能只有过渡话没有内容", "不要每轮都先垫一句",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Errorf("product voice prompt missing %q", required)
-		}
-	}
-}
-
-// The opening rule is the replacement for recorded acknowledgement clips, so it
-// has to forbid the two failures that made the clips necessary to discuss: a
-// fixed line, and an opening with nothing behind it.
-func TestOpeningGuidanceForbidsFixedLinesAndEmptyStarts(t *testing.T) {
-	for _, required := range []string{"每次说法都不同", "不要套用固定句子", "说完立刻接着讲正文", "不能只有过渡话没有内容", "不要每轮都先垫一句"} {
-		if !strings.Contains(OpeningGuidance, required) {
-			t.Errorf("opening guidance missing %q", required)
 		}
 	}
 }

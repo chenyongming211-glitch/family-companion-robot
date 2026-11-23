@@ -945,6 +945,12 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	encoded := make(chan encodedPacket, queueFrames)
 	produced := make(chan struct{})
 	prepared := make(chan struct{})
+	// The answer's own first packet, stamped where it arrives rather than where
+	// it is played: a cover line already speaking must not inflate the number.
+	var answerArrived struct {
+		sync.Mutex
+		at time.Time
+	}
 	var ready sync.Once
 	go func() {
 		defer close(produced)
@@ -998,6 +1004,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			}
 			pending = append(pending, value...)
 			total += len(value) / 2
+			answerArrived.Lock()
+			if answerArrived.at.IsZero() {
+				answerArrived.at = time.Now()
+			}
+			answerArrived.Unlock()
 			for len(pending) >= 2880 {
 				packet, e := encodeFrame(pending[:2880])
 				if e != nil {
@@ -1070,6 +1081,26 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	case <-prepared:
 	}
 	resampler := realtimeaudio.NewResampler()
+	// The answer can take 4.6s to make its first sound because the provider
+	// searches before it speaks. Cover that wait with one line written for this
+	// turn, and drop it the moment the answer itself arrives.
+	var rescueTimer *time.Timer
+	var rescueTimerC <-chan time.Time
+	if s.rescueEligible(media) {
+		// Measured from the end of the user's speech, not from when the request
+		// went out: opening the session already spent part of the budget.
+		wait := rescueDelay - time.Since(rt.stoppedAt)
+		if wait < 200*time.Millisecond {
+			wait = 200 * time.Millisecond
+		}
+		rescueTimer = time.NewTimer(wait)
+		rescueTimerC = rescueTimer.C
+		defer rescueTimer.Stop()
+	}
+	rescueCtx, stopRescue := context.WithCancel(producerCtx)
+	defer stopRescue()
+	var rescueC chan rescueResult
+	answered, rescued := false, false
 	for {
 		var p encodedPacket
 		timer := time.NewTimer(40 * time.Second)
@@ -1083,8 +1114,54 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		case <-timer.C:
 			s.turnError(rt)
 			return
+		case <-rescueTimerC:
+			// Still silent past the deadline: ask for the cover line now.
+			timer.Stop()
+			rescueTimerC = nil
+			out := make(chan rescueResult, 1)
+			rescueC = out
+			userText := rt.turn.User
+			s.spawn(func() {
+				pcm, said, err := rescueLine(rescueCtx, s.cfg, userText)
+				if err != nil || !rescueAcceptable(said, pcm) {
+					return
+				}
+				out <- rescueResult{pcm: pcm, said: said}
+			})
+			continue
+		case res := <-rescueC:
+			timer.Stop()
+			rescueC = nil
+			if answered || len(res.pcm) == 0 {
+				continue
+			}
+			// The answer may already be waiting: this select could have picked the
+			// cover line first. Playing it then would put a line in front of an
+			// answer that is ready to speak.
+			select {
+			case p = <-encoded:
+				rescueTimerC = nil
+				if rescueTimer != nil {
+					rescueTimer.Stop()
+				}
+				stopRescue()
+			default:
+				if e = s.record("rescue_line", map[string]any{"id": rt.turn.ID, "text": res.said, "samples": len(res.pcm) / 2, "since_speech_stop_ms": time.Since(rt.stoppedAt).Milliseconds()}); e != nil {
+					return
+				}
+				if !s.speakRescue(rt, res.pcm, media, encodeFrame, codec, resampler, &asr) {
+					return
+				}
+				rescued = true
+				continue
+			}
 		case p = <-encoded:
 			timer.Stop()
+			rescueTimerC = nil
+			if rescueTimer != nil {
+				rescueTimer.Stop()
+			}
+			stopRescue()
 		}
 		if p.err != nil {
 			if ctx.Err() == nil {
@@ -1098,6 +1175,26 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		}
 		if p.end {
 			break
+		}
+		// The first packet of the answer itself. When a cover line spoke first,
+		// the answer's own latency is recorded separately so it stays comparable
+		// with turns that had no cover.
+		answered = true
+		if rescued {
+			rescued = false
+			answerArrived.Lock()
+			at := answerArrived.at
+			answerArrived.Unlock()
+			ms := int64(0)
+			if !at.IsZero() {
+				ms = at.Sub(rt.stoppedAt).Milliseconds()
+			}
+			s.mu.Lock()
+			e = s.record("answer_first_packet", map[string]any{"id": rt.turn.ID, "speech_stop_to_packet_ms": ms})
+			s.mu.Unlock()
+			if e != nil {
+				return
+			}
 		}
 		for {
 			s.mu.Lock()
@@ -1136,29 +1233,11 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			return
 		}
 		if !rt.turn.Begun {
-			rt.turn.Begun = true
-			e = s.sendLocked(map[string]any{"type": "begin", "id": rt.turn.ID})
-			if e != nil {
+			var er error
+			asr, er = s.beginTurnLocked(rt, media)
+			if er != nil {
 				s.mu.Unlock()
 				s.fail()
-				return
-			}
-			if !media {
-				if e = s.sendExpressionLocked(rt); e != nil {
-					s.mu.Unlock()
-					s.fail()
-					return
-				}
-				asr = NewOutputASR(s.ctx, s.cfg, s.directory, func(sentence map[string]any, elapsed int64) error {
-					s.mu.Lock()
-					rt.turn.Tracker.Add(sentence, float64(elapsed))
-					s.mu.Unlock()
-					return s.record("output_asr_final", map[string]any{"id": rt.turn.ID, "elapsed_ms": elapsed, "sentence": sentence})
-				})
-				rt.asr = asr
-			}
-			if e = s.record("first_packet", map[string]any{"id": rt.turn.ID, "speech_stop_to_packet_ms": time.Since(rt.stoppedAt).Milliseconds()}); e != nil {
-				s.mu.Unlock()
 				return
 			}
 		}
@@ -1186,6 +1265,97 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		return
 	}
 	s.record("generated", fields)
+}
+
+// beginTurnLocked performs the work that happens once per turn before the first
+// packet reaches the speaker: announce the turn, send the expression, start the
+// output transcript, and record the first sound. The caller holds s.mu.
+func (s *Session) beginTurnLocked(rt *liveTurn, media bool) (*OutputASR, error) {
+	rt.turn.Begun = true
+	if err := s.sendLocked(map[string]any{"type": "begin", "id": rt.turn.ID}); err != nil {
+		return nil, err
+	}
+	var asr *OutputASR
+	if !media {
+		if err := s.sendExpressionLocked(rt); err != nil {
+			return nil, err
+		}
+		asr = NewOutputASR(s.ctx, s.cfg, s.directory, func(sentence map[string]any, elapsed int64) error {
+			s.mu.Lock()
+			rt.turn.Tracker.Add(sentence, float64(elapsed))
+			s.mu.Unlock()
+			return s.record("output_asr_final", map[string]any{"id": rt.turn.ID, "elapsed_ms": elapsed, "sentence": sentence})
+		})
+		rt.asr = asr
+	}
+	if err := s.record("first_packet", map[string]any{"id": rt.turn.ID, "speech_stop_to_packet_ms": time.Since(rt.stoppedAt).Milliseconds()}); err != nil {
+		return nil, err
+	}
+	return asr, nil
+}
+
+// rescueEligible limits the cover line to route C. Routes A and B speak the
+// answer in a different voice, so a line from this voice would be a second
+// speaker. Media has its own immediate output.
+func (s *Session) rescueEligible(media bool) bool {
+	if media || s.voiceRoute == "A" || s.voiceRoute == "B" {
+		return false
+	}
+	return s.cfg.URL != "" && s.cfg.Key != "" && s.cfg.Voice != ""
+}
+
+// speakRescue plays the cover line before the answer. It reports false when the
+// turn must end instead of continuing to wait.
+func (s *Session) speakRescue(rt *liveTurn, pcm []byte, media bool, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler, asr **OutputASR) bool {
+	s.mu.Lock()
+	if rt.turn.Cut || s.ctx.Err() != nil {
+		s.mu.Unlock()
+		return false
+	}
+	if !rt.turn.Begun {
+		opened, err := s.beginTurnLocked(rt, media)
+		if err != nil {
+			s.mu.Unlock()
+			s.fail()
+			return false
+		}
+		*asr = opened
+	}
+	s.mu.Unlock()
+	cut, err := s.streamPCM(rt, pcm, encodeFrame, codec, resampler)
+	if err != nil {
+		s.fail()
+		return false
+	}
+	return !cut
+}
+
+// streamPCM plays already-synthesized 24k mono PCM in whole packets.
+func (s *Session) streamPCM(rt *liveTurn, pcm []byte, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
+	for len(pcm) > 0 {
+		s.mu.Lock()
+		cut := rt.turn.Cut
+		s.mu.Unlock()
+		if cut {
+			return true, nil
+		}
+		n := min(len(pcm), 2880)
+		frame := make([]byte, 2880)
+		copy(frame, pcm[:n])
+		pcm = pcm[n:]
+		packet, err := encodeFrame(frame)
+		if err != nil {
+			return false, err
+		}
+		ok, err := s.release(rt, packet, codec, resampler)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Snapshot under Session.mu for both terminal archive events.

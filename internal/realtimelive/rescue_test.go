@@ -1,0 +1,92 @@
+package realtimelive
+
+import (
+	"testing"
+
+	"familyrobot/internal/realtimeaudio"
+)
+
+// A cover line is filler: short, a statement, and only as long as it takes to
+// say it. Anything else means the model answered instead, and playing it would
+// make the user hear the answer twice.
+func TestRescueAcceptableRejectsAnswersAndLongLines(t *testing.T) {
+	short := make([]byte, rescueRate*2) // 1s at 24k mono
+	for _, tc := range []struct {
+		name string
+		said string
+		pcm  []byte
+		want bool
+	}{
+		{"short statement", "我看看啊", short, true},
+		{"empty text", "", short, false},
+		{"no audio", "我看看啊", nil, false},
+		{"question", "你是想找哪一类的", short, false},
+		{"ascii question", "which one?", short, false},
+		{"too long", "这个我得好好想一下再慢慢跟你说说看", short, false},
+		{"too much audio", "我看看啊", make([]byte, rescueRate*2*4), false},
+	} {
+		if got := rescueAcceptable(tc.said, tc.pcm); got != tc.want {
+			t.Errorf("%s: rescueAcceptable(%q)=%v want %v", tc.name, tc.said, got, tc.want)
+		}
+	}
+}
+
+// Routes A and B speak the answer in a different voice, so a line from the
+// configured voice would be a second speaker. Media never waits on a model.
+func TestRescueEligibleOnlyOnNativeVoiceRoute(t *testing.T) {
+	s, _ := newPCMSession(t)
+	if s.rescueEligible(false) {
+		t.Fatal("an unconfigured session must not try a cover line")
+	}
+	s.cfg.URL, s.cfg.Key, s.cfg.Voice = "ws://127.0.0.1:1/realtime", "key", "Tina"
+	if !s.rescueEligible(false) {
+		t.Fatal("route C with a complete config must cover slow turns")
+	}
+	if s.rescueEligible(true) {
+		t.Fatal("media has its own immediate output")
+	}
+	for _, route := range []string{"A", "B"} {
+		s.voiceRoute = route
+		if s.rescueEligible(false) {
+			t.Fatalf("route %s speaks in another voice and must not cover", route)
+		}
+	}
+}
+
+// The cover line goes out in whole packets, and a cut stops it mid-line rather
+// than finishing it over the user's speech.
+func TestStreamPCMSendsWholePackets(t *testing.T) {
+	s, c := newPCMSession(t)
+	rt := s.addTurn()
+	rt.turn.Begun = true
+	if err := s.send(map[string]any{"type": "begin", "id": rt.turn.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	rt.asr = &OutputASR{queue: make(chan []byte, 72), Done: make(chan struct{}), cancel: func() {}}
+	defer close(rt.asr.Done)
+	encode := func(p []byte) ([]byte, error) { return append([]byte(nil), p...), nil }
+	pcm := make([]byte, 2880*2+101)
+	cut, err := s.streamPCM(rt, pcm, encode, nil, realtimeaudio.NewResampler())
+	if cut || err != nil {
+		t.Fatalf("streamPCM cut=%v err=%v", cut, err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := c.ReadMessage(); err != nil {
+			t.Fatalf("packet %d: %v", i+1, err)
+		}
+	}
+
+	s.mu.Lock()
+	rt.turn.Cut = true
+	s.mu.Unlock()
+	cut, err = s.streamPCM(rt, make([]byte, 2880*4), encode, nil, realtimeaudio.NewResampler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cut {
+		t.Fatal("a cut turn must stop the cover line")
+	}
+}

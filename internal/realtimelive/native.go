@@ -364,6 +364,114 @@ func (n *Native) Stream(ctx context.Context, pcm []byte, emit func(string, []byt
 	return errors.New("event_limit")
 }
 
+// StreamText asks the provider for a spoken reply to a text item and returns the
+// audio and transcript through emit.
+//
+// The answer path submits the user's speech as audio. A rescue line is written
+// before that audio exists, so this path carries the item as text and appends no
+// audio at all. Only the rescue line uses it; answers stay on Stream.
+func (n *Native) StreamText(ctx context.Context, text string, emit func(string, []byte) error) (err error) {
+	audit, e := newIntent(n.dir, "live_rescue_line", n.cfg.Synthetic, n.cfg.MemoryOnly)
+	if e != nil {
+		return e
+	}
+	if e = audit.update(map[string]any{"state": "submission_outcome_unknown"}); e != nil {
+		return e
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, func() { n.cancel(); n.Close() })
+	defer stop()
+	identity, size, transcript, completed := "", 0, "", false
+	defer func() {
+		if !completed {
+			if ae := audit.update(map[string]any{"state": "cancelled_or_outcome_unknown", "received_samples": size / 2}); ae != nil && err == nil {
+				err = ae
+			}
+		}
+	}()
+	item := map[string]any{"type": "conversation.item.create", "item": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": text}}}}
+	if err = n.write(item); err != nil {
+		return err
+	}
+	if err = n.write(map[string]any{"type": "response.create", "response": map[string]any{"modalities": []string{"text", "audio"}}}); err != nil {
+		return err
+	}
+	for range 4096 {
+		event, er := n.Read(ctx)
+		if er != nil {
+			return er
+		}
+		switch kind, _ := event["type"].(string); kind {
+		case "response.created":
+			if identity != "" {
+				return errors.New("overlapping_response")
+			}
+			identity, _ = object(event["response"])["id"].(string)
+		case "response.audio.delta":
+			if identity == "" || event["response_id"] != identity {
+				return errors.New("response_identity")
+			}
+			raw, _ := event["delta"].(string)
+			frame, er := base64.StdEncoding.Strict().DecodeString(raw)
+			if er != nil {
+				return errors.New("output_encoding")
+			}
+			size += len(frame)
+			// A hard runaway guard only: a rescue line is capped by its own
+			// acceptance check, so trimming never turns into an error here.
+			if len(frame)%2 != 0 || size > 24000*2*20 {
+				return errors.New("output_limit")
+			}
+			if size == len(frame) {
+				if er = audit.update(map[string]any{"first_pcm_ms": time.Since(audit.start).Milliseconds()}); er != nil {
+					return er
+				}
+			}
+			if er = emit("pcm", frame); er != nil {
+				return er
+			}
+		case "response.audio_transcript.delta":
+			if event["response_id"] != identity {
+				continue
+			}
+			if v, ok := event["delta"].(string); ok {
+				transcript += v
+			}
+			if er = emit("text", []byte(transcript)); er != nil {
+				return er
+			}
+		case "response.audio_transcript.done":
+			if event["response_id"] != identity {
+				continue
+			}
+			if v, ok := event["transcript"].(string); ok {
+				transcript = v
+			}
+			if er = emit("text", []byte(transcript)); er != nil {
+				return er
+			}
+		case "response.done":
+			r := object(event["response"])
+			if identity == "" || r["id"] != identity {
+				return errors.New("response_terminal")
+			}
+			if er = audit.update(nativeTerminalEvidence(r, transcript)); er != nil {
+				return er
+			}
+			if r["status"] != "completed" || size == 0 {
+				return errors.New("response_terminal")
+			}
+			if er = audit.update(map[string]any{"state": "completed", "output_samples": size / 2, "text": transcript}); er != nil {
+				return er
+			}
+			completed = true
+			return nil
+		}
+	}
+	return errors.New("event_limit")
+}
+
 // Keep provider terminal metadata separate from playback/state and never copy
 // free-form errors or payloads. Missing or unrecognized details stay unknown.
 func nativeTerminalEvidence(response map[string]any, transcript string) map[string]any {
