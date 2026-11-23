@@ -21,9 +21,14 @@ func TestRescueAcceptableRejectsAnswersAndLongLines(t *testing.T) {
 	}{
 		{"short statement", "我看看啊", short, true},
 		{"six characters", "我查一下啊", make([]byte, rescueRate*3/2), true},
+		// 什么 inside a statement is reported speech, not a question. Rejecting
+		// it left a real search turn silent for 4s.
+		{"statement with 什么", "看看有什么新片", short, true},
 		{"empty text", "", short, false},
 		{"no audio", "我看看啊", nil, false},
 		{"question", "你是想找哪一类的", short, false},
+		{"question opening", "你想看哪种", short, false},
+		{"question ending", "这样好吗", short, false},
 		{"ascii question", "which one?", short, false},
 		{"too long", "这个我得好好想一下再慢慢跟你说说看", short, false},
 		{"too much audio", "我看看啊", make([]byte, rescueRate*2*4), false},

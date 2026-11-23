@@ -34,10 +34,13 @@ const (
 	rescueRate     = 24000
 )
 
-// Spoken turns often carry no punctuation, so a question has to be recognised by
-// its shape. Rejecting a good line only costs silence; playing a question or a
-// half answer makes the user hear the same thing twice, which is worse.
-var rescueQuestionWords = []string{"？", "?", "你想", "你要", "你是", "哪一", "哪个", "什么", "怎么", "吗", "呢", "要不要", "是不是"}
+// A cover line must be a statement. Spoken turns carry no reliable punctuation,
+// so the shape decides: a question opens with a question form or closes with
+// one. Words like 什么/怎么 inside a statement ("看看有什么新片") are ordinary
+// reported speech -- rejecting those cost a real search turn its cover, which
+// then sat silent for 4s (measured 2026-11-23, turn 7).
+var rescueQuestionOpens = []string{"你想", "你要", "你是", "要不要", "是不是", "哪一", "哪个", "什么", "怎么", "为什么"}
+var rescueQuestionEnds = []string{"吗", "呢", "？", "?"}
 
 // The prompt asks for a line, not a phrase from a list. The wording rules are
 // the same ones the product prompt uses for openings: own words, no template,
@@ -47,9 +50,11 @@ const rescuePrompt = "你在陪家里人说话。用户刚说了一句话，你�
 	"要求：\n" +
 	"1. 用日常口语，不超过六个字。\n" +
 	"2. 这一句是这一轮现想的说法，不要套用现成的客套话，不要每次都用同一个句式。\n" +
-	"3. 不要回答问题本身，不要说具体内容、数字或结论。\n" +
-	"4. 不要用问句，不要承诺多久能给结果。\n" +
-	"5. 只说这一句就停，不要接着往下说。"
+	"3. 不要复述用户要你做的事：用户要你推荐，就别说“我帮你挑”“我给你推荐”；说更泛的说法。" +
+	"这句话之后紧接着就要说真正的回答，重复一遍会让人听见同一句说两次。\n" +
+	"4. 不要回答问题本身，不要说具体内容、数字或结论。\n" +
+	"5. 不要用问句，不要承诺多久能给结果。\n" +
+	"6. 只说这一句就停，不要接着往下说。"
 
 // rescueLine asks for one opening line and returns its audio and transcript.
 // Search is switched off: the line must not wait on a second round of lookup.
@@ -117,21 +122,36 @@ type rescueResult struct {
 	said string
 }
 
-// rescueAcceptable rejects anything that is not a short statement. A line that
-// asks a question or runs long is the model answering instead of covering, and
-// playing it would make the user hear the answer twice.
-func rescueAcceptable(said string, pcm []byte) bool {
+// rescueAudit rejects anything that is not a short statement, and says why.
+// The reason is recorded, because a rejected line is otherwise invisible: it
+// looks exactly like a turn that never asked for a cover.
+func rescueAudit(said string, pcm []byte) (bool, string) {
 	text := strings.TrimSpace(said)
-	if text == "" || len(pcm) == 0 {
-		return false
+	switch {
+	case text == "":
+		return false, "empty_text"
+	case len(pcm) == 0:
+		return false, "empty_audio"
+	case utf8.RuneCountInString(text) > rescueMaxRunes:
+		return false, "too_many_words"
 	}
-	if utf8.RuneCountInString(text) > rescueMaxRunes {
-		return false
-	}
-	for _, word := range rescueQuestionWords {
-		if strings.Contains(text, word) {
-			return false
+	for _, open := range rescueQuestionOpens {
+		if strings.HasPrefix(text, open) {
+			return false, "question"
 		}
 	}
-	return len(pcm)/2 <= rescueMaxMS*rescueRate/1000
+	for _, end := range rescueQuestionEnds {
+		if strings.HasSuffix(text, end) {
+			return false, "question"
+		}
+	}
+	if len(pcm)/2 > rescueMaxMS*rescueRate/1000 {
+		return false, "too_long"
+	}
+	return true, ""
+}
+
+func rescueAcceptable(said string, pcm []byte) bool {
+	ok, _ := rescueAudit(said, pcm)
+	return ok
 }

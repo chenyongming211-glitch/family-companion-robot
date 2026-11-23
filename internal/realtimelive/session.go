@@ -1116,7 +1116,17 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 			userText := rt.turn.User
 			s.spawn(func() {
 				pcm, said, err := rescueLine(rescueCtx, s.cfg, userText)
-				if err != nil || !rescueAcceptable(said, pcm) {
+				if err != nil {
+					// Silence here used to be invisible: a failed line looked
+					// exactly like a turn that never asked for one. A cancelled
+					// one is not a failure -- the answer simply spoke first.
+					if rescueCtx.Err() == nil {
+						_ = s.record("rescue_skipped", map[string]any{"id": rt.turn.ID, "reason": "generation_failed", "detail": err.Error()})
+					}
+					return
+				}
+				if ok, why := rescueAudit(said, pcm); !ok {
+					_ = s.record("rescue_skipped", map[string]any{"id": rt.turn.ID, "reason": why, "text": said, "samples": len(pcm) / 2})
 					return
 				}
 				out <- rescueResult{pcm: pcm, said: said}
