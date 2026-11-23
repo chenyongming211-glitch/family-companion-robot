@@ -80,7 +80,11 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 	s.run = func(ws *websocket.Conn, dir string) {
 		session := s.newSession(ws, dir)
 		session.serverStopping = func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopping }
-		session.Run()
+		// A session can fail before its first event is written, which leaves an
+		// empty directory and no way to tell why from the record.
+		if err := session.Run(); err != nil {
+			log.Printf("session_failed reason=%v client=%s device=%s", err, session.rec.owner.ClientType, session.rec.owner.DeviceID)
+		}
 	}
 	s.runDevice = func(session *Session) { session.Run() }
 	return s
