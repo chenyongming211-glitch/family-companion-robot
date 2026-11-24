@@ -26,6 +26,7 @@ type liveTurn struct {
 	done                    chan struct{}
 	stoppedAt, drainStarted time.Time
 	lastPlaybackProgress    time.Time // Session.mu; validated Completed advances only.
+	rescueText              string    // Session.mu; cover line text for opening echo check only.
 	asr                     *OutputASR
 	transcriptReady         chan struct{}
 	transcriptOnce          sync.Once
@@ -169,6 +170,17 @@ func (s *Session) binary(rt *liveTurn, packet []byte) (bool, error) {
 // release sends one already-encoded packet and feeds the same audio to the
 // output transcript, so what was played is what gets recorded.
 func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
+	return s.releasePacket(rt, packet, false, codec, resampler)
+}
+
+// releaseCover sends one packet of a cover line. It reaches the echo reference
+// (the speaker really plays it) and advances the resampler state, but stays out
+// of the output transcript so filler never enters spoken evidence or memory.
+func (s *Session) releaseCover(rt *liveTurn, packet []byte, codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
+	return s.releasePacket(rt, packet, true, codec, resampler)
+}
+
+func (s *Session) releasePacket(rt *liveTurn, packet []byte, cover bool, codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rt.turn.Cut || s.ctx.Err() != nil {
@@ -193,7 +205,9 @@ func (s *Session) release(rt *liveTurn, packet []byte, codec *realtimeaudio.Code
 			return true, e
 		}
 		s.rememberEchoPCMLocked(rt, converted)
-		rt.asr.Feed(converted)
+		if !cover {
+			rt.asr.Feed(converted)
+		}
 	}
 	return true, nil
 }
@@ -1080,12 +1094,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	var rescueTimer *time.Timer
 	var rescueTimerC <-chan time.Time
 	if s.rescueEligible(media) {
-		// Measured from the end of the user's speech, not from when the request
-		// went out: opening the session already spent part of the budget.
-		wait := rescueDelay - time.Since(rt.stoppedAt)
-		if wait < 200*time.Millisecond {
-			wait = 200 * time.Millisecond
-		}
+		wait := rescueWait(rt.stoppedAt, time.Now(), rt.turn.User, s.cfg.Search)
 		rescueTimer = time.NewTimer(wait)
 		rescueTimerC = rescueTimer.C
 		defer rescueTimer.Stop()
@@ -1135,7 +1144,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		case res := <-rescueC:
 			timer.Stop()
 			rescueC = nil
-			if answered || len(res.pcm) == 0 {
+			if answered || len(res.pcm) == 0 || answer.arrived() {
 				continue
 			}
 			// The answer may already be waiting: this select could have picked the
@@ -1152,7 +1161,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 				if e = s.record("rescue_line", map[string]any{"id": rt.turn.ID, "text": res.said, "samples": len(res.pcm) / 2, "since_speech_stop_ms": time.Since(rt.stoppedAt).Milliseconds()}); e != nil {
 					return
 				}
-				if !s.speakRescue(rt, res.pcm, media, encodeFrame, codec, resampler, &asr, &answer) {
+				if !s.speakRescue(rt, res.said, res.pcm, media, encodeFrame, codec, resampler, &asr, &answer) {
 					return
 				}
 				rescued = true
@@ -1306,12 +1315,13 @@ func (s *Session) rescueEligible(media bool) bool {
 
 // speakRescue plays the cover line before the answer. It reports false when the
 // turn must end instead of continuing to wait.
-func (s *Session) speakRescue(rt *liveTurn, pcm []byte, media bool, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler, asr **OutputASR, answer *answerClock) bool {
+func (s *Session) speakRescue(rt *liveTurn, said string, pcm []byte, media bool, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler, asr **OutputASR, answer *answerClock) bool {
 	s.mu.Lock()
 	if rt.turn.Cut || s.ctx.Err() != nil {
 		s.mu.Unlock()
 		return false
 	}
+	rt.rescueText = said
 	if !rt.turn.Begun {
 		opened, err := s.beginTurnLocked(rt, media)
 		if err != nil {
@@ -1337,10 +1347,13 @@ func (s *Session) speakRescue(rt *liveTurn, pcm []byte, media bool, encodeFrame 
 // closes the connection. Measured 2026-11-23, a 2.48s line did exactly that on
 // every search turn.
 func (s *Session) streamPCM(rt *liveTurn, pcm []byte, encodeFrame func([]byte) ([]byte, error), codec *realtimeaudio.Codec, resampler *realtimeaudio.Resampler, answer *answerClock) (bool, error) {
+	sent := false
 	for len(pcm) > 0 {
-		// The answer arriving mid-line ends the cover: its remaining packets
-		// would be filler in front of an answer that is ready to speak.
-		if answer != nil && answer.arrived() {
+		// If the answer arrives before the first cover frame is sent, drop the
+		// cover altogether. Once the short cover line (<=6 chars, <=1.8s) has
+		// started speaking, finish the phrase rather than chopping a word in
+		// half and splicing it straight into the answer's first syllable.
+		if !sent && answer != nil && answer.arrived() {
 			return false, nil
 		}
 		cut, credit := s.playbackCredit(rt)
@@ -1360,13 +1373,14 @@ func (s *Session) streamPCM(rt *liveTurn, pcm []byte, encodeFrame func([]byte) (
 		if err != nil {
 			return false, err
 		}
-		ok, err := s.release(rt, packet, codec, resampler)
+		ok, err := s.releaseCover(rt, packet, codec, resampler)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
 			return true, nil
 		}
+		sent = true
 	}
 	return false, nil
 }

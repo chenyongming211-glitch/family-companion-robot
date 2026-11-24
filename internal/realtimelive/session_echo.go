@@ -61,6 +61,9 @@ func (s *Session) suspectedOpeningEchoLocked(p *pendingInput, text string, now t
 		return false
 	}
 	if rt.turn.Completed <= 36000 {
+		if rt.rescueText != "" && strings.Contains(string(echoOpeningRunes(rt.rescueText)), string(input)) {
+			return true
+		}
 		return strings.Contains(string(echoOpeningRunes(rt.turn.PlaybackTranscript())), string(input))
 	}
 	if rt.turn.Tracker == nil || len(rt.turn.Tracker.Sentences) == 0 {
@@ -171,7 +174,7 @@ func (s *Session) inputDecisionFieldsLocked(p *pendingInput, result inputDecisio
 		fields["opening_echo_check"] = map[string]any{
 			"output_id": rt.turn.ID, "same_output": s.output == rt,
 			"active_output": s.activeOutputLocked(), "overlapped": p.overlapped, "capture_played_samples": p.overlapSamples,
-			"reference_present": rt.turn.PlaybackTranscript() != "", "matched": result.match,
+			"reference_present": rt.turn.PlaybackTranscript() != "" || rt.rescueText != "", "matched": result.match,
 			"completed": rt.turn.Completed, "progress_age_ms": age,
 		}
 	}

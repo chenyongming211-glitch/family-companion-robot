@@ -23,8 +23,10 @@ import (
 // reused. If the answer's first packet arrives first, the line is dropped
 // before it is ever spoken.
 const (
-	rescueDelay    = 1500 * time.Millisecond
-	rescueDeadline = 7 * time.Second
+	rescueDelay         = 1500 * time.Millisecond
+	rescueNoSearchDelay = 1200 * time.Millisecond
+	rescueMinWait       = 200 * time.Millisecond
+	rescueDeadline      = 7 * time.Second
 	// A rescue line is filler, not an answer. Anything longer means the model
 	// started answering, which would then be repeated by the real answer. It
 	// also has to stay short for a second reason: it plays before the answer,
@@ -33,6 +35,22 @@ const (
 	rescueMaxMS    = 1800
 	rescueRate     = 24000
 )
+
+// rescueWait decides how long after the main session opens to wait before
+// asking for a cover line. On a search turn the budget is measured from the end
+// of the user's speech, because the search plugin blocks for 3.8-4.6s before
+// speaking. When search is gated off (recall, story, continuation, company,
+// opinion, device), time spent in memory selection or control prefetch before
+// the main session opened is already behind us: give the model itself
+// rescueNoSearchDelay from prepared before treating the turn as stalled.
+func rescueWait(stoppedAt, preparedAt time.Time, user string, configuredSearch *bool) time.Duration {
+	wait := rescueDelay - preparedAt.Sub(stoppedAt)
+	search, _ := searchDecision(user, configuredSearch)
+	if search != nil && *search {
+		return max(wait, rescueMinWait)
+	}
+	return max(wait, rescueNoSearchDelay)
+}
 
 // A cover line must be a statement. Spoken turns carry no reliable punctuation,
 // so the shape decides: a question opens with a question form or closes with

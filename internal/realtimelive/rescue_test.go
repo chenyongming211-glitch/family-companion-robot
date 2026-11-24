@@ -160,3 +160,152 @@ func TestStreamPCMWaitsForPlaybackCredit(t *testing.T) {
 		t.Fatal("sender never resumed after credit arrived")
 	}
 }
+
+// A cover line is filler, not part of the answer. It must not enter OutputASR
+// (where it would pollute assistant_spoken_prefix and cross-session memory),
+// while the real answer that follows on the same turn must still be transcribed.
+func TestStreamPCMKeepsCoverOutOfOutputASR(t *testing.T) {
+	s, c := newPCMSession(t)
+	rt := s.addTurn()
+	rt.turn.Begun = true
+	if err := s.send(map[string]any{"type": "begin", "id": rt.turn.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	rt.asr = &OutputASR{queue: make(chan []byte, 72), Done: make(chan struct{}), cancel: func() {}}
+	defer close(rt.asr.Done)
+	resampler := realtimeaudio.NewResampler()
+	encode := func(p []byte) ([]byte, error) { return append([]byte(nil), p...), nil }
+
+	cut, err := s.streamPCM(rt, make([]byte, 2880*2), encode, nil, resampler, nil)
+	if cut || err != nil {
+		t.Fatalf("streamPCM cut=%v err=%v", cut, err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, _, err := c.ReadMessage(); err != nil {
+			t.Fatalf("cover packet %d: %v", i+1, err)
+		}
+	}
+	if got := len(rt.asr.queue); got != 0 {
+		t.Fatalf("cover packets fed %d chunks into OutputASR, want 0", got)
+	}
+
+	ok, err := s.release(rt, make([]byte, 2880), nil, resampler)
+	if !ok || err != nil {
+		t.Fatalf("release ok=%v err=%v", ok, err)
+	}
+	if _, _, err := c.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(rt.asr.queue); got != 1 {
+		t.Fatalf("answer packet fed %d chunks into OutputASR, want 1", got)
+	}
+}
+
+// On a recall or device-control turn, search_gate turns search off, yet memory
+// selection or control routing can spend ~1s before the main session even opens.
+// Measuring 1.5s from speech_stop alone clamped the wait to 200ms after Open and
+// fired a redundant rescue call on non-search turns.
+func TestRescueWaitHonorsSearchGateAndPreOpenRouting(t *testing.T) {
+	on, off := true, false
+	stopped := time.Unix(100, 0)
+	afterRecall := stopped.Add(1150 * time.Millisecond)
+
+	// Search turn ("明天杭州天气"): still fires 1.5s after speech_stop (350ms left).
+	if got := rescueWait(stopped, afterRecall, "明天杭州天气怎么样", &on); got != 350*time.Millisecond {
+		t.Fatalf("search turn wait=%v, want 350ms", got)
+	}
+	// Late search turn: clamped to rescueMinWait (200ms).
+	if got := rescueWait(stopped, stopped.Add(1450*time.Millisecond), "明天杭州天气怎么样", &on); got != rescueMinWait {
+		t.Fatalf("late search turn wait=%v, want %v", got, rescueMinWait)
+	}
+	// Recall turn ("记不记得我上次说的"): search is gated off, so give the open
+	// main session a full rescueNoSearchDelay (1200ms) instead of firing at 350ms.
+	if got := rescueWait(stopped, afterRecall, "记不记得我上次说的", &on); got != rescueNoSearchDelay {
+		t.Fatalf("recall turn wait=%v, want %v", got, rescueNoSearchDelay)
+	}
+	// Search disabled by config (--search=0): also uses rescueNoSearchDelay floor.
+	if got := rescueWait(stopped, afterRecall, "明天杭州天气怎么样", &off); got != rescueNoSearchDelay {
+		t.Fatalf("search-off config wait=%v, want %v", got, rescueNoSearchDelay)
+	}
+}
+
+// If the answer arrives before the cover line sends its first packet, the cover
+// line must be dropped completely. Once the short cover phrase has started
+// speaking, it must finish its remaining frames rather than chopping a word in
+// half when the answer's first packet arrives mid-phrase.
+func TestStreamPCMDropsUnstartedCoverButFinishesStartedPhrase(t *testing.T) {
+	s, c := newPCMSession(t)
+	rt := s.addTurn()
+	rt.turn.Begun = true
+	if err := s.send(map[string]any{"type": "begin", "id": rt.turn.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	encode := func(p []byte) ([]byte, error) { return append([]byte(nil), p...), nil }
+
+	var alreadyReady answerClock
+	alreadyReady.arrive()
+	cut, err := s.streamPCM(rt, make([]byte, 2880*2), encode, nil, realtimeaudio.NewResampler(), &alreadyReady)
+	if cut || err != nil {
+		t.Fatalf("unstarted cover cut=%v err=%v", cut, err)
+	}
+	s.mu.Lock()
+	sentBefore := rt.turn.Sent
+	s.mu.Unlock()
+	if sentBefore != 0 {
+		t.Fatalf("unstarted cover sent %d samples when answer had already arrived, want 0", sentBefore)
+	}
+
+	var midPhrase answerClock
+	frameCount := 0
+	encodeAndArrive := func(p []byte) ([]byte, error) {
+		frameCount++
+		if frameCount == 1 {
+			midPhrase.arrive()
+		}
+		return append([]byte(nil), p...), nil
+	}
+	cut, err = s.streamPCM(rt, make([]byte, 2880*3), encodeAndArrive, nil, realtimeaudio.NewResampler(), &midPhrase)
+	if cut || err != nil {
+		t.Fatalf("started cover cut=%v err=%v", cut, err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := c.ReadMessage(); err != nil {
+			t.Fatalf("started cover packet %d: %v", i+1, err)
+		}
+	}
+	s.mu.Lock()
+	sentAfter := rt.turn.Sent
+	s.mu.Unlock()
+	if sentAfter != 1440*3 {
+		t.Fatalf("started cover sent %d samples, want %d (full 3-frame phrase)", sentAfter, 1440*3)
+	}
+}
+
+// While a cover line is playing on the speaker, the main answer's Generated
+// text has not arrived yet. An echo of the cover line itself must still be
+// recognized as an opening echo so it does not cut the turn before the answer.
+func TestRescueOpeningEchoDoesNotInterruptAnswer(t *testing.T) {
+	r := newEchoAdmissionRig(t)
+	old := echoOutput(t, r, "", 10)
+	r.s.mu.Lock()
+	old.rescueText = "我看看啊"
+	r.s.mu.Unlock()
+	if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+		t.Fatal(err)
+	}
+	r.start(t, "cover-echo")
+	r.preview(t, "cover-echo", "text", "我看看")
+	r.sync(t)
+	r.s.mu.Lock()
+	cut := old.turn.Cut || r.s.output != old
+	r.s.mu.Unlock()
+	if cut {
+		t.Fatal("echo of the cover line cut the active turn")
+	}
+}
