@@ -24,19 +24,40 @@ func echoOpeningRunes(text string) []rune {
 }
 
 func (s *Session) speechPlayingLocked() bool {
-	_, device := s.wire.(*xiaozhiWire)
 	rt := s.output
-	return device && s.ownerErr == nil && s.rec.owner.ClientType == "xiaozhi" &&
-		diagnosticDevicePattern.MatchString(s.rec.owner.DeviceID) && s.activeOutputLocked() &&
-		!rt.media && rt.turn.Begun && rt.turn.Sent > 0
+	if s.ownerErr != nil || !diagnosticDevicePattern.MatchString(s.rec.owner.DeviceID) ||
+		!s.activeOutputLocked() || rt.media || !rt.turn.Begun || rt.turn.Sent <= 0 {
+		return false
+	}
+	switch s.wire.(type) {
+	case *xiaozhiWire:
+		return s.rec.owner.ClientType == "xiaozhi"
+	case *macWire:
+		return s.rec.owner.ClientType == "mac_native"
+	default:
+		return false
+	}
 }
 
 func freshPlaybackProgress(rt *liveTurn, now time.Time) bool {
-	if rt == nil || rt.turn.PlaybackBasis != "i2s_dma" || rt.turn.Completed <= 0 || rt.lastPlaybackProgress.IsZero() {
+	if rt == nil || (rt.turn.PlaybackBasis != "i2s_dma" && rt.turn.PlaybackBasis != "") || rt.turn.Completed <= 0 || rt.lastPlaybackProgress.IsZero() {
 		return false
 	}
 	age := now.Sub(rt.lastPlaybackProgress)
 	return age >= 0 && age <= 500*time.Millisecond
+}
+
+func matchesOpeningEchoRunes(reference, input []rune) bool {
+	if len(reference) == 0 || len(input) == 0 {
+		return false
+	}
+	if strings.Contains(string(reference), string(input)) {
+		return true
+	}
+	// At playback onset, residual AEC can distort the second or third syllable
+	// of an opening phrase (e.g. "我叫小满" transcribed as "我在" or "我在想")
+	// while preserving the opening character.
+	return len(input) <= 3 && input[0] == reference[0]
 }
 
 // Freeze only positive hardware playback actually observed during this capture.
@@ -60,11 +81,11 @@ func (s *Session) suspectedOpeningEchoLocked(p *pendingInput, text string, now t
 	if len(input) == 0 || len(input) > 8 {
 		return false
 	}
-	if rt.turn.Completed <= 36000 {
-		if rt.rescueText != "" && strings.Contains(string(echoOpeningRunes(rt.rescueText)), string(input)) {
+	if rt.turn.Completed <= 36000 || (s.rec.owner.ClientType == "mac_native" && p.overlapSamples > 0 && p.overlapSamples <= 36000) {
+		if rt.rescueText != "" && matchesOpeningEchoRunes(echoOpeningRunes(rt.rescueText), input) {
 			return true
 		}
-		return strings.Contains(string(echoOpeningRunes(rt.turn.PlaybackTranscript())), string(input))
+		return matchesOpeningEchoRunes(echoOpeningRunes(rt.turn.PlaybackTranscript()), input)
 	}
 	if rt.turn.Tracker == nil || len(rt.turn.Tracker.Sentences) == 0 {
 		return false

@@ -583,3 +583,48 @@ func TestInputPreviewOpeningDiagnosticIsBoundedAndDoesNotChangeAdmission(t *test
 		})
 	}
 }
+
+func TestMacNativeOpeningEchoAndAlteredSyllablesDoNotInterrupt(t *testing.T) {
+	for _, tc := range []struct {
+		name, opening, preview, final string
+		completed                     int64
+	}{
+		{"session1_wo_zai", "我叫小满。我能陪你聊天。", "我", "我在。", 17280},
+		{"session2_wo_zai_xiang", "我叫小满，是AI家庭陪伴助手。", "我在", "我在想。", 15840},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newAdmissionRig(t, func(s *Session) {
+				s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "mac_native"}
+				s.wire = &macWire{ws: s.ws}
+			})
+			old := echoOutput(t, r, tc.opening, 19)
+			macReceipt := map[string]any{
+				"id": old.turn.ID, "completed": tc.completed, "accepted": int64(23040),
+				"basis": "CoreAudio_dataPlayedBack", "terminal": "progress",
+			}
+			if err := r.s.receiveReceipt(macReceipt); err != nil {
+				t.Fatal(err)
+			}
+			r.start(t, "mac-echo")
+			r.preview(t, "mac-echo", "text", tc.preview)
+			assertEchoOutputAlive(t, r, old)
+			r.stop(t, "mac-echo")
+			// Even if CoreAudio playback advances past 36000 before final ASR arrives,
+			// an onset echo capture (overlapSamples <= 36000) must not self-interrupt.
+			laterReceipt := map[string]any{
+				"id": old.turn.ID, "completed": int64(27360), "accepted": int64(27360),
+				"basis": "CoreAudio_dataPlayedBack", "terminal": "progress",
+			}
+			if err := r.s.receiveReceipt(laterReceipt); err != nil {
+				t.Fatal(err)
+			}
+			r.final(t, "mac-echo", tc.final)
+			assertEchoOutputAlive(t, r, old)
+
+			// Real interruption on Mac must still cut immediately.
+			r.start(t, "mac-barge")
+			r.preview(t, "mac-barge", "text", "换一个故事")
+			assertEchoPreviewCuts(t, r, old)
+		})
+	}
+}

@@ -618,6 +618,9 @@ func (s *Session) receiveReceipt(event map[string]any) error {
 		rt.lastPlaybackProgress = time.Now()
 	}
 	term := normalized["terminal"]
+	if term == "played" || term == "drained" {
+		rt.turn.PlaybackFinal = true
+	}
 	if rt.turn.PlaybackFinal {
 		s.retireExpressionLocked(rt)
 		if rt == s.output {
