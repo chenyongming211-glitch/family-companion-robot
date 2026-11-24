@@ -654,4 +654,35 @@ func TestInputAdmissionCarriesFirstClauseAcrossMidSentencePauseAndTrailingBreath
 			t.Fatalf("expected absorbed unspoken turn to be folded out of history, got len=%d", len(r.s.history))
 		}
 	})
+
+	t.Run("mid_sentence_restart_drops_carried_first_clause_audio_and_trims_tail_filler", func(t *testing.T) {
+		r := newAdmissionRig(t)
+		var gotPCM int
+		r.s.generate = func(ctx context.Context, id int64, _ string, pcm []byte, _ func(string, []byte) error) error {
+			gotPCM = len(pcm)
+			r.primary.Add(1)
+			r.generated <- id
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		r.event(t, "input_audio_buffer.speech_started", "first", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "first", "text", "查一下")
+		r.event(t, "input_audio_buffer.speech_stopped", "first", map[string]any{"audio_end_ms": 500})
+		r.event(t, "input_audio_buffer.speech_started", "second", map[string]any{"audio_start_ms": 520})
+		r.preview(t, "second", "text", "查一下明天")
+		r.final(t, "first", "嗯，查一下明天呃。")
+		r.event(t, "input_audio_buffer.speech_stopped", "second", map[string]any{"audio_end_ms": 1420})
+		r.final(t, "second", "查一下明天杭州的天气。")
+		id := r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		if r.s.output == nil || r.s.output.turn.ID != id || r.s.output.turn.User != "查一下明天杭州的天气。" {
+			t.Fatalf("got turn user %q, want deduplicated restarted sentence", r.s.output.turn.User)
+		}
+		// Only the second segment (900ms = 14400 samples = 28800 bytes) should be sent.
+		if gotPCM != 900*16*2 {
+			t.Fatalf("restarted carry sent %d PCM bytes, want %d (second segment only)", gotPCM, 900*16*2)
+		}
+	})
 }

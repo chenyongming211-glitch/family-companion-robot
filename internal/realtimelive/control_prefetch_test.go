@@ -283,8 +283,13 @@ func TestParallelPlanningClearMemoryDoesNotPrefetch(t *testing.T) {
 		t.Fatal("memory clear preplanned")
 	}
 	_, done := replyForPlanning(t, s, rt)
-	// A clear command carries no music intent, so classification is gated off
-	// and only the serial control path runs.
+	awaitPlanning(t, g.musicStarted, "music missing")
+	select {
+	case <-g.controlStarted:
+		t.Fatal("control prefetched clear")
+	default:
+	}
+	releaseGate(g.allowMusic)
 	awaitPlanning(t, g.controlStarted, "control missing")
 	releaseGate(g.allowControl)
 	awaitPlanning(t, done, "reply not finished")

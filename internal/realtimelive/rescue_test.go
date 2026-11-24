@@ -26,9 +26,7 @@ func TestRescueAcceptableRejectsAnswersAndLongLines(t *testing.T) {
 		{"statement with 什么", "看看有什么新片", short, true},
 		{"empty text", "", short, false},
 		{"no audio", "我看看啊", nil, false},
-		{"question", "你是想找哪一类的", short, false},
-		{"question opening", "你想看哪种", short, false},
-		{"question ending", "这样好吗", short, false},
+		{"chinese question mark", "你想看哪种？", short, false},
 		{"ascii question", "which one?", short, false},
 		{"too long", "这个我得好好想一下再慢慢跟你说说看", short, false},
 		{"too much audio", "我看看啊", make([]byte, rescueRate*2*4), false},
@@ -214,47 +212,30 @@ func TestRescueWaitHonorsSearchGateAndPreOpenRouting(t *testing.T) {
 	on, off := true, false
 	stopped := time.Unix(100, 0)
 	afterOpen := stopped.Add(350 * time.Millisecond)
-	afterRecall := stopped.Add(1150 * time.Millisecond)
+	afterPrePlan := stopped.Add(1150 * time.Millisecond)
 
-	// Fresh-information search turn ("明天杭州天气"): starts synthesis at 650ms (300ms after 350ms Open).
-	if got := rescueWait(stopped, afterOpen, "明天杭州天气怎么样", &on); got != 300*time.Millisecond {
-		t.Fatalf("early fresh search turn wait=%v, want 300ms", got)
+	// Fast open (350ms): waits 800ms (until 1150ms rescueDelay) before starting synthesis.
+	if got := rescueWait(stopped, afterOpen, &on); got != 800*time.Millisecond {
+		t.Fatalf("early open wait=%v, want 800ms", got)
 	}
-	// Late fresh-information search turn: clamped to 50ms floor.
-	if got := rescueWait(stopped, afterRecall, "明天杭州天气怎么样", &on); got != 50*time.Millisecond {
-		t.Fatalf("late fresh search turn wait=%v, want 50ms", got)
+	// Late open after pre-planning (1150ms): still gives the newly opened main
+	// session rescueOpenMinWait (650ms) before starting synthesis.
+	if got := rescueWait(stopped, afterPrePlan, &on); got != rescueOpenMinWait {
+		t.Fatalf("post-plan open wait=%v, want %v", got, rescueOpenMinWait)
 	}
-	// Speak hold gates early synthesis so it never speaks before 1350ms.
-	if got := rescueSpeakHold(stopped, stopped.Add(1100*time.Millisecond)); got != 250*time.Millisecond {
-		t.Fatalf("rescueSpeakHold at 1100ms=%v, want 250ms", got)
+	// Speak hold gates playback until both 1850ms since speech_stop and 1350ms
+	// since the main session opened, so non-search replies (~1.2-1.8s) win.
+	if got := rescueSpeakHold(stopped, afterOpen, stopped.Add(1600*time.Millisecond)); got != 250*time.Millisecond {
+		t.Fatalf("rescueSpeakHold at 1600ms=%v, want 250ms", got)
 	}
-	if got := rescueSpeakHold(stopped, stopped.Add(1400*time.Millisecond)); got != 0 {
-		t.Fatalf("rescueSpeakHold at 1400ms=%v, want 0", got)
+	if got := rescueSpeakHold(stopped, afterPrePlan, stopped.Add(2000*time.Millisecond)); got != 500*time.Millisecond {
+		t.Fatalf("rescueSpeakHold after pre-plan at 2000ms=%v, want 500ms", got)
 	}
-	// Bare "推荐" keeps search enabled in search_gate, but without a live-lookup
-	// word it waits the normal 1500ms rescueDelay rather than pre-starting a
-	// 1350ms cover line ahead of a 1.5s direct recommendation answer.
-	if got := rescueWait(stopped, afterOpen, "嗯，杭州还有什么好玩的地方吗？你给推荐一下。", &on); got != 1150*time.Millisecond {
-		t.Fatalf("open-ended recommendation wait=%v, want 1150ms", got)
+	if got := rescueSpeakHold(stopped, afterOpen, stopped.Add(1900*time.Millisecond)); got != 0 {
+		t.Fatalf("rescueSpeakHold at 1900ms=%v, want 0", got)
 	}
-	if got := rescueWait(stopped, afterOpen, "推荐一部最近上映的电影", &on); got != 300*time.Millisecond {
-		t.Fatalf("live-lookup recommendation wait=%v, want 300ms", got)
-	}
-	// Default-on unclassified turn ("随便聊聊"): still waits 1500ms from speech_stop (350ms left after 1150ms).
-	if got := rescueWait(stopped, afterRecall, "随便聊聊", &on); got != 350*time.Millisecond {
-		t.Fatalf("default_on turn wait=%v, want 350ms", got)
-	}
-	// Recall turn ("记不记得我上次说的"): search is gated off, so give the open
-	// main session a full rescueNoSearchDelay (1200ms) instead of firing at 350ms.
-	if got := rescueWait(stopped, afterRecall, "记不记得我上次说的", &on); got != rescueNoSearchDelay {
-		t.Fatalf("recall turn wait=%v, want %v", got, rescueNoSearchDelay)
-	}
-	// Meta-recall mentioning weather ("你还记得刚才我让你查哪个城市的天气吗"): gated off as recall.
-	if got := rescueWait(stopped, afterRecall, "你还记得刚才我让你查哪个城市的天气吗", &on); got != rescueNoSearchDelay {
-		t.Fatalf("meta-recall weather turn wait=%v, want %v", got, rescueNoSearchDelay)
-	}
-	// Search disabled by config (--search=0): also uses rescueNoSearchDelay floor.
-	if got := rescueWait(stopped, afterRecall, "明天杭州天气怎么样", &off); got != rescueNoSearchDelay {
+	// Search disabled by config (--search=0): uses rescueNoSearchDelay floor.
+	if got := rescueWait(stopped, afterPrePlan, &off); got != rescueNoSearchDelay {
 		t.Fatalf("search-off config wait=%v, want %v", got, rescueNoSearchDelay)
 	}
 }

@@ -819,7 +819,7 @@ func currentTurnInput(text string) string {
 // ledger's playback evidence. The schema note sits next to that projection so
 // the model reads position and said_openings correctly instead of treating a
 // fully played clip as a finished task or restarting a line it already used.
-const compactStateNote = "以上对话记录是精简投影：recent_turns 按时间排列，user 是用户原话，assistant_spoken_prefix 是该轮实际播出的开头文字（可能有识别误差或不完整）；position=complete 表示整段播完，candidate 表示只说了一部分，unknown 表示无法判断；interrupted=true 表示被打断。说过的内容不要用相同开头重新起头，也不要复述已经讲过的段落；用户要求继续时，从停下的地方往下讲。\n"
+const compactStateNote = "以上对话记录是精简投影：recent_turns 按时间排列，user 是用户原话，assistant_spoken_prefix 是该轮实际播出的开头文字（可能有识别误差或不完整）；position=complete 表示整段播完，candidate 表示只说了一部分，unknown 表示无法判断；interrupted=true 表示被打断。说过的内容不要用相同开头重新起头，也不要复述已经讲过的段落；用户要求继续时，从停下的地方往下讲；如果用户询问的是上述对话记录里已经聊过的内容，直接根据对话记录回答，不要为此发起联网搜索。\n"
 
 // The trailing turn input must stay last: it is the only line that names what
 // this turn has to answer, and every earlier line is background.
@@ -1090,6 +1090,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 		return
 	case <-prepared:
 	}
+	preparedAt := time.Now()
 	resampler := realtimeaudio.NewResampler()
 	// The answer can take 4.6s to make its first sound because the provider
 	// searches before it speaks. Cover that wait with one line written for this
@@ -1097,7 +1098,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 	var rescueTimer *time.Timer
 	var rescueTimerC <-chan time.Time
 	if s.rescueEligible(media) {
-		wait := rescueWait(rt.stoppedAt, time.Now(), rt.turn.User, s.cfg.Search)
+		wait := rescueWait(rt.stoppedAt, preparedAt, s.cfg.Search)
 		rescueTimer = time.NewTimer(wait)
 		rescueTimerC = rescueTimer.C
 		defer rescueTimer.Stop()
@@ -1141,7 +1142,7 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 					_ = s.record("rescue_skipped", map[string]any{"id": rt.turn.ID, "reason": why, "text": said, "samples": len(pcm) / 2})
 					return
 				}
-				if hold := rescueSpeakHold(rt.stoppedAt, time.Now()); hold > 0 {
+				if hold := rescueSpeakHold(rt.stoppedAt, preparedAt, time.Now()); hold > 0 {
 					holdTimer := time.NewTimer(hold)
 					select {
 					case <-rescueCtx.Done():

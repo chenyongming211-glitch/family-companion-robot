@@ -11,24 +11,23 @@ import (
 
 // Search turns are slow in a way no prompt can fix: the provider's search
 // plugin runs before the model is allowed to speak, so the first sound arrives
-// 3.8-4.6s after the user stops. Measured 2026-11-23, the model had already
-// written an opening line in the transcript for one of those turns -- the audio
-// was dropped when the search interrupted it. Telling the model to say
-// something first cannot help, because it has nothing to speak into yet.
+// 3.8-4.6s after the user stops.
 //
-// So the server covers the wait itself. If no audio has arrived after
-// rescueDelay, it asks for one short line, synthesized through the same
-// endpoint and the same voice as the answer, and plays that while the search
-// finishes. The line is written for this turn only; nothing is cached or
-// reused. If the answer's first packet arrives first, the line is dropped
-// before it is ever spoken.
+// So the server covers the wait itself purely by elapsed time, without any
+// keyword list guessing whether the model will search. After the main session
+// opens, if no audio has arrived by rescueDelay, it synthesizes one short line
+// in the background and holds playback until rescueSpeakAt (and at least
+// rescueSpeakAfterOpen after the main session opened). If the model decides not
+// to search, its first audio packet arrives within ~1.2-1.8s and cancels the
+// cover before it ever speaks; if the model decides to search, the cover speaks
+// right at the hold boundary while the search finishes.
 const (
-	rescueFreshDelay    = 650 * time.Millisecond
-	rescueFreshSpeakAt  = 1350 * time.Millisecond
-	rescueDelay         = 1500 * time.Millisecond
-	rescueNoSearchDelay = 1200 * time.Millisecond
-	rescueMinWait       = 200 * time.Millisecond
-	rescueDeadline      = 7 * time.Second
+	rescueDelay          = 1150 * time.Millisecond
+	rescueOpenMinWait    = 650 * time.Millisecond
+	rescueSpeakAt        = 1850 * time.Millisecond
+	rescueSpeakAfterOpen = 1350 * time.Millisecond
+	rescueNoSearchDelay  = 1200 * time.Millisecond
+	rescueDeadline       = 7 * time.Second
 	// A rescue line is filler, not an answer. Anything longer means the model
 	// started answering, which would then be repeated by the real answer. It
 	// also has to stay short for a second reason: it plays before the answer,
@@ -38,68 +37,31 @@ const (
 	rescueRate     = 24000
 )
 
-// rescueEarlySearchWords are strong signals that the provider's web-search
-// plugin will execute a ~4s live network lookup before emitting audio. Softer
-// fresh-information words such as bare "推荐" stay in searchFreshWords so
-// search_gate keeps search enabled, but they frequently answer directly from
-// session context or general knowledge in ~1.5s and must not pre-start a 1.35s
-// cover line unless paired with a live-lookup word below.
-var rescueEarlySearchWords = []string{
-	"天气", "气温", "温度", "下雨", "下雪", "刮风", "冷不冷", "热不热",
-	"新闻", "最近", "最新", "现在几点",
-	"价格", "多少钱", "汇率", "股价", "票价", "油价", "房价",
-	"附近", "营业", "开门", "堵不堵",
-	"航班", "机票", "火车", "高铁", "限行", "上映", "比分", "赛程",
-	"政策", "规定", "发布", "上市",
-}
-
-func rescueNeedsEarlyCover(user string) bool {
-	for _, word := range rescueEarlySearchWords {
-		if strings.Contains(user, word) {
-			return true
-		}
-	}
-	return false
-}
-
 // rescueWait decides how long after the main session opens to wait before
-// asking for a cover line. When search_gate explicitly identifies
-// fresh_information with a live-lookup word (weather, movies, news, prices),
-// synthesis (~750ms) starts at rescueFreshDelay (650ms) so the cover audio is
-// ready to speak at ~1.4s and finishes by ~2.3s without colliding with a 2.4s
-// search answer. For default_on turns (and open-ended recommendations without a
-// live-lookup word) it waits rescueDelay from speech_stop; when search is gated
-// off (recall, story, continuation, company, opinion, device), it gives the
-// open main session rescueNoSearchDelay from prepared.
-func rescueWait(stoppedAt, preparedAt time.Time, user string, configuredSearch *bool) time.Duration {
+// synthesizing a cover line in the background. It uses no keyword lists: when
+// search is enabled, synthesis starts at rescueDelay from speech_stop (and at
+// least rescueOpenMinWait after the main session opened). When search is
+// disabled by config, it waits at least rescueNoSearchDelay after Open.
+func rescueWait(stoppedAt, preparedAt time.Time, configuredSearch *bool) time.Duration {
 	elapsed := preparedAt.Sub(stoppedAt)
-	search, reason := searchDecision(user, configuredSearch)
-	if search != nil && *search {
-		if reason == "fresh_information" && rescueNeedsEarlyCover(user) {
-			return max(rescueFreshDelay-elapsed, 50*time.Millisecond)
-		}
-		return max(rescueDelay-elapsed, rescueMinWait)
+	if configuredSearch != nil && *configuredSearch {
+		return max(rescueDelay-elapsed, rescueOpenMinWait)
 	}
-	return max(rescueDelay-elapsed, rescueNoSearchDelay)
+	return max(rescueSpeakAt-elapsed, rescueNoSearchDelay)
 }
 
 // rescueSpeakHold keeps an early-synthesized cover line from speaking before
-// rescueFreshSpeakAt, so any answer that arrives within normal turn-taking time
-// (<1.35s) still wins outright and cancels the cover.
-func rescueSpeakHold(stoppedAt, now time.Time) time.Duration {
-	if wait := rescueFreshSpeakAt - now.Sub(stoppedAt); wait > 0 {
+// both rescueSpeakAt (since speech_stop) and rescueSpeakAfterOpen (since the
+// main session opened), so any non-search answer (~1.2-1.8s) wins outright and
+// cancels the cover.
+func rescueSpeakHold(stoppedAt, preparedAt, now time.Time) time.Duration {
+	waitStop := rescueSpeakAt - now.Sub(stoppedAt)
+	waitOpen := rescueSpeakAfterOpen - now.Sub(preparedAt)
+	if wait := max(waitStop, waitOpen); wait > 0 {
 		return wait
 	}
 	return 0
 }
-
-// A cover line must be a statement. Spoken turns carry no reliable punctuation,
-// so the shape decides: a question opens with a question form or closes with
-// one. Words like 什么/怎么 inside a statement ("看看有什么新片") are ordinary
-// reported speech -- rejecting those cost a real search turn its cover, which
-// then sat silent for 4s (measured 2026-11-23, turn 7).
-var rescueQuestionOpens = []string{"你想", "你要", "你是", "要不要", "是不是", "哪一", "哪个", "什么", "怎么", "为什么"}
-var rescueQuestionEnds = []string{"吗", "呢", "？", "?"}
 
 // The prompt asks for a line, not a phrase from a list. The wording rules are
 // the same ones the product prompt uses for openings: own words, no template,
@@ -181,9 +143,8 @@ type rescueResult struct {
 	said string
 }
 
-// rescueAudit rejects anything that is not a short statement, and says why.
-// The reason is recorded, because a rejected line is otherwise invisible: it
-// looks exactly like a turn that never asked for a cover.
+// rescueAudit checks physical bounds and question punctuation on the generated
+// cover line, without maintaining a hard-coded prefix/suffix keyword list.
 func rescueAudit(said string, pcm []byte) (bool, string) {
 	text := strings.TrimSpace(said)
 	switch {
@@ -193,16 +154,8 @@ func rescueAudit(said string, pcm []byte) (bool, string) {
 		return false, "empty_audio"
 	case utf8.RuneCountInString(text) > rescueMaxRunes:
 		return false, "too_many_words"
-	}
-	for _, open := range rescueQuestionOpens {
-		if strings.HasPrefix(text, open) {
-			return false, "question"
-		}
-	}
-	for _, end := range rescueQuestionEnds {
-		if strings.HasSuffix(text, end) {
-			return false, "question"
-		}
+	case strings.ContainsAny(text, "?？"):
+		return false, "question"
 	}
 	if len(pcm)/2 > rescueMaxMS*rescueRate/1000 {
 		return false, "too_long"

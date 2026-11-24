@@ -300,24 +300,24 @@ func TestMusicMemoryWaitsForClassification(t *testing.T) {
 	check("你好")
 }
 
-// The gate exists to remove a fixed 0.7-0.9s model round-trip from ordinary
-// turns, so the assertion must be that no planner connection happened at all.
-func TestMusicPlannerSkippedWithoutIntent(t *testing.T) {
+// Every turn on a music-enabled device delegates to the music planner model so
+// no static server-side keyword table decides whether music was requested.
+func TestMusicPlannerCalledForModelDecision(t *testing.T) {
 	s, _ := musicRouteSession(t)
 	reached := 0
-	cfg, _ := expressionProvider(t, false, func(c *websocket.Conn) {
-		reached++
-		musicPlannerTerminal(c, `{"action":"none","title":"","artist":""}`, false)
-	})
-	s.cfg.URL, s.cfg.Synthetic = cfg.URL, true
 	for _, text := range []string{"今天天气不错", "讲个故事", "他说黄昏很好听", "帮我设个闹钟"} {
+		cfg, _ := expressionProvider(t, false, func(c *websocket.Conn) {
+			reached++
+			musicPlannerTerminal(c, `{"action":"none","title":"","artist":""}`, false)
+		})
+		s.cfg.URL, s.cfg.Synthetic = cfg.URL, true
 		got, err := s.routeMusic(musicRequest(s, text), `{"recent_turns":[]}`)
 		if err != nil || got.Handled || got.Stream != nil {
 			t.Fatalf("%q: unexpected route handled=%t err=%v", text, got.Handled, err)
 		}
 	}
-	if reached != 0 {
-		t.Fatalf("planner connected %d times for turns without music intent", reached)
+	if reached != 4 {
+		t.Fatalf("planner connected %d times, want 4", reached)
 	}
 }
 
@@ -338,24 +338,5 @@ func TestMusicPlannerKeptWhileMediaPlaying(t *testing.T) {
 	got, err := s.routeMusic(musicRequest(s, "关掉吧"), `{"recent_turns":[]}`)
 	if err != nil || !got.Handled || reached != 1 {
 		t.Fatalf("instruction during playback lost the planner: handled=%t err=%v calls=%d", got.Handled, err, reached)
-	}
-}
-
-func TestMemoryRecallIntent(t *testing.T) {
-	for _, tc := range []struct {
-		text string
-		want bool
-	}{
-		{"今天天气不错", false},
-		{"讲个故事", false},
-		{"帮我设个闹钟", false},
-		{"你还记得那个暗号吗", true},
-		{"上次说的那个", true},
-		{"接着讲刚才的故事", true},
-		{"我之前跟你说过", true},
-	} {
-		if got := memoryRecallIntent(tc.text); got != tc.want {
-			t.Errorf("%q: want %t got %t", tc.text, tc.want, got)
-		}
 	}
 }

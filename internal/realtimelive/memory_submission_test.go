@@ -219,16 +219,8 @@ func TestMusicMemoryReplyClassifiesBeforeCheckpointAndSelection(t *testing.T) {
 				}
 				return
 			}
-			if scenario == "private" {
-				// A selected scoped track keeps every turn on the planner, so the
-				// original classification-before-selection order still applies.
-				if len(calls) != 2 || calls[0].tool != musicPlanName || calls[1].tool != memorySelectionName {
-					t.Error("private turn lost classification-before-selection", calls)
-				}
-				return
-			}
-			if len(calls) != 1 || calls[0].tool != memorySelectionName {
-				t.Error("ordinary turn did not select memory exactly once", calls)
+			if len(calls) != 2 || calls[0].tool != musicPlanName || calls[1].tool != memorySelectionName {
+				t.Error("turn lost classification-before-selection", calls)
 			}
 			wantSaved := scenario == "ordinary"
 			if strings.Contains(prompt, "verified_saved") != wantSaved || !wantSaved && !strings.Contains(prompt, "not_saved") {

@@ -34,46 +34,38 @@ type pendingInput struct {
 }
 
 func carriedCompareRunes(text string) []rune {
-	var out []rune
+	var b strings.Builder
 	for _, r := range text {
 		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			out = append(out, unicode.ToLower(r))
+			b.WriteRune(unicode.ToLower(r))
 		}
 	}
-	for len(out) > 1 {
-		switch out[0] {
-		case '嗯', '呃', '啊', '哦', '噢', '诶', '欸':
-			out = out[1:]
-		default:
-			return out
-		}
-	}
-	return out
+	return []rune(strings.Trim(b.String(), "嗯呃啊哦噢诶欸"))
 }
 
-func joinCarriedText(prefix, suffix string) string {
+func joinCarriedText(prefix, suffix string) (string, bool) {
 	prefix = strings.TrimSpace(prefix)
 	suffix = strings.TrimSpace(suffix)
 	if prefix == "" {
-		return suffix
+		return suffix, false
 	}
 	if suffix == "" {
-		return prefix
+		return prefix, false
 	}
 	trimmed := strings.TrimRight(prefix, "。，、！？；：,.!?;: ")
 	if trimmed == "" {
-		return suffix
+		return suffix, false
 	}
 	// When the user pauses and restarts the sentence from the beginning
-	// ("查一下明天。" -> "查一下明天杭州的天气。"), keep the full restarted
-	// sentence instead of stuttering the repeated opening prefix.
+	// ("查一下明天呃。" -> "查一下明天杭州的天气。"), keep only the full restarted
+	// sentence (and its audio) instead of stuttering the repeated opening prefix.
 	prefixRunes := carriedCompareRunes(trimmed)
 	suffixRunes := carriedCompareRunes(suffix)
-	if len(prefixRunes) >= 2 && len(suffixRunes) >= len(prefixRunes) &&
+	if len(prefixRunes) >= 3 && len(suffixRunes) >= len(prefixRunes) &&
 		string(suffixRunes[:len(prefixRunes)]) == string(prefixRunes) {
-		return suffix
+		return suffix, true
 	}
-	return trimmed + "，" + suffix
+	return trimmed + "，" + suffix, false
 }
 
 func retireInputLocked(p *pendingInput) {
@@ -445,7 +437,12 @@ func (s *Session) finishInput(event map[string]any) error {
 			name = s.product.Name()
 		}
 		if !memoryClearCommand(text, name) {
-			cur.carryText = joinCarriedText(cur.carryText, text)
+			joined, restarted := joinCarriedText(cur.carryText, text)
+			cur.carryText = joined
+			if restarted {
+				clear(cur.carryPCM)
+				cur.carryPCM = nil
+			}
 			if len(cur.carryPCM)+len(p.pcm)+len(cur.pcm) <= inputPCMLimit {
 				cur.carryPCM = append(cur.carryPCM, p.pcm...)
 			}
@@ -474,8 +471,9 @@ func (s *Session) finishInput(event map[string]any) error {
 		name = s.product.Name()
 	}
 	if p.carryText != "" && !memoryClearCommand(p.carryText, name) && !memoryClearCommand(text, name) {
-		text = joinCarriedText(p.carryText, text)
-		if len(p.carryPCM) > 0 && len(p.carryPCM)+len(p.pcm) <= inputPCMLimit {
+		var restarted bool
+		text, restarted = joinCarriedText(p.carryText, text)
+		if !restarted && len(p.carryPCM) > 0 && len(p.carryPCM)+len(p.pcm) <= inputPCMLimit {
 			p.pcm = append(p.carryPCM, p.pcm...)
 		}
 	}
@@ -488,7 +486,7 @@ func (s *Session) finishInput(event map[string]any) error {
 			!prev.turn.Begun && prev.turn.Sent == 0 && prev.turn.Completed == 0 && prev.turn.Cut &&
 			!prev.stoppedAt.IsZero() && p.stoppedAt.Sub(prev.stoppedAt) <= 3*time.Second &&
 			!memoryClearCommand(prev.turn.User, name) && !memoryClearCommand(text, name) {
-			text = joinCarriedText(prev.turn.User, text)
+			text, _ = joinCarriedText(prev.turn.User, text)
 			s.history = s.history[:n-1]
 		}
 	}

@@ -388,54 +388,6 @@ func (s *Session) projectedMemoryLocked() (excerpts, recent []memoryTurn) {
 	return
 }
 
-// memoryRecallWords are signals that the user is pointing at an earlier
-// session. Only those turns run the cross-session selector: it returns zero
-// selections in the overwhelming majority of turns while costing a fixed
-// 0.86-3.0s in front of every reply.
-var memoryRecallWords = []string{
-	"记得", "记不记得", "还记得", "忘了", "上次", "上回", "之前", "以前",
-	"那次", "那天", "昨天", "前天", "前两天", "刚才", "我说过", "跟你说",
-	"聊过", "讲过", "提过", "回忆",
-}
-
-var crossSessionRecallWords = []string{
-	"上次", "上回", "之前", "以前", "那次", "那天", "昨天", "前天", "前两天", "旧",
-}
-
-func memoryRecallIntent(text string) bool {
-	text = strings.ToLower(strings.TrimSpace(text))
-	if text == "" {
-		return false
-	}
-	for _, word := range memoryRecallWords {
-		if strings.Contains(text, word) {
-			return true
-		}
-	}
-	return false
-}
-
-// When the user asks about "刚才" (just now) during an active multi-turn
-// conversation and names no cross-session time marker, the relevant turns are
-// already present in recent_turns. Skipping the cross-session selector saves
-// ~900ms while still running it on the first turns after a reconnect.
-func inSessionRecallCovered(history, text string) bool {
-	text = strings.ToLower(strings.TrimSpace(text))
-	if !strings.Contains(text, "刚才") {
-		return false
-	}
-	for _, word := range crossSessionRecallWords {
-		if strings.Contains(text, word) {
-			return false
-		}
-	}
-	data, err := decodeObject([]byte(history))
-	if err != nil {
-		return false
-	}
-	return len(listMemoryTurns(data["recent_turns"])) >= 2
-}
-
 func (s *Session) selectMemoryContext(rt *liveTurn, history, text string) (string, error) {
 	m := s.memory
 	m.mu.Lock()
@@ -448,12 +400,6 @@ func (s *Session) selectMemoryContext(rt *liveTurn, history, text string) (strin
 	}
 	m.mu.Unlock()
 	if len(candidates) == 0 || strings.TrimSpace(text) == "" {
-		return history, rt.ctx.Err()
-	}
-	if !memoryRecallIntent(text) || inSessionRecallCovered(history, text) {
-		// The turn points at no earlier session, so the selector can only spend
-		// its budget and return empty. Keep the current-session history and skip
-		// the model call entirely.
 		return history, rt.ctx.Err()
 	}
 	n := NewNative(s.cfg, s.directory)

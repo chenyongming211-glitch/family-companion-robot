@@ -543,39 +543,3 @@ func TestMemorySelectionTerminalHookPreservesCallerAndGenericAudit(t *testing.T)
 		t.Fatal("audit regressed", own, generic)
 	}
 }
-
-func TestInSessionRecallSkipsCrossSessionSelectorWhenRecentTurnsCoverJustNow(t *testing.T) {
-	s := selectionSession(t)
-	rememberedTurn(s, "帮我查一下明天杭州天气", "明天杭州多云，六到十四度。", true)
-	var calls atomic.Int32
-	provider := memorySelectionProvider(t, `{"intent":"none","indices":[]}`, "", func(map[string]any) { calls.Add(1) }, nil)
-	defer provider.Close()
-	s.cfg.URL = "ws" + strings.TrimPrefix(provider.URL, "http")
-
-	// Active multi-turn session (>=2 turns) asking about "刚才" without any
-	// cross-session marker: recent_turns already carries it, so skip the ~900ms selector.
-	rt := rememberedTurn(s, "嗯，你还记得刚才我让你查哪个城市的天气吗？", "", false)
-	h, err := s.settle(rt.ctx, rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.routeMemory(rt, h); err != nil {
-		t.Fatal(err)
-	}
-	if got := calls.Load(); got != 0 {
-		t.Fatalf("in-session '刚才' recall called cross-session selector %d times, want 0", got)
-	}
-
-	// Asking about "上次" in the same session must still run the cross-session selector.
-	cross := rememberedTurn(s, "你还记得上次刚才说的那个暗号吗？", "", false)
-	h, err = s.settle(cross.ctx, cross)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.routeMemory(cross, h); err != nil {
-		t.Fatal(err)
-	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("cross-session '上次' recall called selector %d times, want 1", got)
-	}
-}
