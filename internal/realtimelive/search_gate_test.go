@@ -23,6 +23,8 @@ func TestSearchGateClosesTurnsThatNeedNothingNew(t *testing.T) {
 		{"你好", "company"},
 		{"我有点累了", "company"},
 		{"你还记得我刚才说要去哪吗", "recall"},
+		{"嗯，你还记得刚才我让你查哪个城市的天气吗？", "recall"},
+		{"记不记得上次推荐的电影叫什么", "recall"},
 		{"你觉得哪个好", "opinion"},
 		{"大点声", "device"},
 	} {
@@ -54,12 +56,19 @@ func TestSearchGateKeepsTurnsThatNeedTheWorld(t *testing.T) {
 	}
 }
 
-// A fresh-information word wins over a company word: "谢谢，明天天气怎么样" is a
-// weather question, not a thank-you.
+// A fresh-information word wins over a company word or a bare past reference
+// ("我刚才说的那个城市明天天气怎么样" needs tomorrow's weather), while explicit
+// memory-verification questions ("你还记得刚才我让你查哪个城市的天气吗") close search.
 func TestSearchGateLetsFreshInformationOverride(t *testing.T) {
-	allowed, reason := searchAllowedFor(t, "谢谢，明天天气怎么样")
-	if !allowed || reason != "fresh_information" {
-		t.Fatalf("expected a search with reason fresh_information, got %v %q", allowed, reason)
+	for _, user := range []string{
+		"谢谢，明天天气怎么样",
+		"我刚才说的那个城市明天天气怎么样",
+		"上次说的那部电影什么时候上映",
+	} {
+		allowed, reason := searchAllowedFor(t, user)
+		if !allowed || reason != "fresh_information" {
+			t.Fatalf("%q: expected a search with reason fresh_information, got %v %q", user, allowed, reason)
+		}
 	}
 }
 

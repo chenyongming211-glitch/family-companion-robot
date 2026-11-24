@@ -23,6 +23,8 @@ import (
 // reused. If the answer's first packet arrives first, the line is dropped
 // before it is ever spoken.
 const (
+	rescueFreshDelay    = 650 * time.Millisecond
+	rescueFreshSpeakAt  = 1350 * time.Millisecond
 	rescueDelay         = 1500 * time.Millisecond
 	rescueNoSearchDelay = 1200 * time.Millisecond
 	rescueMinWait       = 200 * time.Millisecond
@@ -37,19 +39,33 @@ const (
 )
 
 // rescueWait decides how long after the main session opens to wait before
-// asking for a cover line. On a search turn the budget is measured from the end
-// of the user's speech, because the search plugin blocks for 3.8-4.6s before
-// speaking. When search is gated off (recall, story, continuation, company,
-// opinion, device), time spent in memory selection or control prefetch before
-// the main session opened is already behind us: give the model itself
-// rescueNoSearchDelay from prepared before treating the turn as stalled.
+// asking for a cover line. When search_gate explicitly identifies
+// fresh_information (weather, movies, news, prices), synthesis (~750ms) starts
+// at rescueFreshDelay (650ms) so the cover audio is ready to speak at ~1.4s and
+// finishes by ~2.3s without colliding with a 2.4s search answer. For default_on
+// turns it waits rescueDelay from speech_stop; when search is gated off
+// (recall, story, continuation, company, opinion, device), it gives the open
+// main session rescueNoSearchDelay from prepared.
 func rescueWait(stoppedAt, preparedAt time.Time, user string, configuredSearch *bool) time.Duration {
-	wait := rescueDelay - preparedAt.Sub(stoppedAt)
-	search, _ := searchDecision(user, configuredSearch)
+	elapsed := preparedAt.Sub(stoppedAt)
+	search, reason := searchDecision(user, configuredSearch)
 	if search != nil && *search {
-		return max(wait, rescueMinWait)
+		if reason == "fresh_information" {
+			return max(rescueFreshDelay-elapsed, 50*time.Millisecond)
+		}
+		return max(rescueDelay-elapsed, rescueMinWait)
 	}
-	return max(wait, rescueNoSearchDelay)
+	return max(rescueDelay-elapsed, rescueNoSearchDelay)
+}
+
+// rescueSpeakHold keeps an early-synthesized cover line from speaking before
+// rescueFreshSpeakAt, so any answer that arrives within normal turn-taking time
+// (<1.35s) still wins outright and cancels the cover.
+func rescueSpeakHold(stoppedAt, now time.Time) time.Duration {
+	if wait := rescueFreshSpeakAt - now.Sub(stoppedAt); wait > 0 {
+		return wait
+	}
+	return 0
 }
 
 // A cover line must be a statement. Spoken turns carry no reliable punctuation,

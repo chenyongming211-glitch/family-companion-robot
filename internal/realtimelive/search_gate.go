@@ -28,6 +28,18 @@ var searchFreshWords = []string{
 	"政策", "规定", "发布", "上市",
 }
 
+// Explicit memory-verification questions ask about past conversation turns
+// themselves ("do you remember which city you checked the weather for just
+// now?"). They must not trigger a web search merely because the recalled topic
+// mentions a noun like "weather" or "movie". By contrast, bare time references
+// ("我刚才说的那个城市明天天气怎么样") still fall through to searchFreshWords.
+var searchMetaRecallWords = []string{
+	"记得", "记不记得", "还记得",
+	"刚才我让你", "刚才让你", "我刚才让你",
+	"我刚才问", "刚才问你", "刚才我问",
+	"刚才说的什么", "刚才讲的什么", "刚才查的什么", "刚才查的是",
+}
+
 // Turns that plainly do not need anything from the network. Each entry is a
 // reason string plus the words that prove it; the first hit wins.
 var noSearchGroups = []struct {
@@ -61,6 +73,12 @@ func searchDecision(user string, configured *bool) (*bool, string) {
 	// the default rather than risking a wrong guess.
 	if len([]rune(text)) > 40 {
 		return configured, "long_input"
+	}
+	for _, word := range searchMetaRecallWords {
+		if strings.Contains(text, word) {
+			off := false
+			return &off, "recall"
+		}
 	}
 	for _, word := range searchFreshWords {
 		if strings.Contains(text, word) {

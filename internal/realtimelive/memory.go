@@ -398,6 +398,10 @@ var memoryRecallWords = []string{
 	"聊过", "讲过", "提过", "回忆",
 }
 
+var crossSessionRecallWords = []string{
+	"上次", "上回", "之前", "以前", "那次", "那天", "昨天", "前天", "前两天", "旧",
+}
+
 func memoryRecallIntent(text string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	if text == "" {
@@ -409,6 +413,27 @@ func memoryRecallIntent(text string) bool {
 		}
 	}
 	return false
+}
+
+// When the user asks about "刚才" (just now) during an active multi-turn
+// conversation and names no cross-session time marker, the relevant turns are
+// already present in recent_turns. Skipping the cross-session selector saves
+// ~900ms while still running it on the first turns after a reconnect.
+func inSessionRecallCovered(history, text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if !strings.Contains(text, "刚才") {
+		return false
+	}
+	for _, word := range crossSessionRecallWords {
+		if strings.Contains(text, word) {
+			return false
+		}
+	}
+	data, err := decodeObject([]byte(history))
+	if err != nil {
+		return false
+	}
+	return len(listMemoryTurns(data["recent_turns"])) >= 2
 }
 
 func (s *Session) selectMemoryContext(rt *liveTurn, history, text string) (string, error) {
@@ -425,7 +450,7 @@ func (s *Session) selectMemoryContext(rt *liveTurn, history, text string) (strin
 	if len(candidates) == 0 || strings.TrimSpace(text) == "" {
 		return history, rt.ctx.Err()
 	}
-	if !memoryRecallIntent(text) {
+	if !memoryRecallIntent(text) || inSessionRecallCovered(history, text) {
 		// The turn points at no earlier session, so the selector can only spend
 		// its budget and return empty. Keep the current-session history and skip
 		// the model call entirely.

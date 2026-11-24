@@ -207,24 +207,42 @@ func TestStreamPCMKeepsCoverOutOfOutputASR(t *testing.T) {
 // On a recall or device-control turn, search_gate turns search off, yet memory
 // selection or control routing can spend ~1s before the main session even opens.
 // Measuring 1.5s from speech_stop alone clamped the wait to 200ms after Open and
-// fired a redundant rescue call on non-search turns.
+// fired a redundant rescue call on non-search turns. Conversely, explicit
+// fresh_information search turns start synthesis early (650ms) and hold playback
+// until rescueFreshSpeakAt (1350ms) so the cover finishes before a 2.4s answer.
 func TestRescueWaitHonorsSearchGateAndPreOpenRouting(t *testing.T) {
 	on, off := true, false
 	stopped := time.Unix(100, 0)
+	afterOpen := stopped.Add(350 * time.Millisecond)
 	afterRecall := stopped.Add(1150 * time.Millisecond)
 
-	// Search turn ("明天杭州天气"): still fires 1.5s after speech_stop (350ms left).
-	if got := rescueWait(stopped, afterRecall, "明天杭州天气怎么样", &on); got != 350*time.Millisecond {
-		t.Fatalf("search turn wait=%v, want 350ms", got)
+	// Fresh-information search turn ("明天杭州天气"): starts synthesis at 650ms (300ms after 350ms Open).
+	if got := rescueWait(stopped, afterOpen, "明天杭州天气怎么样", &on); got != 300*time.Millisecond {
+		t.Fatalf("early fresh search turn wait=%v, want 300ms", got)
 	}
-	// Late search turn: clamped to rescueMinWait (200ms).
-	if got := rescueWait(stopped, stopped.Add(1450*time.Millisecond), "明天杭州天气怎么样", &on); got != rescueMinWait {
-		t.Fatalf("late search turn wait=%v, want %v", got, rescueMinWait)
+	// Late fresh-information search turn: clamped to 50ms floor.
+	if got := rescueWait(stopped, afterRecall, "明天杭州天气怎么样", &on); got != 50*time.Millisecond {
+		t.Fatalf("late fresh search turn wait=%v, want 50ms", got)
+	}
+	// Speak hold gates early synthesis so it never speaks before 1350ms.
+	if got := rescueSpeakHold(stopped, stopped.Add(1100*time.Millisecond)); got != 250*time.Millisecond {
+		t.Fatalf("rescueSpeakHold at 1100ms=%v, want 250ms", got)
+	}
+	if got := rescueSpeakHold(stopped, stopped.Add(1400*time.Millisecond)); got != 0 {
+		t.Fatalf("rescueSpeakHold at 1400ms=%v, want 0", got)
+	}
+	// Default-on unclassified turn ("随便聊聊"): still waits 1500ms from speech_stop (350ms left after 1150ms).
+	if got := rescueWait(stopped, afterRecall, "随便聊聊", &on); got != 350*time.Millisecond {
+		t.Fatalf("default_on turn wait=%v, want 350ms", got)
 	}
 	// Recall turn ("记不记得我上次说的"): search is gated off, so give the open
 	// main session a full rescueNoSearchDelay (1200ms) instead of firing at 350ms.
 	if got := rescueWait(stopped, afterRecall, "记不记得我上次说的", &on); got != rescueNoSearchDelay {
 		t.Fatalf("recall turn wait=%v, want %v", got, rescueNoSearchDelay)
+	}
+	// Meta-recall mentioning weather ("你还记得刚才我让你查哪个城市的天气吗"): gated off as recall.
+	if got := rescueWait(stopped, afterRecall, "你还记得刚才我让你查哪个城市的天气吗", &on); got != rescueNoSearchDelay {
+		t.Fatalf("meta-recall weather turn wait=%v, want %v", got, rescueNoSearchDelay)
 	}
 	// Search disabled by config (--search=0): also uses rescueNoSearchDelay floor.
 	if got := rescueWait(stopped, afterRecall, "明天杭州天气怎么样", &off); got != rescueNoSearchDelay {

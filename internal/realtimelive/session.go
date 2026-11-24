@@ -1138,6 +1138,18 @@ func (s *Session) reply(rt *liveTurn, pcm []byte) {
 					_ = s.record("rescue_skipped", map[string]any{"id": rt.turn.ID, "reason": why, "text": said, "samples": len(pcm) / 2})
 					return
 				}
+				if hold := rescueSpeakHold(rt.stoppedAt, time.Now()); hold > 0 {
+					holdTimer := time.NewTimer(hold)
+					select {
+					case <-rescueCtx.Done():
+						holdTimer.Stop()
+						return
+					case <-holdTimer.C:
+					}
+				}
+				if rescueCtx.Err() != nil || answer.arrived() {
+					return
+				}
 				out <- rescueResult{pcm: pcm, said: said}
 			})
 			continue

@@ -584,3 +584,47 @@ func TestInputAdmissionPreviewAfterStopCutsBeforeFinal(t *testing.T) {
 		})
 	}
 }
+
+func TestInputAdmissionCarriesFirstClauseAcrossMidSentencePauseAndTrailingBreath(t *testing.T) {
+	t.Run("mid_sentence_pause_merges_clauses", func(t *testing.T) {
+		r := newAdmissionRig(t)
+		r.event(t, "input_audio_buffer.speech_started", "first-half", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "first-half", "text", "继续刚才")
+		r.event(t, "input_audio_buffer.speech_stopped", "first-half", map[string]any{"audio_end_ms": 620})
+		// Second half starts 20ms later before first-half's final ASR arrives.
+		r.event(t, "input_audio_buffer.speech_started", "second-half", map[string]any{"audio_start_ms": 640})
+		r.preview(t, "second-half", "text", "讲")
+		r.final(t, "first-half", "继续刚才阿宁画家的故事。")
+		r.event(t, "input_audio_buffer.speech_stopped", "second-half", map[string]any{"audio_end_ms": 1200})
+		r.final(t, "second-half", "讲的那个。")
+		id := r.expectGenerated(t)
+		r.sync(t)
+		if got := r.primary.Load(); got != 1 {
+			t.Fatalf("merged clauses made %d primary calls, want 1", got)
+		}
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		if r.s.output == nil || r.s.output.turn.ID != id || r.s.output.turn.User != "继续刚才阿宁画家的故事，讲的那个。" {
+			t.Fatalf("got turn user %q, want merged clauses", r.s.output.turn.User)
+		}
+	})
+
+	t.Run("trailing_breath_empty_transcript_preserves_first_clause", func(t *testing.T) {
+		r := newAdmissionRig(t)
+		r.event(t, "input_audio_buffer.speech_started", "sentence", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "sentence", "text", "给我讲个")
+		r.event(t, "input_audio_buffer.speech_stopped", "sentence", map[string]any{"audio_end_ms": 620})
+		// Trailing breath opens a second segment before final ASR arrives.
+		r.event(t, "input_audio_buffer.speech_started", "breath", map[string]any{"audio_start_ms": 640})
+		r.final(t, "sentence", "给我讲个孙悟空的故事")
+		r.event(t, "input_audio_buffer.speech_stopped", "breath", map[string]any{"audio_end_ms": 900})
+		r.final(t, "breath", " ")
+		id := r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		if r.s.output == nil || r.s.output.turn.ID != id || r.s.output.turn.User != "给我讲个孙悟空的故事" {
+			t.Fatalf("trailing empty breath dropped first clause: %#v", r.s.output)
+		}
+	})
+}
