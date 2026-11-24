@@ -33,6 +33,24 @@ type pendingInput struct {
 	carryPCM                              []byte
 }
 
+func carriedCompareRunes(text string) []rune {
+	var out []rune
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			out = append(out, unicode.ToLower(r))
+		}
+	}
+	for len(out) > 1 {
+		switch out[0] {
+		case '嗯', '呃', '啊', '哦', '噢', '诶', '欸':
+			out = out[1:]
+		default:
+			return out
+		}
+	}
+	return out
+}
+
 func joinCarriedText(prefix, suffix string) string {
 	prefix = strings.TrimSpace(prefix)
 	suffix = strings.TrimSpace(suffix)
@@ -44,6 +62,15 @@ func joinCarriedText(prefix, suffix string) string {
 	}
 	trimmed := strings.TrimRight(prefix, "。，、！？；：,.!?;: ")
 	if trimmed == "" {
+		return suffix
+	}
+	// When the user pauses and restarts the sentence from the beginning
+	// ("查一下明天。" -> "查一下明天杭州的天气。"), keep the full restarted
+	// sentence instead of stuttering the repeated opening prefix.
+	prefixRunes := carriedCompareRunes(trimmed)
+	suffixRunes := carriedCompareRunes(suffix)
+	if len(prefixRunes) >= 2 && len(suffixRunes) >= len(prefixRunes) &&
+		string(suffixRunes[:len(prefixRunes)]) == string(prefixRunes) {
 		return suffix
 	}
 	return trimmed + "，" + suffix
@@ -462,6 +489,7 @@ func (s *Session) finishInput(event map[string]any) error {
 			!prev.stoppedAt.IsZero() && p.stoppedAt.Sub(prev.stoppedAt) <= 3*time.Second &&
 			!memoryClearCommand(prev.turn.User, name) && !memoryClearCommand(text, name) {
 			text = joinCarriedText(prev.turn.User, text)
+			s.history = s.history[:n-1]
 		}
 	}
 	pcm := p.pcm

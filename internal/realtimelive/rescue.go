@@ -38,19 +38,44 @@ const (
 	rescueRate     = 24000
 )
 
+// rescueEarlySearchWords are strong signals that the provider's web-search
+// plugin will execute a ~4s live network lookup before emitting audio. Softer
+// fresh-information words such as bare "推荐" stay in searchFreshWords so
+// search_gate keeps search enabled, but they frequently answer directly from
+// session context or general knowledge in ~1.5s and must not pre-start a 1.35s
+// cover line unless paired with a live-lookup word below.
+var rescueEarlySearchWords = []string{
+	"天气", "气温", "温度", "下雨", "下雪", "刮风", "冷不冷", "热不热",
+	"新闻", "最近", "最新", "现在几点",
+	"价格", "多少钱", "汇率", "股价", "票价", "油价", "房价",
+	"附近", "营业", "开门", "堵不堵",
+	"航班", "机票", "火车", "高铁", "限行", "上映", "比分", "赛程",
+	"政策", "规定", "发布", "上市",
+}
+
+func rescueNeedsEarlyCover(user string) bool {
+	for _, word := range rescueEarlySearchWords {
+		if strings.Contains(user, word) {
+			return true
+		}
+	}
+	return false
+}
+
 // rescueWait decides how long after the main session opens to wait before
 // asking for a cover line. When search_gate explicitly identifies
-// fresh_information (weather, movies, news, prices), synthesis (~750ms) starts
-// at rescueFreshDelay (650ms) so the cover audio is ready to speak at ~1.4s and
-// finishes by ~2.3s without colliding with a 2.4s search answer. For default_on
-// turns it waits rescueDelay from speech_stop; when search is gated off
-// (recall, story, continuation, company, opinion, device), it gives the open
-// main session rescueNoSearchDelay from prepared.
+// fresh_information with a live-lookup word (weather, movies, news, prices),
+// synthesis (~750ms) starts at rescueFreshDelay (650ms) so the cover audio is
+// ready to speak at ~1.4s and finishes by ~2.3s without colliding with a 2.4s
+// search answer. For default_on turns (and open-ended recommendations without a
+// live-lookup word) it waits rescueDelay from speech_stop; when search is gated
+// off (recall, story, continuation, company, opinion, device), it gives the
+// open main session rescueNoSearchDelay from prepared.
 func rescueWait(stoppedAt, preparedAt time.Time, user string, configuredSearch *bool) time.Duration {
 	elapsed := preparedAt.Sub(stoppedAt)
 	search, reason := searchDecision(user, configuredSearch)
 	if search != nil && *search {
-		if reason == "fresh_information" {
+		if reason == "fresh_information" && rescueNeedsEarlyCover(user) {
 			return max(rescueFreshDelay-elapsed, 50*time.Millisecond)
 		}
 		return max(rescueDelay-elapsed, rescueMinWait)

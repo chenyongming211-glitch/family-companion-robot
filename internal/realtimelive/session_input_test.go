@@ -627,4 +627,31 @@ func TestInputAdmissionCarriesFirstClauseAcrossMidSentencePauseAndTrailingBreath
 			t.Fatalf("trailing empty breath dropped first clause: %#v", r.s.output)
 		}
 	})
+
+	t.Run("unspoken_cut_turn_deduplicates_restarted_prefix_and_folds_out_of_history", func(t *testing.T) {
+		r := newAdmissionRig(t)
+		// Turn 1 final ASR arrives just before Turn 2 speech_started, so Turn 1
+		// activates and is immediately cut at Sent==0 before speaking.
+		r.s.mu.Lock()
+		prev := r.s.activateTurnLocked(1, time.Now())
+		prev.turn.User = "查一下明天。"
+		prev.turn.Cut = true
+		r.s.output = nil
+		r.s.mu.Unlock()
+
+		r.event(t, "input_audio_buffer.speech_started", "restarted", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "restarted", "text", "查一下")
+		r.event(t, "input_audio_buffer.speech_stopped", "restarted", map[string]any{"audio_end_ms": 900})
+		r.final(t, "restarted", "查一下明天杭州的天气。")
+		id := r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		if r.s.output == nil || r.s.output.turn.ID != id || r.s.output.turn.User != "查一下明天杭州的天气。" {
+			t.Fatalf("got turn user %q, want deduplicated restarted sentence", r.s.output.turn.User)
+		}
+		if len(r.s.history) != 1 || r.s.history[0].turn.ID != id {
+			t.Fatalf("expected absorbed unspoken turn to be folded out of history, got len=%d", len(r.s.history))
+		}
+	})
 }

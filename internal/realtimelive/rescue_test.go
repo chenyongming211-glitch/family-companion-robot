@@ -231,6 +231,15 @@ func TestRescueWaitHonorsSearchGateAndPreOpenRouting(t *testing.T) {
 	if got := rescueSpeakHold(stopped, stopped.Add(1400*time.Millisecond)); got != 0 {
 		t.Fatalf("rescueSpeakHold at 1400ms=%v, want 0", got)
 	}
+	// Bare "推荐" keeps search enabled in search_gate, but without a live-lookup
+	// word it waits the normal 1500ms rescueDelay rather than pre-starting a
+	// 1350ms cover line ahead of a 1.5s direct recommendation answer.
+	if got := rescueWait(stopped, afterOpen, "嗯，杭州还有什么好玩的地方吗？你给推荐一下。", &on); got != 1150*time.Millisecond {
+		t.Fatalf("open-ended recommendation wait=%v, want 1150ms", got)
+	}
+	if got := rescueWait(stopped, afterOpen, "推荐一部最近上映的电影", &on); got != 300*time.Millisecond {
+		t.Fatalf("live-lookup recommendation wait=%v, want 300ms", got)
+	}
 	// Default-on unclassified turn ("随便聊聊"): still waits 1500ms from speech_stop (350ms left after 1150ms).
 	if got := rescueWait(stopped, afterRecall, "随便聊聊", &on); got != 350*time.Millisecond {
 		t.Fatalf("default_on turn wait=%v, want 350ms", got)
