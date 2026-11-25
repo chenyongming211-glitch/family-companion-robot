@@ -141,10 +141,12 @@ final class LiveClient: @unchecked Sendable {
                     fixture.start()
                 }
             case "speaker_observation":
-                guard speakerTest, ready, speakerEnabled else { throw ClientFailure("unexpected_speaker_observation") }
+                guard ready, !speakerTest || speakerEnabled else { throw ClientFailure("unexpected_speaker_observation") }
                 let observation = try SpeakerObservation.validate(event)
-                speakerGuideEvent?(.observation(observation), generation)
-                if let value = speakerObservation.apply(observation) { speakerStatus?(value) }
+                if speakerTest {
+                    speakerGuideEvent?(.observation(observation), generation)
+                    if let value = speakerObservation.apply(observation) { speakerStatus?(value) }
+                }
             case "begin":
                 guard ready, !active, let id = event["id"] as? Int, id > identity else { throw ClientFailure("begin_identity") }
                 identity = id; accepted = 0; completed = 0; active = true; sealed = false; draining = false; transcript = ""

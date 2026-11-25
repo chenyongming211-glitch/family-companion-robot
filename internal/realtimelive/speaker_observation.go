@@ -66,8 +66,10 @@ func (s *Session) beginSpeaker() {
 	if s.speakerFailed {
 		state = "unavailable"
 	}
-	event := speakerEvent(speakerlive.Result{ID: s.speakerLatest, State: state})
-	_ = s.sendLocked(event)
+	if s.cfg.MemoryOnly {
+		event := speakerEvent(speakerlive.Result{ID: s.speakerLatest, State: state})
+		_ = s.sendLocked(event)
+	}
 	s.mu.Unlock()
 }
 
@@ -119,7 +121,9 @@ func (s *Session) speakerResult(r speakerlive.Result) {
 		}
 	}
 	// A slow/closed observer cannot cancel the normal speech/model pipeline.
-	_ = s.sendLocked(speakerEvent(r))
+	if s.cfg.MemoryOnly {
+		_ = s.sendLocked(speakerEvent(r))
+	}
 }
 
 func (s *Session) observeSpeaker(id, start, end int64, pcm []byte, complete bool) {
