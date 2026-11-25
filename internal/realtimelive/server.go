@@ -55,9 +55,6 @@ func NewServer(cfg Config, product *realtimestate.Product, root, build string) *
 	if cfg.MemoryOnly && (cfg.MemoryEnabled || cfg.DiagnosticsDevice != "") {
 		initErr = errors.New("memory_only_policy_conflict")
 	}
-	if cfg.Speaker != nil && !cfg.MemoryOnly {
-		initErr = errors.New("speaker_test_requires_memory_only")
-	}
 	if cfg.DiagnosticsDevice != "" {
 		if cfg.DiagnosticsDuration == 0 {
 			cfg.DiagnosticsDuration = diagnosticWindow

@@ -28,6 +28,9 @@ type pendingInput struct {
 	weakPreview                           string // At most eight normalized runes until corroborated.
 	matchedEchoPreview                    bool   // An earlier preview matched this capture's playing output.
 	lastHeldReason                        string
+	speakerState                          string
+	speakerLabel                          string
+	speakerReason                         string
 	carryFrom                             *pendingInput
 	carryText                             string
 	carryPCM                              []byte
@@ -299,6 +302,15 @@ func (s *Session) previewInput(event map[string]any) error {
 	if decision.match {
 		p.matchedEchoPreview = true
 	}
+	if decision.allow && p.overlapped && s.cfg.Speaker != nil {
+		captured := p.pcm
+		if !p.ended {
+			captured = s.ring.Slice(p.start, s.ring.End)
+		}
+		if reason := s.bystanderRejectionLocked(p, captured); reason != "" {
+			decision = inputDecision{reason: reason}
+		}
+	}
 	// Once VAD has sealed a short capture, a revised preview adds no new
 	// audio. Wait for its final before cutting a previously matching output.
 	if decision.allow && decision.reason != "stop_request" && p.shortEchoCapture() &&
@@ -378,6 +390,11 @@ func (s *Session) finishInput(event map[string]any) error {
 	}
 	now := time.Now()
 	decision := s.playbackInputLocked(p, text, text, true, now)
+	if decision.allow {
+		if reason := s.bystanderRejectionLocked(p, p.pcm); reason != "" {
+			decision = inputDecision{reason: reason}
+		}
+	}
 	audioCheck := ""
 	referenceMS := 0
 	if decision.allow && decision.reason != "stop_request" && p.shortEchoCapture() {
@@ -492,9 +509,15 @@ func (s *Session) finishInput(event map[string]any) error {
 	}
 	pcm := p.pcm
 	p.pcm = nil
+	overlapped := p.overlapped
+	speakerState, speakerLabel := p.speakerState, p.speakerLabel
 	s.discardInputLocked()
 	rt := s.activateTurnLocked(p.id, p.stoppedAt)
+	rt.overlapped = overlapped
 	rt.turn.User = text
+	if !overlapped && !s.speakerFailed && s.speakerAnchor == "" && speakerState == "temporary" && speakerLabel != "" {
+		s.speakerAnchor = speakerLabel
+	}
 	rt.transcriptOnce.Do(func() { close(rt.transcriptReady) })
 	s.mu.Unlock()
 	if err := s.record("user_text", map[string]any{"id": rt.turn.ID, "text": text, "input_decision": fields}); err != nil {

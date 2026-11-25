@@ -8,10 +8,10 @@ import type { VoiceRoute } from "../types.ts";
 const props = defineProps<{deviceId: string}>();
 const state = reactive(voiceRoutesState());
 const control = createVoiceRoutesController(api, state);
-const routes: {id: VoiceRoute; name: string; output: string}[] = [
-  {id: "A", name: "Omni 语音理解 → 文字 → CosyVoice", output: "理解语音后生成文字，完整合成后播放。"},
-  {id: "B", name: "Fun-ASR → Qwen Plus → CosyVoice", output: "先识别文字，再生成回答，使用与 A 相同的语音合成；完整合成后播放。"},
-  {id: "C", name: "Omni 原生直接语音", output: "直接生成语音，流式播放。"},
+const routes: {id: VoiceRoute; name: string; output: string; retired?: boolean}[] = [
+  {id: "A", name: "Omni 语音理解 → 文字 → CosyVoice（已停用）", output: "理解语音后生成文字，完整合成后播放；已停用并收敛至 C 链路。", retired: true},
+  {id: "B", name: "Fun-ASR → Qwen Plus → CosyVoice（冷备）", output: "先识别文字，再生成回答，使用与 A 相同的语音合成；完整合成后播放。"},
+  {id: "C", name: "Omni 原生直接语音（默认主线）", output: "直接生成语音，流式播放。"},
 ];
 let unsubscribe = () => {};
 function start() {if (document.visibilityState === "visible") void control.start(props.deviceId);}
@@ -33,7 +33,7 @@ onBeforeUnmount(() => {unsubscribe(); document.removeEventListener("visibilitych
     <p class="muted">A、B 会等待完整语音合成并校验后开始播放；C 随生成随播放。</p>
     <div class="voice-route-options" role="group" aria-label="选择语音链路" aria-describedby="voice-route-notice">
       <button v-for="route in routes" :id="'voice-route-' + route.id" :key="route.id" type="button"
-        :aria-pressed="state.view?.selectedRoute === route.id" :disabled="!control.canSwitch()" @click="control.select(route.id)">
+        :aria-pressed="state.view?.selectedRoute === route.id" :disabled="Boolean(route.retired) || !control.canSwitch()" @click="control.select(route.id)">
         <strong>{{ route.id }} · {{ route.name }}</strong>
         <span>{{ route.output }}</span>
       </button>

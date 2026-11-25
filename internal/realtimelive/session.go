@@ -20,6 +20,7 @@ import (
 type liveTurn struct {
 	media                   bool // Session.mu; media never supplies spoken text.
 	musicClassified         bool // Session.mu; defer memory until music routing finishes.
+	overlapped              bool // Session.mu; input started while device speech was playing.
 	turn                    *realtimestate.Turn
 	ctx                     context.Context
 	cancel                  context.CancelFunc
@@ -60,6 +61,7 @@ type Session struct {
 	speaker          speakerObserver
 	speakerLatest    int64
 	speakerFailed    bool
+	speakerAnchor    string // Session.mu; locked primary speaker label (e.g. "guest_1").
 	providerEnd      int64
 	seq              int64
 	output           *liveTurn

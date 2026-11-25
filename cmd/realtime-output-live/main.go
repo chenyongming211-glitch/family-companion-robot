@@ -7,6 +7,7 @@ import (
 	"familyrobot/internal/management"
 	"familyrobot/internal/realtimelive"
 	"familyrobot/internal/realtimestate"
+	"familyrobot/internal/speakerlive"
 	"flag"
 	"log"
 	"net"
@@ -40,7 +41,13 @@ func main() {
 	memorySocket := flag.String("memory-control-socket", "", "optional root-private memory control Unix socket")
 	managementConfig := flag.String("management-config", "", "private management config for voice routes, memory control or family music")
 	devVoiceRoute := flag.String("dev-voice-route", "", "development terminal only: force A or B for a device that has no route row")
+	speakerBinary := flag.String("speaker-binary", "", "optional Linux speaker observer helper executable")
+	speakerModel := flag.String("speaker-model", "", "optional speaker embedding ONNX model path")
+	speakerSHA := flag.String("speaker-sha256", "", "optional speaker embedding ONNX model SHA-256")
 	flag.Parse()
+	if (*speakerBinary != "" || *speakerModel != "" || *speakerSHA != "") && (*speakerBinary == "" || *speakerModel == "" || *speakerSHA == "") {
+		log.Fatal("speaker_config_invalid")
+	}
 	if (*memorySocket != "" || *musicLibrary != "") && *managementConfig == "" {
 		log.Fatal("memory_control_config_invalid")
 	}
@@ -70,6 +77,9 @@ func main() {
 	cfg.DeviceProfilesPath = *deviceProfiles
 	cfg.DiagnosticsDevice = *diagnosticDevice
 	cfg.DiagnosticsDuration = *diagnosticDuration
+	if *speakerBinary != "" {
+		cfg.Speaker = &speakerlive.Config{Binary: *speakerBinary, Model: *speakerModel, SHA256: *speakerSHA}
+	}
 	product, e := realtimestate.LoadProduct(*identity)
 	if e != nil {
 		log.Fatal("identity_invalid")

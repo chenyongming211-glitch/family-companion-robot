@@ -29,16 +29,18 @@ async function withDocument(action: (doc: EventTarget & {visibilityState: string
 }
 
 
-test('compiled voice panel offers exactly three native buttons, full chains and explicit ending notice', async () => withDocument(async () => {
+test('compiled voice panel offers three buttons, disables retired route A and switches active routes', async () => withDocument(async () => {
   const calls: string[] = []; let saved = false;
-  const m = mount({getDeviceVoiceRoute: async () => {calls.push('GET'); return dto(id, saved ? {selectedRoute: 'A', version: 'b'.repeat(64)} : {});}, setDeviceVoiceRoute: async () => {calls.push('PUT'); saved = true; return {...dto(id, {selectedRoute: 'A', version: 'b'.repeat(64)}), disconnectConfirmed: true};}});
+  const m = mount({getDeviceVoiceRoute: async () => {calls.push('GET'); return dto(id, saved ? {selectedRoute: 'B', version: 'b'.repeat(64)} : {});}, setDeviceVoiceRoute: async () => {calls.push('PUT'); saved = true; return {...dto(id, {selectedRoute: 'B', version: 'b'.repeat(64)}), disconnectConfirmed: true};}});
   try {
     await tick();
     for (const text of [/Omni/, /CosyVoice/, /Fun-ASR/, /Qwen Plus/, /原生直接语音/, /完整合成后播放/, /当前对话将立即结束/, /已选择/, /当前连接实际链路/]) assert.match(m.text(), text);
     const buttons = ['A', 'B', 'C'].map(route => m.find('voice-route-' + route));
     assert.equal(buttons.length, 3); assert.equal(buttons[2]!.props['aria-pressed'], true);
+    assert.equal(buttons[0]!.props.disabled, true);
+    assert.equal(buttons[1]!.props.disabled, false);
     for (const button of buttons) {assert.equal(button.tag, 'button'); assert.equal(button.props.type, 'button');}
-    buttons[0]!.props.onClick(); await tick(); assert.deepEqual(calls, ['GET', 'PUT', 'GET']); assert.match(m.text(), /已切换，请重新唤醒/);
+    buttons[1]!.props.onClick(); await tick(); assert.deepEqual(calls, ['GET', 'PUT', 'GET']); assert.match(m.text(), /已切换，请重新唤醒/);
     assert.equal(m.nodes().filter(n => n.props.role === 'dialog').length, 0);
   } finally {m.app.unmount();}
 }));
@@ -51,7 +53,7 @@ test('compiled voice panel separates selected and actual route, forbids readonly
       await tick(); assert.match(m.text(), /已选择：C/);
       if (state.connection === 'active') assert.match(m.text(), /当前连接实际链路：B/);
       if (state.connection === 'unknown') assert.match(m.text(), /当前连接实际链路：未知/);
-      if (state.canSwitch === false) {assert.ok(m.find('voice-route-A').props.disabled); m.find('voice-route-A').props.onClick(); await tick(); assert.equal(writes, 0);}
+      if (state.canSwitch === false) {assert.ok(m.find('voice-route-B').props.disabled); m.find('voice-route-B').props.onClick(); await tick(); assert.equal(writes, 0);}
       assert.doesNotMatch(m.text(), /已切换/);
     } finally {m.app.unmount();}
   }
@@ -60,7 +62,7 @@ test('compiled voice panel separates selected and actual route, forbids readonly
 test('compiled panel aborts on hide/logout/device change and drops late results with no automatic writes', async () => withDocument(async doc => {
   let resolve!: (value: any) => void, signal!: AbortSignal; let writes = 0, reads = 0;
   const m = mount({getDeviceVoiceRoute: async (deviceId: string) => {reads++; return dto(deviceId);}, setDeviceVoiceRoute: async (_id: string, _route: string, _version: string, requestSignal: AbortSignal) => {writes++; signal = requestSignal; return new Promise(r => resolve = r);}});
-  await tick(); m.find('voice-route-A').props.onClick(); await tick(); assert.ok(m.find('voice-route-B').props.disabled);
+  await tick(); m.find('voice-route-B').props.onClick(); await tick(); assert.ok(m.find('voice-route-C').props.disabled);
   doc.visibilityState = 'hidden'; doc.dispatchEvent(new Event('visibilitychange')); await tick(); assert.equal(signal.aborted, true); assert.equal(m.state().view, null);
   resolve({...dto(), disconnectConfirmed: true}); await tick(); assert.equal(m.state().view, null);
   doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange')); await tick(); m.props.deviceId = 'next'; await tick(); assert.equal(m.state().view?.deviceId, 'next');

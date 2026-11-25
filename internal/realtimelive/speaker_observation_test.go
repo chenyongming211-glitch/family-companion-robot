@@ -2,6 +2,7 @@ package realtimelive
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"familyrobot/internal/realtimeaudio"
 	"familyrobot/internal/realtimestate"
@@ -300,4 +301,112 @@ func TestSpeakerReasonReachesCurrentWindow(t *testing.T) {
 	if last := w.events[len(w.events)-1]; last["state"] != "unavailable" || last["reason"] != "observer_unavailable" {
 		t.Fatal(last)
 	}
+}
+
+func makeAmplitudePCM(samples int, amp int16) []byte {
+	buf := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		binary.LittleEndian.PutUint16(buf[i*2:], uint16(amp))
+	}
+	return buf
+}
+
+func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
+	t.Run("low_energy_bystander_rejected_even_under_1500ms", func(t *testing.T) {
+		r := newAdmissionRig(t, func(s *Session) {
+			s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}
+			s.cfg.Speaker = &speakerlive.Config{}
+			s.speaker = &speakerCaptureObserver{accept: true}
+			s.ring = realtimestate.NewAudioRing(16000 * 10)
+			// Amplitude 20 -> 20/32768 = 0.00061 < minSpeakerRMS (0.005).
+			_ = s.ring.Append(makeAmplitudePCM(16000*2, 20))
+			s.providerEnd = 16000 * 2
+		})
+		old := echoOutput(t, r, "我正在给你讲一个故事，内容很长。", 15)
+		if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+			t.Fatal(err)
+		}
+		r.event(t, "input_audio_buffer.speech_started", "low-tv", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "low-tv", "text", "旁边电视里说的台词")
+		r.event(t, "input_audio_buffer.speech_stopped", "low-tv", map[string]any{"audio_end_ms": 800})
+		r.final(t, "low-tv", "旁边电视里说的台词")
+		r.sync(t)
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		if old.turn.Cut || r.s.output != old || r.primary.Load() != 0 {
+			t.Fatalf("low-energy bystander interrupted or generated: cut=%v primary=%d", old.turn.Cut, r.primary.Load())
+		}
+	})
+
+	t.Run("anchor_locks_on_non_overlapped_turn_blocks_guest2_and_allows_short_command", func(t *testing.T) {
+		r := newAdmissionRig(t, func(s *Session) {
+			s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}
+			s.cfg.Speaker = &speakerlive.Config{}
+			s.speaker = &speakerCaptureObserver{accept: true}
+		})
+		// 1. Short (<1.5s) first turn with normal energy must be allowed and must not lock anchor.
+		r.event(t, "input_audio_buffer.speech_started", "short-hi", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "short-hi", "text", "你好")
+		r.event(t, "input_audio_buffer.speech_stopped", "short-hi", map[string]any{"audio_end_ms": 800})
+		r.final(t, "short-hi", "你好")
+		_ = r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		if r.s.speakerAnchor != "" {
+			r.s.mu.Unlock()
+			t.Fatalf("short turn locked speakerAnchor=%q, want empty", r.s.speakerAnchor)
+		}
+		r.s.output.turn.Cut = true
+		r.s.output = nil
+		r.s.mu.Unlock()
+
+		// 2. Non-overlapped >=1.5s turn observed as guest_1 locks speakerAnchor = "guest_1".
+		r.event(t, "input_audio_buffer.speech_started", "primary-turn", map[string]any{"audio_start_ms": 800})
+		r.preview(t, "primary-turn", "text", "给我讲个")
+		r.event(t, "input_audio_buffer.speech_stopped", "primary-turn", map[string]any{"audio_end_ms": 2400})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: 2, Start: 12800, End: 38400, State: "temporary", Label: "guest_1", Reason: "candidate", AudioMS: 1600})
+		r.final(t, "primary-turn", "给我讲个西湖的故事")
+		_ = r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		if r.s.speakerAnchor != "guest_1" {
+			r.s.mu.Unlock()
+			t.Fatalf("speakerAnchor=%q, want guest_1", r.s.speakerAnchor)
+		}
+		r.s.mu.Unlock()
+
+		// 3. While playing, bystander guest_2 speaks and must be rejected without cutting output.
+		old := echoOutput(t, r, "西湖边上有一座雷峰塔，风景特别好。", 15)
+		if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+			t.Fatal(err)
+		}
+		beforePrimary := r.primary.Load()
+		r.event(t, "input_audio_buffer.speech_started", "bystander-guest2", map[string]any{"audio_start_ms": 2400})
+		r.event(t, "input_audio_buffer.speech_stopped", "bystander-guest2", map[string]any{"audio_end_ms": 3950})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: 4, Start: 38400, End: 63200, State: "temporary", Label: "guest_2", Reason: "candidate", AudioMS: 1550})
+		r.final(t, "bystander-guest2", "今晚我们吃什么饭")
+		r.sync(t)
+		r.s.mu.Lock()
+		if old.turn.Cut || r.s.output != old || r.primary.Load() != beforePrimary {
+			r.s.mu.Unlock()
+			t.Fatalf("bystander guest_2 interrupted or generated: cut=%v", old.turn.Cut)
+		}
+		r.s.mu.Unlock()
+
+		// 4. Short near-field barge-in (<1.5s, too_short) while playing is allowed to interrupt.
+		r.event(t, "input_audio_buffer.speech_started", "short-barge", map[string]any{"audio_start_ms": 3500})
+		r.event(t, "input_audio_buffer.speech_stopped", "short-barge", map[string]any{"audio_end_ms": 3950})
+		r.final(t, "short-barge", "换个故事吧")
+		r.sync(t)
+		r.s.mu.Lock()
+		cut := old.turn.Cut
+		old.turn.MarkDrainDone()
+		r.s.mu.Unlock()
+		if !cut {
+			t.Fatal("near-field short command failed to interrupt")
+		}
+		_ = r.expectGenerated(t)
+	})
 }

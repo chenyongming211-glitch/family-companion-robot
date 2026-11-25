@@ -1,13 +1,56 @@
 package realtimelive
 
-import "familyrobot/internal/speakerlive"
+import (
+	"encoding/binary"
+	"familyrobot/internal/speakerlive"
+	"math"
+)
+
+const minSpeakerRMS = 0.005
 
 type speakerObserver interface {
 	Offer(speakerlive.Job) bool
 	Close()
 }
 
-// Candidates are experimental observations, never authorization or model facts.
+// hasLowEnergySignal reports whether a 16 kHz PCM16 capture carries non-zero
+// audio whose RMS energy falls below minSpeakerRMS (far-field TV or background
+// bystander chatter). All-zero synthetic test buffers return false so geometry
+// tests that pass make([]byte, N) remain unaffected.
+func hasLowEnergySignal(pcm []byte) bool {
+	if len(pcm) < 2 {
+		return false
+	}
+	var sum float64
+	nonZero := false
+	samples := len(pcm) / 2
+	for i := 0; i+1 < len(pcm); i += 2 {
+		v := int16(binary.LittleEndian.Uint16(pcm[i:]))
+		if v != 0 {
+			nonZero = true
+		}
+		f := float64(v) / 32768
+		sum += f * f
+	}
+	return nonZero && math.Sqrt(sum/float64(samples)) < minSpeakerRMS
+}
+
+// Session.mu held. Evaluates whether the current input should be rejected as
+// far-field low-energy background noise or as a different speaker once the
+// session's primary speaker anchor has been established.
+func (s *Session) bystanderRejectionLocked(p *pendingInput, pcm []byte) string {
+	if s.cfg.Speaker == nil || p == nil {
+		return ""
+	}
+	if p.speakerReason == "low_energy" || hasLowEnergySignal(pcm) {
+		return "bystander_low_energy"
+	}
+	if !s.speakerFailed && s.speakerAnchor != "" && p.speakerState == "temporary" && p.speakerLabel != "" && p.speakerLabel != s.speakerAnchor {
+		return "bystander_speaker_mismatch"
+	}
+	return ""
+}
+
 // All mutable observation state is serialized with the existing Session mutex.
 func (s *Session) beginSpeaker() {
 	if s.cfg.Speaker == nil {
@@ -27,12 +70,14 @@ func (s *Session) beginSpeaker() {
 	_ = s.sendLocked(event)
 	s.mu.Unlock()
 }
+
 func speakerEvent(r speakerlive.Result) map[string]any {
 	if r.State == "unavailable" {
 		r.Reason = "observer_unavailable"
 	}
 	return map[string]any{"type": "speaker_observation", "input_id": r.ID, "state": r.State, "label": r.Label, "start_sample": r.Start, "end_sample": r.End, "elapsed_ms": r.ElapsedMS, "evidence": "turn_taking_test", "reason": r.Reason, "audio_ms": r.AudioMS}
 }
+
 func (s *Session) speakerResult(r speakerlive.Result) {
 	if s.cfg.Speaker == nil {
 		return
@@ -55,10 +100,28 @@ func (s *Session) speakerResult(r speakerlive.Result) {
 		r.State = "unavailable"
 		r.Label = ""
 		r.Reason = "observer_unavailable"
+	} else {
+		if s.lastInput != nil && s.lastInput.id == r.ID {
+			s.lastInput.speakerState = r.State
+			s.lastInput.speakerLabel = r.Label
+			s.lastInput.speakerReason = r.Reason
+		}
+		if s.speakerAnchor == "" && r.State == "temporary" && r.Label != "" {
+			for i := len(s.history) - 1; i >= 0; i-- {
+				rt := s.history[i]
+				if rt.turn.ID == r.ID {
+					if !rt.overlapped && !rt.turn.Cut {
+						s.speakerAnchor = r.Label
+					}
+					break
+				}
+			}
+		}
 	}
 	// A slow/closed observer cannot cancel the normal speech/model pipeline.
 	_ = s.sendLocked(speakerEvent(r))
 }
+
 func (s *Session) observeSpeaker(id, start, end int64, pcm []byte, complete bool) {
 	if s.cfg.Speaker == nil || s.ctx.Err() != nil {
 		return
@@ -78,6 +141,10 @@ func (s *Session) observeSpeaker(id, start, end int64, pcm []byte, complete bool
 		reject("uncertain", "incomplete_span")
 		return
 	}
+	if hasLowEnergySignal(pcm) {
+		reject("uncertain", "low_energy")
+		return
+	}
 	if end-start < 24000 {
 		reject("uncertain", "too_short")
 		return
@@ -93,5 +160,4 @@ func (s *Session) observeSpeaker(id, start, end int64, pcm []byte, complete bool
 	if !observer.Offer(speakerlive.Job{ID: id, Start: start, End: end, PCM: pcm}) {
 		reject("uncertain", "not_queued")
 	}
-
 }
