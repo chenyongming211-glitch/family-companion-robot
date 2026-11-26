@@ -458,7 +458,9 @@ func (s *Session) Run() (err error) {
 		s.speaker = observer
 		s.mu.Unlock()
 		if err != nil {
-			s.speakerResult(speakerlive.Result{State: "unavailable"})
+			// Startup failures must stay visible: the bounded reason is recorded
+			// as speaker_observer_unavailable and never carries audio or paths.
+			s.speakerResult(speakerlive.Result{State: "unavailable", Reason: "observer_start_failed"})
 		}
 	}
 	s.spawn(func() {

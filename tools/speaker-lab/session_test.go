@@ -199,6 +199,7 @@ func TestSessionClipLimit(t *testing.T) {
 	for i := 0; i < 33; i++ {
 		hs = append(hs, sessionFrame(uint64(i+1), uint64(i*1000), 1000))
 	}
+	// Default (maxClips == 0) processes every clip until the session ends.
 	var in, out bytes.Buffer
 	for _, h := range hs {
 		_ = writeRequest(&in, h, sessionPCM(1000))
@@ -208,6 +209,20 @@ func TestSessionClipLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := sessionEvents(t, out.Bytes())
+	if len(ev) != 35 || ev[len(ev)-1].Event != "closed" {
+		t.Fatal(len(ev))
+	}
+	// An explicit maxClips still bounds the session.
+	in.Reset()
+	out.Reset()
+	for _, h := range hs {
+		_ = writeRequest(&in, h, sessionPCM(1000))
+	}
+	opt.maxClips = 32
+	if err := runSession(context.Background(), io.NopCloser(&in), &out, "model", strings.Repeat("a", 64), true, opt); err != nil {
+		t.Fatal(err)
+	}
+	ev = sessionEvents(t, out.Bytes())
 	if len(ev) != 34 || ev[len(ev)-1].Event != "closed" {
 		t.Fatal(len(ev))
 	}
@@ -308,8 +323,8 @@ func testRealSessionBridge(t *testing.T, realtime bool) {
 	if decoder.Decode(&ready) != nil || ready.Event != "ready" || ready.Evidence != evidence || ready.Reason != "" {
 		t.Fatal("session not ready")
 	}
-	// Human capture takes longer than the worker idle deadline. The second
-	// fresh worker must still accept ID 2 and retain the parent's guest label.
+	// A real capture gap must not restart the worker: one session worker serves
+	// both clips, and the tracker keeps the parent's guest label across them.
 	for i := 0; i < 2; i++ {
 		if i == 1 {
 			time.Sleep(requestTimeout + 50*time.Millisecond)
@@ -345,6 +360,53 @@ func readWAVFileForSession(path string) ([]byte, error) {
 	}
 	defer f.Close()
 	return readWAV(f)
+}
+
+// Consecutive qualified clips must reuse one worker: the whole session starts
+// the ONNX worker exactly once. Opt-in because it needs the real Linux helper.
+func TestSessionReusesOneWorkerForConsecutiveClips(t *testing.T) {
+	model, sha, wav := os.Getenv("SPEAKER_LAB_TEST_MODEL"), os.Getenv("SPEAKER_LAB_TEST_SHA256"), os.Getenv("SPEAKER_LAB_TEST_WAV")
+	if model == "" || sha == "" || wav == "" {
+		t.Skip("explicit model+digest+synthetic WAV opt-in not set")
+	}
+	pcm, err := readWAVFileForSession(wav)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(pcm)
+	if qualityReason(pcm) != "qualified" {
+		t.Fatal("fixture must be qualified")
+	}
+	calls := 0
+	start := func(ctx context.Context, m, s string) (*workerProcess, error) {
+		calls++
+		return startWorker(ctx, m, s)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var in, out bytes.Buffer
+	for i := 0; i < 3; i++ {
+		h := sessionFrame(uint64(i+1), uint64(i*len(pcm)/2), len(pcm)/2)
+		h.Scope, h.ModelSHA = "realtime-test", sha
+		if err := writeRequest(&in, h, pcm); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runSession(ctx, io.NopCloser(&in), &out, model, sha, true, sessionOptions{realtime: true, start: start}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("worker started %d times, want 1", calls)
+	}
+	events := sessionEvents(t, out.Bytes())
+	if len(events) != 5 || events[0].Event != "ready" || events[4].Event != "closed" {
+		t.Fatalf("events=%+v", events)
+	}
+	for i := 1; i <= 3; i++ {
+		if events[i].Label != "guest_1" || events[i].Event != "observation" {
+			t.Fatalf("events=%+v", events)
+		}
+	}
 }
 
 func TestSessionZeroDurationHasExplicitObservationSchema(t *testing.T) {

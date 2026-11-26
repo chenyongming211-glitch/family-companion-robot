@@ -23,7 +23,6 @@ const (
 	maxSamples   = 8 * sampleRate
 	maxPCMBytes  = maxSamples * 2
 	maxLineBytes = 4096
-	maxClips     = 32
 )
 
 var (
@@ -33,7 +32,13 @@ var (
 )
 
 // Config contains fixed cloud paths. The helper verifies the model digest.
-type Config struct{ Binary, Model, SHA256 string }
+// A zero Lifetime follows the owning Session's lifetime instead of imposing a
+// fixed wall-clock cap. A zero MaxClips processes clips until the Session ends.
+type Config struct {
+	Binary, Model, SHA256 string
+	Lifetime              time.Duration
+	MaxClips              int
+}
 
 // Job is a complete mono 16 kHz signed little-endian PCM span. Coordinates are
 // source samples; nonzero starts and gaps are allowed.
@@ -51,10 +56,13 @@ type Result struct {
 	AudioMS              int64
 }
 
-type observerLimits struct{ startup, request, lifetime time.Duration }
+type observerLimits struct {
+	startup, request, lifetime time.Duration
+	maxClips                   int
+}
 
-func defaultLimits() observerLimits {
-	return observerLimits{15 * time.Second, 3 * time.Second, 5 * time.Minute}
+func limitsFor(cfg Config) observerLimits {
+	return observerLimits{startup: 15 * time.Second, request: 3 * time.Second, lifetime: cfg.Lifetime, maxClips: cfg.MaxClips}
 }
 
 type helperEvent struct {
@@ -95,13 +103,13 @@ type Observer struct {
 // New validates configuration and starts the helper without waiting for model
 // loading. Readiness and its 15-second deadline belong to the background worker.
 func New(ctx context.Context, session string, cfg Config, emit func(Result)) (*Observer, error) {
-	return newObserver(ctx, session, cfg, emit, defaultLimits())
+	return newObserver(ctx, session, cfg, emit, limitsFor(cfg))
 }
 func newObserver(parent context.Context, session string, cfg Config, emit func(Result), limits observerLimits) (*Observer, error) {
 	if parent == nil || parent.Err() != nil || !tokenPattern.MatchString(session) || !shaPattern.MatchString(cfg.SHA256) || !validFile(cfg.Binary, true) || !validFile(cfg.Model, false) {
 		return nil, errUnavailable
 	}
-	if limits.startup <= 0 || limits.startup > 15*time.Second || limits.request <= 0 || limits.request > 3*time.Second || limits.lifetime <= 0 || limits.lifetime > 5*time.Minute {
+	if limits.startup <= 0 || limits.startup > 15*time.Second || limits.request <= 0 || limits.request > 3*time.Second || limits.lifetime < 0 || limits.maxClips < 0 {
 		return nil, errUnavailable
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -152,7 +160,7 @@ func (o *Observer) Offer(job Job) bool {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.closed || o.ctx.Err() != nil || o.accepted >= maxClips || job.ID <= o.lastID || job.Start < o.lastEnd || len(o.jobs) == cap(o.jobs) {
+	if o.closed || o.ctx.Err() != nil || (o.limits.maxClips > 0 && o.accepted >= o.limits.maxClips) || job.ID <= o.lastID || job.Start < o.lastEnd || len(o.jobs) == cap(o.jobs) {
 		return false
 	}
 	job.PCM = append([]byte(nil), job.PCM...)
@@ -200,42 +208,48 @@ func (o *Observer) run() {
 		o.drainLocked()
 		o.mu.Unlock()
 	}()
-	lifetime, cancel := context.WithTimeout(o.ctx, o.limits.lifetime)
-	defer cancel()
-	event, err := o.next(lifetime, o.limits.startup)
+	timeout := o.ctx
+	var cancel context.CancelFunc
+	var lifetimeDone <-chan struct{}
+	if o.limits.lifetime > 0 {
+		timeout, cancel = context.WithTimeout(o.ctx, o.limits.lifetime)
+		defer cancel()
+		lifetimeDone = timeout.Done()
+	}
+	event, err := o.next(timeout, o.limits.startup)
 	if err != nil || event.Event != "ready" {
 		o.stop()
-		o.fail(nil)
+		o.fail(nil, "startup_failed")
 		return
 	}
 	for count := 0; ; {
 		select {
 		case <-o.ctx.Done():
 			return
-		case <-lifetime.Done():
+		case <-lifetimeDone:
 			o.stop()
-			o.fail(nil)
+			o.fail(nil, "lifetime_expired")
 			return
 		case <-o.events:
 			o.stop()
-			o.fail(nil)
+			o.fail(nil, "helper_exited")
 			return // unsolicited output or EOF
 		case job := <-o.jobs:
 			if o.ctx.Err() != nil {
 				clear(job.PCM)
 				return
 			}
-			result, err := o.request(lifetime, job)
+			result, err := o.request(timeout, job)
 			if err != nil {
 				o.stop()
-				o.fail(&job)
+				o.fail(&job, "request_failed")
 				return
 			}
 			o.deliver(result)
 			count++
-			if count == maxClips {
+			if o.limits.maxClips > 0 && count == o.limits.maxClips {
 				o.stop()
-				o.fail(nil)
+				o.fail(nil, "clip_limit")
 				return
 			}
 		}
@@ -246,7 +260,7 @@ func (o *Observer) deliver(result Result) {
 		o.emit(result)
 	}
 }
-func (o *Observer) fail(current *Job) {
+func (o *Observer) fail(current *Job, reason string) {
 	o.mu.Lock()
 	o.closed = true
 	jobs := o.drainLocked()
@@ -257,11 +271,11 @@ func (o *Observer) fail(current *Job) {
 		jobs = append([]Job{*current}, jobs...)
 	}
 	if len(jobs) == 0 {
-		o.deliver(Result{State: "unavailable"})
+		o.deliver(Result{State: "unavailable", Reason: reason})
 		return
 	}
 	for _, job := range jobs {
-		o.deliver(Result{ID: job.ID, Start: job.Start, End: job.End, State: "unavailable"})
+		o.deliver(Result{ID: job.ID, Start: job.Start, End: job.End, State: "unavailable", Reason: reason})
 	}
 }
 func (o *Observer) next(parent context.Context, timeout time.Duration) (helperEvent, error) {

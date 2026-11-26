@@ -442,7 +442,7 @@ func TestCancellationKillsDescendants(t *testing.T) {
 func TestFiniteSessionAndMonotonicCoordinates(t *testing.T) {
 	cfg := fakeConfig(t, "ok")
 	ch := make(chan Result, 40)
-	o := observerForTest(t, cfg, func(r Result) { ch <- r }, observerLimits{startup: time.Second, request: time.Second, lifetime: 4 * time.Second})
+	o := observerForTest(t, cfg, func(r Result) { ch <- r }, observerLimits{startup: time.Second, request: time.Second, lifetime: 4 * time.Second, maxClips: 32})
 	for id := int64(1); id <= 32; id++ {
 		if !o.Offer(testJob(id)) {
 			t.Fatalf("offer %d", id)

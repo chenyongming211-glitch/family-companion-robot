@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -25,6 +26,13 @@ import (
 const requestTimeout = 2 * time.Second
 const startupTimeout = 10 * time.Second
 const maxModelBytes = 128 * 1024 * 1024
+
+// requestIdleTimeout bounds how long an already-ready worker connection waits
+// for the next request before ending only the connection. It is deliberately
+// separate from requestTimeout: a capture-to-capture gap must not stretch the
+// two-second read/extract/write budget, and a two-second budget must not idle
+// out a connection the session is still reusing. Tests shorten it.
+var requestIdleTimeout = 5 * time.Minute
 
 var errModel = errors.New("invalid_model")
 var errWorker = errors.New("worker_failed")
@@ -192,19 +200,36 @@ func listenPrivate(path string) (*privateListener, error) {
 	return managed, nil
 }
 func serveConnection(ctx context.Context, c net.Conn, ex extractor, sha string) {
-	serveConnectionSequence(ctx, c, ex, sha, &requestSequence{})
+	serveConnectionSequence(ctx, c, ex, sha, &requestSequence{}, requestIdleTimeout)
 }
-func serveConnectionSequence(ctx context.Context, c net.Conn, ex extractor, sha string, sequence *requestSequence) {
+func serveConnectionSequence(ctx context.Context, c net.Conn, ex extractor, sha string, sequence *requestSequence, idle time.Duration) {
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
+	if idle <= 0 {
+		idle = requestIdleTimeout
+	}
 	if c.SetDeadline(time.Now().Add(requestTimeout)) != nil || writeReady(c, sha, ex.Dimension()) != nil {
 		return
 	}
+	reader := bufio.NewReaderSize(c, maxHeaderBytes+4)
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		// Idle deadline waits for the next request only. It ends the connection
+		// when the session pauses too long, but never widens the two-second
+		// read/extract/write budget below.
+		if c.SetDeadline(time.Now().Add(idle)) != nil {
+			return
+		}
+		if _, err := reader.Peek(1); err != nil {
+			return
+		}
+		// A request has begun: bound read, extraction and response together.
 		if ctx.Err() != nil || c.SetDeadline(time.Now().Add(requestTimeout)) != nil {
 			return
 		}
-		h, pcm, e := readRequest(c, sha)
+		h, pcm, e := readRequest(reader, sha)
 		if e != nil || !sequence.accept(h) {
 			return
 		}
@@ -269,7 +294,7 @@ func runWorker(ctx context.Context, socket, model, sha string) error {
 			}
 			return errWorker
 		}
-		serveConnectionSequence(ctx, c, ex, sha, sequence)
+		serveConnectionSequence(ctx, c, ex, sha, sequence, requestIdleTimeout)
 		_ = c.Close()
 	}
 }

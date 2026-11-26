@@ -84,17 +84,25 @@ func (s *Session) speakerResult(r speakerlive.Result) {
 	if s.cfg.Speaker == nil {
 		return
 	}
+	var logReason string
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.ctx.Err() != nil {
+		s.mu.Unlock()
 		return
 	}
 	if r.State == "unavailable" {
+		if !s.speakerFailed && r.Reason != "" {
+			logReason = r.Reason
+		}
+		// The upper layer does not auto-recover a failed observer; a new
+		// session naturally recovers by constructing a fresh one. No audio,
+		// transcript or path is recorded here.
 		s.speakerFailed = true
 		if r.ID != s.speakerLatest {
-			r = speakerlive.Result{ID: s.speakerLatest, State: "unavailable"}
+			r = speakerlive.Result{ID: s.speakerLatest, State: "unavailable", Reason: r.Reason}
 		}
 	} else if r.ID != s.speakerLatest {
+		s.mu.Unlock()
 		return
 	}
 	// Permanent helper failure wins even if Offer/validation raced its callback.
@@ -123,6 +131,11 @@ func (s *Session) speakerResult(r speakerlive.Result) {
 	// A slow/closed observer cannot cancel the normal speech/model pipeline.
 	if s.cfg.MemoryOnly {
 		_ = s.sendLocked(speakerEvent(r))
+	}
+	s.mu.Unlock()
+	// Bounded reason only: never audio, transcripts, paths or credentials.
+	if logReason != "" {
+		_ = s.record("speaker_observer_unavailable", map[string]any{"reason": logReason})
 	}
 }
 

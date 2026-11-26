@@ -13,8 +13,6 @@ import (
 )
 
 const sessionMaxSamples = 64000
-const sessionMaxClips = 32
-const sessionLifetime = 5 * time.Minute
 
 // sessionEvent deliberately excludes audio, features, paths and identity fields.
 type sessionEvent struct {
@@ -30,19 +28,63 @@ type sessionOptions struct {
 	realtime bool
 	validate func(string, string) error
 	extract  func(context.Context, requestHeader, []byte) ([]float32, error)
-	lifetime time.Duration
+	lifetime time.Duration // 0 follows the parent context; positive bounds the session.
+	maxClips int           // 0 processes clips until the session ends.
+	start    func(context.Context, string, string) (*workerProcess, error)
 }
 
-// A fresh child is intentional: capture and source gaps can exceed the private
-// worker's two-second idle deadline. Only the Tracker survives a clip.
-func extractSessionClip(ctx context.Context, model, sha string, h requestHeader, pcm []byte) ([]float32, error) {
-	w, err := startWorker(ctx, model, sha)
+// sessionExtractor owns one worker for the whole session. Reusing it avoids
+// re-forking and re-validating the model for every clip. A failed, stalled or
+// timed out request closes its worker and is retried once on a fresh worker
+// before that clip gives up, so one stuck clip cannot end the whole session.
+// The tracker lives in the session and survives worker restarts. rebuilds is
+// the visible rebuild count for tests and diagnostics.
+type sessionExtractor struct {
+	model, sha string
+	start      func(context.Context, string, string) (*workerProcess, error)
+	w          *workerProcess
+	rebuilds   int
+}
+
+func (e *sessionExtractor) extract(ctx context.Context, h requestHeader, pcm []byte) ([]float32, error) {
+	if e.w == nil {
+		w, err := e.start(ctx, e.model, e.sha)
+		if err != nil {
+			return nil, err
+		}
+		e.w = w
+	}
+	v, _, err := e.w.request(ctx, h, pcm)
+	if err == nil {
+		return v, nil
+	}
+	// A failed request already retired its worker. Rebuild at most once so a
+	// single stalled clip cannot end the whole session.
+	e.w.Close()
+	e.w = nil
+	if e.rebuilds >= 1 {
+		return nil, errWorker
+	}
+	e.rebuilds++
+	w, err := e.start(ctx, e.model, e.sha)
 	if err != nil {
 		return nil, err
 	}
-	defer w.Close()
-	v, _, err := w.request(ctx, h, pcm)
-	return v, err
+	e.w = w
+	v, _, err = e.w.request(ctx, h, pcm)
+	if err != nil {
+		e.w.Close()
+		e.w = nil
+		return nil, err
+	}
+	return v, nil
+}
+
+func (e *sessionExtractor) close() {
+	if e.w != nil {
+		e.w.Close()
+		e.w = nil
+	}
 }
 
 // runSession owns input. Cancellation closes it to interrupt a partial frame or
@@ -58,11 +100,15 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 	if opt.validate(model, sha) != nil {
 		return errModel
 	}
-	if opt.lifetime <= 0 || opt.lifetime > sessionLifetime {
-		opt.lifetime = sessionLifetime
+	if opt.lifetime < 0 {
+		return errProtocol
 	}
-	ctx, cancel := context.WithTimeout(parent, opt.lifetime)
-	defer cancel()
+	ctx := parent
+	var cancel context.CancelFunc
+	if opt.lifetime > 0 {
+		ctx, cancel = context.WithTimeout(parent, opt.lifetime)
+		defer cancel()
+	}
 	interrupt := context.AfterFunc(ctx, func() { _ = input.Close() })
 	defer interrupt()
 	if ctx.Err() != nil {
@@ -94,15 +140,23 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 		}
 		_ = encode("closed", 0, "", 0, "")
 	}()
+	var owned *sessionExtractor
 	if opt.extract == nil {
-		opt.extract = func(ctx context.Context, h requestHeader, p []byte) ([]float32, error) {
-			return extractSessionClip(ctx, model, sha, h, p)
+		owned = &sessionExtractor{model: model, sha: sha, start: opt.start}
+		if owned.start == nil {
+			owned.start = startWorker
 		}
+		opt.extract = owned.extract
 	}
+	defer func() {
+		if owned != nil {
+			owned.close()
+		}
+	}()
 	reader := bufio.NewReaderSize(input, maxHeaderBytes+4)
 	var first requestHeader
 	var lastID, end uint64
-	for count := 0; count < sessionMaxClips; count++ {
+	for count := 0; opt.maxClips == 0 || count < opt.maxClips; count++ {
 		if _, err := reader.Peek(1); err != nil {
 			if err == io.EOF && ctx.Err() == nil {
 				return nil

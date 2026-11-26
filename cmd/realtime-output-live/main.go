@@ -44,6 +44,8 @@ func main() {
 	speakerBinary := flag.String("speaker-binary", "", "optional Linux speaker observer helper executable")
 	speakerModel := flag.String("speaker-model", "", "optional speaker embedding ONNX model path")
 	speakerSHA := flag.String("speaker-sha256", "", "optional speaker embedding ONNX model SHA-256")
+	speakerLifetime := flag.Duration("speaker-lifetime", 0, "optional fixed speaker observer lifetime; zero follows the session")
+	speakerMaxClips := flag.Int("speaker-max-clips", 0, "optional speaker observer clip bound; zero follows the session")
 	flag.Parse()
 	if (*speakerBinary != "" || *speakerModel != "" || *speakerSHA != "") && (*speakerBinary == "" || *speakerModel == "" || *speakerSHA == "") {
 		log.Fatal("speaker_config_invalid")
@@ -78,7 +80,7 @@ func main() {
 	cfg.DiagnosticsDevice = *diagnosticDevice
 	cfg.DiagnosticsDuration = *diagnosticDuration
 	if *speakerBinary != "" {
-		cfg.Speaker = &speakerlive.Config{Binary: *speakerBinary, Model: *speakerModel, SHA256: *speakerSHA}
+		cfg.Speaker = &speakerlive.Config{Binary: *speakerBinary, Model: *speakerModel, SHA256: *speakerSHA, Lifetime: *speakerLifetime, MaxClips: *speakerMaxClips}
 	}
 	product, e := realtimestate.LoadProduct(*identity)
 	if e != nil {
