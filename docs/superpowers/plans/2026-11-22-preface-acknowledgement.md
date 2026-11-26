@@ -1,4 +1,10 @@
-# 2026-11-22 慢轮兜底播报（preface）
+# 2026-11-22 慢轮兜底播报（已收敛为 `rescue.go` 纯时间驱动极简实现）
+
+> **最新状态（2026-11-25 规范更新）：**
+> 遵循 **“先极简、只在极简兜不住的关键处加一点点复杂度”** 与 **“零静态意图词表”** 原则，慢轮兜底已收敛为 `internal/realtimelive/rescue.go` 现行实现（提交 `4809fa8`）：
+> - 彻底删除 `rescueEarlySearchWords` / `rescueQuestionOpens` / `rescueQuestionEnds` 词表，完全按真实等待时间（距话尾 `1850ms` 且距主会话 Open `1350ms`）触发；
+> - 垫话音频隔离 `OutputASR`（不污染 `assistant_spoken_prefix` 与跨会话记忆），已起播的短垫话（`≤9` 字 / `≤1.8s`）播完当前短句再接正文。
+> 完整现行计划见 [2026-11-23-route-c-and-speaker-roadmap.md](2026-11-23-route-c-and-speaker-roadmap.md)。以下保留作早期实测记录。
 
 ## 背景：实测数据
 

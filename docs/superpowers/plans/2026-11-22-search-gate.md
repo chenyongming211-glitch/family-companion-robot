@@ -1,4 +1,8 @@
-# 2026-11-22 反向搜索门控
+# 2026-11-22 反向搜索门控（已于 2026-11-24 退役，改为全模型自主决策）
+
+> **最新状态（2026-11-25 规范更新）：**
+> 遵循 **“先极简、只在极简兜不住的关键处加一点点复杂度”** 与 **“取消所有服务端静态意图词表，所有语义决策交由大模型”** 的原则，本文档中的三层关键词门控（`searchFreshWords` / `searchMetaRecallWords` / `noSearchGroups`）已于提交 `4809fa8` 彻底移除。
+> 当前实现（`internal/realtimelive/search_gate.go`）：只要服务端配置开启 `--search`，`searchDecision` 直接放行（`default_on`），是否发起联网检索 100% 由千问大模型根据对话上下文自主决定。完整现行计划见 [2026-11-23-route-c-and-speaker-roadmap.md](2026-11-23-route-c-and-speaker-roadmap.md)。以下保留作历史背景对照。
 
 ## 背景
 
