@@ -507,6 +507,66 @@ func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
 		}
 	})
 
+	t.Run("capture_opened_on_pending_turn_without_preview_blocks_guest2", func(t *testing.T) {
+		r := newAdmissionRig(t, func(s *Session) {
+			s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}
+			s.cfg.Speaker = &speakerlive.Config{}
+			s.speaker = &speakerCaptureObserver{accept: true}
+		})
+		// Lock anchor guest_1.
+		r.event(t, "input_audio_buffer.speech_started", "primary", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "primary", "text", "给我讲个")
+		r.event(t, "input_audio_buffer.speech_stopped", "primary", map[string]any{"audio_end_ms": 2400})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: r.inputID(t), Start: 0, End: 38400, State: "temporary", Label: "guest_1", Reason: "candidate", AudioMS: 2400})
+		r.final(t, "primary", "给我讲个西湖的故事")
+		_ = r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		r.s.output = nil
+		r.s.mu.Unlock()
+
+		// A reply turn exists but has not played yet.
+		old := r.s.addTurn()
+		r.s.mu.Lock()
+		old.turn.Generated = "西湖边上有一座雷峰塔，风景特别好。"
+		old.turn.Begun = true
+		_ = r.s.sendLocked(map[string]any{"type": "begin", "id": old.turn.ID})
+		r.s.mu.Unlock()
+
+		// guest_2 opens against that still-silent turn (overlapped=false).
+		r.event(t, "input_audio_buffer.speech_started", "guest2", map[string]any{"audio_start_ms": 2400})
+		r.sync(t)
+		guestID := r.inputID(t)
+		for range 15 {
+			if ok, err := r.s.binary(old, make([]byte, 2880)); err != nil || !ok {
+				t.Fatalf("release opening audio: %v", err)
+			}
+		}
+
+		// No preview at all: only the finish path observes the playback, and it
+		// must latch it just the same.
+		r.event(t, "input_audio_buffer.speech_stopped", "guest2", map[string]any{"audio_end_ms": 4000})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: guestID, Start: 38400, End: 64000, State: "temporary", Label: "guest_2", Reason: "candidate", AudioMS: 1600})
+		r.s.mu.Lock()
+		before := r.primary.Load()
+		histories := len(r.s.history)
+		r.s.mu.Unlock()
+		r.final(t, "guest2", "今晚我们吃什么饭")
+		r.sync(t)
+		time.Sleep(600 * time.Millisecond)
+		r.s.mu.Lock()
+		defer r.s.mu.Unlock()
+		// The output still belongs to the playing turn, nothing was cut, and no
+		// new turn was admitted: the only way to see this is that the finish
+		// path latched the playback it observed.
+		if old.turn.Cut || r.s.output != old || len(r.s.history) != histories || r.primary.Load() != before {
+			t.Fatalf("finish-only guest_2 was admitted: cut=%v output%v history=%d primary=%d",
+				old.turn.Cut, r.s.output == old, len(r.s.history), r.primary.Load())
+		}
+	})
+
 	t.Run("guest2_opened_during_playback_still_blocked_after_playback_ends", func(t *testing.T) {
 		r := newAdmissionRig(t, func(s *Session) {
 			s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}

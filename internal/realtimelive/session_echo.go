@@ -141,6 +141,12 @@ func hasDistinctSpeech(runes []rune) bool {
 // playing is ambiguous. Only a later extension adds recognition content; a
 // repeated unstable preview or a final label alone does not establish a speaker.
 func (s *Session) playbackInputLocked(p *pendingInput, text, stable string, final bool, now time.Time) inputDecision {
+	// Record playback seen during this capture before any early return: the
+	// bystander filter reads it as evidence that the capture overlapped robot
+	// speech, and a later caller must not have to remember to latch it.
+	if s.speechPlayingLocked() && s.output == p.outputAtStart {
+		p.playbackSeen = true
+	}
 	if p.hadPreview || !p.overlapped {
 		return inputDecision{allow: true, reason: "ordinary_input"}
 	}

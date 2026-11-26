@@ -295,9 +295,6 @@ func (s *Session) previewInput(event map[string]any) error {
 	// The provider's text and stash can be stable and unstable continuations.
 	// Compare their complete content; a matching field cannot hide new words.
 	now := time.Now()
-	if s.speechPlayingLocked() && s.output == p.outputAtStart {
-		p.playbackSeen = true
-	}
 	if !p.ended {
 		p.observePlayback(s.output, now)
 	}
@@ -393,9 +390,6 @@ func (s *Session) finishInput(event map[string]any) error {
 		return s.record("input_rejected", map[string]any{"id": p.id, "reason": reason, "had_preview": hadPreview, "item_scope": "current"})
 	}
 	now := time.Now()
-	if s.speechPlayingLocked() && s.output == p.outputAtStart {
-		p.playbackSeen = true
-	}
 	decision := s.playbackInputLocked(p, text, text, true, now)
 	if decision.allow {
 		if reason := s.bystanderRejectionLocked(p, p.pcm); reason != "" {
