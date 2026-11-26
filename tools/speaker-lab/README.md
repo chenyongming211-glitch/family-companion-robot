@@ -159,13 +159,13 @@ JSON还包含模型／manifest摘要、有效质量与CPU配置、冷加载耗�
 
 stdin 复用上述 v1 binary PCM 帧，scope 必须为 `manual-test`，同一连接固定 session／generation／模型，ID 严格递增，sample 区间从0连续相接，每句最多64000 samples（4秒）。句数与时长跟随会话：`realtime-output-live` 的 `--speaker-max-clips` 与 `--speaker-lifetime` 默认 0 表示不限，由 stdin EOF、父上下文取消或服务停机结束。EOF、取消、超时、坏帧关闭并清除临时 Tracker；session 拥有可关闭 stdin，取消直接关闭读取，不遗留阻塞 reader goroutine。
 
-仅合格片段提取特征；会话内复用同一个 worker，首次使用前预热（10秒冷启动上限），单次RPC上限2秒。请求失败只放弃当句（`uncertain`/`worker_unavailable`），下一句重建 worker；连续3次失败才结束会话。父进程只保留一个最多8人的首次模板 Tracker；首个合格特征锁定维度，模板不随匹配更新。临时向量在 Observe 后清零，PCM 在每句处理后清零，不写录音、特征或人物库。预热只在会话开始与 worker 重建后发生，不是每句冷启动。
+仅合格片段提取特征；会话内复用同一个 worker，首次使用前预热（10秒冷启动上限），单次RPC上限2秒。请求失败只放弃当句（`uncertain`/`worker_unavailable`），下一句重建 worker；连续3次片段失败才结束会话，预热失败不计入这3次。父进程只保留一个最多8人的首次模板 Tracker；首个合格特征锁定维度，模板不随匹配更新。临时向量在 Observe 后清零，PCM 在每句处理后清零，不写录音、特征或人物库。预热只在会话开始与 worker 重建后发生，不是每句冷启动。
 
 stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `id`、`label`（`guest_1`～`guest_8`／`uncertain`／`unknown`）与 `duration_ms`（输入音频片段时长，按样本数换算并向下取整；不是处理耗时；即使0ms也始终提供），所有事件带 `evidence:user_declared_test`。没有向量、PCM、路径、姓名、文本。错误仅 stderr 固定 `session_failed`。真实输入结果不能重定向到文件。
 
 低于1.5秒／RMS低于0.005直接 observation uncertain、不会生成身份。单人状态来自参与者显式声明，非算法验证；门禁不检测语音／换人／重叠。ERes2Net研究阈值 new=0.622530、match=0.682987、margin=0.030229来自既有合成基准，未经家庭真人校准，不作身份认证或登记依据。单人多句实测不能宣称多人验收。
 
-新增 `TestRealSessionBridgeOptIn` 使用显式合成 WAV，经实际 stdin CLI→新 worker→Tracker，间隔超过显式 idle deadline 后检查同标签再获和 EOF 关闭。与既有3项原生opt-in同样通过显式模型／摘要／fixture／binary环境运行。应用内存处理不证明系统／内核所有副本或既有 swap 的状态；不改系统 swap。
+新增 `TestRealSessionBridgeOptIn` 使用显式合成 WAV，经实际 stdin CLI→新 worker→Tracker，间隔超过单次请求上限后再发一句，检查同标签、worker 不重启和 EOF 关闭。与既有3项原生opt-in同样通过显式模型／摘要／fixture／binary环境运行。应用内存处理不证明系统／内核所有副本或既有 swap 的状态；不改系统 swap。
 
 ## Realtime 轮流发言测试输入
 
@@ -189,6 +189,9 @@ stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `
 | `capacity` | Tracker容量已满，返回unknown |
 | `too_short` | 输入总片段不足24000 samples（1.5秒），不调用提取器 |
 | `low_energy` | 输入总片段达到1.5秒，但未通过既有RMS门禁，不调用提取器 |
+| `worker_unavailable` | 该句请求失败或重建失败，只放弃当句，helper 与其余句继续 |
+
+这6组 `(label, reason)` 与 observer 的白名单由仓库根 `testdata/speaker_observation_protocol.json` 共同约束：两侧测试都读同一份表，任一侧单独增删 token 会让对应用例在云端 Linux 上失败。observer 收到形状合规但本版本不认识的 reason 时只丢弃该字段（`unsupported`→无 reason）并记一行日志，不会终结整场声纹过滤。
 
 `duration_ms` 仍由完整输入的样本数换算，不等于有效人声时长。原因码不含相似度、分数、向量、转写或音频，也不能追溯此前未携带原因的uncertain结果。
 

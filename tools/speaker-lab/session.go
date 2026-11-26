@@ -95,6 +95,11 @@ func (e *sessionExtractor) extract(ctx context.Context, h requestHeader, pcm []b
 	return nil, errClipUnavailable
 }
 
+// forgetFailures clears the consecutive-failure budget after a best-effort
+// prewarm, so a worker that never started still gets maxConsecutiveWorkerFailures
+// clips before the session ends.
+func (e *sessionExtractor) forgetFailures() { e.failures = 0 }
+
 func (e *sessionExtractor) close() {
 	if e.w != nil {
 		e.w.Close()
@@ -157,9 +162,11 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 	if owned != nil {
 		// Warm the inference worker before announcing ready so the first clip
 		// never pays the model load inside the observer's request budget. A
-		// failed warm is not fatal: the first clip retries and the usual
-		// three-strike rule decides when a broken worker ends the session.
+		// failed warm is not fatal and does not consume a strike: the three
+		// consecutive failures that end the session are reserved for clips, so
+		// a worker that is broken from the start still gets three clips.
 		_ = owned.warm(ctx)
+		owned.forgetFailures()
 		if ctx.Err() != nil {
 			return errWorker
 		}

@@ -1,0 +1,18 @@
+{
+  "comment": "Every (label, reason) pair the speaker-lab helper emits in realtime mode. The helper emits only these, and the observer accepts exactly these. Both sides read this file in their tests, so a new token cannot ship without the other side learning it.",
+  "observations": [
+    {"label": "uncertain", "reason": "match_uncertain"},
+    {"label": "uncertain", "reason": "too_short"},
+    {"label": "uncertain", "reason": "low_energy"},
+    {"label": "uncertain", "reason": "worker_unavailable"},
+    {"label": "unknown", "reason": "capacity"},
+    {"label": "guest_1", "reason": "candidate"},
+    {"label": "guest_2", "reason": "candidate"},
+    {"label": "guest_3", "reason": "candidate"},
+    {"label": "guest_4", "reason": "candidate"},
+    {"label": "guest_5", "reason": "candidate"},
+    {"label": "guest_6", "reason": "candidate"},
+    {"label": "guest_7", "reason": "candidate"},
+    {"label": "guest_8", "reason": "candidate"}
+  ]
+}

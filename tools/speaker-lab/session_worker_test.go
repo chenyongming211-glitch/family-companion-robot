@@ -108,11 +108,12 @@ func TestSessionDegradesOneClipAfterWorkerFailure(t *testing.T) {
 	var in, out bytes.Buffer
 	for i := 0; i < 2; i++ {
 		h := sessionFrame(uint64(i+1), uint64(i*32000), 32000)
+		h.Scope = "realtime-test"
 		if err := writeRequest(&in, h, sessionPCM(32000)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	opt := sessionOptions{validate: func(string, string) error { return nil }, start: start}
+	opt := sessionOptions{realtime: true, validate: func(string, string) error { return nil }, start: start}
 	if err := runSession(context.Background(), io.NopCloser(&in), &out, "model", strings.Repeat("a", 64), true, opt); err != nil {
 		t.Fatal(err)
 	}
@@ -123,10 +124,12 @@ func TestSessionDegradesOneClipAfterWorkerFailure(t *testing.T) {
 	if len(ev) != 4 || ev[0].Event != "ready" || ev[3].Event != "closed" {
 		t.Fatalf("events=%+v", ev)
 	}
-	if ev[1].Label != "uncertain" {
-		t.Fatalf("failed clip must degrade to uncertain: %+v", ev[1])
+	// The failing clip must announce the per-clip degradation the observer
+	// accepts, not merely a bare uncertain label.
+	if ev[1].Label != "uncertain" || ev[1].Reason != "worker_unavailable" || ev[1].Evidence != "turn_taking_test" {
+		t.Fatalf("failed clip must degrade to uncertain/worker_unavailable: %+v", ev[1])
 	}
-	if ev[2].Label != "guest_1" || ev[2].ID != 2 {
+	if ev[2].Label != "guest_1" || ev[2].ID != 2 || ev[2].Reason != "candidate" {
 		t.Fatalf("next clip must recover on a fresh worker: %+v", ev[2])
 	}
 }

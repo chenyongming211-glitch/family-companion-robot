@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,9 @@ var (
 	errUnavailable = errors.New("speaker observer unavailable")
 	tokenPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	shaPattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// reasonPattern bounds the readable shape of a reason token so an unknown
+	// one can be dropped without opening IPC to arbitrary helper text.
+	reasonPattern = regexp.MustCompile(`^[a-z][a-z_]{0,31}$`)
 )
 
 // Config contains fixed cloud paths. The helper verifies the model digest.
@@ -443,8 +447,18 @@ func decodeEvent(line []byte) (helperEvent, error) {
 		required = append(required, "id", "label", "duration_ms")
 		if _, present := fields["reason"]; present {
 			required = append(required, "reason")
-			if !validHelperReason(event.Label, event.Reason) {
+			// The reason is diagnostic metadata, not part of the event's
+			// identity: helper and observer can be built from different
+			// commits. An unreadable token still ends the observer, so no
+			// arbitrary helper text crosses IPC; a readable token this build
+			// does not know degrades to "no reason" for this clip instead of
+			// tearing down voice filtering for the rest of the session.
+			if !reasonPattern.MatchString(event.Reason) {
 				return event, errUnavailable
+			}
+			if !validHelperReason(event.Label, event.Reason) {
+				log.Printf("speaker observer: dropping unsupported reason %q for label %q", event.Reason, event.Label)
+				event.Reason = ""
 			}
 		}
 		if event.ID <= 0 || event.DurationMS < 0 || event.DurationMS > 8000 {
@@ -468,6 +482,9 @@ func decodeEvent(line []byte) (helperEvent, error) {
 }
 
 // Only fixed branch names cross IPC; no arbitrary worker/provider error text.
+// The accepted set is duplicated on the helper side, so
+// TestReasonProtocolMatchesSharedTable pins it against
+// testdata/speaker_observation_protocol.json.
 func validHelperReason(label, reason string) bool {
 	if label == "uncertain" {
 		// worker_unavailable is a per-clip degradation: the helper kept running
