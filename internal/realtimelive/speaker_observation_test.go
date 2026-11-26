@@ -565,6 +565,12 @@ func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
 			t.Fatalf("finish-only guest_2 was admitted: cut=%v output%v history=%d primary=%d",
 				old.turn.Cut, r.s.output == old, len(r.s.history), r.primary.Load())
 		}
+		// A rejected final discards its input; an ignored final leaves it
+		// pending. Without this, "the final was never processed" would look the
+		// same as "the filter rejected it".
+		if r.s.lastInput != nil {
+			t.Fatalf("final left its input pending; rejection never ran")
+		}
 	})
 
 	t.Run("guest2_opened_during_playback_still_blocked_after_playback_ends", func(t *testing.T) {
