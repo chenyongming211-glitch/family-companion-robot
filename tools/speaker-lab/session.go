@@ -156,8 +156,11 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 	}
 	if owned != nil {
 		// Warm the inference worker before announcing ready so the first clip
-		// never pays the model load inside the observer's request budget.
-		if err := owned.warm(ctx); err != nil {
+		// never pays the model load inside the observer's request budget. A
+		// failed warm is not fatal: the first clip retries and the usual
+		// three-strike rule decides when a broken worker ends the session.
+		_ = owned.warm(ctx)
+		if ctx.Err() != nil {
 			return errWorker
 		}
 	}

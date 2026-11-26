@@ -15,6 +15,13 @@ import (
 	"time"
 )
 
+func fakeStart(t *testing.T) func(context.Context, string, string) (*workerProcess, error) {
+	t.Helper()
+	return func(context.Context, string, string) (*workerProcess, error) {
+		return sessionFakeWorker(t), nil
+	}
+}
+
 func sessionPCM(n int) []byte {
 	p := make([]byte, n*2)
 	for i := 0; i < len(p); i += 2 {
@@ -204,7 +211,7 @@ func TestSessionClipLimit(t *testing.T) {
 	for _, h := range hs {
 		_ = writeRequest(&in, h, sessionPCM(1000))
 	}
-	opt := sessionOptions{validate: func(string, string) error { return nil }, lifetime: time.Second}
+	opt := sessionOptions{validate: func(string, string) error { return nil }, lifetime: time.Second, start: fakeStart(t)}
 	if err := runSession(context.Background(), io.NopCloser(&in), &out, "model", strings.Repeat("a", 64), true, opt); err != nil {
 		t.Fatal(err)
 	}
@@ -366,8 +373,9 @@ func readWAVFileForSession(path string) ([]byte, error) {
 // the ONNX worker exactly once. Opt-in because it needs the real Linux helper.
 func TestSessionReusesOneWorkerForConsecutiveClips(t *testing.T) {
 	model, sha, wav := os.Getenv("SPEAKER_LAB_TEST_MODEL"), os.Getenv("SPEAKER_LAB_TEST_SHA256"), os.Getenv("SPEAKER_LAB_TEST_WAV")
-	if model == "" || sha == "" || wav == "" {
-		t.Skip("explicit model+digest+synthetic WAV opt-in not set")
+	bin := os.Getenv("SPEAKER_LAB_TEST_BINARY")
+	if model == "" || sha == "" || wav == "" || bin == "" {
+		t.Skip("explicit model+digest+synthetic WAV+built helper binary opt-in not set")
 	}
 	pcm, err := readWAVFileForSession(wav)
 	if err != nil {
@@ -380,7 +388,7 @@ func TestSessionReusesOneWorkerForConsecutiveClips(t *testing.T) {
 	calls := 0
 	start := func(ctx context.Context, m, s string) (*workerProcess, error) {
 		calls++
-		return startWorker(ctx, m, s)
+		return startWorkerBinary(ctx, bin, m, s)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -414,7 +422,7 @@ func TestSessionZeroDurationHasExplicitObservationSchema(t *testing.T) {
 		var in, out bytes.Buffer
 		h := sessionFrame(1, 0, n)
 		_ = writeRequest(&in, h, make([]byte, n*2))
-		opt := sessionOptions{validate: func(string, string) error { return nil }, lifetime: time.Second}
+		opt := sessionOptions{validate: func(string, string) error { return nil }, lifetime: time.Second, start: fakeStart(t)}
 		if err := runSession(context.Background(), io.NopCloser(&in), &out, "model", h.ModelSHA, true, opt); err != nil {
 			t.Fatal(err)
 		}
