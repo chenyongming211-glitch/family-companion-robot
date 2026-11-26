@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"time"
 
@@ -34,50 +35,64 @@ type sessionOptions struct {
 }
 
 // sessionExtractor owns one worker for the whole session. Reusing it avoids
-// re-forking and re-validating the model for every clip. A failed, stalled or
-// timed out request closes its worker and is retried once on a fresh worker
-// before that clip gives up, so one stuck clip cannot end the whole session.
-// The tracker lives in the session and survives worker restarts. rebuilds is
-// the visible rebuild count for tests and diagnostics.
+// re-forking and re-validating the model for every clip. A failed request
+// retires the worker and gives up on that clip only; the next clip starts a
+// fresh worker, and consecutive failures end the session so a broken helper
+// cannot spin. The tracker lives in the session and survives worker restarts.
 type sessionExtractor struct {
 	model, sha string
 	start      func(context.Context, string, string) (*workerProcess, error)
 	w          *workerProcess
-	rebuilds   int
+	failures   int
+}
+
+const maxConsecutiveWorkerFailures = 3
+
+var errClipUnavailable = errors.New("session_clip_unavailable")
+
+// warm ensures the session owns a running worker, starting one when needed.
+func (e *sessionExtractor) warm(ctx context.Context) error {
+	if e.w != nil {
+		return nil
+	}
+	w, err := e.start(ctx, e.model, e.sha)
+	if err != nil {
+		e.failures++
+		if e.failures >= maxConsecutiveWorkerFailures {
+			return errWorker
+		}
+		return errClipUnavailable
+	}
+	e.w = w
+	return nil
 }
 
 func (e *sessionExtractor) extract(ctx context.Context, h requestHeader, pcm []byte) ([]float32, error) {
-	if e.w == nil {
-		w, err := e.start(ctx, e.model, e.sha)
-		if err != nil {
-			return nil, err
+	if err := e.warm(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil, errWorker
 		}
-		e.w = w
+		return nil, err
 	}
 	v, _, err := e.w.request(ctx, h, pcm)
 	if err == nil {
+		e.failures = 0
 		return v, nil
 	}
-	// A failed request already retired its worker. Rebuild at most once so a
-	// single stalled clip cannot end the whole session.
+	if errors.Is(err, errUnavailable) {
+		// The worker answered but could not extract a vector; its connection is
+		// still healthy, so only this clip is uncertain.
+		return nil, errClipUnavailable
+	}
+	// Worker I/O failed: retire it, fail this clip, and let the next clip start
+	// a fresh worker instead of ending the whole session.
 	e.w.Close()
 	e.w = nil
-	if e.rebuilds >= 1 {
+	e.failures++
+	if e.failures >= maxConsecutiveWorkerFailures {
 		return nil, errWorker
 	}
-	e.rebuilds++
-	w, err := e.start(ctx, e.model, e.sha)
-	if err != nil {
-		return nil, err
-	}
-	e.w = w
-	v, _, err = e.w.request(ctx, h, pcm)
-	if err != nil {
-		e.w.Close()
-		e.w = nil
-		return nil, err
-	}
-	return v, nil
+	return nil, errClipUnavailable
 }
 
 func (e *sessionExtractor) close() {
@@ -100,7 +115,7 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 	if opt.validate(model, sha) != nil {
 		return errModel
 	}
-	if opt.lifetime < 0 {
+	if opt.lifetime < 0 || opt.maxClips < 0 {
 		return errProtocol
 	}
 	ctx := parent
@@ -130,6 +145,22 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 		}
 		return json.NewEncoder(out).Encode(fields)
 	}
+	var owned *sessionExtractor
+	if opt.extract == nil {
+		owned = &sessionExtractor{model: model, sha: sha, start: opt.start}
+		if owned.start == nil {
+			owned.start = startWorker
+		}
+		opt.extract = owned.extract
+		defer owned.close()
+	}
+	if owned != nil {
+		// Warm the inference worker before announcing ready so the first clip
+		// never pays the model load inside the observer's request budget.
+		if err := owned.warm(ctx); err != nil {
+			return errWorker
+		}
+	}
 	if err := encode("ready", 0, "", 0, ""); err != nil {
 		return err
 	}
@@ -139,19 +170,6 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 			tracker.Close()
 		}
 		_ = encode("closed", 0, "", 0, "")
-	}()
-	var owned *sessionExtractor
-	if opt.extract == nil {
-		owned = &sessionExtractor{model: model, sha: sha, start: opt.start}
-		if owned.start == nil {
-			owned.start = startWorker
-		}
-		opt.extract = owned.extract
-	}
-	defer func() {
-		if owned != nil {
-			owned.close()
-		}
 	}()
 	reader := bufio.NewReaderSize(input, maxHeaderBytes+4)
 	var first requestHeader
@@ -185,34 +203,44 @@ func runSession(parent context.Context, input io.ReadCloser, out io.Writer, mode
 		if quality == "qualified" {
 			v, err := opt.extract(ctx, h, pcm)
 			clear(pcm)
-			if err != nil || ctx.Err() != nil {
+			if ctx.Err() != nil {
 				clear(v)
 				return errWorker
 			}
-			if !validVector(v, len(v)) {
+			switch {
+			case errors.Is(err, errClipUnavailable):
+				// One failed clip must not end the session: report it as
+				// uncertain and keep serving the following clips.
+				clear(v)
+				reason = "worker_unavailable"
+			case err != nil:
+				clear(v)
+				return errWorker
+			case !validVector(v, len(v)):
 				clear(v)
 				return errProtocol
-			}
-			scope := speaker.Scope{SessionID: first.Session, StreamGeneration: first.Generation, ModelRevision: sha}
-			if tracker == nil {
-				tracker, err = speaker.NewTracker(speaker.Config{Scope: scope, Dimension: len(v), MinSamples: minQualitySamples, MatchThreshold: .682987, NewSpeakerThreshold: .622530, Margin: .030229, MaxSpeakers: 8})
+			default:
+				scope := speaker.Scope{SessionID: first.Session, StreamGeneration: first.Generation, ModelRevision: sha}
+				if tracker == nil {
+					tracker, err = speaker.NewTracker(speaker.Config{Scope: scope, Dimension: len(v), MinSamples: minQualitySamples, MatchThreshold: .682987, NewSpeakerThreshold: .622530, Margin: .030229, MaxSpeakers: 8})
+					if err != nil {
+						clear(v)
+						return errProtocol
+					}
+				}
+				result, err := tracker.Observe(speaker.Observation{Scope: scope, StartSample: int64(h.Start), EndSample: int64(h.End), Embedding: v, SingleSpeaker: true, Complete: true})
+				clear(v)
 				if err != nil {
-					clear(v)
 					return errProtocol
 				}
-			}
-			result, err := tracker.Observe(speaker.Observation{Scope: scope, StartSample: int64(h.Start), EndSample: int64(h.End), Embedding: v, SingleSpeaker: true, Complete: true})
-			clear(v)
-			if err != nil {
-				return errProtocol
-			}
-			if result.State == speaker.StateTemporary {
-				label = result.Label
-				reason = "candidate"
-			} else {
-				label = string(result.State)
-				if result.State == speaker.StateUnknown {
-					reason = "capacity"
+				if result.State == speaker.StateTemporary {
+					label = result.Label
+					reason = "candidate"
+				} else {
+					label = string(result.State)
+					if result.State == speaker.StateUnknown {
+						reason = "capacity"
+					}
 				}
 			}
 		} else {

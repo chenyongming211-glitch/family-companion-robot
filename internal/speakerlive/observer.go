@@ -61,8 +61,13 @@ type observerLimits struct {
 	maxClips                   int
 }
 
+// requestTimeout bounds one observation end to end. It must cover a cold model
+// start after a worker restart (up to ten seconds) plus one inference and one
+// queued neighbour, because the helper serves clips serially.
+const requestTimeout = 15 * time.Second
+
 func limitsFor(cfg Config) observerLimits {
-	return observerLimits{startup: 15 * time.Second, request: 3 * time.Second, lifetime: cfg.Lifetime, maxClips: cfg.MaxClips}
+	return observerLimits{startup: 15 * time.Second, request: requestTimeout, lifetime: cfg.Lifetime, maxClips: cfg.MaxClips}
 }
 
 type helperEvent struct {
@@ -109,7 +114,7 @@ func newObserver(parent context.Context, session string, cfg Config, emit func(R
 	if parent == nil || parent.Err() != nil || !tokenPattern.MatchString(session) || !shaPattern.MatchString(cfg.SHA256) || !validFile(cfg.Binary, true) || !validFile(cfg.Model, false) {
 		return nil, errUnavailable
 	}
-	if limits.startup <= 0 || limits.startup > 15*time.Second || limits.request <= 0 || limits.request > 3*time.Second || limits.lifetime < 0 || limits.maxClips < 0 {
+	if limits.startup <= 0 || limits.startup > 15*time.Second || limits.request <= 0 || limits.request > requestTimeout || limits.lifetime < 0 || limits.maxClips < 0 {
 		return nil, errUnavailable
 	}
 	ctx, cancel := context.WithCancel(parent)

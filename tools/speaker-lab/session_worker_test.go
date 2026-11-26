@@ -96,7 +96,7 @@ func TestSessionReusesOneWorkerForManyClips(t *testing.T) {
 	}
 }
 
-func TestSessionRebuildsWorkerOnceAfterCrash(t *testing.T) {
+func TestSessionDegradesOneClipAfterWorkerFailure(t *testing.T) {
 	var starts int
 	start := func(context.Context, string, string) (*workerProcess, error) {
 		starts++
@@ -106,20 +106,28 @@ func TestSessionRebuildsWorkerOnceAfterCrash(t *testing.T) {
 		return sessionFakeWorker(t), nil
 	}
 	var in, out bytes.Buffer
-	h := sessionFrame(1, 0, 32000)
-	if err := writeRequest(&in, h, sessionPCM(32000)); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2; i++ {
+		h := sessionFrame(uint64(i+1), uint64(i*32000), 32000)
+		if err := writeRequest(&in, h, sessionPCM(32000)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	opt := sessionOptions{validate: func(string, string) error { return nil }, start: start}
 	if err := runSession(context.Background(), io.NopCloser(&in), &out, "model", strings.Repeat("a", 64), true, opt); err != nil {
 		t.Fatal(err)
 	}
 	if starts != 2 {
-		t.Fatalf("worker starts=%d want=2 (one rebuild)", starts)
+		t.Fatalf("worker starts=%d want=2 (warm + one restart)", starts)
 	}
 	ev := sessionEvents(t, out.Bytes())
-	if len(ev) != 3 || ev[0].Event != "ready" || ev[1].Label != "guest_1" || ev[2].Event != "closed" {
+	if len(ev) != 4 || ev[0].Event != "ready" || ev[3].Event != "closed" {
 		t.Fatalf("events=%+v", ev)
+	}
+	if ev[1].Label != "uncertain" || ev[1].Reason != "worker_unavailable" {
+		t.Fatalf("failed clip must degrade to uncertain: %+v", ev[1])
+	}
+	if ev[2].Label != "guest_1" || ev[2].ID != 2 {
+		t.Fatalf("next clip must recover on a fresh worker: %+v", ev[2])
 	}
 }
 

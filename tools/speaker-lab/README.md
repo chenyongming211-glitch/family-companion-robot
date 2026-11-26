@@ -73,7 +73,7 @@ WAV 由有界 Go 解析器读取：RIFF/WAVE、单一 16 字节 PCM `fmt `、16k
 payload 为最多 1024 个 little-endian float32。特征不可用时为固定 `code:"unavailable"` 且没有 payload。
 父进程把每项归属、摘要、维度和长度与当前请求/ready 精确匹配，拒绝 NaN、Inf、全零和截断向量。
 向量只允许存在于此受保护 IPC 和父/子进程内存；不得打印、落盘或写报告。
-每次读请求/写响应的绝对期限是 2 秒；等待新请求的连接空闲 2 秒后关闭，worker 可接收新连接。
+每次读请求/写响应的绝对期限是 2 秒；等待新请求的连接不设空闲期限，随会话保留复用，worker 随父进程 Pdeathsig 一并退出。
 
 同包后续评估可以复用 `readWAV(io.Reader)`、`startWorkerBinary(ctx, executable, model, sha)`、
 `workerProcess.request(ctx, requestHeader, pcm)` 和幂等 `Close()`；这些 API 由单个串行调用者拥有，
@@ -157,9 +157,9 @@ JSON还包含模型／manifest摘要、有效质量与CPU配置、冷加载耗�
 
 必须显式声明单人测试，不作为默认模式。启动先核验模型摘要，然后 stdout 输出一行 `{"event":"ready","evidence":"user_declared_test"}`；不打开麦克风。配套 Mac 手动入口见 [`../speaker-session/README.md`](../speaker-session/README.md)。
 
-stdin 复用上述 v1 binary PCM 帧，scope 必须为 `manual-test`，同一连接固定 session／generation／模型，ID 严格递增，sample 区间从0连续相接，每句最多64000 samples（4秒）。最多32句／5分钟，包含空闲和不完整帧等待。EOF、取消、超时、坏帧关闭并清除临时 Tracker；session 拥有可关闭 stdin，取消直接关闭读取，不遗留阻塞 reader goroutine。
+stdin 复用上述 v1 binary PCM 帧，scope 必须为 `manual-test`，同一连接固定 session／generation／模型，ID 严格递增，sample 区间从0连续相接，每句最多64000 samples（4秒）。句数与时长跟随会话：`--speaker-max-clips` 与 `--speaker-lifetime` 默认 0 表示不限，由 stdin EOF、父上下文取消或服务停机结束。EOF、取消、超时、坏帧关闭并清除临时 Tracker；session 拥有可关闭 stdin，取消直接关闭读取，不遗留阻塞 reader goroutine。
 
-仅合格片段提取特征，每句重新启动／关闭／回收实际 worker，保留其10秒冷启动与2秒RPC上限，以免人工4秒采集超过原worker的2秒空闲期限。父进程只保留一个最多8人的首次模板 Tracker；首个合格特征锁定维度，模板不随匹配更新。临时向量在 Observe 后清零，PCM 在每句处理后清零，不写录音、特征或人物库。每句冷启动仅为隔离诊断设计，不是产品延迟指标。
+仅合格片段提取特征；会话内复用同一个 worker，首次使用前预热（10秒冷启动上限），单次RPC上限2秒。请求失败只放弃当句（`uncertain`/`worker_unavailable`），下一句重建 worker；连续3次失败才结束会话。父进程只保留一个最多8人的首次模板 Tracker；首个合格特征锁定维度，模板不随匹配更新。临时向量在 Observe 后清零，PCM 在每句处理后清零，不写录音、特征或人物库。每句冷启动仅为隔离诊断设计，不是产品延迟指标。
 
 stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `id`、`label`（`guest_1`～`guest_8`／`uncertain`／`unknown`）与 `duration_ms`（输入音频片段时长，按样本数换算并向下取整；不是处理耗时；即使0ms也始终提供），所有事件带 `evidence:user_declared_test`。没有向量、PCM、路径、姓名、文本。错误仅 stderr 固定 `session_failed`。真实输入结果不能重定向到文件。
 
@@ -178,7 +178,7 @@ stdout NDJSON 仅有 `ready`、`observation`、`closed`；observation另有正 `
 
 `--realtime-test` 仅适用于 `session`，仍必须显式声明测试片段为单人。stdin 保持严格协议 v1，scope 固定为 `realtime-test`，同一连接的 session／generation／模型固定、ID 严格递增。完整片段最多128000 samples（8秒）；首段可从非零源采样坐标开始，后段 start 必须大于等于上段 end，允许真实静音／播放期间的坐标间隙，拒绝重叠或倒序。该模式不填补间隙、不裁切长片段。
 
-32段／5分钟上限、质量门禁、临时数据清零及子进程回收规则与上述手动模式相同；所有事件的 evidence 改为 `turn_taking_test`。Realtime 的 observation 在原5字段上增加固定 `reason`，共6字段；ready／closed仍恰为2字段。默认手动模式仍使用 `manual-test`、从0连续相接、4秒上限及 `user_declared_test`，observation保持原5字段、不增加reason。`TestRealRealtimeSessionBridgeOptIn` 在内存重复显式合成 fixture，验证两个完整8秒片段、非零起点／源坐标间隙、标签／原因及 EOF 回收，不保存新增音频。
+句数／时长跟随会话、质量门禁、临时数据清零及子进程回收规则与上述手动模式相同；所有事件的 evidence 改为 `turn_taking_test`。Realtime 的 observation 在原5字段上增加固定 `reason`，共6字段；ready／closed仍恰为2字段。默认手动模式仍使用 `manual-test`、从0连续相接、4秒上限及 `user_declared_test`，observation保持原5字段、不增加reason。`TestRealRealtimeSessionBridgeOptIn` 在内存重复显式合成 fixture，验证两个完整8秒片段、非零起点／源坐标间隙、标签／原因及 EOF 回收，不保存新增音频。
 
 `reason` 只区分现有判定来源，不改变模型、阈值或质量门禁：
 

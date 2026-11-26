@@ -27,12 +27,12 @@ const requestTimeout = 2 * time.Second
 const startupTimeout = 10 * time.Second
 const maxModelBytes = 128 * 1024 * 1024
 
-// requestIdleTimeout bounds how long an already-ready worker connection waits
-// for the next request before ending only the connection. It is deliberately
-// separate from requestTimeout: a capture-to-capture gap must not stretch the
-// two-second read/extract/write budget, and a two-second budget must not idle
-// out a connection the session is still reusing. Tests shorten it.
-var requestIdleTimeout = 5 * time.Minute
+// requestIdleTimeout optionally bounds how long an already-ready worker
+// connection waits for the next request. Zero keeps the connection open for the
+// whole session: the worker is killed together with its parent (Pdeathsig), so
+// orphan cleanup does not depend on an idle deadline, and a family-sized pause
+// between questions must never retire a healthy worker. Tests may shorten it.
+var requestIdleTimeout time.Duration
 
 var errModel = errors.New("invalid_model")
 var errWorker = errors.New("worker_failed")
@@ -205,7 +205,7 @@ func serveConnection(ctx context.Context, c net.Conn, ex extractor, sha string) 
 func serveConnectionSequence(ctx context.Context, c net.Conn, ex extractor, sha string, sequence *requestSequence, idle time.Duration) {
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
-	if idle <= 0 {
+	if idle == 0 {
 		idle = requestIdleTimeout
 	}
 	if c.SetDeadline(time.Now().Add(requestTimeout)) != nil || writeReady(c, sha, ex.Dimension()) != nil {
@@ -216,10 +216,14 @@ func serveConnectionSequence(ctx context.Context, c net.Conn, ex extractor, sha 
 		if ctx.Err() != nil {
 			return
 		}
-		// Idle deadline waits for the next request only. It ends the connection
-		// when the session pauses too long, but never widens the two-second
-		// read/extract/write budget below.
-		if c.SetDeadline(time.Now().Add(idle)) != nil {
+		// Wait for the next request. Zero means no idle deadline: the connection
+		// stays open for the session and the two-second budget below still bounds
+		// each read/extract/write.
+		if idle > 0 {
+			if c.SetDeadline(time.Now().Add(idle)) != nil {
+				return
+			}
+		} else if c.SetDeadline(time.Time{}) != nil {
 			return
 		}
 		if _, err := reader.Peek(1); err != nil {
@@ -466,10 +470,12 @@ func (w *workerProcess) requestWithDecoder(ctx context.Context, h requestHeader,
 	v, us, e := decode(w.conn, h, w.dimension)
 	if e != nil || ctx.Err() != nil {
 		clear(v)
-		w.Close()
-		if e == errUnavailable {
+		if e == errUnavailable && ctx.Err() == nil {
+			// A valid "no vector" response leaves the connection healthy; only
+			// this clip is uncertain and the worker must not be retired.
 			return nil, 0, errUnavailable
 		}
+		w.Close()
 		return nil, 0, errWorker
 	}
 	return v, us, nil
