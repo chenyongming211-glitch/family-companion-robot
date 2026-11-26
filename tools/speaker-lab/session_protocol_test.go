@@ -139,8 +139,9 @@ func TestSessionEmittedPairsMatchSharedTable(t *testing.T) {
 	}
 }
 
-// A worker that cannot start still gets three clips before the session ends:
-// the best-effort prewarm does not consume one of the three strikes.
+// A worker that cannot start still gets three clip attempts before the session
+// ends: the best-effort prewarm does not consume one of the three strikes. The
+// third attempt ends the session, so two clips carry the degradation result.
 func TestSessionPrewarmFailureDoesNotConsumeStrike(t *testing.T) {
 	errStart := errors.New("worker could not start")
 	starts := 0
