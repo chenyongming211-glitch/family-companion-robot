@@ -558,21 +558,19 @@ func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
 		r.s.mu.Unlock()
 		r.final(t, "guest2", "今晚我们吃什么饭")
 		r.sync(t)
+		// The output still belongs to the playing turn and no new turn was
+		// admitted: the only way to see this is that the finish path latched the
+		// playback it observed. A rejected final also discards its input, which
+		// separates "rejected" from "the final was never processed".
+		r.assertRejectedState(t, old, histories)
 		r.s.mu.Lock()
-		cut, outputOK, hist, pending := old.turn.Cut, r.s.output == old, len(r.s.history), r.s.lastInput
+		cut := old.turn.Cut
 		r.s.mu.Unlock()
-		// The output still belongs to the playing turn, nothing was cut, and no
-		// new turn was admitted: the only way to see this is that the finish
-		// path latched the playback it observed.
-		if cut || !outputOK || hist != histories {
-			t.Fatalf("finish-only guest_2 was admitted: cut=%v outputOK=%v history=%d", cut, outputOK, hist)
+		if cut {
+			t.Fatal("finish-only rejection still cut the playing turn")
 		}
-		// A rejected final discards its input; an ignored final leaves it
-		// pending. Without this, "the final was never processed" would look the
-		// same as "the filter rejected it".
-		if pending != nil {
-			t.Fatalf("final left its input pending; rejection never ran")
-		}
+		// Redundant with the state above, kept only to fail loudly if a future
+		// change ever starts a reply somewhere other than activateTurnLocked.
 		if got := r.primary.Load(); got != before {
 			t.Fatalf("finish-only guest_2 generated: primary=%d want=%d", got, before)
 		}
