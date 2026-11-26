@@ -15,11 +15,13 @@ struct SpeakerObservation {
         self.reason = reason; self.audioMS = audioMS; self.display = display
     }
     enum InvalidEvent: Error { case malformed, incompatibleReady }
+    // Paired with testdata/speaker_observation_protocol.json, which the Go
+    // helper and observer test against; keep the two in step.
     private static let uncertainDescriptions = [
         "": "证据不足", "incomplete_span": "片段边界未确认",
         "too_short": "声音片段不足1.5秒", "too_long": "片段超过8秒",
         "not_queued": "本段未送入识别", "match_uncertain": "声音特征匹配证据不足",
-        "low_energy": "收到的声音较弱"
+        "low_energy": "收到的声音较弱", "worker_unavailable": "本次声纹识别未能完成"
     ]
 
     static func validateReady(_ event: [String: Any], enabled: Bool) throws {

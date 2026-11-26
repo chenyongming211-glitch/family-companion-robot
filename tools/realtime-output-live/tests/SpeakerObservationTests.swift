@@ -27,7 +27,8 @@ import Foundation
   let descriptions = [
    "": "证据不足", "incomplete_span": "片段边界未确认", "too_short": "声音片段不足1.5秒",
    "too_long": "片段超过8秒", "not_queued": "本段未送入识别",
-   "match_uncertain": "声音特征匹配证据不足", "low_energy": "收到的声音较弱"
+   "match_uncertain": "声音特征匹配证据不足", "low_energy": "收到的声音较弱",
+   "worker_unavailable": "本次声纹识别未能完成"
   ]
   for (reason, description) in descriptions {
    var fresh = SpeakerObservationState()
@@ -35,7 +36,7 @@ import Foundation
    reasonCheck(try fresh.apply(diagnosed("uncertain",reason,2340)) == "本次发言：不确定（\(description)，片段2.34秒）", "uncertain audio duration")
   }
   for (state, allowed) in ["pending":[""], "temporary":["","candidate"], "uncertain":Array(descriptions.keys), "unknown":["","capacity"], "unavailable":["","observer_unavailable"]] {
-   let all = ["", "candidate", "capacity", "observer_unavailable", "incomplete_span", "too_short", "too_long", "not_queued", "match_uncertain", "low_energy", "untrusted_upstream_text"]
+   let all = ["", "candidate", "capacity", "observer_unavailable", "incomplete_span", "too_short", "too_long", "not_queued", "match_uncertain", "low_energy", "worker_unavailable", "untrusted_upstream_text"]
    for reason in all {
     let value = diagnosed(state,reason,2000)
     if allowed.contains(reason) {

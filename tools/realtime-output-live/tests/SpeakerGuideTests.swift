@@ -62,7 +62,7 @@ import Foundation
         guide.receive(try observation(7, "temporary", label: "guest_2"), generation: 1)
         guide.playback(busy: false, generation: 1) // simulated reply completion
         check(guide.step == 2 && guide.canPrepare && guide.message.contains("本步未通过"), "different label fails without person claim")
-        let advice = ["too_short": "3～5秒", "too_long": "一句", "low_energy": "靠近", "incomplete_span": "完整", "match_uncertain": "正常语速", "not_queued": "重试", "": "重试"]
+        let advice = ["too_short": "3～5秒", "too_long": "一句", "low_energy": "靠近", "incomplete_span": "完整", "match_uncertain": "正常语速", "not_queued": "重试", "worker_unavailable": "重连后恢复", "": "重试"]
         var id = 8
         for (reason, expected) in advice.sorted(by: { $0.key < $1.key }) {
             check(guide.prepare(generation: 1), "arm retry")

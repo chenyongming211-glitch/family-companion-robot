@@ -127,6 +127,7 @@ struct SpeakerGuide {
             case "incomplete_span": text = "片段边界未确认，请等回答播完，再完整说一句。"
             case "match_uncertain": text = "声音特征匹配证据不足，请保持同一人、正常语速和安静环境。"
             case "not_queued": text = "本段未送入识别，请等待回答和结果后重试。"
+            case "worker_unavailable": text = "本次声纹识别未能完成；可以继续正常聊天，重连后恢复。"
             default: text = "证据不足，请保持单人、安静环境后重试。"
             }
         }

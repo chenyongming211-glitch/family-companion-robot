@@ -441,6 +441,7 @@ func decodeEvent(line []byte) (helperEvent, error) {
 		return event, errUnavailable
 	}
 	required := []string{"event", "evidence"}
+	unsanctioned := ""
 	switch event.Event {
 	case "ready", "closed":
 	case "observation":
@@ -457,8 +458,7 @@ func decodeEvent(line []byte) (helperEvent, error) {
 				return event, errUnavailable
 			}
 			if !validHelperReason(event.Label, event.Reason) {
-				log.Printf("speaker observer: dropping unsupported reason %q for label %q", event.Reason, event.Label)
-				event.Reason = ""
+				unsanctioned = event.Reason
 			}
 		}
 		if event.ID <= 0 || event.DurationMS < 0 || event.DurationMS > 8000 {
@@ -478,7 +478,23 @@ func decodeEvent(line []byte) (helperEvent, error) {
 			return event, errUnavailable
 		}
 	}
+	// Only now, with label and ids validated, may helper-controlled text reach
+	// the log.
+	if unsanctioned != "" {
+		logUnsupportedReason(event.Label, unsanctioned)
+		event.Reason = ""
+	}
 	return event, nil
+}
+
+// unsupportedReasons dedupes the diagnostic line: a drifting helper would
+// otherwise log once per clip for the whole session.
+var unsupportedReasons sync.Map
+
+func logUnsupportedReason(label, reason string) {
+	if _, seen := unsupportedReasons.LoadOrStore(label+"|"+reason, struct{}{}); !seen {
+		log.Printf("speaker observer: dropping unsupported reason %q for label %q", reason, label)
+	}
 }
 
 // Only fixed branch names cross IPC; no arbitrary worker/provider error text.

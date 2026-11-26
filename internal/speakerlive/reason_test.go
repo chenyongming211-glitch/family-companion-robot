@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +38,13 @@ func loadProtocolTable(t *testing.T) []protocolPair {
 	}
 	if len(doc.Observations) == 0 {
 		t.Fatal("shared protocol table is empty")
+	}
+	seen := map[protocolPair]bool{}
+	for _, pair := range doc.Observations {
+		if seen[pair] {
+			t.Fatalf("duplicate pair in shared protocol table: %v", pair)
+		}
+		seen[pair] = true
 	}
 	return doc.Observations
 }
@@ -94,7 +103,10 @@ func TestReasonProtocolRejectsUnreadableReason(t *testing.T) {
 }
 
 // validHelperReason must accept exactly the shared table: no missing pair and
-// no extra pair, so neither side can add a token alone.
+// no extra pair, so neither side can add a token alone. The probe alphabet is
+// the table's own tokens plus a token no build knows; a permissive extra token
+// in the whitelist would only be caught if it were in that alphabet, but that
+// direction is harmless (it accepts more, never less).
 func TestReasonProtocolMatchesSharedTable(t *testing.T) {
 	pairs := loadProtocolTable(t)
 	sanctioned := map[protocolPair]bool{}
@@ -113,6 +125,27 @@ func TestReasonProtocolMatchesSharedTable(t *testing.T) {
 				t.Fatalf("validHelperReason(%q,%q)=%t want %t (shared table)", label, token, got, want)
 			}
 		}
+	}
+}
+
+// A drifting helper must not flood the service log: one line per distinct
+// (label, token) is enough to see it happened.
+func TestUnsupportedReasonLogsOncePerPair(t *testing.T) {
+	unsupportedReasons.Delete("guest_8|never_seen_token")
+	unsupportedReasons.Delete("guest_7|never_seen_token")
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	for i := 0; i < 3; i++ {
+		if _, err := decodeEvent([]byte(observationLine("guest_8", "never_seen_token"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := decodeEvent([]byte(observationLine("guest_7", "never_seen_token"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(buf.String(), "dropping unsupported reason"); got != 2 {
+		t.Fatalf("log lines=%d want 2: %s", got, buf.String())
 	}
 }
 
