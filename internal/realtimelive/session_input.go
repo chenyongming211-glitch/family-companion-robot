@@ -24,6 +24,7 @@ type pendingInput struct {
 	pcm                                   []byte
 	outputAtStart                         *liveTurn
 	overlapped                            bool   // Device speech was playing when VAD opened this capture.
+	playbackSeen                          bool   // Device speech was observed playing at some point during this capture.
 	overlapSamples                        int64  // First confirmed playhead observed during this capture.
 	weakPreview                           string // At most eight normalized runes until corroborated.
 	matchedEchoPreview                    bool   // An earlier preview matched this capture's playing output.
@@ -176,7 +177,7 @@ func (s *Session) startInput(event map[string]any) error {
 	p := &pendingInput{
 		id: s.seq, item: item, start: start,
 		speakerStartValid: valid && pos >= 0 && pos*16 <= float64(s.providerEnd),
-		outputAtStart: s.output, overlapped: s.speechPlayingLocked(),
+		outputAtStart:     s.output, overlapped: s.speechPlayingLocked(),
 		carryFrom: carryFrom, carryText: carryText, carryPCM: carryPCM,
 	}
 	p.observePlayback(s.output, now)
@@ -294,6 +295,9 @@ func (s *Session) previewInput(event map[string]any) error {
 	// The provider's text and stash can be stable and unstable continuations.
 	// Compare their complete content; a matching field cannot hide new words.
 	now := time.Now()
+	if s.speechPlayingLocked() && s.output == p.outputAtStart {
+		p.playbackSeen = true
+	}
 	if !p.ended {
 		p.observePlayback(s.output, now)
 	}
@@ -389,6 +393,9 @@ func (s *Session) finishInput(event map[string]any) error {
 		return s.record("input_rejected", map[string]any{"id": p.id, "reason": reason, "had_preview": hadPreview, "item_scope": "current"})
 	}
 	now := time.Now()
+	if s.speechPlayingLocked() && s.output == p.outputAtStart {
+		p.playbackSeen = true
+	}
 	decision := s.playbackInputLocked(p, text, text, true, now)
 	if decision.allow {
 		if reason := s.bystanderRejectionLocked(p, p.pcm); reason != "" {

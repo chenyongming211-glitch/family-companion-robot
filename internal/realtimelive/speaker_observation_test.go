@@ -409,4 +409,144 @@ func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
 		}
 		_ = r.expectGenerated(t)
 	})
+
+	t.Run("idle_guest2_full_sentence_generates", func(t *testing.T) {
+		r := newAdmissionRig(t, func(s *Session) {
+			s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}
+			s.cfg.Speaker = &speakerlive.Config{}
+			s.speaker = &speakerCaptureObserver{accept: true}
+		})
+		// Lock the anchor as guest_1 via a non-overlapped >=1.5s turn.
+		r.event(t, "input_audio_buffer.speech_started", "primary", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "primary", "text", "给我讲个")
+		r.event(t, "input_audio_buffer.speech_stopped", "primary", map[string]any{"audio_end_ms": 2400})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: r.inputID(t), Start: 0, End: 38400, State: "temporary", Label: "guest_1", Reason: "candidate", AudioMS: 2400})
+		r.final(t, "primary", "给我讲个西湖的故事")
+		_ = r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		if r.s.speakerAnchor != "guest_1" {
+			r.s.mu.Unlock()
+			t.Fatalf("speakerAnchor=%q, want guest_1", r.s.speakerAnchor)
+		}
+		// End the reply so the session is idle: no playing output.
+		r.s.output = nil
+		r.s.mu.Unlock()
+
+		// An idle full guest_2 sentence must generate, not be silently dropped.
+		r.event(t, "input_audio_buffer.speech_started", "idle-guest2", map[string]any{"audio_start_ms": 2400})
+		r.preview(t, "idle-guest2", "text", "今晚我们")
+		r.event(t, "input_audio_buffer.speech_stopped", "idle-guest2", map[string]any{"audio_end_ms": 4000})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: r.inputID(t), Start: 38400, End: 64000, State: "temporary", Label: "guest_2", Reason: "candidate", AudioMS: 1600})
+		r.final(t, "idle-guest2", "今晚我们吃什么饭")
+		_ = r.expectGenerated(t)
+	})
+
+	t.Run("capture_opened_on_pending_turn_then_that_turn_plays_blocks_guest2", func(t *testing.T) {
+		r := newAdmissionRig(t, func(s *Session) {
+			s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}
+			s.cfg.Speaker = &speakerlive.Config{}
+			s.speaker = &speakerCaptureObserver{accept: true}
+		})
+		// Lock anchor guest_1.
+		r.event(t, "input_audio_buffer.speech_started", "primary", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "primary", "text", "给我讲个")
+		r.event(t, "input_audio_buffer.speech_stopped", "primary", map[string]any{"audio_end_ms": 2400})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: r.inputID(t), Start: 0, End: 38400, State: "temporary", Label: "guest_1", Reason: "candidate", AudioMS: 2400})
+		r.final(t, "primary", "给我讲个西湖的故事")
+		_ = r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		r.s.output = nil
+		r.s.mu.Unlock()
+
+		// A reply turn exists but has not played yet.
+		old := r.s.addTurn()
+		r.s.mu.Lock()
+		old.turn.Generated = "西湖边上有一座雷峰塔，风景特别好。"
+		old.turn.Begun = true
+		_ = r.s.sendLocked(map[string]any{"type": "begin", "id": old.turn.ID})
+		r.s.mu.Unlock()
+
+		// guest_2 opens against that still-silent turn (overlapped=false).
+		r.event(t, "input_audio_buffer.speech_started", "guest2", map[string]any{"audio_start_ms": 2400})
+		r.sync(t)
+		guestID := r.inputID(t)
+
+		// The same turn then starts playing; playbackSeen must latch it.
+		for range 15 {
+			if ok, err := r.s.binary(old, make([]byte, 2880)); err != nil || !ok {
+				t.Fatalf("release opening audio: %v", err)
+			}
+		}
+
+		// guest_2 preview observes playback, latches it, and cuts the turn.
+		r.preview(t, "guest2", "text", "今晚我们")
+		r.sync(t)
+		r.s.mu.Lock()
+		if !old.turn.Cut {
+			r.s.mu.Unlock()
+			t.Fatal("preview did not cut the now-playing turn")
+		}
+		old.turn.MarkDrainDone()
+		r.s.mu.Unlock()
+
+		// guest_2 speaks the full sentence; the latched playback must block it.
+		r.event(t, "input_audio_buffer.speech_stopped", "guest2", map[string]any{"audio_end_ms": 4000})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: guestID, Start: 38400, End: 64000, State: "temporary", Label: "guest_2", Reason: "candidate", AudioMS: 1600})
+		before := r.primary.Load()
+		r.final(t, "guest2", "今晚我们吃什么饭")
+		r.sync(t)
+		time.Sleep(600 * time.Millisecond)
+		if r.primary.Load() != before {
+			t.Fatalf("crossing guest_2 generated after playback was seen: primary=%d", r.primary.Load())
+		}
+	})
+
+	t.Run("guest2_opened_during_playback_still_blocked_after_playback_ends", func(t *testing.T) {
+		r := newAdmissionRig(t, func(s *Session) {
+			s.rec.owner = Ownership{DeviceID: memoryDeviceA, ClientType: "xiaozhi"}
+			s.cfg.Speaker = &speakerlive.Config{}
+			s.speaker = &speakerCaptureObserver{accept: true}
+		})
+		// Lock anchor guest_1.
+		r.event(t, "input_audio_buffer.speech_started", "primary", map[string]any{"audio_start_ms": 0})
+		r.preview(t, "primary", "text", "给我讲个")
+		r.event(t, "input_audio_buffer.speech_stopped", "primary", map[string]any{"audio_end_ms": 2400})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: r.inputID(t), Start: 0, End: 38400, State: "temporary", Label: "guest_1", Reason: "candidate", AudioMS: 2400})
+		r.final(t, "primary", "给我讲个西湖的故事")
+		_ = r.expectGenerated(t)
+		r.sync(t)
+		r.s.mu.Lock()
+		r.s.output = nil
+		r.s.mu.Unlock()
+
+		// Playback begins; guest_2 opens while playing (overlapped=true), then
+		// playback ends before the final transcript. The overlap still blocks.
+		old := echoOutput(t, r, "西湖边上有一座雷峰塔，风景特别好。", 15)
+		if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+			t.Fatal(err)
+		}
+		r.event(t, "input_audio_buffer.speech_started", "guest2", map[string]any{"audio_start_ms": 2400})
+		r.sync(t)
+		guestID := r.inputID(t)
+		r.s.mu.Lock()
+		r.s.output = nil
+		r.s.mu.Unlock()
+		r.event(t, "input_audio_buffer.speech_stopped", "guest2", map[string]any{"audio_end_ms": 4000})
+		r.sync(t)
+		r.s.speakerResult(speakerlive.Result{ID: guestID, Start: 38400, End: 64000, State: "temporary", Label: "guest_2", Reason: "candidate", AudioMS: 1600})
+		before := r.primary.Load()
+		r.final(t, "guest2", "今晚我们吃什么饭")
+		r.sync(t)
+		time.Sleep(600 * time.Millisecond)
+		if r.primary.Load() != before {
+			t.Fatalf("overlap-opened guest_2 generated after playback ended: primary=%d", r.primary.Load())
+		}
+	})
 }

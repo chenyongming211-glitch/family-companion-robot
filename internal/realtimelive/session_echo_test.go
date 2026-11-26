@@ -628,3 +628,42 @@ func TestMacNativeOpeningEchoAndAlteredSyllablesDoNotInterrupt(t *testing.T) {
 		})
 	}
 }
+
+func TestStopRequestWordsInterruptImmediately(t *testing.T) {
+	for _, word := range []string{"别说了", "安静", "换一个", "闭嘴"} {
+		t.Run(word, func(t *testing.T) {
+			r := newEchoAdmissionRig(t)
+			old := echoOutput(t, r, "西湖边上有一座雷峰塔，风景特别好。", 15)
+			if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+				t.Fatal(err)
+			}
+			r.start(t, "stop-word")
+			r.preview(t, "stop-word", "text", word)
+			assertEchoPreviewCuts(t, r, old)
+		})
+	}
+}
+
+func TestStopRequestWordsInterruptOnFinal(t *testing.T) {
+	for _, word := range []string{"别说了", "安静", "换一个", "闭嘴"} {
+		t.Run(word, func(t *testing.T) {
+			r := newEchoAdmissionRig(t)
+			old := echoOutput(t, r, "西湖边上有一座雷峰塔，风景特别好。", 15)
+			if err := r.s.receiveReceipt(echoReceipt(old, 12960)); err != nil {
+				t.Fatal(err)
+			}
+			r.start(t, "stop-word")
+			r.stop(t, "stop-word")
+			r.final(t, "stop-word", word)
+			r.sync(t)
+			r.s.mu.Lock()
+			cut := old.turn.Cut
+			old.turn.MarkDrainDone()
+			r.s.mu.Unlock()
+			if !cut {
+				t.Fatal("final stop word did not interrupt")
+			}
+			_ = r.expectGenerated(t)
+		})
+	}
+}

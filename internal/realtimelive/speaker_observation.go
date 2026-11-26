@@ -45,7 +45,16 @@ func (s *Session) bystanderRejectionLocked(p *pendingInput, pcm []byte) string {
 	if p.speakerReason == "low_energy" || hasLowEnergySignal(pcm) {
 		return "bystander_low_energy"
 	}
-	if !s.speakerFailed && s.speakerAnchor != "" && p.speakerState == "temporary" && p.speakerLabel != "" && p.speakerLabel != s.speakerAnchor {
+	// A different speaker is rejected only when robot playback overlaps their
+	// capture, as an interval rather than a point in time. Both callers latch
+	// p.playbackSeen whenever they see playback running during the capture, so
+	// this reads two recorded facts: the capture opened while speech was playing
+	// (p.overlapped), or playback was seen at some point during the capture
+	// (p.playbackSeen). A capture that opened during playback stays rejected
+	// even after playback ends. A pending turn that never actually played is not
+	// covered: cancelling it and answering the bystander is the accepted
+	// trade-off. Any new caller must latch p.playbackSeen before calling.
+	if (p.overlapped || p.playbackSeen) && !s.speakerFailed && s.speakerAnchor != "" && p.speakerState == "temporary" && p.speakerLabel != "" && p.speakerLabel != s.speakerAnchor {
 		return "bystander_speaker_mismatch"
 	}
 	return ""

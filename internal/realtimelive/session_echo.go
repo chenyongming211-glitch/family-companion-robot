@@ -156,7 +156,7 @@ func (s *Session) playbackInputLocked(p *pendingInput, text, stable string, fina
 	// Direct short stop requests remain usable. An echo matching the audible
 	// reference was tested above, including when the robot itself says "停".
 	switch normalized {
-	case "停", "停止", "停下", "等等", "等下", "等一下", "停一下":
+	case "停", "停止", "停下", "等等", "等下", "等一下", "停一下", "别说了", "安静", "换一个", "闭嘴":
 		return inputDecision{allow: true, reason: "stop_request"}
 	}
 	if final {

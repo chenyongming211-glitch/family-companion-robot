@@ -158,6 +158,16 @@ func (r *admissionRig) noReply(t *testing.T) {
 	}
 }
 
+func (r *admissionRig) inputID(t *testing.T) int64 {
+	t.Helper()
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if r.s.lastInput == nil {
+		t.Fatal("no pending input")
+	}
+	return r.s.lastInput.id
+}
+
 func TestInputAdmissionEmptySegmentPreservesContinuousOldOutput(t *testing.T) {
 	r := newAdmissionRig(t)
 	old := r.s.addTurn()
