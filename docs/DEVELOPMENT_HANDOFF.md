@@ -1,5 +1,9 @@
 # 换电脑开发交接
 
+**11 月 25 日 23:45，全模型决策去词表、声纹一期（旁音过滤与主说话人锁定）及管理后台 A 链路收口已上线，确立“先极简、只在极简兜不住的关键处加一点点复杂度”最高产品原则。**
+- **产品与架构原则**：后续所有开发遵循“先极简、只在极简兜不住的关键处加一点点复杂度”；彻底取消服务端静态意图词表（`4809fa8` 已删除 `search_gate.go`、`rescue.go`、`memory.go`、`music.go` 全部 4 处共 338 行硬编码词表），是否联网搜索、调用记忆或控制音乐完全由大模型自主决定，慢轮垫话纯按真实等待耗时触发；跨段停顿重说支持 `>=3` 字前缀音文同步去重并折叠未起播空轮次。
+- **声纹一期与 A 链路收口（`3f7a9dc` / `27a6ad3`）**：管理后台前端（`VoiceRoutes.vue`）已将 A 链路标记为“已停用”并禁用选择（静态产物已同步至 `/opt/family-robot-management/releases/product-voice-routes-20261116-r1/web`）。云端语音服务已升级为 `/opt/family-robot-livekit-runtime/releases/speaker-phase1-20261125-r2/realtime-output-live`，正式挂载 `speaker-lab` 与 `eres2net.onnx`（`/healthz` 返回 `ready: true, speaker_enabled: true`）。生产会话在服务端静默执行两层过滤：① 0 延迟 RMS 能量门限（`minSpeakerRMS = 0.005`）直接拦截远场电视声与低能量背景旁音（`bystander_low_energy`）；② 首个非 `overlapped` 正常回复轮次自动锁定本会话 `speakerAnchor`（`guest_1`），拦截旁人（`guest_2..8`）插话（`bystander_speaker_mismatch`），放行 `<1.5s` 短指令。下一步仅需补齐 Phase 1.1 播报期流式预览暂缓（`awaiting_speaker_check`）与终态 120ms 声纹同步等待（约 20 行代码）。详见[最新极简开发计划](superpowers/plans/2026-11-23-route-c-and-speaker-roadmap.md)。
+
 **11 月 20 日 14:19，微雪自我打断的服务端修正已上线。** 在 A 链路上问一次姓名，旧版本连续生成了三轮回答。前两轮播放到 2.28 秒、1.68 秒时，Go 将短语音识别的改词当成插话。当前云端语音版本为 `voice-echo-20261120-r1`（二进制 SHA-256 前缀 `a9dd25c6e33b`），实现提交 `547878b`。A、B、C 的公共输入判断现在能用同轮设备已播的音频核对这类可疑短输入。云端按微雪上行编码参数重放，两例纯回声均保住原回答，独立人声和同步混入的人声均可打断。发布后语音和记忆就绪，微雪仍选中 A。真实房间的听感与新版设备回执待现场核对。[现场时间线及回归](verification/2026-11-20-abc-interaction-analysis.md#微雪问一次姓名却连续回答)
 
 **11 月 20 日，A 指令去重、录音分片和新增计时已上线。** 云端语音版本为 `voice-latency-20261120-r1`（二进制 SHA-256 前缀 `edfb4a613646`），发布后语音与记忆就绪。微雪选中 A。管理服务沿用原进程。两个代码提交为 `9b8113d`、`1f7439a`。生产源码的普通测试 1,940 项、竞态测试 523 项全部通过。云端真实模型跑通了问姓名、讲故事、沿前文续讲、在续讲中注入插话后转答姓名，播放回执由隔离测试客户端提供。新会话可按轮号对照 A 的首字时间、音乐判断结果、首包和微雪播放回执。[验证方法与数值](verification/2026-11-20-abc-interaction-analysis.md#单份指令首字与音乐判断诊断)
