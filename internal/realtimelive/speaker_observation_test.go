@@ -498,12 +498,15 @@ func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
 		r.event(t, "input_audio_buffer.speech_stopped", "guest2", map[string]any{"audio_end_ms": 4000})
 		r.sync(t)
 		r.s.speakerResult(speakerlive.Result{ID: guestID, Start: 38400, End: 64000, State: "temporary", Label: "guest_2", Reason: "candidate", AudioMS: 1600})
+		r.s.mu.Lock()
 		before := r.primary.Load()
+		histories := len(r.s.history)
+		r.s.mu.Unlock()
 		r.final(t, "guest2", "今晚我们吃什么饭")
 		r.sync(t)
-		time.Sleep(600 * time.Millisecond)
-		if r.primary.Load() != before {
-			t.Fatalf("crossing guest_2 generated after playback was seen: primary=%d", r.primary.Load())
+		r.assertRejectedState(t, nil, histories)
+		if got := r.primary.Load(); got != before {
+			t.Fatalf("crossing guest_2 generated after playback was seen: primary=%d want=%d", got, before)
 		}
 	})
 
@@ -555,21 +558,23 @@ func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
 		r.s.mu.Unlock()
 		r.final(t, "guest2", "今晚我们吃什么饭")
 		r.sync(t)
-		time.Sleep(600 * time.Millisecond)
 		r.s.mu.Lock()
-		defer r.s.mu.Unlock()
+		cut, outputOK, hist, pending := old.turn.Cut, r.s.output == old, len(r.s.history), r.s.lastInput
+		r.s.mu.Unlock()
 		// The output still belongs to the playing turn, nothing was cut, and no
 		// new turn was admitted: the only way to see this is that the finish
 		// path latched the playback it observed.
-		if old.turn.Cut || r.s.output != old || len(r.s.history) != histories || r.primary.Load() != before {
-			t.Fatalf("finish-only guest_2 was admitted: cut=%v output%v history=%d primary=%d",
-				old.turn.Cut, r.s.output == old, len(r.s.history), r.primary.Load())
+		if cut || !outputOK || hist != histories {
+			t.Fatalf("finish-only guest_2 was admitted: cut=%v outputOK=%v history=%d", cut, outputOK, hist)
 		}
 		// A rejected final discards its input; an ignored final leaves it
 		// pending. Without this, "the final was never processed" would look the
 		// same as "the filter rejected it".
-		if r.s.lastInput != nil {
+		if pending != nil {
 			t.Fatalf("final left its input pending; rejection never ran")
+		}
+		if got := r.primary.Load(); got != before {
+			t.Fatalf("finish-only guest_2 generated: primary=%d want=%d", got, before)
 		}
 	})
 
@@ -607,12 +612,15 @@ func TestSpeakerPhase1BystanderFilteringAndSessionAnchor(t *testing.T) {
 		r.event(t, "input_audio_buffer.speech_stopped", "guest2", map[string]any{"audio_end_ms": 4000})
 		r.sync(t)
 		r.s.speakerResult(speakerlive.Result{ID: guestID, Start: 38400, End: 64000, State: "temporary", Label: "guest_2", Reason: "candidate", AudioMS: 1600})
+		r.s.mu.Lock()
 		before := r.primary.Load()
+		histories := len(r.s.history)
+		r.s.mu.Unlock()
 		r.final(t, "guest2", "今晚我们吃什么饭")
 		r.sync(t)
-		time.Sleep(600 * time.Millisecond)
-		if r.primary.Load() != before {
-			t.Fatalf("overlap-opened guest_2 generated after playback ended: primary=%d", r.primary.Load())
+		r.assertRejectedState(t, nil, histories)
+		if got := r.primary.Load(); got != before {
+			t.Fatalf("overlap-opened guest_2 generated after playback ended: primary=%d want=%d", got, before)
 		}
 	})
 }

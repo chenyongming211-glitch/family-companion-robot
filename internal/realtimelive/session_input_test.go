@@ -168,6 +168,27 @@ func (r *admissionRig) inputID(t *testing.T) int64 {
 	return r.s.lastInput.id
 }
 
+// assertRejectedState checks, deterministically after r.sync(t), that a
+// finalized input was rejected without admitting a turn: its pending input is
+// discarded, history did not grow, and s.output is still wantOutput. finishInput
+// mutates all three synchronously before it returns, so these are stable the
+// moment the event barrier completes; the async primary counter is not a
+// reliable gate and is checked separately by the caller.
+func (r *admissionRig) assertRejectedState(t *testing.T, wantOutput *liveTurn, histories int) {
+	t.Helper()
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if r.s.lastInput != nil {
+		t.Fatalf("rejection left pending input id=%d", r.s.lastInput.id)
+	}
+	if len(r.s.history) != histories {
+		t.Fatalf("rejection admitted a turn: history %d -> %d", histories, len(r.s.history))
+	}
+	if r.s.output != wantOutput {
+		t.Fatalf("rejection changed output: got %p want %p", r.s.output, wantOutput)
+	}
+}
+
 func TestInputAdmissionEmptySegmentPreservesContinuousOldOutput(t *testing.T) {
 	r := newAdmissionRig(t)
 	old := r.s.addTurn()
