@@ -17,7 +17,7 @@ func TestReasonProtocolAcceptsLegacyAndDiagnostic(t *testing.T) {
 		t.Fatal("diagnostic output rejected", err)
 	}
 	for _, tc := range []struct{ label, reason string }{
-		{"guest_1", "candidate"}, {"uncertain", "too_short"}, {"uncertain", "low_energy"}, {"uncertain", "match_uncertain"}, {"unknown", "capacity"},
+		{"guest_1", "candidate"}, {"uncertain", "too_short"}, {"uncertain", "low_energy"}, {"uncertain", "match_uncertain"}, {"uncertain", "worker_unavailable"}, {"unknown", "capacity"},
 	} {
 		line := fmt.Sprintf(`{"event":"observation","id":1,"label":%q,"duration_ms":1500,"evidence":"turn_taking_test","reason":%q}`, tc.label, tc.reason)
 		if _, err := decodeEvent([]byte(line)); err != nil {

@@ -470,7 +470,9 @@ func decodeEvent(line []byte) (helperEvent, error) {
 // Only fixed branch names cross IPC; no arbitrary worker/provider error text.
 func validHelperReason(label, reason string) bool {
 	if label == "uncertain" {
-		return reason == "too_short" || reason == "low_energy" || reason == "match_uncertain"
+		// worker_unavailable is a per-clip degradation: the helper kept running
+		// but could not produce a vector for this clip.
+		return reason == "too_short" || reason == "low_energy" || reason == "match_uncertain" || reason == "worker_unavailable"
 	}
 	if label == "unknown" {
 		return reason == "capacity"
